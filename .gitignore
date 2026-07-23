@@ -1,0 +1,16 @@
+# secrets & env
+.env
+*.token
+*.pem
+# data (never commit raw/derived data)
+/data/
+/spark-warehouse/
+*.parquet
+*.delta
+# python
+__pycache__/
+.venv/
+.pytest_cache/
+.ruff_cache/
+# databricks
+.databricks/

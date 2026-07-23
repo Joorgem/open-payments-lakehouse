@@ -20,6 +20,7 @@ dev = [
     "confluent-kafka==2.6.1",
     "databricks-sdk==0.40.0",
     "requests==2.32.3",
+    "pre-commit==4.0.1",
 ]
 
 [tool.hatch.build.targets.wheel]
