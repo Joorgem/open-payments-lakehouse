@@ -66,16 +66,36 @@ class WebDavClient:
         headers = {"Range": f"bytes={resume_from}-"} if resume_from else {}
         with self.session.get(self._url(rel_path), auth=self.auth, headers=headers,
                               stream=True, timeout=120) as r:
+            if r.status_code == 416:
+                # Server says the requested range is beyond the resource's size,
+                # which happens when resume_from already equals the full file size.
+                already_done = dest.exists() and dest.stat().st_size == expected_size
+                if expected_size is not None and already_done:
+                    return dest
+                # Stale/inconsistent partial file: discard it and re-fetch from scratch.
+                if dest.exists():
+                    dest.unlink()
+                return self.download(rel_path, dest, expected_size)
+
             r.raise_for_status()
-            mode = "ab" if resume_from else "wb"
+
+            # Only treat this as a genuine resume if the server actually honored the
+            # Range request (206 Partial Content). A server that ignores Range and
+            # replies 200 sends the FULL body, so appending it onto existing partial
+            # bytes would corrupt the file — fall back to writing from scratch.
+            resumed = resume_from > 0 and r.status_code == 206
+            effective_start = resume_from if resumed else 0
+            mode = "ab" if resumed else "wb"
+
             with open(dest, mode) as f:
                 for chunk in r.iter_content(chunk_size=1 << 20):
                     if chunk:
                         f.write(chunk)
+
             target = expected_size
             if target is None:
                 cl = r.headers.get("Content-Length")
-                target = (resume_from + int(cl)) if cl else None
+                target = (effective_start + int(cl)) if cl else None
         actual = dest.stat().st_size
         if target is not None and actual != target:
             raise IntegrityError(f"{rel_path}: expected {target} bytes, got {actual}")

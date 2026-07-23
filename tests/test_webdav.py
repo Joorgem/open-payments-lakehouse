@@ -54,3 +54,42 @@ def test_download_writes_file(monkeypatch, tmp_path):
                         lambda *a, **k: _Resp(200, b"abc", {"Content-Length": "3"}))
     out = client.download("2026-07/x.zip", tmp_path / "x.zip", expected_size=3)
     assert out.read_bytes() == b"abc"
+
+
+def test_download_resume_honored_appends(monkeypatch, tmp_path):
+    dest = tmp_path / "x.zip"
+    dest.write_bytes(b"abc")  # partial file already on disk (3 bytes)
+    client = WebDavClient("https://h/public.php/webdav", "TOK")
+    monkeypatch.setattr(
+        client.session, "get",
+        lambda *a, **k: _Resp(
+            206, b"def",
+            {"Content-Length": "3", "Content-Range": "bytes 3-5/6"},
+        ),
+    )
+    out = client.download("2026-07/x.zip", dest, expected_size=6)
+    assert out.read_bytes() == b"abcdef"
+
+
+def test_download_range_ignored_returns_200_no_corruption(monkeypatch, tmp_path):
+    dest = tmp_path / "x.zip"
+    dest.write_bytes(b"abc")  # partial file already on disk (3 bytes)
+    full_body = b"abcdef"
+    client = WebDavClient("https://h/public.php/webdav", "TOK")
+    monkeypatch.setattr(
+        client.session, "get",
+        lambda *a, **k: _Resp(200, full_body, {"Content-Length": str(len(full_body))}),
+    )
+    out = client.download("2026-07/x.zip", dest, expected_size=len(full_body))
+    # Server ignored Range and sent the full body: old partial bytes must be
+    # discarded (not appended onto), leaving exactly the full body.
+    assert out.read_bytes() == full_body
+
+
+def test_download_already_complete_416(monkeypatch, tmp_path):
+    dest = tmp_path / "x.zip"
+    dest.write_bytes(b"abcdef")  # already fully downloaded (6 bytes)
+    client = WebDavClient("https://h/public.php/webdav", "TOK")
+    monkeypatch.setattr(client.session, "get", lambda *a, **k: _Resp(416, b""))
+    out = client.download("2026-07/x.zip", dest, expected_size=6)
+    assert out.read_bytes() == b"abcdef"
