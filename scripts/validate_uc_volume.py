@@ -13,10 +13,11 @@ import sys
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.catalog import VolumeType
+from opl.config import DEFAULT
 
-CATALOG = "workspace"
-SCHEMA = "default"
-VOLUME_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/landing"  # created below if missing
+CATALOG = DEFAULT.catalog
+SCHEMA = DEFAULT.schema
+VOLUME_PATH = DEFAULT.volume_root  # created below if missing
 
 
 def main() -> int:
