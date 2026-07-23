@@ -187,7 +187,7 @@ wheels = [
 [[package]]
 name = "open-payments-lakehouse"
 version = "0.0.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "delta-spark" },
     { name = "pyspark" },
