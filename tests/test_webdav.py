@@ -41,6 +41,32 @@ def test_list_dir_parses_propfind(monkeypatch):
                                  size=980, is_dir=False)
 
 
+PROPFIND_XML_NO_LENGTH = b"""<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response><d:href>/public.php/webdav/2026-07/</d:href>
+    <d:propstat><d:prop><d:getcontentlength/>
+    <d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>
+  <d:response><d:href>/public.php/webdav/2026-07/Empresas0.zip</d:href>
+    <d:propstat><d:prop>
+    <d:resourcetype/></d:prop></d:propstat></d:response>
+</d:multistatus>"""
+
+
+def test_list_dir_missing_contentlength_yields_none_size(monkeypatch):
+    """A PROPFIND response whose file entry has NO getcontentlength element
+    must parse to size=None (unknown), not size=0 (which would collide with
+    a real empty file and wrongly fail the download's integrity check)."""
+    client = WebDavClient("https://h/public.php/webdav", "TOK")
+    monkeypatch.setattr(client.session, "request",
+                        lambda *a, **k: _Resp(207, PROPFIND_XML_NO_LENGTH))
+    entries = client.list_dir("2026-07")
+    files = [e for e in entries if not e.is_dir]
+    assert len(files) == 1
+    assert files[0] == FileEntry(name="Empresas0.zip",
+                                 rel_path="2026-07/Empresas0.zip",
+                                 size=None, is_dir=False)
+
+
 def test_download_size_mismatch_raises(monkeypatch, tmp_path):
     client = WebDavClient("https://h/public.php/webdav", "TOK")
     monkeypatch.setattr(client.session, "get",

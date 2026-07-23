@@ -156,3 +156,4 @@ def test_all_file_groups_present_and_correctly_mapped():
 def test_csv_dialect_full():
     assert CSV_DIALECT["quotechar"] == '"'
     assert CSV_DIALECT["date_format"] == "%Y%m%d"
+    assert CSV_DIALECT["decimal"] == ","

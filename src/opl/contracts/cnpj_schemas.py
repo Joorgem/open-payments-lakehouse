@@ -10,6 +10,7 @@ CSV_DIALECT = {
     "quotechar": '"',
     "header": None,
     "date_format": "%Y%m%d",
+    "decimal": ",",
 }
 
 TABLES: dict[str, list[str]] = {

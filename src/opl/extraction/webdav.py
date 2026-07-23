@@ -32,7 +32,7 @@ class IntegrityError(Exception):
 class FileEntry:
     name: str
     rel_path: str
-    size: int
+    size: int | None
     is_dir: bool
 
 
@@ -91,10 +91,14 @@ class WebDavClient:
                 continue
             name = href.rstrip("/").split("/")[-1]
             size_txt = prop.findtext(f"{_DAV}getcontentlength") if prop is not None else None
+            # A missing getcontentlength is an UNKNOWN size, not a zero-byte file:
+            # 0 would collide with a real empty file, and download() already
+            # treats expected_size=None as "fall back to Content-Length" for
+            # integrity checking, so None is the correct sentinel here.
             entries.append(FileEntry(
                 name=name,
                 rel_path=f"{rel_path.strip('/')}/{name}",
-                size=int(size_txt) if size_txt else 0,
+                size=int(size_txt) if size_txt else None,
                 is_dir=is_dir,
             ))
         return entries
