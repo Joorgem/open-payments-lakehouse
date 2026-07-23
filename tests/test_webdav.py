@@ -1,6 +1,7 @@
 # tests/test_webdav.py
 import pytest
 
+import opl.extraction.webdav as webdav_mod
 from opl.extraction.webdav import FileEntry, IntegrityError, WebDavClient
 
 PROPFIND_XML = b"""<?xml version="1.0"?>
@@ -93,3 +94,53 @@ def test_download_already_complete_416(monkeypatch, tmp_path):
     monkeypatch.setattr(client.session, "get", lambda *a, **k: _Resp(416, b""))
     out = client.download("2026-07/x.zip", dest, expected_size=6)
     assert out.read_bytes() == b"abcdef"
+
+
+def test_download_retries_on_transient_500_then_succeeds(monkeypatch, tmp_path):
+    monkeypatch.setattr(webdav_mod, "_sleep", lambda *_a, **_k: None)
+    calls = {"n": 0}
+
+    def fake_get(*_a, **_k):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return _Resp(500, b"")
+        return _Resp(200, b"abc", {"Content-Length": "3"})
+
+    client = WebDavClient("https://h/public.php/webdav", "TOK")
+    monkeypatch.setattr(client.session, "get", fake_get)
+    out = client.download("2026-07/x.zip", tmp_path / "x.zip", expected_size=3)
+    assert out.read_bytes() == b"abc"
+    assert calls["n"] == 3
+
+
+def test_list_dir_retries_on_transient_503_then_succeeds(monkeypatch):
+    monkeypatch.setattr(webdav_mod, "_sleep", lambda *_a, **_k: None)
+    calls = {"n": 0}
+
+    def fake_request(*_a, **_k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _Resp(503, b"")
+        return _Resp(207, PROPFIND_XML)
+
+    client = WebDavClient("https://h/public.php/webdav", "TOK")
+    monkeypatch.setattr(client.session, "request", fake_request)
+    entries = client.list_dir("2026-07")
+    files = [e for e in entries if not e.is_dir]
+    assert len(files) == 1
+    assert calls["n"] == 2
+
+
+def test_download_raises_after_exhausting_retries(monkeypatch, tmp_path):
+    monkeypatch.setattr(webdav_mod, "_sleep", lambda *_a, **_k: None)
+    calls = {"n": 0}
+
+    def always_500(*_a, **_k):
+        calls["n"] += 1
+        return _Resp(500, b"")
+
+    client = WebDavClient("https://h/public.php/webdav", "TOK")
+    monkeypatch.setattr(client.session, "get", always_500)
+    with pytest.raises(webdav_mod.requests.exceptions.HTTPError):
+        client.download("2026-07/x.zip", tmp_path / "x.zip", expected_size=3)
+    assert calls["n"] == webdav_mod._MAX_ATTEMPTS
