@@ -1,0 +1,18 @@
+# NOTE: the brief's original draft set `workspace.host: ${DATABRICKS_HOST}`,
+# assuming shell-style env var substitution. Databricks Asset Bundles do not
+# expand raw shell env vars this way -- `${...}` is bundle variable/resource
+# interpolation syntax (e.g. `${var.name}`), not envsubst. Confirmed via
+# `databricks bundle validate`, which errored with the literal string
+# "${DATABRICKS_HOST}" as an unresolved host. Fix: omit workspace.host and let
+# it resolve from the `opl-free` CLI profile (passed via --profile), which
+# already carries the correct host from .env.
+bundle:
+  name: open-payments-lakehouse
+
+targets:
+  free:
+    mode: development
+    default: true
+
+include:
+  - resources/*.yml

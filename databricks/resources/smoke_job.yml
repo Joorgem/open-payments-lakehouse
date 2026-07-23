@@ -1,0 +1,8 @@
+resources:
+  jobs:
+    smoke:
+      name: opl-smoke
+      tasks:
+        - task_key: hello
+          notebook_task:
+            notebook_path: /Workspace/Shared/opl_smoke
