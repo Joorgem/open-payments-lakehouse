@@ -2,7 +2,10 @@
 """Bronze-boundary data-quality gate transforms. evaluate() tags a reject
 reason (null = valid); split() partitions into promotable rows and quarantine.
 Defensive about _rescued_data so the same rules run on a local batch DataFrame
-and on the Databricks Auto Loader stream."""
+and on the Databricks Auto Loader stream.
+
+Rejection rules (precedence): rescued_data_present > null_or_empty_codigo >
+null_or_empty_descricao > encoding_replacement_char > valid."""
 from __future__ import annotations
 
 from pyspark.sql import Column, DataFrame
@@ -18,6 +21,8 @@ def _reject_reason(df: DataFrame) -> Column:
         F.when(rescued.isNotNull(), F.lit("rescued_data_present"))
         .when(F.col("codigo").isNull() | (F.trim(F.col("codigo")) == ""),
               F.lit("null_or_empty_codigo"))
+        .when(F.col("descricao").isNull() | (F.trim(F.col("descricao")) == ""),
+              F.lit("null_or_empty_descricao"))
         .when(F.col("descricao").contains(_REPLACEMENT_CHAR),
               F.lit("encoding_replacement_char"))
         .otherwise(F.lit(None))

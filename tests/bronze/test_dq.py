@@ -12,6 +12,7 @@ def _df(spark):
             ("  ", "blank code", None),      # invalid: empty codigo
             ("02", "mojib�de", None),   # invalid: replacement char (encoding fail)
             ("03", "extra cols", "{\"_c2\":\"x\"}"),  # invalid: rescued data present
+            ("04", None, None),              # invalid: null descricao
         ],
         ["codigo", "descricao", "_rescued_data"],
     )
@@ -26,6 +27,7 @@ def test_evaluate_tags_reasons():
         assert out["  "] == "null_or_empty_codigo"
         assert out["02"] == "encoding_replacement_char"
         assert out["03"] == "rescued_data_present"
+        assert out["04"] == "null_or_empty_descricao"
     finally:
         spark.stop()
 
@@ -35,7 +37,7 @@ def test_split_partitions_good_and_bad():
     try:
         good, bad = split(_df(spark))
         assert good.count() == 1
-        assert bad.count() == 4
+        assert bad.count() == 5
         assert REJECT_COLUMN not in good.columns   # dropped from good
         assert REJECT_COLUMN in bad.columns
     finally:
