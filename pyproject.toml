@@ -8,7 +8,7 @@ version = "0.0.0"
 description = "Production-grade lakehouse on Databricks/Delta: real Receita CNPJ data + synthetic payment stream, Data Vault 2.0 -> Kimball, full DataOps."
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "pyspark==3.5.3",
+    "pyspark==3.5.9",
     "delta-spark==3.3.1",
 ]
 

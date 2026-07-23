@@ -3,7 +3,7 @@ so that behavior tested locally reproduces on Databricks DBR 16.4 LTS."""
 import platform
 from importlib.metadata import version
 
-_EXPECTED = {"pyspark": "3.5.3", "delta": "3.3.1"}
+_EXPECTED = {"pyspark": "3.5.9", "delta": "3.3.1"}
 
 
 def assert_versions() -> dict[str, str]:
