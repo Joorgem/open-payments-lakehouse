@@ -1,8 +1,15 @@
 resources:
   jobs:
-    smoke:
+    opl_smoke:
       name: opl-smoke
       tasks:
-        - task_key: hello
-          notebook_task:
-            notebook_path: /Workspace/Shared/opl_smoke
+        - task_key: smoke
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/smoke.py
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl   # opl wheel, built + uploaded by the artifacts block below

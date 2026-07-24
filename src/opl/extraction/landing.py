@@ -7,8 +7,9 @@ import zipfile
 from pathlib import Path
 
 from databricks.sdk import WorkspaceClient
+from opl.config import DEFAULT
 
-LANDING_VOLUME_DIR = "/Volumes/workspace/default/landing/cnpj"
+LANDING_VOLUME_DIR = DEFAULT.landing_cnpj_root
 
 
 def unzip_single(zip_path: Path, dest_dir: Path) -> Path:

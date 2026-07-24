@@ -235,9 +235,13 @@ version = "0.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "databricks-sdk" },
+    { name = "requests" },
+]
+
+[package.optional-dependencies]
+spark = [
     { name = "delta-spark" },
     { name = "pyspark" },
-    { name = "requests" },
 ]
 
 [package.dev-dependencies]
@@ -252,10 +256,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "databricks-sdk", specifier = "==0.40.0" },
-    { name = "delta-spark", specifier = "==3.3.1" },
-    { name = "pyspark", specifier = "==3.5.9" },
+    { name = "delta-spark", marker = "extra == 'spark'", specifier = "==3.3.1" },
+    { name = "pyspark", marker = "extra == 'spark'", specifier = "==3.5.9" },
     { name = "requests", specifier = "==2.32.3" },
 ]
+provides-extras = ["spark"]
 
 [package.metadata.requires-dev]
 dev = [
