@@ -23,6 +23,16 @@ _RETRYABLE_STATUS = {500, 502, 503, 504}
 _MAX_ATTEMPTS = 5
 _BACKOFF_BASE = 0.5  # seconds: 0.5, 1, 2, 4 (2**n * base for n in 0..3)
 
+# Mid-stream body-resume budget, separate from the per-request setup budget
+# (_MAX_ATTEMPTS). A connection that dies DURING iter_content triggers a fresh
+# ranged request resuming from the bytes already on disk, up to this many times.
+_MAX_STREAM_RESUMES = 8
+_STREAM_ERRORS = (
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+)
+
 
 class IntegrityError(Exception):
     """Downloaded file size did not match the expected/advertised size."""
@@ -103,46 +113,70 @@ class WebDavClient:
             ))
         return entries
 
+    def _open_ranged(self, rel_path: str, resume_from: int) -> requests.Response:
+        """Issue a GET (through the setup-retry helper) resuming from
+        `resume_from` bytes, sending a Range header only when resuming."""
+        headers = {"Range": f"bytes={resume_from}-"} if resume_from else {}
+        return _request_with_retry(lambda: self.session.get(
+            self._url(rel_path), auth=self.auth, headers=headers,
+            stream=True, timeout=120,
+        ))
+
     def download(self, rel_path: str, dest: Path, expected_size: int | None = None) -> Path:
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        resume_from = dest.stat().st_size if dest.exists() else 0
-        headers = {"Range": f"bytes={resume_from}-"} if resume_from else {}
-        with _request_with_retry(lambda: self.session.get(
-            self._url(rel_path), auth=self.auth, headers=headers,
-            stream=True, timeout=120,
-        )) as r:
-            if r.status_code == 416:
-                # Server says the requested range is beyond the resource's size,
-                # which happens when resume_from already equals the full file size.
-                already_done = dest.exists() and dest.stat().st_size == expected_size
-                if expected_size is not None and already_done:
-                    return dest
-                # Stale/inconsistent partial file: discard it and re-fetch from scratch.
-                if dest.exists():
-                    dest.unlink()
-                return self.download(rel_path, dest, expected_size)
+        resumes = 0
+        while True:
+            # Re-evaluate the resume point every iteration: a mid-stream death
+            # may have left more bytes on disk since the previous request.
+            resume_from = dest.stat().st_size if dest.exists() else 0
+            r = self._open_ranged(rel_path, resume_from)
+            try:
+                if r.status_code == 416:
+                    # Server says the requested range is beyond the resource's size,
+                    # which happens when resume_from already equals the full file size.
+                    already_done = dest.exists() and dest.stat().st_size == expected_size
+                    if expected_size is not None and already_done:
+                        return dest
+                    # Stale/inconsistent partial file: discard it and re-fetch fresh.
+                    if dest.exists():
+                        dest.unlink()
+                    return self.download(rel_path, dest, expected_size)
 
-            r.raise_for_status()
+                r.raise_for_status()
 
-            # Only treat this as a genuine resume if the server actually honored the
-            # Range request (206 Partial Content). A server that ignores Range and
-            # replies 200 sends the FULL body, so appending it onto existing partial
-            # bytes would corrupt the file — fall back to writing from scratch.
-            resumed = resume_from > 0 and r.status_code == 206
-            effective_start = resume_from if resumed else 0
-            mode = "ab" if resumed else "wb"
+                # Only treat this as a genuine resume if the server actually honored
+                # the Range request (206 Partial Content). A server that ignores Range
+                # and replies 200 sends the FULL body, so appending it onto existing
+                # partial bytes would corrupt the file — fall back to writing fresh.
+                resumed = resume_from > 0 and r.status_code == 206
+                effective_start = resume_from if resumed else 0
+                mode = "ab" if resumed else "wb"
 
-            with open(dest, mode) as f:
-                for chunk in r.iter_content(chunk_size=1 << 20):
-                    if chunk:
-                        f.write(chunk)
+                try:
+                    with open(dest, mode) as f:
+                        for chunk in r.iter_content(chunk_size=1 << 20):
+                            if chunk:
+                                f.write(chunk)
+                except _STREAM_ERRORS:
+                    # Body died mid-transfer: the bytes flushed so far stay on disk.
+                    # Resume from the new size, up to _MAX_STREAM_RESUMES times.
+                    if resumes >= _MAX_STREAM_RESUMES:
+                        raise
+                    _sleep(_BACKOFF_BASE * (2 ** min(resumes, 3)))
+                    resumes += 1
+                    continue
 
-            target = expected_size
-            if target is None:
-                cl = r.headers.get("Content-Length")
-                target = (effective_start + int(cl)) if cl else None
-        actual = dest.stat().st_size
-        if target is not None and actual != target:
-            raise IntegrityError(f"{rel_path}: expected {target} bytes, got {actual}")
-        return dest
+                target = expected_size
+                if target is None:
+                    cl = r.headers.get("Content-Length")
+                    target = (effective_start + int(cl)) if cl else None
+            finally:
+                close = getattr(r, "close", None)
+                if callable(close):
+                    close()
+
+            actual = dest.stat().st_size
+            if target is not None and actual != target:
+                raise IntegrityError(f"{rel_path}: expected {target} bytes, got {actual}")
+            return dest
