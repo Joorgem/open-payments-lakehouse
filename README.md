@@ -8,8 +8,8 @@ CI, dual-targeted at Databricks Free Edition with its real limits documented
 instead of glossed over. It's building toward a Data Vault 2.0 silver layer
 and a Kimball star schema on top.
 
-**Status:** F1.1 complete (real CNPJ extraction → landing → versioned schema
-contracts) — F1.2 (Bronze + first Databricks job) next.
+**Status:** F1.2 complete (Bronze via Auto Loader with a blocking DQ gate,
+run for real on Databricks Free Edition) — Silver (Data Vault 2.0) next.
 
 ## Why this isn't a tutorial repo (true today)
 - **Real, messy source data**, not a clean CSV fixture: RFB's CNPJ registry is
@@ -38,9 +38,9 @@ contracts) — F1.2 (Bronze + first Databricks job) next.
 
 | | Status |
 |---|---|
-| **Built (F0 + F1.1)** | Autonomous dev harness (uv lockfile, CI, secret scanning, dual-target version guard) · Docker stack (Redpanda + Postgres) · Databricks Unity Catalog Volume landing via a validated control-plane path · **CNPJ extraction → landing → versioned schema contracts** (WebDAV client with resume + retry, real data landed to a UC Volume) |
-| **Roadmap — next (F1.2)** | Bronze via Auto Loader + a blocking data-quality gate + the first real Databricks Spark/Delta job |
-| **Roadmap — later** | Silver Data Vault 2.0 (hubs/links/sats, historized snapshots) · Gold Kimball star (SCD2 dims, event-grain facts) · Unity Catalog governance (RBAC, column masking, lineage) · pipeline observability · an AI-assisted incident-triage (RCA) agent |
+| **Built (F0 + F1.1 + F1.2)** | Autonomous dev harness (uv lockfile, CI, secret scanning, dual-target version guard) · Docker stack (Redpanda + Postgres) · Databricks Unity Catalog Volume landing via a validated control-plane path · **CNPJ extraction → landing → versioned schema contracts** (WebDAV client with resume + retry, real data landed to a UC Volume) · **Bronze via Auto Loader → Delta with a blocking data-quality gate + quarantine**, deployed as a real 5-task Databricks Job (Asset Bundle) and **run for real** on Databricks Free Edition against the landed lookup files, including a deliberately corrupted batch that the gate blocked — verbatim evidence in [`docs/f1.2-bronze-run-evidence.md`](docs/f1.2-bronze-run-evidence.md) |
+| **Roadmap — next** | Silver Data Vault 2.0 (hubs/links/sats, historized snapshots) |
+| **Roadmap — later** | Gold Kimball star (SCD2 dims, event-grain facts) · Unity Catalog governance (RBAC, column masking, lineage) · pipeline observability · an AI-assisted incident-triage (RCA) agent |
 
 The Data Vault / Kimball / Unity Catalog governance / AI-agent items above are
 **roadmap, not built** — they are planned, not present in this repo's code
@@ -65,6 +65,13 @@ TRANSFORMATION (Databricks Free Edition: serverless, UC, Jobs)   v
 ```
 
 ## Run locally
+
+Local Spark needs a JDK and Windows Hadoop native bits that `uv` does not
+manage: **JDK Temurin 17** (`JAVA_HOME`) and Hadoop's `winutils.exe` +
+`hadoop.dll` (`HADOOP_HOME`, e.g. Hadoop 3.3.6 from
+[`cdarlint/winutils`](https://github.com/cdarlint/winutils)) — see
+[`CLAUDE.md`](CLAUDE.md#local-environment) for exact versions and how to
+export both into a shell that doesn't already have them on `PATH`.
 
 ```bash
 uv sync --all-groups --all-extras
