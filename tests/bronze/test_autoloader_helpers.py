@@ -1,9 +1,11 @@
 from pyspark.sql import functions as F
 
+import opl.bronze.autoloader as al
 from opl.bronze.autoloader import (
     BRONZE_ESTAB_STAGING,
     RECORD_SOURCE,
     add_audit_columns,
+    bronze_lookup_stream,
     checkpoint_location,
     lookup_type_column,
     schema_location,
@@ -52,6 +54,32 @@ def test_state_locations_estab_are_siblings():
     assert sl.endswith("/_schemas/bronze_cnpj_estab")
     assert cl.endswith("/_checkpoints/bronze_cnpj_estab")
     assert sl != schema_location(DEFAULT) and cl != checkpoint_location(DEFAULT)
+
+
+def test_lookup_stream_requests_csv_path_glob(monkeypatch):
+    # F1.3 Task 6 subdir-isolation regression guard: the lookup stream reads the
+    # cnpj/<month> root, which Auto Loader walks recursively. It MUST forward
+    # pathGlobFilter="*CSV" to bronze_stream so non-CSV files planted in sibling
+    # subdirs (empirically a probe.txt in zips/estabelecimentos/ was ingested,
+    # staging 7408->7409, before this) are excluded. Spark-free: bronze_stream
+    # and the lookup_type column builder are stubbed.
+    captured: dict[str, object] = {}
+
+    class _FakeDF:
+        def withColumn(self, *_a, **_k):
+            return self
+
+    def _fake_bronze_stream(spark, cfg, table, source_dir, table_key, path_glob_filter=None):
+        captured.update(table=table, path_glob_filter=path_glob_filter)
+        return _FakeDF()
+
+    monkeypatch.setattr(al, "bronze_stream", _fake_bronze_stream)
+    monkeypatch.setattr(al, "lookup_type_column", lambda _col: None)
+    monkeypatch.setattr(al.F, "col", lambda _name: None)
+
+    bronze_lookup_stream(spark=None, cfg=DEFAULT)
+    assert captured["table"] == "lookup"
+    assert captured["path_glob_filter"] == "*CSV"
 
 
 def test_lookup_type_column_maps_paths():

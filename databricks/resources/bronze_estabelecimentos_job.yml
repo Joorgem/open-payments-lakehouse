@@ -1,0 +1,60 @@
+# databricks/resources/bronze_estabelecimentos_job.yml
+resources:
+  jobs:
+    bronze_cnpj_estabelecimentos:
+      name: opl-bronze-cnpj-estabelecimentos
+      parameters:
+        - name: month
+          default: "2026-06"
+      tasks:
+        - task_key: unzip
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/unzip_estabelecimentos.py
+            parameters: ["{{job.parameters.month}}"]
+
+        - task_key: ingest
+          depends_on: [{ task_key: unzip }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/bronze_estab_ingest.py
+            parameters: ["{{job.run_id}}", "{{job.parameters.month}}"]
+
+        - task_key: dq_gate_batch
+          depends_on: [{ task_key: ingest }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/dq_gate_batch.py
+            parameters: ["{{job.run_id}}"]
+
+        - task_key: check_bad_rows
+          depends_on: [{ task_key: dq_gate_batch }]
+          condition_task:
+            op: EQUAL_TO
+            left: "{{tasks.dq_gate_batch.values.bad_row_count}}"
+            right: "0"
+
+        - task_key: promote
+          depends_on: [{ task_key: check_bad_rows, outcome: "true" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/promote_batch.py
+            parameters: ["{{job.run_id}}"]
+
+        - task_key: fail_on_dq
+          depends_on: [{ task_key: check_bad_rows, outcome: "false" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/fail_on_dq.py
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl
