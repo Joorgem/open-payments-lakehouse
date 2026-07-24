@@ -19,10 +19,10 @@ from datetime import date
 
 import requests
 
-# Public read-only Nextcloud share id for dados_abertos_cnpj (not a credential; see docstring).
-CNPJ_SHARE_TOKEN = "YggdBLfdninEJX9"  # gitleaks:allow
+from opl.extraction.cnpj_source import SHARE_TOKEN
+
 CNPJ_WEBDAV_BASE = "https://arquivos.receitafederal.gov.br/public.php/webdav"
-CNPJ_AUTH = (CNPJ_SHARE_TOKEN, "")
+CNPJ_AUTH = (SHARE_TOKEN, "")
 CNPJ_PROBE_FILE = "Empresas0.zip"  # first part of a large table; HEAD only, never downloaded
 
 PTAX = (
