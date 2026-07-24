@@ -19,6 +19,9 @@ def main() -> None:
     spark = SparkSession.builder.getOrCreate()
     batch_id = sys.argv[1] if len(sys.argv) > 1 else "manual"
     df = bronze_lookup_stream(spark, DEFAULT)
+    # TODO(F1.3+): parameterize the snapshot month (job parameter) instead of
+    # pinning to opl.config's default; promote also needs a month/snapshot key
+    # before a second month can land without duplicating lookup rows.
     audited = add_audit_columns(df, batch_id=batch_id)
     query = (
         audited.writeStream.format("delta")

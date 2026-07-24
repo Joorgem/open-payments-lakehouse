@@ -1,7 +1,14 @@
 # databricks/src/dq_gate.py
 """Job task: split staging rows into promotable vs quarantine, persist the
 quarantine, and publish bad_row_count as a task value for the condition task.
-Does NOT raise — the condition task owns the branch; fail_on_dq owns the hard stop."""
+Does NOT raise — the condition task owns the branch; fail_on_dq owns the hard stop.
+
+Fail-closed by design: rejected rows stay in staging (they are COPIED to
+quarantine, not moved), so a single bad row blocks promotion on every
+subsequent run until staging is manually cleaned (see the F1.2 evidence
+doc, Run 3, for the recovery procedure). Batch-scoped gating is a
+deliberate follow-up for the multi-month phase.
+"""
 from pyspark.sql import SparkSession
 
 from databricks.sdk.runtime import dbutils

@@ -2,6 +2,11 @@ import pytest
 
 from opl.bronze.lookup_routing import LOOKUP_SUFFIX, lookup_type_from_filename
 
+# NOTE: lookup_type_from_filename is the pure "spec oracle" for the suffix map;
+# the production path uses opl.bronze.autoloader.lookup_type_column (a Column
+# expression built from the same LOOKUP_SUFFIX dict, covered in
+# tests/bronze/test_autoloader_helpers.py). Keep both in agreement.
+
 
 @pytest.mark.parametrize(
     "filename,expected",
