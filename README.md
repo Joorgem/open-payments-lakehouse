@@ -67,7 +67,7 @@ TRANSFORMATION (Databricks Free Edition: serverless, UC, Jobs)   v
 ## Run locally
 
 ```bash
-uv sync --all-groups
+uv sync --all-groups --all-extras
 uv run pytest                       # unit tests (Delta roundtrip needs a JDK; green in CI)
 
 docker compose up -d                # Postgres (host port 5433) + Redpanda

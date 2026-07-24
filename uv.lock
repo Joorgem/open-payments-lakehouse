@@ -238,13 +238,17 @@ dependencies = [
     { name = "requests" },
 ]
 
+[package.optional-dependencies]
+spark = [
+    { name = "delta-spark" },
+    { name = "pyspark" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "confluent-kafka" },
-    { name = "delta-spark" },
     { name = "pre-commit" },
     { name = "psycopg", extra = ["binary"] },
-    { name = "pyspark" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -252,16 +256,17 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "databricks-sdk", specifier = "==0.40.0" },
+    { name = "delta-spark", marker = "extra == 'spark'", specifier = "==3.3.1" },
+    { name = "pyspark", marker = "extra == 'spark'", specifier = "==3.5.9" },
     { name = "requests", specifier = "==2.32.3" },
 ]
+provides-extras = ["spark"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "confluent-kafka", specifier = "==2.6.1" },
-    { name = "delta-spark", specifier = "==3.3.1" },
     { name = "pre-commit", specifier = "==4.0.1" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.2.3" },
-    { name = "pyspark", specifier = "==3.5.9" },
     { name = "pytest", specifier = "==8.3.4" },
     { name = "ruff", specifier = "==0.9.2" },
 ]

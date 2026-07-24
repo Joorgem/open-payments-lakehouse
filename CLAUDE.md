@@ -6,7 +6,7 @@ synthetic payment stream → Data Vault 2.0 → Kimball dimensional on Delta Lak
 with full DataOps. See the design spec in the campaign repo.
 
 ## Commands
-- Install: `uv sync --all-groups`
+- Install: `uv sync --all-groups --all-extras`
 - Test (unit): `uv run pytest`
 - Test (integration): `docker compose up -d && uv run pytest -m integration`
 - Lint: `uv run ruff check .`
@@ -53,6 +53,13 @@ variables):
   not the project's interpreter.
 
 ### Databricks CLI / credentials
+- CLI: installed via winget (`Databricks.DatabricksCLI`, v1.8+). Its dir is on the
+  **User** `PATH`, but (same caveat as `JAVA_HOME` above) an agent/tool shell
+  spawned from a process that predates the setting will not see it — export
+  inline in that case:
+  ```bash
+  export PATH="/c/Users/jorge/AppData/Local/Microsoft/WinGet/Packages/Databricks.DatabricksCLI_Microsoft.Winget.Source_8wekyb3d8bbwe:$PATH"
+  ```
 - CLI profile: `opl-free` (configured via `databricks configure --profile opl-free`).
 - Secrets live in a git-ignored `.env` (never committed) with `DATABRICKS_HOST`
   and `DATABRICKS_TOKEN`; source it before Databricks CLI/SDK commands:
