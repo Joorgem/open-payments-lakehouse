@@ -14,14 +14,15 @@ from opl.config import OplConfig
 
 RECORD_SOURCE = "rfb_cnpj_webdav"
 BRONZE_STAGING = "bronze_cnpj_lookup_staging"
+BRONZE_ESTAB_STAGING = "bronze_cnpj_estab_staging"
 
 
-def schema_location(cfg: OplConfig) -> str:
-    return f"{cfg.volume_root}/_schemas/bronze_cnpj_lookup"
+def schema_location(cfg: OplConfig, table_key: str = "bronze_cnpj_lookup") -> str:
+    return f"{cfg.volume_root}/_schemas/{table_key}"
 
 
-def checkpoint_location(cfg: OplConfig) -> str:
-    return f"{cfg.volume_root}/_checkpoints/bronze_cnpj_lookup"
+def checkpoint_location(cfg: OplConfig, table_key: str = "bronze_cnpj_lookup") -> str:
+    return f"{cfg.volume_root}/_checkpoints/{table_key}"
 
 
 def add_audit_columns(
@@ -42,21 +43,37 @@ def lookup_type_column(file_path_col: Column) -> Column:
     return col
 
 
-def bronze_lookup_stream(
-    spark: SparkSession, cfg: OplConfig, month: str | None = None
+def bronze_stream(
+    spark: SparkSession,
+    cfg: OplConfig,
+    table: str,
+    source_dir: str,
+    table_key: str,
 ) -> DataFrame:
-    src = cfg.landing_cnpj_month(month)
+    """Generalized cloudFiles bronze read for any contract table. Reads
+    ``source_dir`` with the ``struct_for(table)`` schema and the shared CSV
+    options, adds ``_source_file``. Lookup-specific columns are added by the
+    caller (see ``bronze_lookup_stream``)."""
     reader = (
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "csv")
-        .option("cloudFiles.schemaLocation", schema_location(cfg))
+        .option("cloudFiles.schemaLocation", schema_location(cfg, table_key))
         .option("cloudFiles.inferColumnTypes", "false")
         .option("rescuedDataColumn", "_rescued_data")
-        .schema(struct_for("lookup"))
+        .schema(struct_for(table))
     )
     for k, v in csv_read_options().items():
         reader = reader.option(k, v)
-    df = reader.load(src)
-    return df.withColumn("_source_file", F.col("_metadata.file_path")).withColumn(
+    df = reader.load(source_dir)
+    return df.withColumn("_source_file", F.col("_metadata.file_path"))
+
+
+def bronze_lookup_stream(
+    spark: SparkSession, cfg: OplConfig, month: str | None = None
+) -> DataFrame:
+    df = bronze_stream(
+        spark, cfg, "lookup", cfg.landing_cnpj_month(month), "bronze_cnpj_lookup"
+    )
+    return df.withColumn(
         "lookup_type", lookup_type_column(F.col("_metadata.file_path"))
     )

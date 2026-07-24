@@ -1,6 +1,7 @@
 from pyspark.sql import functions as F
 
 from opl.bronze.autoloader import (
+    BRONZE_ESTAB_STAGING,
     RECORD_SOURCE,
     add_audit_columns,
     checkpoint_location,
@@ -31,6 +32,26 @@ def test_state_locations_are_separate_and_not_under_table_dir():
     assert sl.startswith(DEFAULT.volume_root)
     assert cl.startswith(DEFAULT.volume_root)
     assert "_schemas" in sl and "_checkpoints" in cl
+
+
+def test_estab_staging_constant():
+    assert BRONZE_ESTAB_STAGING == "bronze_cnpj_estab_staging"
+
+
+def test_state_locations_default_are_f12_golden():
+    # F1.2 shipped exactly these paths; the refactor must not move them.
+    assert schema_location(DEFAULT) == \
+        "/Volumes/workspace/default/landing/_schemas/bronze_cnpj_lookup"
+    assert checkpoint_location(DEFAULT) == \
+        "/Volumes/workspace/default/landing/_checkpoints/bronze_cnpj_lookup"
+
+
+def test_state_locations_estab_are_siblings():
+    sl = schema_location(DEFAULT, "bronze_cnpj_estab")
+    cl = checkpoint_location(DEFAULT, "bronze_cnpj_estab")
+    assert sl.endswith("/_schemas/bronze_cnpj_estab")
+    assert cl.endswith("/_checkpoints/bronze_cnpj_estab")
+    assert sl != schema_location(DEFAULT) and cl != checkpoint_location(DEFAULT)
 
 
 def test_lookup_type_column_maps_paths():
