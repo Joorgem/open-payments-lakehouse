@@ -1,0 +1,48 @@
+resources:
+  jobs:
+    bronze_cnpj_lookup:
+      name: opl-bronze-cnpj-lookup
+      tasks:
+        - task_key: ingest
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/bronze_ingest.py
+            parameters: ["{{job.run_id}}"]
+
+        - task_key: dq_gate
+          depends_on:
+            - task_key: ingest
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/dq_gate.py
+
+        - task_key: check_bad_rows
+          depends_on:
+            - task_key: dq_gate
+          condition_task:
+            op: EQUAL_TO
+            left: "{{tasks.dq_gate.values.bad_row_count}}"
+            right: "0"
+
+        - task_key: promote
+          depends_on:
+            - task_key: check_bad_rows
+              outcome: "true"
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/promote.py
+
+        - task_key: fail_on_dq
+          depends_on:
+            - task_key: check_bad_rows
+              outcome: "false"
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/fail_on_dq.py
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            client: "3"
+            dependencies:
+              - ../../dist/*.whl   # opl wheel, built + uploaded by the artifacts block below
