@@ -38,7 +38,7 @@ def lookup_type_column(file_path_col: Column) -> Column:
     # Build a nested CASE from the suffix map, matching the inner-file suffix in the path.
     col = F.lit(None)
     for suffix, lookup_type in LOOKUP_SUFFIX.items():
-        col = F.when(file_path_col.contains(f".{suffix}CSV"), F.lit(lookup_type)).otherwise(col)
+        col = F.when(file_path_col.endswith(f".{suffix}CSV"), F.lit(lookup_type)).otherwise(col)
     return col
 
 

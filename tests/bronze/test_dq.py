@@ -13,6 +13,7 @@ def _df(spark):
             ("02", "mojib�de", None),   # invalid: replacement char (encoding fail)
             ("03", "extra cols", "{\"_c2\":\"x\"}"),  # invalid: rescued data present
             ("04", None, None),              # invalid: null descricao
+            ("05", None, "{\"_c2\":\"y\"}"),  # both rescued data AND null descricao -> rescued wins
         ],
         ["codigo", "descricao", "_rescued_data"],
     )
@@ -28,6 +29,7 @@ def test_evaluate_tags_reasons():
         assert out["02"] == "encoding_replacement_char"
         assert out["03"] == "rescued_data_present"
         assert out["04"] == "null_or_empty_descricao"
+        assert out["05"] == "rescued_data_present"
     finally:
         spark.stop()
 
@@ -37,7 +39,7 @@ def test_split_partitions_good_and_bad():
     try:
         good, bad = split(_df(spark))
         assert good.count() == 1
-        assert bad.count() == 5
+        assert bad.count() == 6
         assert REJECT_COLUMN not in good.columns   # dropped from good
         assert REJECT_COLUMN in bad.columns
     finally:

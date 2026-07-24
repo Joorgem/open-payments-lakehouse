@@ -5,6 +5,7 @@ resources:
       tasks:
         - task_key: ingest
           environment_key: opl_env
+          max_retries: 0
           spark_python_task:
             python_file: ../src/bronze_ingest.py
             parameters: ["{{job.run_id}}"]
@@ -13,6 +14,7 @@ resources:
           depends_on:
             - task_key: ingest
           environment_key: opl_env
+          max_retries: 0
           spark_python_task:
             python_file: ../src/dq_gate.py
 
@@ -29,6 +31,7 @@ resources:
             - task_key: check_bad_rows
               outcome: "true"
           environment_key: opl_env
+          max_retries: 0
           spark_python_task:
             python_file: ../src/promote.py
 
@@ -37,12 +40,13 @@ resources:
             - task_key: check_bad_rows
               outcome: "false"
           environment_key: opl_env
+          max_retries: 0
           spark_python_task:
             python_file: ../src/fail_on_dq.py
 
       environments:
         - environment_key: opl_env
           spec:
-            client: "3"
+            environment_version: "3"
             dependencies:
               - ../../dist/*.whl   # opl wheel, built + uploaded by the artifacts block below

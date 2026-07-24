@@ -66,12 +66,13 @@ TRANSFORMATION (Databricks Free Edition: serverless, UC, Jobs)   v
 
 ## Run locally
 
-Local Spark needs a JDK and Windows Hadoop native bits that `uv` does not
-manage: **JDK Temurin 17** (`JAVA_HOME`) and Hadoop's `winutils.exe` +
-`hadoop.dll` (`HADOOP_HOME`, e.g. Hadoop 3.3.6 from
+Local Spark needs a JDK. On Windows, it also needs Hadoop native bits that
+`uv` does not manage: **JDK Temurin 17** (`JAVA_HOME`) and, on Windows,
+Hadoop's `winutils.exe` + `hadoop.dll` (`HADOOP_HOME`, e.g. Hadoop 3.3.6 from
 [`cdarlint/winutils`](https://github.com/cdarlint/winutils)) — see
 [`CLAUDE.md`](CLAUDE.md#local-environment) for exact versions and how to
-export both into a shell that doesn't already have them on `PATH`.
+export both into a shell that doesn't already have them on `PATH`. Unix-like
+systems need only the JDK.
 
 ```bash
 uv sync --all-groups --all-extras

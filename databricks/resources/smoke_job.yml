@@ -10,6 +10,6 @@ resources:
       environments:
         - environment_key: opl_env
           spec:
-            client: "3"
+            environment_version: "3"
             dependencies:
               - ../../dist/*.whl   # opl wheel, built + uploaded by the artifacts block below

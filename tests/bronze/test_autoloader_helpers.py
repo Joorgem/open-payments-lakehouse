@@ -41,6 +41,7 @@ def test_lookup_type_column_maps_paths():
                 ("/Volumes/workspace/default/landing/cnpj/2026-06/F.K03200$Z.D60613.CNAECSV",),
                 ("/Volumes/workspace/default/landing/cnpj/2026-06/F.K03200$Z.D60613.QUALSCSV",),
                 ("/some/other/file.txt",),
+                ("/Volumes/x/F.K03200$Z.D60613.CNAECSV.bak",),
             ],
             ["path"],
         )
@@ -51,5 +52,6 @@ def test_lookup_type_column_maps_paths():
         assert out["F.K03200$Z.D60613.CNAECSV"] == "cnae"
         assert out["F.K03200$Z.D60613.QUALSCSV"] == "qualificacao"
         assert out["file.txt"] is None
+        assert out["F.K03200$Z.D60613.CNAECSV.bak"] is None
     finally:
         spark.stop()
