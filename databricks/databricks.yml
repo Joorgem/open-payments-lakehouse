@@ -16,3 +16,9 @@ targets:
 
 include:
   - resources/*.yml
+
+artifacts:
+  opl_wheel:
+    type: whl
+    build: uv build --wheel
+    path: ..

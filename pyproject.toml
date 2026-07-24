@@ -7,9 +7,19 @@ name = "open-payments-lakehouse"
 version = "0.0.0"
 description = "Production-grade lakehouse on Databricks/Delta: real Receita CNPJ data + synthetic payment stream, Data Vault 2.0 -> Kimball, full DataOps."
 requires-python = ">=3.12,<3.13"
+# NOTE (Task 6 deployment-spike finding): pyspark/delta-spark are intentionally
+# NOT core wheel dependencies. Databricks serverless compute provides its own
+# pyspark/Delta runtime via Databricks Connect; pinning them here makes the
+# opl wheel un-installable through a job's `environments.dependencies` pip
+# install on this Free Edition workspace (confirmed empirically: client="2"
+# rejects the wheel outright -- pyproject's requires-python >=3.12 doesn't
+# match serverless env v2's Python 3.11.10; client="3" matches Python 3.12.3
+# but pip then fails to fetch the ~300MB pyspark wheel with a generic
+# "Unable to find or download the required package" error, reproducible on
+# repeat runs -- Free Edition's governed egress/serverless install budget
+# can't complete that download). They remain available for local dev/tests
+# via the `dev` dependency group below.
 dependencies = [
-    "pyspark==3.5.9",
-    "delta-spark==3.3.1",
     "databricks-sdk==0.40.0",
     "requests==2.32.3",
 ]
@@ -21,6 +31,8 @@ dev = [
     "psycopg[binary]==3.2.3",
     "confluent-kafka==2.6.1",
     "pre-commit==4.0.1",
+    "pyspark==3.5.9",
+    "delta-spark==3.3.1",
 ]
 
 [tool.hatch.build.targets.wheel]
