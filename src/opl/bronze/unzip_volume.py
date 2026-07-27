@@ -11,7 +11,12 @@ topology of ADR 0002/0004.
 The logic is pure ``zipfile`` over directories: no Spark/Java, unit-tested
 locally with tmp dirs. Idempotent -- a zip whose inner file already exists at
 the expected uncompressed size is skipped, so re-runs are safe and a run that
-died mid-extract (leaving only a ``.tmp``) re-extracts next time."""
+died mid-extract (leaving only a ``.tmp``) re-extracts next time.
+
+Defense in depth against a bad input object: a zip that is missing bytes yet
+still carries its original tail (see ``_reject_negative_header_offset``) is
+rejected with ``CorruptZipError`` naming the archive, rather than blowing up
+deep inside ``zipfile`` on an unexplained negative seek."""
 from __future__ import annotations
 
 import os
@@ -20,6 +25,10 @@ import zipfile
 from pathlib import Path
 
 _COPY_CHUNK = 8 << 20  # 8 MiB -- stream members; never .read() a ~14 GB CSV whole.
+
+
+class CorruptZipError(ValueError):
+    """A zip whose central directory points outside the archive it lives in."""
 
 
 def unzip_dir(zips_dir: str | Path, dest_dir: str | Path) -> list[Path]:
@@ -55,6 +64,8 @@ def _unzip_one(zip_path: Path, dest_dir: Path) -> Path:
         if dest.exists() and dest.stat().st_size == info.file_size:
             return dest  # already extracted at the expected size -- skip untouched.
 
+        _reject_negative_header_offset(zip_path, info)
+
         tmp = dest.with_name(dest.name + ".tmp")
         with z.open(info) as src, open(tmp, "wb") as out:
             shutil.copyfileobj(src, out, _COPY_CHUNK)
@@ -68,3 +79,24 @@ def _unzip_one(zip_path: Path, dest_dir: Path) -> Path:
             )
         os.replace(tmp, dest)  # atomic; replaces existing target on Windows too.
     return dest
+
+
+def _reject_negative_header_offset(zip_path: Path, info: zipfile.ZipInfo) -> None:
+    """Fail with a diagnosis instead of the EINVAL seek a short archive causes.
+
+    When an archive is missing bytes but still carries its original tail (what a
+    short-written upload produces), CPython's
+    ``concat = ecd_location - size_cd - offset_cd`` goes negative and shifts every
+    member's ``header_offset`` below zero. ``ZipFile(...)`` and ``infolist()``
+    both succeed on such a file; the break only lands at ``z.open(member)``, as
+    ``OSError: [Errno 22] Invalid argument`` from seeking to a negative position
+    -- a message that says nothing about the actual problem. This is how the F1.3
+    Estabelecimentos job failed twice on a Volume object that had landed
+    273,373,127 of its 341,333,959 bytes."""
+    if info.header_offset < 0:
+        raise CorruptZipError(
+            f"{zip_path.name}: member {info.filename!r} has a negative local "
+            f"header offset ({info.header_offset}) -- the archive is shorter than "
+            "the offsets its own central directory advertises, i.e. an incomplete "
+            "or short-written upload. Re-upload the zip and re-run."
+        )
