@@ -10,6 +10,7 @@ import argparse
 from pathlib import Path
 
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.core import Config
 from opl.config import DEFAULT
 from opl.contracts.cnpj_schemas import FILE_GROUPS
 from opl.extraction.cnpj_source import SHARE_TOKEN, WEBDAV_BASE
@@ -23,6 +24,23 @@ from opl.extraction.webdav import WebDavClient
 # part; these are ceilings, not waits, so a fast link is unaffected.
 UPLOAD_RETRY_TIMEOUT_SECONDS = 2 * 60 * 60
 UPLOAD_HTTP_TIMEOUT_SECONDS = 2 * 60 * 60
+
+
+def _upload_client(**auth) -> WorkspaceClient:
+    """Build the upload client carrying the widened timeouts.
+
+    Both timeouts are Config fields, not WorkspaceClient.__init__ kwargs (sdk
+    0.40), so they must travel through an explicit Config; passing them to the
+    client raises TypeError. `auth` defaults to the local `opl-free` profile;
+    tests pass an explicit host/token so this factory needs no credentials.
+    """
+    return WorkspaceClient(
+        config=Config(
+            retry_timeout_seconds=UPLOAD_RETRY_TIMEOUT_SECONDS,
+            http_timeout_seconds=UPLOAD_HTTP_TIMEOUT_SECONDS,
+            **(auth or {"profile": "opl-free"}),
+        )
+    )
 
 
 def _parse_parts(raw: str | None, group: str) -> list[int]:
@@ -70,15 +88,7 @@ def run(
     local_dir = Path(dest) / month / "giants"
     print(f"giants {month} {group} parts={parts} upload={upload}")
 
-    w = (
-        WorkspaceClient(
-            profile="opl-free",
-            retry_timeout_seconds=UPLOAD_RETRY_TIMEOUT_SECONDS,
-            http_timeout_seconds=UPLOAD_HTTP_TIMEOUT_SECONDS,
-        )
-        if upload
-        else None
-    )
+    w = _upload_client() if upload else None
     downloaded = 0
     uploaded = 0
     had_error = False
