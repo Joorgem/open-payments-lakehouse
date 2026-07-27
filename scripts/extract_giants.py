@@ -16,6 +16,14 @@ from opl.extraction.cnpj_source import SHARE_TOKEN, WEBDAV_BASE
 from opl.extraction.giants import download_parts, upload_zips
 from opl.extraction.webdav import WebDavClient
 
+# The SDK defaults both windows to 300 s. A ~340 MB part (Estabelecimentos3.zip
+# is 366,824,247 B) cannot complete a single PUT in that time on this uplink,
+# which moves roughly 10 MB/min -- ~35 min for one part. The default killed an
+# upload with `Timed out after 0:05:00`. 2 h leaves ample room for the largest
+# part; these are ceilings, not waits, so a fast link is unaffected.
+UPLOAD_RETRY_TIMEOUT_SECONDS = 2 * 60 * 60
+UPLOAD_HTTP_TIMEOUT_SECONDS = 2 * 60 * 60
+
 
 def _parse_parts(raw: str | None, group: str) -> list[int]:
     """Parse the raw --parts CLI value into a validated list of part indices.
@@ -62,7 +70,15 @@ def run(
     local_dir = Path(dest) / month / "giants"
     print(f"giants {month} {group} parts={parts} upload={upload}")
 
-    w = WorkspaceClient(profile="opl-free") if upload else None
+    w = (
+        WorkspaceClient(
+            profile="opl-free",
+            retry_timeout_seconds=UPLOAD_RETRY_TIMEOUT_SECONDS,
+            http_timeout_seconds=UPLOAD_HTTP_TIMEOUT_SECONDS,
+        )
+        if upload
+        else None
+    )
     downloaded = 0
     uploaded = 0
     had_error = False
