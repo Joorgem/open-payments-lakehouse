@@ -8,12 +8,6 @@ uncompressed) exceed that. So the giants are uploaded as their compressed ZIPs
 cluster into the table landing subdir -- the two-layer control-plane/data-plane
 topology of ADR 0002/0004.
 
-Each zip is staged to the node's local disk before being opened: the Volumes
-FUSE mount serves sequential streams but rejects ``zipfile``'s random-access
-backward seek to a member's local header (``OSError: [Errno 22]`` on
-serverless), so reading a member in place is impossible. Writing the extracted
-member back to the Volume is a sequential stream, hence supported.
-
 The logic is pure ``zipfile`` over directories: no Spark/Java, unit-tested
 locally with tmp dirs. Idempotent -- a zip whose inner file already exists at
 the expected uncompressed size is skipped, so re-runs are safe and a run that
@@ -22,7 +16,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 import zipfile
 from pathlib import Path
 
@@ -50,14 +43,6 @@ def unzip_dir(zips_dir: str | Path, dest_dir: str | Path) -> list[Path]:
 
 
 def _unzip_one(zip_path: Path, dest_dir: Path) -> Path:
-    # Staged one zip at a time and dropped on exit, so peak local disk is one zip.
-    with tempfile.TemporaryDirectory() as staging:
-        staged = Path(staging) / zip_path.name
-        shutil.copyfile(zip_path, staged)  # OS-streamed; part 0 is ~2 GB.
-        return _extract_single(staged, dest_dir)
-
-
-def _extract_single(zip_path: Path, dest_dir: Path) -> Path:
     with zipfile.ZipFile(zip_path) as z:
         members = [m for m in z.infolist() if not m.is_dir()]
         if len(members) != 1:
