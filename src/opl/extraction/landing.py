@@ -12,6 +12,10 @@ from opl.config import DEFAULT
 LANDING_VOLUME_DIR = DEFAULT.landing_cnpj_root
 
 
+class UploadIntegrityError(OSError):
+    """A Files API upload landed a byte count different from the local source."""
+
+
 def unzip_single(zip_path: Path, dest_dir: Path) -> Path:
     zip_path = Path(zip_path)
     dest_dir = Path(dest_dir)
@@ -26,8 +30,36 @@ def unzip_single(zip_path: Path, dest_dir: Path) -> Path:
 
 
 def upload_to_volume(w: WorkspaceClient, local_path: Path, volume_dir: str) -> str:
+    """PUT ``local_path`` into ``volume_dir`` and verify the landed byte count.
+
+    WHY the verification: a single-PUT ``w.files.upload()`` of a 341 MB zip was
+    observed to return without error having written only 273 MB -- bytes missing
+    from the MIDDLE of the object, tail intact. Nothing downstream noticed until
+    ``zipfile`` computed a negative member offset from the still-original central
+    directory and died on an EINVAL seek, two job runs later. So every upload is
+    checked against the source size here, at the only point where the truth is
+    still cheap to establish.
+
+    Raises ``UploadIntegrityError`` if the remote size differs from the local one
+    or cannot be read at all. Deliberately does NOT delete or retry: the caller
+    owns that policy; this function's contract is to fail loudly.
+    """
     local_path = Path(local_path)
     target = f"{volume_dir.rstrip('/')}/{local_path.name}"
+    expected = local_path.stat().st_size
     with open(local_path, "rb") as f:
         w.files.upload(target, f, overwrite=True)
+
+    actual = w.files.get_metadata(target).content_length
+    if actual is None:
+        raise UploadIntegrityError(
+            f"{target}: upload of {expected} bytes could not be verified -- the "
+            "Files API reported no content-length for the remote object"
+        )
+    if actual != expected:
+        raise UploadIntegrityError(
+            f"{target}: uploaded {expected} bytes but the remote object is "
+            f"{actual} bytes ({expected - actual} missing) -- the PUT was "
+            "short-written; re-upload before reading it"
+        )
     return target

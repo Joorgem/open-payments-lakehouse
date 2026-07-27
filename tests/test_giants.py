@@ -53,6 +53,8 @@ def test_upload_zips_targets_zips_subdir(tmp_path):
     w = mock.Mock()
     f = tmp_path / "Estabelecimentos1.zip"
     f.write_bytes(b"zip")
+    # upload_to_volume verifies the landed size, so the fake must report it back.
+    w.files.get_metadata.return_value.content_length = f.stat().st_size
     targets = upload_zips(w, [f], DEFAULT, "estabelecimentos", "2026-06")
     assert targets == [
         "/Volumes/workspace/default/landing/cnpj/2026-06/zips/estabelecimentos/Estabelecimentos1.zip"
