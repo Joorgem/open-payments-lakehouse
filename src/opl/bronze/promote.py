@@ -2,13 +2,21 @@
 """Promote one ingested batch's good rows into a bronze Delta table, exactly once.
 
 This lives in the library rather than in `databricks/src/promote_batch.py` so the
-two properties that matter can be tested against a real Delta log locally: that a
-second promote of the same `_batch_id` does not duplicate it, and that a
-`batch_id` naming no batch is refused before anything is written."""
+properties that matter can be tested against a real Delta log locally: that a
+second promote of the same `_batch_id` does not duplicate it, that a `batch_id`
+naming no batch is refused before anything is written, and that a batch bronze
+holds only PART of is refused rather than reported promoted.
+
+It also owns the batch-scoped primitives the DQ gate task reuses -- `batch_rows`
+(the one spelling of "the rows of this batch"), `tally` (both side counts in one
+pass) and `rows_of_batch` (what a target table already holds for a batch) --
+because the gate's quarantine append needs the same append-once property as this
+promote, and that property should have one tested implementation."""
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
@@ -34,12 +42,29 @@ class PromoteRefused(RuntimeError):
     they were."""
 
 
+class PromoteOutcome(Enum):
+    """What a promote did. Not a boolean, deliberately: the four outcomes carry
+    different obligations for the caller (only APPENDED wrote anything; only
+    NOTHING_INGESTED must skip the constraint DDL) and different log lines."""
+
+    APPENDED = "appended"
+    ALREADY_PROMOTED = "already_promoted"
+    # Bronze holds the batch and staging no longer does, so the promotable count
+    # could not be re-derived: "already promoted" here is inferred from bronze
+    # alone and the log must not claim a verified match.
+    ALREADY_PROMOTED_STAGING_GONE = "already_promoted_staging_gone"
+    NOTHING_INGESTED = "nothing_ingested"
+
+
 @dataclass(frozen=True)
 class PromoteResult:
     batch_id: str
+    outcome: PromoteOutcome
     appended_rows: int
     rejected_rows: int
-    already_promoted: bool
+    # What bronze already held for this batch before the call. Kept because the
+    # skip-path log has to print the number it decided on, not just the verdict.
+    bronze_rows: int
 
 
 def require_batch_id(batch_id: str | None) -> str:
@@ -47,7 +72,12 @@ def require_batch_id(batch_id: str | None) -> str:
 
     A job-parameter default is not validation: the sentinel below simply matched
     no staging rows, so the promote appended nothing and exited 0 -- a forgotten
-    `--params` reported SUCCESS to an operator recovering a stranded batch."""
+    `--params` reported SUCCESS to an operator recovering a stranded batch.
+
+    This is the ONLY guard that runs before bronze is consulted, and it can:
+    a blank or the sentinel is not an id at all, so no batch was ever ingested
+    under it and it cannot name an already-promoted batch. Every other refusal
+    has to wait until both counts are known -- see `plan_promotion`."""
     candidate = (batch_id or "").strip()
     if not candidate or candidate == SENTINEL_BATCH_ID:
         raise PromoteRefused(
@@ -61,6 +91,95 @@ def require_batch_id(batch_id: str | None) -> str:
     return candidate
 
 
+def plan_promotion(
+    batch_id: str,
+    *,
+    bronze_rows: int,
+    staged_promotable: int,
+    staged_rejected: int,
+    in_flow: bool,
+    staging_table: str,
+    bronze_table: str,
+) -> PromoteResult:
+    """Decide what to do with this batch from the two counts alone, or refuse.
+
+    Pure, so every reachable (bronze, staging) state is covered by a test that
+    needs no Spark session. `promote_batch` gathers the counts, calls this, and
+    performs the single write that APPENDED asks for -- so the returned value is
+    both the plan and, once carried out, the result.
+
+    WHAT "ALREADY PROMOTED" MEANS: bronze holds exactly as many rows for this
+    batch as the batch has promotable rows. It used to mean "bronze holds ANY row
+    for this batch", which read a count as a boolean: bronze holding a strict
+    subset reported the batch fully present, the missing rows were never appended
+    and the task exited 0. A subset is reachable -- the documented rebuild
+    procedure drops bronze while leaving staging, so a repromote of a pre-rebuild
+    `_batch_id` is exactly the case where the two counts can legitimately differ.
+
+    ON A MISMATCH IT REFUSES, with both numbers, rather than appending the
+    difference: bronze is append-only raw data with no verified unique key (RFB
+    guarantees none), so there is no per-row identity to diff on -- "append the
+    missing 1 of 2 rows" cannot be distinguished from "append both again". A
+    mismatch is not one state either (a partial rebuild, a batch appended twice
+    by an older build, or a DQ rule tightened since the promote all land here),
+    and they need different repairs. Printing both counts and stopping is the
+    only honest move; the message says which reconciliation to make.
+
+    ORDER: bronze first. The staging-based refusals used to run before the
+    idempotence check, so a batch whose staging rows were gone (truncated, or the
+    rebuild that drops staging) could never reach the skip: the promote task was
+    permanently un-repairable and the error blamed a missing batch id."""
+    staged_total = staged_promotable + staged_rejected
+    if bronze_rows > 0 and bronze_rows == staged_promotable:
+        return PromoteResult(
+            batch_id, PromoteOutcome.ALREADY_PROMOTED, 0, staged_rejected, bronze_rows
+        )
+    if bronze_rows > 0 and staged_total == 0:
+        return PromoteResult(
+            batch_id, PromoteOutcome.ALREADY_PROMOTED_STAGING_GONE, 0, 0, bronze_rows
+        )
+    if bronze_rows > 0:
+        raise PromoteRefused(
+            f"refusing to promote: {bronze_table} already holds {bronze_rows} row(s) of "
+            f"batch {batch_id}, but that batch has {staged_promotable} promotable row(s) "
+            f"in {staging_table} -- it is neither absent nor fully present, so this "
+            "promote can neither append it nor call it already promoted. Nothing was "
+            "written: bronze has no per-row identity, so the difference cannot be "
+            "diffed and appending it would duplicate whatever part is already there. "
+            f"Reconcile by hand -- if the {bronze_rows} row(s) are a partial or "
+            f"duplicated promote, DELETE FROM {bronze_table} WHERE {BATCH_COLUMN} = "
+            f"'{batch_id}' and re-run this promote; if a DQ rule changed since the "
+            "batch was promoted, the counts are expected to differ and nothing needs "
+            "promoting."
+        )
+    if staged_total == 0:
+        if in_flow:
+            # The ingestion flow's own run ingested nothing (Auto Loader found no
+            # new file), so its batch is legitimately empty. Refusing here turned
+            # the pipeline's only legitimate no-op path red, and blamed a bad
+            # batch id for it.
+            return PromoteResult(batch_id, PromoteOutcome.NOTHING_INGESTED, 0, 0, 0)
+        raise PromoteRefused(
+            f"refusing to promote: batch_id={batch_id!r} matches no row in "
+            f"{staging_table} and no row in {bronze_table}, so there is nothing to "
+            "promote and no promoted batch to recognise. Check the id against that "
+            f"table's _batch_id values (SELECT _batch_id, count(*) FROM {staging_table} "
+            "GROUP BY 1) -- promoting nothing is not success, so this fails instead of "
+            "reporting a batch it never found. (A run of the ingestion flow whose own "
+            "batch is empty because no new file arrived is the one case where this is "
+            "not an error, and it says so by passing the in-flow flag.)"
+        )
+    if staged_promotable == 0:
+        raise PromoteRefused(
+            f"refusing to promote: all {staged_rejected} row(s) of batch {batch_id} are "
+            "rejected by the DQ rules, so there is nothing to promote. The whole "
+            "batch is in the quarantine table; re-ingest it rather than re-promoting."
+        )
+    return PromoteResult(
+        batch_id, PromoteOutcome.APPENDED, staged_promotable, staged_rejected, 0
+    )
+
+
 def promote_batch(
     spark: SparkSession,
     batch_id: str | None,
@@ -68,11 +187,17 @@ def promote_batch(
     staging_table: str,
     bronze_table: str,
     rules: Rules,
+    in_flow: bool = False,
 ) -> PromoteResult:
     """Append the rows of `batch_id` that pass `rules` to `bronze_table`, once.
 
-    IDEMPOTENCE SHAPE -- skip the append if the batch is already there, rather
-    than delete-then-append or MERGE:
+    `in_flow` says the caller is the ingestion flow itself and `batch_id` is its
+    OWN run id, which is what makes an empty batch a success there. It defaults
+    to False -- fail-closed -- so an operator run, or a caller that forgot to say
+    so, still gets a refusal instead of a green run that promoted nothing.
+
+    IDEMPOTENCE SHAPE -- skip the append when bronze already holds the batch,
+    rather than delete-then-append or MERGE:
     - not delete-then-append: DELETE and APPEND are two separate Delta commits,
       so that shape's own failure window leaves bronze *missing* a batch it
       already held, and it rewrites files for ~9.5M rows to reach a state that
@@ -93,43 +218,46 @@ def promote_batch(
     operator's job here (same assumption as `landing.upload_to_volume`'s
     exclusive ownership of its target).
 
-    Raises `PromoteRefused` (before touching `bronze_table`) if `batch_id` names
-    no batch, matches no staging row, or has no promotable row at all."""
+    `plan_promotion` owns which states are refused and why; every refusal happens
+    before `bronze_table` is touched, and therefore before the caller's DDL."""
     batch_id = require_batch_id(batch_id)
-    staged = evaluate(
-        spark.read.table(staging_table).filter(F.col(BATCH_COLUMN) == batch_id),
-        rules=rules,
+    # Bronze BEFORE staging: an already-promoted batch has to be recognised even
+    # when staging no longer holds it.
+    bronze_rows = rows_of_batch(spark, bronze_table, batch_id)
+    staged = evaluate(batch_rows(spark, staging_table, batch_id), rules=rules)
+    promotable, rejected = tally(staged)
+    plan = plan_promotion(
+        batch_id,
+        bronze_rows=bronze_rows,
+        staged_promotable=promotable,
+        staged_rejected=rejected,
+        in_flow=in_flow,
+        staging_table=staging_table,
+        bronze_table=bronze_table,
     )
-    promotable, rejected = _tally(staged)
-    if promotable + rejected == 0:
-        raise PromoteRefused(
-            f"refusing to promote: batch_id={batch_id!r} matches no row in "
-            f"{staging_table}. Check the id against that table's _batch_id values "
-            "(SELECT _batch_id, count(*) FROM "
-            f"{staging_table} GROUP BY 1) -- promoting nothing is not success, so "
-            "this fails instead of reporting a batch it never found."
-        )
-    if promotable == 0:
-        raise PromoteRefused(
-            f"refusing to promote: all {rejected} row(s) of batch {batch_id} are "
-            "rejected by the DQ rules, so there is nothing to promote. The whole "
-            "batch is in the quarantine table; re-ingest it rather than re-promoting."
-        )
-    already_landed = _rows_already_in_bronze(spark, bronze_table, batch_id)
-    if already_landed:
-        return PromoteResult(batch_id, 0, rejected, already_promoted=True)
+    if plan.outcome is not PromoteOutcome.APPENDED:
+        return plan
     good = staged.filter(F.col(REJECT_COLUMN).isNull()).drop(REJECT_COLUMN)
     good.write.format("delta").mode("append").saveAsTable(bronze_table)
-    return PromoteResult(batch_id, promotable, rejected, already_promoted=False)
+    return plan
 
 
-def _tally(evaluated: DataFrame) -> tuple[int, int]:
+def batch_rows(spark: SparkSession, table: str, batch_id: str) -> DataFrame:
+    """The rows `table` holds for `batch_id`.
+
+    One spelling of the batch filter, shared with the DQ gate task: the gate and
+    the promote must scope to the same rows, and two copies of
+    `col("_batch_id") == batch_id` are two places for that to drift."""
+    return spark.read.table(table).filter(F.col(BATCH_COLUMN) == batch_id)
+
+
+def tally(evaluated: DataFrame) -> tuple[int, int]:
     """(promotable, rejected) row counts in ONE pass over the batch.
 
     Same predicate `dq.split` uses, taken from the same `evaluate` call, because
-    calling `split` and counting both sides would scan the batch twice. The
-    reject count is not optional output: the operator job promotes a batch whose
-    rejects a human has agreed to accept, so that number belongs in the log."""
+    counting both sides of `split` separately scans the batch twice. The reject
+    count is not optional output: the operator job promotes a batch whose rejects
+    a human has agreed to accept, so that number belongs in the log."""
     counts = {
         row["promotable"]: row["n"]
         for row in (
@@ -141,26 +269,29 @@ def _tally(evaluated: DataFrame) -> tuple[int, int]:
     return counts.get(True, 0), counts.get(False, 0)
 
 
-def _rows_already_in_bronze(spark: SparkSession, bronze_table: str, batch_id: str) -> int:
-    """Rows of `batch_id` that `bronze_table` already holds.
+def rows_of_batch(spark: SparkSession, table: str, batch_id: str) -> int:
+    """How many rows `table` already holds for `batch_id`. 0 if it does not exist.
 
-    WHY `_batch_id` is a sound idempotence key: a Delta append is a single atomic
-    commit, so a failed promote leaves either all of a batch's rows or none of
-    them -- never a partial batch this count would misread. And `_batch_id` is
-    the ingesting run's id, so "bronze already has rows for it" can only mean
-    "this same batch was already appended".
+    WHY `_batch_id` is the idempotence key: it is the ingesting run's id, so rows
+    carrying it in a target table can only have been put there by an append of
+    that same batch. What the count canNOT tell you is that the append was
+    complete -- a Delta append is one atomic commit, so no crash leaves a partial
+    batch, but a later DELETE or a rebuild that drops the target can, and the
+    documented rebuild procedure does exactly that. Hence the callers compare
+    this count with the number of rows the batch should contribute instead of
+    treating any nonzero value as "already done".
 
-    COST: one narrow scan of `_batch_id` over the whole bronze table (71.9M rows
-    at the end of F1.3) on every promote, since `_batch_id` is past the 32
-    columns Delta keeps min/max stats for and so cannot be file-skipped. Cheap
-    next to writing the batch, and it is the price of not double-counting one."""
-    if not spark.catalog.tableExists(bronze_table):
+    COST: one narrow scan of `_batch_id` over the whole target table (71.9M rows
+    at the end of F1.3) per call, since `_batch_id` is past the 32 columns Delta
+    keeps min/max stats for and so cannot be file-skipped. Cheap next to writing
+    the batch, and it is the price of not double-counting one."""
+    if not spark.catalog.tableExists(table):
         return 0
-    landed = spark.read.table(bronze_table)
+    landed = spark.read.table(table)
     if BATCH_COLUMN not in landed.columns:
         raise PromoteRefused(
-            f"refusing to promote: {bronze_table} has no {BATCH_COLUMN} column, so an "
-            "already-promoted batch cannot be recognised and appending could "
+            f"refusing to write: {table} has no {BATCH_COLUMN} column, so an "
+            "already-appended batch cannot be recognised and appending could "
             "duplicate it."
         )
     return landed.filter(F.col(BATCH_COLUMN) == batch_id).count()

@@ -7,6 +7,11 @@ second append duplicates a batch. They are slow (~40 s each on a local session),
 so there are as few as the properties allow; everything that can be proven
 without a session is proven without one below.
 
+The whole promote POLICY -- which of the reachable (bronze count, staging count)
+states appends, which skips, which refuses -- is a pure function of two counts
+(`plan_promotion`), so every state is covered here without a session. Only the
+states whose reachability depends on real Delta behaviour get a Spark test.
+
 Both defects were verified on the live workspace before this module existed:
 promoting the same `_batch_id` twice doubled the rows and exited 0 both times,
 and running the operator job with no `--params` matched no staging row, appended
@@ -22,7 +27,9 @@ from pyspark.sql.types import StringType, StructField, StructType
 
 from opl.bronze.promote import (
     SENTINEL_BATCH_ID,
+    PromoteOutcome,
     PromoteRefused,
+    plan_promotion,
     promote_batch,
     require_batch_id,
 )
@@ -79,6 +86,82 @@ def test_a_real_batch_id_is_accepted_and_stripped():
     assert require_batch_id(" 315230730740144 ") == "315230730740144"
 
 
+def _plan(*, bronze_rows=0, promotable=0, rejected=0, in_flow=False):
+    return plan_promotion(
+        "b1",
+        bronze_rows=bronze_rows,
+        staged_promotable=promotable,
+        staged_rejected=rejected,
+        in_flow=in_flow,
+        staging_table="stg",
+        bronze_table="bronze",
+    )
+
+
+def test_bronze_holding_every_promotable_row_of_the_batch_is_already_promoted():
+    result = _plan(bronze_rows=2, promotable=2, rejected=1)
+
+    assert result.outcome is PromoteOutcome.ALREADY_PROMOTED
+    assert (result.appended_rows, result.rejected_rows, result.bronze_rows) == (0, 1, 2)
+
+
+def test_bronze_holding_only_part_of_the_batch_is_refused_with_both_counts():
+    """The presence check used to collapse this count into a boolean: bronze
+    holding a strict SUBSET of the batch reported "already promoted", the missing
+    rows were never appended and the task exited 0. Reachable: the documented
+    rebuild drops bronze and leaves staging, so bronze's count for a
+    pre-rebuild `_batch_id` can legitimately differ from staging's."""
+    with pytest.raises(PromoteRefused) as excinfo:
+        _plan(bronze_rows=1, promotable=2)
+
+    message = str(excinfo.value)
+    assert "1 row" in message and "2 promotable" in message
+
+
+def test_bronze_holding_more_rows_than_the_batch_can_promote_is_refused():
+    """The other side of the same mismatch: an older build that appended twice,
+    or a DQ rule tightened since the batch was promoted."""
+    with pytest.raises(PromoteRefused, match="4 row"):
+        _plan(bronze_rows=4, promotable=2)
+
+
+def test_an_already_promoted_batch_is_recognised_when_staging_no_longer_holds_it():
+    """Staging-based refusals used to run first, so a batch whose staging rows
+    are gone (truncated, or the rebuild that drops staging) could never reach the
+    idempotent skip: the promote task was permanently un-repairable."""
+    result = _plan(bronze_rows=2)
+
+    assert result.outcome is PromoteOutcome.ALREADY_PROMOTED_STAGING_GONE
+    assert (result.appended_rows, result.bronze_rows) == (0, 2)
+
+
+def test_an_in_flow_batch_that_ingested_nothing_is_a_successful_no_op():
+    """A scheduled run with no new files ingests nothing, and that empty batch
+    still reaches promote. It used to be refused -- the pipeline's only
+    legitimate no-op path ended FAILED."""
+    result = _plan(in_flow=True)
+
+    assert result.outcome is PromoteOutcome.NOTHING_INGESTED
+    assert (result.appended_rows, result.rejected_rows) == (0, 0)
+
+
+def test_an_operator_batch_id_that_names_nothing_is_still_refused():
+    with pytest.raises(PromoteRefused, match="no row"):
+        _plan(in_flow=False)
+
+
+def test_a_batch_whose_every_row_is_rejected_is_refused_even_in_flow():
+    with pytest.raises(PromoteRefused, match="rejected"):
+        _plan(promotable=0, rejected=3, in_flow=True)
+
+
+def test_a_batch_absent_from_bronze_is_planned_for_append():
+    result = _plan(promotable=2, rejected=1)
+
+    assert result.outcome is PromoteOutcome.APPENDED
+    assert (result.appended_rows, result.rejected_rows) == (2, 1)
+
+
 @pytest.fixture(scope="module")
 def spark():
     session = local_session("test-promote")
@@ -126,10 +209,10 @@ def test_promoting_the_same_batch_twice_appends_it_once(spark, tables):
 
     # The reject count is reported on both passes: the operator job promotes a
     # batch whose rejects a human agreed to accept, so the number is log-worthy.
-    assert (first.appended_rows, first.rejected_rows, first.already_promoted) \
-        == (2, 1, False)
-    assert (second.appended_rows, second.rejected_rows, second.already_promoted) \
-        == (0, 1, True)
+    assert (first.appended_rows, first.rejected_rows, first.outcome) \
+        == (2, 1, PromoteOutcome.APPENDED)
+    assert (second.appended_rows, second.rejected_rows, second.outcome) \
+        == (0, 1, PromoteOutcome.ALREADY_PROMOTED)
     assert _bronze_batches(spark, tables) == ["b1", "b1"]  # not four rows
 
 
@@ -166,3 +249,28 @@ def test_a_batch_whose_every_row_is_rejected_is_refused(spark, tables):
         _promote(spark, tables, "b1")
 
     assert not spark.catalog.tableExists(tables.bronze)
+
+
+def test_a_partial_bronze_is_refused_and_a_promoted_batch_survives_staging_loss(spark, tables):
+    """Two states the old boolean presence check got wrong, against real tables,
+    proving the counts are read from the tables the caller named:
+
+    * bronze holds ONE of batch b1's two promotable rows -- reported "already
+      promoted", so the missing row was silently never appended;
+    * batch b2 is fully in bronze but no longer in staging -- the staging-based
+      refusals ran first, so the skip was unreachable and the task un-repairable.
+    """
+    _stage(spark, tables.staging, [_good("12345678", "b1"), _good("87654321", "b1"),
+                                   _good("11111111", "b2")])
+    _stage(spark, tables.bronze, [_good("12345678", "b1")])
+
+    with pytest.raises(PromoteRefused, match="1 row"):
+        _promote(spark, tables, "b1")
+    assert _bronze_batches(spark, tables) == ["b1"]  # refused: nothing appended
+
+    _promote(spark, tables, "b2")
+    spark.sql(f"DELETE FROM {tables.staging} WHERE _batch_id = 'b2'")
+    repromoted = _promote(spark, tables, "b2")
+
+    assert repromoted.outcome is PromoteOutcome.ALREADY_PROMOTED_STAGING_GONE
+    assert _bronze_batches(spark, tables) == ["b1", "b2"]
