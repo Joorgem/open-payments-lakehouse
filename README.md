@@ -8,8 +8,9 @@ CI, dual-targeted at Databricks Free Edition with its real limits documented
 instead of glossed over. It's building toward a Data Vault 2.0 silver layer
 and a Kimball star schema on top.
 
-**Status:** F1.2 complete (Bronze via Auto Loader with a blocking DQ gate,
-run for real on Databricks Free Edition) — Silver (Data Vault 2.0) next.
+**Status:** F1.3 complete (42.8M rows of real Estabelecimentos data in Delta,
+ingested incrementally with a batch-scoped DQ gate) — Silver (Data Vault 2.0)
+next.
 
 ## Why this isn't a tutorial repo (true today)
 - **Real, messy source data**, not a clean CSV fixture: RFB's CNPJ registry is
@@ -38,7 +39,7 @@ run for real on Databricks Free Edition) — Silver (Data Vault 2.0) next.
 
 | | Status |
 |---|---|
-| **Built (F0 + F1.1 + F1.2)** | Autonomous dev harness (uv lockfile, CI, secret scanning, dual-target version guard) · Docker stack (Redpanda + Postgres) · Databricks Unity Catalog Volume landing via a validated control-plane path · **CNPJ extraction → landing → versioned schema contracts** (WebDAV client with resume + retry, real data landed to a UC Volume) · **Bronze via Auto Loader → Delta with a blocking data-quality gate + quarantine**, deployed as a real 5-task Databricks Job (Asset Bundle) and **run for real** on Databricks Free Edition against the landed lookup files, including a deliberately corrupted batch that the gate blocked — verbatim evidence in [`docs/f1.2-bronze-run-evidence.md`](docs/f1.2-bronze-run-evidence.md) |
+| **Built (F0 + F1.1 + F1.2 + F1.3)** | Autonomous dev harness (uv lockfile, CI, secret scanning, dual-target version guard) · Docker stack (Redpanda + Postgres) · Databricks Unity Catalog Volume landing via a validated control-plane path · **CNPJ extraction → landing → versioned schema contracts** (WebDAV client with resume + retry, real data landed to a UC Volume) · **Bronze via Auto Loader → Delta with a blocking data-quality gate + quarantine**, deployed as a real 5-task Databricks Job (Asset Bundle) and **run for real** on Databricks Free Edition against the landed lookup files, including a deliberately corrupted batch that the gate blocked — verbatim evidence in [`docs/f1.2-bronze-run-evidence.md`](docs/f1.2-bronze-run-evidence.md) · **Multi-gigabyte Estabelecimentos ingestion: 42.8M rows in Delta**, staged incrementally across runs (Auto Loader checkpoint picks up only new files), unzipped in-Volume on Databricks to stay under the Files API single-PUT ceiling, with a **batch-scoped** DQ gate and a triaged-batch re-promotion path — and three real incidents caught and fixed along the way, including a silently short-written upload and a CSV reader that split records on newlines inside quoted fields: [`docs/f1.3-estabelecimentos-run-evidence.md`](docs/f1.3-estabelecimentos-run-evidence.md), [ADR 0005](docs/adr/0005-csv-multiline-parallelism-ceiling.md), [ADR 0006](docs/adr/0006-bronze-dq-gate-policy.md) |
 | **Roadmap — next** | Silver Data Vault 2.0 (hubs/links/sats, historized snapshots) |
 | **Roadmap — later** | Gold Kimball star (SCD2 dims, event-grain facts) · Unity Catalog governance (RBAC, column masking, lineage) · pipeline observability · an AI-assisted incident-triage (RCA) agent |
 
