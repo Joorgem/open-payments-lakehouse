@@ -4,16 +4,17 @@
 A historical bad batch no longer wedges future clean batches (F1.2 lesson).
 
 Does not raise on rejected rows: the condition task owns that branch and
-fail_on_dq owns the hard stop. It DOES raise when the quarantine table already
-holds a different number of rows for this batch than the batch has rejects, which
-is a corrupted-state refusal rather than a DQ verdict -- see `main`."""
+fail_on_dq owns the hard stop. It DOES raise on the two states that are not DQ
+verdicts at all: no batch id given (the shared operator guard in
+`opl.bronze.promote`), and a quarantine table already holding a different number
+of rows for this batch than the batch has rejects -- see `main`."""
 import sys
 
 from pyspark.sql import SparkSession
 
 from opl.bronze.autoloader import BRONZE_ESTAB_STAGING
 from opl.bronze.dq import evaluate, split
-from opl.bronze.promote import batch_rows, rows_of_batch, tally
+from opl.bronze.promote import batch_rows, require_batch_id, rows_of_batch, tally
 from opl.bronze.rules import rules_for
 from opl.config import DEFAULT
 
@@ -22,8 +23,15 @@ QUARANTINE = "bronze_cnpj_estab_quarantine"
 
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
+    # An absent argument is passed through as "" rather than indexed, the same way
+    # promote_batch.py does it: `require_batch_id` owns refusing it, with a message
+    # that tells the operator what to pass. `args[0]` here answered a task run
+    # without parameters with a bare `IndexError: list index out of range`, which
+    # names a list index and not the missing job parameter. Before the session, too:
+    # nothing about that refusal needs Spark, and an operator should not wait for a
+    # serverless session to be told the argument is missing.
+    batch_id = require_batch_id(args[0] if args else "", action="gate")
     spark = SparkSession.builder.getOrCreate()
-    batch_id = args[0]
     quarantine = DEFAULT.table(QUARANTINE)
     rules = rules_for("estabelecimentos")
     batch = batch_rows(spark, DEFAULT.table(BRONZE_ESTAB_STAGING), batch_id)

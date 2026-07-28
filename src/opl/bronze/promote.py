@@ -78,8 +78,8 @@ class PromoteResult:
     bronze_rows: int
 
 
-def require_batch_id(batch_id: str | None) -> str:
-    """Return the batch id to promote, or refuse if none was really given.
+def require_batch_id(batch_id: str | None, *, action: str = "promote") -> str:
+    """Return the batch id to work on, or refuse if none was really given.
 
     A job-parameter default is not validation: the sentinel below simply matched
     no staging rows, so the promote appended nothing and exited 0 -- a forgotten
@@ -88,16 +88,25 @@ def require_batch_id(batch_id: str | None) -> str:
     This is the ONLY guard that runs before bronze is consulted, and it can:
     a blank or the sentinel is not an id at all, so no batch was ever ingested
     under it and it cannot name an already-promoted batch. Every other refusal
-    has to wait until both counts are known -- see `plan_promotion`."""
+    has to wait until both counts are known -- see `plan_promotion`.
+
+    SHARED WITH THE DQ GATE TASK, which faces the identical accident (a task run
+    with no parameters) and used to answer it with a bare `IndexError` naming a
+    list index. `action` is what that costs: the message has to say which task is
+    refusing, since "refusing to promote" from the gate would misreport where the
+    run stopped. Everything after it is the same in both cases -- the id is the same
+    id, found the same way -- and one guard is why it cannot drift."""
     candidate = (batch_id or "").strip()
     if not candidate or candidate == SENTINEL_BATCH_ID:
         raise PromoteRefused(
-            f"refusing to promote: batch_id={batch_id!r} names no batch. Pass the "
-            "_batch_id of the batch to promote -- it is the run id of the run that "
+            f"refusing to {action}: batch_id={batch_id!r} names no batch. Pass the "
+            f"_batch_id of the batch to {action} -- it is the run id of the run that "
             "ingested it, printed by that run's dq_gate_batch task as 'batch=<id>' "
             "(or list them with: SELECT _batch_id, count(*) FROM "
-            "<staging table> GROUP BY 1). Example: databricks bundle run "
-            "repromote_triaged_batch -t free --params batch_id=315230730740144"
+            "<staging table> GROUP BY 1). In the ingestion flow every task takes it "
+            "as its first parameter, {{job.run_id}}; an operator recovering a batch "
+            "passes it by hand: databricks bundle run repromote_triaged_batch -t "
+            "free --params batch_id=315230730740144"
         )
     return candidate
 

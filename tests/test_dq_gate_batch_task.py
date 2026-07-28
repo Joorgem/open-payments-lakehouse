@@ -19,6 +19,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from opl.bronze.promote import PromoteRefused
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "databricks" / "src" / "dq_gate_batch.py"
 _spec = importlib.util.spec_from_file_location("dq_gate_batch_task", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
@@ -150,6 +152,31 @@ def test_a_clean_batch_still_appends_so_the_quarantine_table_exists(monkeypatch)
 
     assert seen.bad.saved == [_QUARANTINE]
     assert seen.published == [("bad_row_count", 0)]
+
+
+def test_no_batch_id_at_all_is_refused_with_an_operator_message(monkeypatch):
+    """`args[0]` on an empty argv is a bare IndexError -- a traceback that names a
+    list index, not the missing job parameter. The same accident on the promote task
+    (a `spark_python_task` run or a repair with no parameters) is answered by
+    `require_batch_id`, which says what to pass and how to find it, so this task
+    reuses that guard rather than growing a second spelling of the same refusal
+    (`opl.bronze.promote` already owns the batch-scoped primitives this task shares).
+
+    It refuses before the batch is read and before anything is written -- no
+    quarantine append, and no `bad_row_count` published, since the condition task
+    downstream branches on that value and must not see one from a run that never
+    identified a batch."""
+    seen = _wire(monkeypatch, already=0)
+
+    with pytest.raises(PromoteRefused, match="names no batch") as excinfo:
+        task.main([])
+
+    # It says which task stopped: a shared message that still read "refusing to
+    # promote" would send the operator to the wrong end of the flow.
+    assert "refusing to gate" in str(excinfo.value)
+    assert seen.read_tables == []
+    assert seen.bad.saved == []
+    assert seen.published == []
 
 
 def test_it_counts_both_sides_of_the_batch_in_one_pass(monkeypatch):
