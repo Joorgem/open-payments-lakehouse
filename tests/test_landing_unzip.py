@@ -4,22 +4,27 @@ from types import SimpleNamespace
 
 import pytest
 
+from databricks.sdk.errors import NotFound
+from opl.extraction import landing
 from opl.extraction.landing import UploadIntegrityError, unzip_single, upload_to_volume
 
 
 class _FakeFilesApi:
-    """Stands in for ``WorkspaceClient.files``: records the PUT, the cleanup
-    DELETE and reports a controllable remote ``content_length``. ``upload_error``
-    / ``delete_error`` inject failures. No network, no Databricks."""
+    """Stands in for ``WorkspaceClient.files``: records the PUT, the verification
+    GET and the cleanup DELETE, and reports a controllable remote
+    ``content_length``. ``upload_error`` / ``metadata_error`` / ``delete_error``
+    inject failures. No network, no Databricks."""
 
     def __init__(
         self,
         remote_size: int | None,
         upload_error: Exception | None = None,
+        metadata_error: Exception | None = None,
         delete_error: Exception | None = None,
     ):
         self.remote_size = remote_size
         self.upload_error = upload_error
+        self.metadata_error = metadata_error
         self.delete_error = delete_error
         self.uploads: list[tuple[str, bool]] = []
         self.metadata_calls: list[str] = []
@@ -33,6 +38,8 @@ class _FakeFilesApi:
 
     def get_metadata(self, file_path):
         self.metadata_calls.append(file_path)
+        if self.metadata_error is not None:
+            raise self.metadata_error
         return SimpleNamespace(content_length=self.remote_size)
 
     def delete(self, file_path):
@@ -44,10 +51,16 @@ class _FakeFilesApi:
 def _fake_workspace_client(
     remote_size: int | None,
     upload_error: Exception | None = None,
+    metadata_error: Exception | None = None,
     delete_error: Exception | None = None,
 ):
     return SimpleNamespace(
-        files=_FakeFilesApi(remote_size, upload_error=upload_error, delete_error=delete_error)
+        files=_FakeFilesApi(
+            remote_size,
+            upload_error=upload_error,
+            metadata_error=metadata_error,
+            delete_error=delete_error,
+        )
     )
 
 
@@ -124,17 +137,72 @@ def test_upload_to_volume_deletes_and_reraises_when_the_put_itself_fails(tmp_pat
     assert w.files.metadata_calls == []  # nothing to verify once the PUT blew up
 
 
-def test_upload_to_volume_surfaces_the_integrity_error_when_cleanup_fails(tmp_path):
-    """A clean failure leaves no object at all, so the cleanup DELETE 404s. That
-    is the expected case and must never mask the real problem."""
+def test_upload_to_volume_deletes_and_reraises_when_the_verification_call_fails(tmp_path):
+    """The verification GET is as fallible as the PUT: a transient 503 there
+    leaves an object of unknown length in the Volume. Unverified is not verified
+    -- the cleanup must cover the GET too, and the original error must survive."""
+    src = tmp_path / "Estabelecimentos3.zip"
+    src.write_bytes(b"z" * 4096)
+    boom = OSError("503 Service Unavailable")
+    w = _fake_workspace_client(4096, metadata_error=boom)
+
+    with pytest.raises(OSError) as excinfo:
+        upload_to_volume(w, src, "/Volumes/workspace/default/landing/zips")
+
+    assert excinfo.value is boom
+    assert not isinstance(excinfo.value, UploadIntegrityError)
+    assert w.files.deletes == ["/Volumes/workspace/default/landing/zips/Estabelecimentos3.zip"]
+
+
+def test_upload_to_volume_does_not_delete_when_the_local_file_cannot_be_opened(tmp_path):
+    """A purely local failure must not touch the remote object. On Windows an AV
+    scanner or a stray handle raises PermissionError on open(); if that happened
+    on a re-run of an already-correctly-landed part, cleanup would delete a good
+    object that this process never wrote a byte to."""
     src = tmp_path / "Estabelecimentos1.zip"
     src.write_bytes(b"z" * 4096)
-    w = _fake_workspace_client(3072, delete_error=OSError("404 File not found"))
+    w = _fake_workspace_client(4096)
+
+    def boom(*_a, **_kw):
+        raise PermissionError(13, "The process cannot access the file")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(landing, "open", boom, raising=False)
+        with pytest.raises(PermissionError):
+            upload_to_volume(w, src, "/Volumes/workspace/default/landing/zips")
+
+    assert w.files.uploads == []
+    assert w.files.deletes == []  # nothing was PUT, so nothing may be deleted
+
+
+def test_upload_to_volume_surfaces_the_integrity_error_when_cleanup_fails(tmp_path, capsys):
+    """A cleanup DELETE that itself fails must not mask the real problem -- but
+    it must also not let an operator believe the corrupt object was removed."""
+    src = tmp_path / "Estabelecimentos1.zip"
+    src.write_bytes(b"z" * 4096)
+    w = _fake_workspace_client(3072, delete_error=OSError("503 Service Unavailable"))
 
     with pytest.raises(UploadIntegrityError, match="short-written"):
         upload_to_volume(w, src, "/Volumes/workspace/default/landing/zips")
 
     assert w.files.deletes == ["/Volumes/workspace/default/landing/zips/Estabelecimentos1.zip"]
+    out = capsys.readouterr().out
+    assert "delete FAILED" in out and "503 Service Unavailable" in out
+
+
+def test_upload_to_volume_reports_the_expected_404_as_nothing_to_delete(tmp_path, capsys):
+    """A clean failure leaves no object at all, so the cleanup DELETE 404s. That
+    is the expected case, not a cleanup failure, and must read as such."""
+    src = tmp_path / "Estabelecimentos1.zip"
+    src.write_bytes(b"z" * 4096)
+    w = _fake_workspace_client(3072, delete_error=NotFound("File not found"))
+
+    with pytest.raises(UploadIntegrityError, match="short-written"):
+        upload_to_volume(w, src, "/Volumes/workspace/default/landing/zips")
+
+    out = capsys.readouterr().out
+    assert "nothing to delete" in out
+    assert "FAILED" not in out
 
 
 def test_unzip_single_extracts_inner_file(tmp_path):
