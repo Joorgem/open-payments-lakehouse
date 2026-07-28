@@ -17,12 +17,17 @@ UPLOAD_PROFILE = "opl-free"
 # WHY widen this: `retry_timeout_seconds` is the SDK's TOTAL wall-clock budget
 # for one API call across every attempt (`_base_client.py:78`, default 300 s),
 # and `retried()` only checks that deadline BETWEEN attempts (sdk retries.py).
-# So once a single attempt runs longer than the budget, no retry can ever
-# happen and the call dies as `Timed out after 0:05:00`. Measured upstream to
-# this workspace is ~67 MB/min, so Estabelecimentos3.zip (366,824,247 B) needs
-# ~5.5 min -- just past the 300 s default, which is exactly why it died there
-# while its 336 MB sibling landed just inside. The largest payload is bigger
-# still: extract_cnpj.py PUTs uncompressed inner CSVs (Simples' is several GB,
+# So the budget never interrupts a PUT in flight; what it does is make the first
+# retryable failure fatal once the budget is spent -- which is how a long upload
+# ends as `Timed out after 0:05:00`: some attempt failed and there was no time
+# left to retry it. Estabelecimentos3.zip (366,824,247 B) died that way. At the
+# ~67 MB/min measured upstream to this workspace a ~340 MB part needs ~5 min,
+# i.e. the whole default budget, so a part that size spends it inside its first
+# attempt and has no retry left. (What that first failure was is not recorded,
+# and duration alone cannot produce this error, so no size threshold is claimed
+# here -- the widening is justified by the mechanism, not by a correlation.)
+# The largest payload is bigger still:
+# extract_cnpj.py PUTs uncompressed inner CSVs (Simples' is several GB,
 # up to the Files API's 5 GiB single-PUT cap => ~75 min at that rate). 2 h
 # covers one full attempt of the worst case plus room for a retry.
 UPLOAD_RETRY_TIMEOUT_SECONDS = 2 * 60 * 60

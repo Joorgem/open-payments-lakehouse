@@ -41,18 +41,21 @@ that both paths parse the RFB files byte-identically.
 ## Consequences
 - **Correctness first, parallelism second.** With `multiLine=true` Spark cannot
   split a single file across tasks: the unit of parallelism becomes the file,
-  not the ~128 MB block. For ten Estabelecimentos parts of ~340 MB this is a
-  non-issue — there are enough files to keep the cluster busy, and the lookup
+  not the ~128 MB block. Estabelecimentos ships as **ten parts in total** — nine
+  of ~320–370 MB plus part 0 at 2,128,818,559 B — and for the nine this is a
+  non-issue: there are enough files to keep the cluster busy, and the lookup
   files were already one task each.
-- **The 2 GB part 0 is the case this ADR exists to flag.** Part 0 is
-  2,128,818,559 B compressed, roughly 14 GB of CSV, and it will now be read,
-  parsed and written by a **single task**. This is the "one huge file" scenario
-  where the ceiling stops being theoretical. No benchmark is claimed here; the
-  run's wall clock is recorded in
+- **Part 0 is the case this ADR exists to flag, and it has now been run.** Part 0
+  is 2,128,818,559 B compressed, roughly 14 GB of CSV, so under `multiLine=true`
+  it was read, parsed and written by a **single task**: 29,093,533 rows in a run
+  of about nine minutes, taking bronze to 71,874,448 rows. Wall clocks in
   [`docs/f1.3-estabelecimentos-run-evidence.md`](../f1.3-estabelecimentos-run-evidence.md).
-  If it proves unacceptable, the fix is upstream of the reader — split the
-  giant inner CSV on newline-safe boundaries during the in-Volume unzip so the
-  file count, not the reader mode, restores parallelism.
+  That is one run with nothing isolated — not a benchmark, and no comparison
+  against `multiLine=false` exists — so what it settles is that the ceiling is
+  livable at this scale, not what it costs. No pre-splitting was needed. Should a
+  later stage find it unacceptable, the fix is still upstream of the reader —
+  split the giant inner CSV on newline-safe boundaries during the in-Volume unzip
+  so the file count, not the reader mode, restores parallelism.
 - `multiLine` is not part of Auto Loader's schema state, so flipping it neither
   invalidates the schema location nor triggers reprocessing. Records already
   ingested under `multiLine=false` are **not** repaired by this change: the

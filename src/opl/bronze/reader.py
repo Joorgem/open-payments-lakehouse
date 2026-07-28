@@ -23,14 +23,16 @@ def csv_read_options() -> dict[str, str]:
         # rule and gets promoted) plus a garbage "fragment"; the row count still
         # matches the source, so no count check can catch it.
         #
-        # Cost, stated because it is real and unmeasured here: with multiLine
-        # Spark cannot split one file across tasks, so the unit of parallelism
-        # becomes the file, not the 128 MB block. Accepted for this workload --
-        # 10 Estabelecimentos parts of ~340 MB plus one ~2 GB part give enough
-        # files to keep the cluster busy, and the lookup files are single-part
-        # and small enough that a file was already one task. No benchmark was
-        # run; the trade is correctness for a parallelism ceiling we can live
-        # with, and it must be revisited if a stage ever ingests one huge file.
+        # Cost, stated because it is real: with multiLine Spark cannot split one
+        # file across tasks, so the unit of parallelism becomes the file, not the
+        # 128 MB block. Accepted for this workload -- Estabelecimentos ships as
+        # ten parts in total (nine of ~320-370 MB plus part 0 at 2,128,818,559 B),
+        # enough files to keep the cluster busy, and the lookup files are
+        # single-part and small enough that a file was already one task. Part 0 is
+        # the one-huge-file case: ~14 GB of CSV in a single task ingested
+        # 29,093,533 rows in about nine minutes, so the ceiling is livable at this
+        # scale. One run, nothing isolated -- a data point, not a benchmark; the
+        # trade is correctness for a known parallelism ceiling (ADR 0005).
         "multiLine": "true",
     }
 

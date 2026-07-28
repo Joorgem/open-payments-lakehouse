@@ -47,9 +47,15 @@ Three parts, deliberately separated by risk:
    `batch_id`, for use *after* a human has read the quarantine and accepted the
    rejects. It is not a bypass — it reuses `promote_batch`, which re-applies the
    same rules and appends only passing rows, so rejects stay out of bronze and
-   stay in quarantine. It lives outside the ingestion flow so nothing automated
-   can reach it, and its `batch_id` has no usable default. Both stranded batches
-   above were recovered with it (9,506,870 rows each).
+   stay in quarantine. Its two safety properties sit in two different places:
+   *isolation* comes from living outside the ingestion flow, which is what keeps
+   anything automated from reaching it; *validation* comes from `promote_batch`,
+   which refuses the sentinel its `batch_id` parameter defaults to and any
+   `batch_id` matching no staging row. The default itself guards nothing — before
+   that check existed, running the job with no `--params` matched no rows,
+   appended nothing and exited 0, reporting SUCCESS for a batch it never
+   promoted. Both stranded batches above were recovered with it (9,506,870 rows
+   each).
 3. **Defer rate-based gating to F1.4**, specified here rather than left as a
    vague intention: block promotion when the reject *rate* exceeds a threshold,
    otherwise quarantine and continue. The threshold must be chosen against
@@ -62,6 +68,10 @@ Three parts, deliberately separated by risk:
 - Until F1.4, every run with a reject fails and needs a human to read the
   quarantine and re-promote. That is now a bounded, documented operation rather
   than a dead end, but it is still manual.
+- Re-running the triage job is safe, which matters because "I am not sure the
+  first invocation took" is the expected operator state: `promote_batch` is
+  idempotent per `_batch_id` — it skips the append when bronze already holds that
+  batch — so a second invocation cannot double-count the batch.
 - Rate-based gating trades a hard stop for a monitoring obligation: rejects
   would accumulate silently unless someone watches them. The alert must be on
   the **trend** of the quarantine, not on the presence of rows in it — otherwise

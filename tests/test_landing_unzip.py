@@ -69,9 +69,11 @@ def test_upload_to_volume_deletes_the_short_object_before_raising(tmp_path, fake
 def test_upload_to_volume_deletes_and_reraises_when_the_put_itself_fails(
     tmp_path, fake_workspace_client
 ):
-    """Estabelecimentos3.zip (366,824,247 B) died with `Timed out after 0:05:00`
-    mid-PUT. A timed-out PUT may leave a partial object, so clean up -- but the
-    caller must still see the original TimeoutError, not UploadIntegrityError."""
+    """Estabelecimentos3.zip (366,824,247 B) failed as `Timed out after 0:05:00`
+    -- the SDK's retry budget spent, not a PUT interrupted mid-flight (see
+    landing.py). A failed PUT may still have left a partial object behind, so
+    clean up -- but the caller must see the original TimeoutError, not
+    UploadIntegrityError."""
     src = tmp_path / "Estabelecimentos3.zip"
     src.write_bytes(b"z" * 4096)
     boom = TimeoutError("Timed out after 0:05:00")
