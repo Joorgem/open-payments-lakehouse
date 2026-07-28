@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from databricks.sdk import WorkspaceClient
 from opl.contracts.cnpj_schemas import FILE_GROUPS
 from opl.extraction.cnpj_source import (
     RECORTE_GROUPS,
@@ -14,7 +13,12 @@ from opl.extraction.cnpj_source import (
     WEBDAV_BASE,
     expected_files,
 )
-from opl.extraction.landing import LANDING_VOLUME_DIR, unzip_single, upload_to_volume
+from opl.extraction.landing import (
+    LANDING_VOLUME_DIR,
+    unzip_single,
+    upload_client,
+    upload_to_volume,
+)
 from opl.extraction.webdav import WebDavClient
 
 
@@ -69,7 +73,7 @@ def run(
         print(f"error: {month} is incomplete for {groups}; missing={missing}")
         return 2
 
-    w = WorkspaceClient(profile="opl-free") if upload else None
+    w = upload_client() if upload else None
     landed = 0
     had_error = False
     for fname in expected:

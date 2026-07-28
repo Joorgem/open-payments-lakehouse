@@ -7,13 +7,49 @@ import zipfile
 from pathlib import Path
 
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.core import Config
 from opl.config import DEFAULT
 
 LANDING_VOLUME_DIR = DEFAULT.landing_cnpj_root
+UPLOAD_PROFILE = "opl-free"
+
+# WHY widen this: `retry_timeout_seconds` is the SDK's TOTAL wall-clock budget
+# for one API call across every attempt (`_base_client.py:78`, default 300 s),
+# and `retried()` only checks that deadline BETWEEN attempts (sdk retries.py).
+# So once a single attempt runs longer than the budget, no retry can ever
+# happen and the call dies as `Timed out after 0:05:00`. Measured upstream to
+# this workspace is ~67 MB/min, so Estabelecimentos3.zip (366,824,247 B) needs
+# ~5.5 min -- just past the 300 s default, which is exactly why it died there
+# while its 336 MB sibling landed just inside. The largest payload is bigger
+# still: extract_cnpj.py PUTs uncompressed inner CSVs (Simples' is several GB,
+# up to the Files API's 5 GiB single-PUT cap => ~75 min at that rate). 2 h
+# covers one full attempt of the worst case plus room for a retry.
+UPLOAD_RETRY_TIMEOUT_SECONDS = 2 * 60 * 60
+# `http_timeout_seconds` is deliberately NOT touched: it is the per-socket
+# connect/read inactivity timeout handed straight to `requests`
+# (`_base_client.py:95`, default 60 s), not part of the budget above. No
+# evidence implicates it, and raising it only turns a dead socket into a hang.
 
 
 class UploadIntegrityError(OSError):
     """A Files API upload landed a byte count different from the local source."""
+
+
+def upload_client(**auth: object) -> WorkspaceClient:
+    """Build the WorkspaceClient every Volume upload path must use.
+
+    `retry_timeout_seconds` is a Config field, not a WorkspaceClient.__init__
+    kwarg (databricks-sdk 0.40), so it has to travel through an explicit Config;
+    passing it to the client raises TypeError. `auth` defaults to the local
+    `opl-free` CLI profile; tests pass an explicit host/token so this factory
+    needs no credentials.
+    """
+    return WorkspaceClient(
+        config=Config(
+            retry_timeout_seconds=UPLOAD_RETRY_TIMEOUT_SECONDS,
+            **(auth or {"profile": UPLOAD_PROFILE}),
+        )
+    )
 
 
 def unzip_single(zip_path: Path, dest_dir: Path) -> Path:

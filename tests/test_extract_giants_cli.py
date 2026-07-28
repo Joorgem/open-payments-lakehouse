@@ -2,9 +2,8 @@
 """Unit tests for scripts/extract_giants.py's CLI wiring.
 
 Pure-Python, no network, no credentials, no `.databrickscfg` profile: the
-upload client is built from an explicit dummy host/token, which the SDK
-resolves locally (no auth call happens at construction time), and a FakeClient
-stands in for the real WebDavClient.
+upload client factory is stubbed out and a FakeClient stands in for the real
+WebDavClient.
 """
 from __future__ import annotations
 
@@ -14,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from opl.extraction import landing
 from opl.extraction.webdav import FileEntry
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "extract_giants.py"
@@ -21,9 +21,6 @@ _spec = importlib.util.spec_from_file_location("extract_giants_cli", _SCRIPT_PAT
 assert _spec is not None and _spec.loader is not None
 cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cli)
-
-_DUMMY_AUTH = {"host": "https://example.cloud.databricks.com", "token": "dummy"}
-
 
 class FakeClient:
     """Stands in for WebDavClient: no network, writes a valid 1-member zip."""
@@ -47,24 +44,32 @@ class FakeClient:
         return dest
 
 
-def test_upload_client_carries_the_widened_timeouts():
-    """The widened timeouts must actually reach the client the uploads use.
+def test_upload_uses_the_shared_widened_timeout_client(tmp_path, monkeypatch):
+    """The uploading path must go through the library factory, not a bare
+    WorkspaceClient: the factory is where the widened retry budget lives."""
+    assert cli.upload_client is landing.upload_client
 
-    Regression guard: `retry_timeout_seconds` / `http_timeout_seconds` are NOT
-    WorkspaceClient.__init__ kwargs in databricks-sdk 0.40 -- they are Config
-    fields. Passing them as kwargs raises TypeError on the very first upload
-    run, which no other test in the suite would have caught.
-    """
-    w = cli._upload_client(**_DUMMY_AUTH)
-    assert w.config.retry_timeout_seconds == cli.UPLOAD_RETRY_TIMEOUT_SECONDS
-    assert w.config.http_timeout_seconds == cli.UPLOAD_HTTP_TIMEOUT_SECONDS
+    sentinel = object()
+    monkeypatch.setattr(cli, "upload_client", lambda **_auth: sentinel)
+    seen: list[object] = []
+
+    def fake_upload_zips(w, paths, cfg, table, month):
+        seen.append(w)
+        return [f"/Volumes/x/{p.name}" for p in paths]
+
+    monkeypatch.setattr(cli, "upload_zips", fake_upload_zips)
+    client = FakeClient(present_names={"Estabelecimentos1.zip"})
+    rc = cli.run(client, "2026-07", "Estabelecimentos", [1], str(tmp_path), upload=True)
+
+    assert rc == 0
+    assert seen == [sentinel]
 
 
 def test_run_without_upload_builds_no_client(tmp_path, monkeypatch):
     def boom(**_auth):
         raise AssertionError("no WorkspaceClient may be built when --upload is off")
 
-    monkeypatch.setattr(cli, "_upload_client", boom)
+    monkeypatch.setattr(cli, "upload_client", boom)
     client = FakeClient(present_names={"Estabelecimentos1.zip"})
     rc = cli.run(client, "2026-07", "Estabelecimentos", [1], str(tmp_path), upload=False)
     assert rc == 0
