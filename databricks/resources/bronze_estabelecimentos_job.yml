@@ -1,0 +1,71 @@
+# databricks/resources/bronze_estabelecimentos_job.yml
+resources:
+  jobs:
+    bronze_cnpj_estabelecimentos:
+      name: opl-bronze-cnpj-estabelecimentos
+      parameters:
+        - name: month
+          default: "2026-06"
+      tasks:
+        - task_key: unzip
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/unzip_estabelecimentos.py
+            parameters: ["{{job.parameters.month}}"]
+
+        - task_key: ingest
+          depends_on: [{ task_key: unzip }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/bronze_estab_ingest.py
+            parameters: ["{{job.run_id}}", "{{job.parameters.month}}"]
+
+        - task_key: dq_gate_batch
+          depends_on: [{ task_key: ingest }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/dq_gate_batch.py
+            parameters: ["{{job.run_id}}"]
+
+        - task_key: check_bad_rows
+          depends_on: [{ task_key: dq_gate_batch }]
+          condition_task:
+            op: EQUAL_TO
+            left: "{{tasks.dq_gate_batch.values.bad_row_count}}"
+            right: "0"
+
+        - task_key: promote
+          depends_on: [{ task_key: check_bad_rows, outcome: "true" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/promote_batch.py
+            # --in-flow declares "this batch_id is the run executing this task",
+            # which is the ONLY caller that can say so truthfully. It is what
+            # lets a scheduled run whose batch is empty (no new file arrived)
+            # succeed as a no-op instead of being refused. The operator job
+            # deliberately omits it, so a mistyped batch_id there is still
+            # refused rather than exiting 0 having promoted nothing.
+            parameters: ["{{job.run_id}}", "--in-flow"]
+
+        - task_key: fail_on_dq
+          depends_on: [{ task_key: check_bad_rows, outcome: "false" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/fail_on_dq.py
+            # The quarantine THIS job writes (must match QUARANTINE in
+            # ../src/dq_gate_batch.py). fail_on_dq is shared with the lookup job,
+            # which quarantines elsewhere; hardcoding one of them sent estab
+            # triagers to a table full of unrelated F1.2 lookup rows.
+            parameters: ["bronze_cnpj_estab_quarantine"]
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

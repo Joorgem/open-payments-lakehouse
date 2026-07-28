@@ -13,6 +13,24 @@ def test_options_are_cp1252_semicolon_quoted_headerless():
     assert o["quote"] == '"'
     assert o["header"] == "false"
     assert o["mode"] == "PERMISSIVE"
+    # Deliberate change on top of what F1.2 shipped: RFB quotes fields that
+    # contain literal newlines, so the record separator cannot be trusted.
+    # Pinned here so it cannot be dropped silently -- see
+    # tests/bronze/test_reader_multiline.py for the incident it fixes.
+    assert o["multiLine"] == "true"
+    # The other half of RFC 4180 quoting (section 2.7): a quote inside a quoted
+    # field is escaped by doubling it, and in RFC 4180 the escape character IS
+    # the quote character. Spark's `escape` defaults to backslash, so without
+    # this RFB's `""` is never unescaped and the value can absorb the `;`
+    # delimiter. Pinned for the same reason as multiLine -- dropping it corrupts
+    # free-text fields on 461 of the 4,753,436 records of Estabelecimentos6
+    # while every DQ rule still passes. See test_reader_multiline.py.
+    assert o["escape"] == '"'
+    # Deliberately absent: with `escape` set, unescapedQuoteHandling changes
+    # nothing for any well-formed RFC 4180 record, and its non-default values
+    # only alter how genuinely malformed records parse (RAISE_ERROR would abort
+    # the job). Asserted so nobody adds it without a measured reason.
+    assert "unescapedQuoteHandling" not in o
 
 
 def test_reads_real_cp1252_bytes_preserving_accents_and_leading_zeros(tmp_path):
@@ -21,7 +39,9 @@ def test_reads_real_cp1252_bytes_preserving_accents_and_leading_zeros(tmp_path):
         '"01";"AÇÃO E TECNOLOGIA"',
         '"0023";"SÃO JOÃO — SERVIÇOS"',   # em dash 0x97 lives in cp1252 0x80-0x9F
     ]
-    raw = ("\r\n".join(rows) + "\r\n").encode("cp1252")
+    # LF record separator: the real extracts carry zero CR bytes (see the
+    # docstring of tests/bronze/test_reader_multiline.py, which also pins CRLF).
+    raw = ("\n".join(rows) + "\n").encode("cp1252")
     f = tmp_path / "sample.CNAECSV"
     f.write_bytes(raw)
 

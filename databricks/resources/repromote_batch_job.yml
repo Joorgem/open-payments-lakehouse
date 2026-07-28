@@ -1,0 +1,60 @@
+# databricks/resources/repromote_batch_job.yml
+# Operator tool, deliberately NOT part of the ingestion flow.
+#
+# WHY it exists: the batch-scoped gate blocks promotion of a batch that holds
+# any rejected row, and a later normal run ingests new files under a NEW
+# _batch_id -- so the blocked batch is never revisited and its good rows sit in
+# staging with nowhere to go. That is not hypothetical: on 2026-07-27 run
+# 315230730740144 ingested 9,506,871 rows of real RFB data, the gate rejected
+# exactly one of them, and the other 9,506,870 were stranded.
+#
+# WHAT that one rejected row actually was, since the first diagnosis was wrong
+# and this comment outlived it: the SOURCE record was valid CSV -- a literal
+# newline inside a quoted field (RFC 4180 §2.6). Our reader split it in two,
+# because Spark's CSV reader defaults to multiLine=false: a NULL-tailed "parent"
+# that passed every DQ rule and was promoted, plus a "fragment" starting
+# mid-field whose cnpj_basico was garbage. The gate rejected the fragment our
+# own reader had manufactured, not dirty source data (ADR 0005; the reader now
+# sets multiLine=true).
+#
+# This job re-runs the promote step alone against an explicitly named batch,
+# for use AFTER a human has read the quarantine table and accepted the
+# rejects. It is not a gate bypass: promote_batch re-applies the same DQ rules
+# and appends only the rows that pass, so rejected rows stay out of bronze and
+# remain in quarantine.
+#
+# Two safety properties, deliberately in two different places:
+#   * ISOLATION is this job's job -- living outside the ingestion flow is what
+#     keeps anything automated from reaching it.
+#   * VALIDATION is promote_batch.py's job. The batch_id default below is a
+#     SENTINEL, i.e. a value the script refuses, alongside any batch_id that
+#     names nothing in staging or bronze. This job also omits the ingestion
+#     flow's --in-flow token on purpose, so an empty batch is refused here even
+#     though it is a legitimate no-op there. It is NOT what makes the job safe:
+#     before that check
+#     existed, running this job with no --params matched no rows, appended
+#     nothing and exited 0 -- a green run for a batch it never promoted. A
+#     job-parameter default cannot validate anything.
+resources:
+  jobs:
+    repromote_triaged_batch:
+      name: opl-repromote-triaged-batch
+      parameters:
+        - name: batch_id
+          # Sentinel refused by promote_batch (opl.bronze.promote.SENTINEL_BATCH_ID),
+          # because a job parameter has to have SOME default and no id is valid.
+          default: "REQUIRED-PASS-A-BATCH-ID"
+      tasks:
+        - task_key: promote
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/promote_batch.py
+            parameters: ["{{job.parameters.batch_id}}"]
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

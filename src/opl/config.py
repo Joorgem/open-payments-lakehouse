@@ -24,6 +24,12 @@ class OplConfig:
     def landing_cnpj_month(self, month: str | None = None) -> str:
         return f"{self.landing_cnpj_root}/{month or self.month}"
 
+    def landing_zips(self, table: str, month: str | None = None) -> str:
+        return f"{self.landing_cnpj_month(month)}/zips/{table}"
+
+    def landing_table(self, table: str, month: str | None = None) -> str:
+        return f"{self.landing_cnpj_month(month)}/{table}"
+
     def table(self, name: str) -> str:
         return f"{self.catalog}.{self.schema}.{name}"
 

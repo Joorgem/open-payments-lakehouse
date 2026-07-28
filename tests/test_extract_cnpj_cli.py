@@ -2,8 +2,8 @@
 """Unit tests for scripts/extract_cnpj.py's run()/main() orchestration.
 
 Pure-Python, no network, no JVM, no Docker: a FakeClient stands in for the
-real WebDavClient (implements list_dir + download only), and upload=False
-(--no-upload) avoids ever constructing a real WorkspaceClient.
+real WebDavClient (implements list_dir + download only), and the upload client
+factory is stubbed out so no real WorkspaceClient is ever constructed.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from opl.extraction import landing
 from opl.extraction.webdav import FileEntry
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "extract_cnpj.py"
@@ -55,6 +56,37 @@ def test_run_complete_month_upload_false_lands_all(tmp_path):
     assert sorted(client.downloaded) == ["2026-07/Cnaes.zip", "2026-07/Motivos.zip"]
     unz_dir = tmp_path / "2026-07" / "unz"
     assert sorted(p.name for p in unz_dir.iterdir()) == ["Cnaes.TXT", "Motivos.TXT"]
+
+
+def test_upload_uses_the_shared_widened_timeout_client(tmp_path, monkeypatch):
+    """This path uploads the UNCOMPRESSED inner CSV (Simples' is several GB), so
+    it needs the widened retry budget even more than the giants path does -- it
+    used to build a bare WorkspaceClient carrying the SDK's 300 s default."""
+    assert cli.upload_client is landing.upload_client
+
+    sentinel = object()
+    monkeypatch.setattr(cli, "upload_client", lambda **_auth: sentinel)
+    seen: list[object] = []
+
+    def fake_upload_to_volume(w, inner, volume_dir):
+        seen.append(w)
+        return f"{volume_dir}/{inner.name}"
+
+    monkeypatch.setattr(cli, "upload_to_volume", fake_upload_to_volume)
+    client = FakeClient(present_names={"Cnaes.zip"})
+    rc = cli.run(client, "2026-07", ["Cnaes"], str(tmp_path), upload=True)
+
+    assert rc == 0
+    assert seen == [sentinel]
+
+
+def test_run_without_upload_builds_no_client(tmp_path, monkeypatch):
+    def boom(**_auth):
+        raise AssertionError("no WorkspaceClient may be built when --no-upload is set")
+
+    monkeypatch.setattr(cli, "upload_client", boom)
+    client = FakeClient(present_names={"Cnaes.zip"})
+    assert cli.run(client, "2026-07", ["Cnaes"], str(tmp_path), upload=False) == 0
 
 
 def test_run_missing_expected_file_returns_1(tmp_path):
