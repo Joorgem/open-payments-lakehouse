@@ -135,6 +135,20 @@ def test_an_already_promoted_batch_is_recognised_when_staging_no_longer_holds_it
     assert (result.appended_rows, result.bronze_rows) == (0, 2)
 
 
+def test_a_reject_count_that_cannot_be_re_derived_is_unknown_and_not_zero():
+    """The reject count comes from staging, and this outcome is the state where
+    staging no longer holds the batch -- so there is no number to report. It used to
+    be filled in with 0, a placeholder for "unknown" that only the docstring
+    distinguished from a count: `promote_batch.py` printed it as "0 rejected row(s)
+    ... stay in quarantine", telling an operator the batch had no rejects when the
+    quarantine may well hold some. `None` makes the difference part of the type, so
+    the next caller has to decide what to do with it instead of doing arithmetic on a
+    zero that means nothing."""
+    assert _plan(bronze_rows=2).rejected_rows is None
+    # Contrast: every other outcome reports a count it actually derived.
+    assert _plan(bronze_rows=2, promotable=2, rejected=1).rejected_rows == 1
+
+
 def test_an_in_flow_batch_that_ingested_nothing_is_a_successful_no_op():
     """A scheduled run with no new files ingests nothing, and that empty batch
     still reaches promote. It used to be refused -- the pipeline's only
@@ -273,4 +287,7 @@ def test_a_partial_bronze_is_refused_and_a_promoted_batch_survives_staging_loss(
     repromoted = _promote(spark, tables, "b2")
 
     assert repromoted.outcome is PromoteOutcome.ALREADY_PROMOTED_STAGING_GONE
+    # Against real tables: the rejects were counted from staging, staging no longer
+    # holds b2, so there is no count -- not a count of zero.
+    assert repromoted.rejected_rows is None
     assert _bronze_batches(spark, tables) == ["b1", "b2"]

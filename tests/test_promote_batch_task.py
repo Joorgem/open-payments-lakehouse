@@ -15,7 +15,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from opl.bronze.promote import PromoteOutcome, PromoteRefused, PromoteResult
+from opl.bronze.promote import (
+    PromoteOutcome,
+    PromoteRefused,
+    PromoteResult,
+    plan_promotion,
+)
 from opl.bronze.rules import rules_for
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "databricks" / "src" / "promote_batch.py"
@@ -109,6 +114,32 @@ def test_a_repromote_after_a_rebuild_that_dropped_staging_still_reaches_the_ddl(
     out = capsys.readouterr().out
     assert "ALREADY" in out and "9506870" in out
     assert "staging no longer" in out
+
+
+def test_it_never_reports_a_reject_count_it_could_not_re_derive(monkeypatch, capsys):
+    """The reject count is derived from staging, and this outcome is defined by
+    staging no longer holding the batch -- so this task cannot know it. It printed the
+    line unconditionally anyway: "0 rejected row(s) of batch X stay in quarantine",
+    which is a claim about the quarantine table that nothing here checked, and which
+    contradicts the outcome's own docstring ("the log must not claim a verified
+    match"). An operator recovering a batch reads that as "nothing was quarantined".
+
+    The result comes from the REAL `plan_promotion`, not a hand-written one: a test
+    that re-spells what this outcome carries would keep passing on the very
+    placeholder it exists to forbid."""
+    _stub_session(monkeypatch)
+    planned = plan_promotion(
+        "315230730740144", bronze_rows=9506870, staged_promotable=0, staged_rejected=0,
+        in_flow=False, staging_table="stg", bronze_table="bronze",
+    )
+    assert planned.outcome is PromoteOutcome.ALREADY_PROMOTED_STAGING_GONE
+    _record_promote(monkeypatch, planned)
+
+    task.main(["315230730740144"])
+
+    out = capsys.readouterr().out
+    assert "rejected row(s) of batch" not in out  # no count is a fact here
+    assert "NOT knowable" in out and "quarantine" in out
 
 
 def test_it_reports_the_accepted_reject_count(monkeypatch, capsys):

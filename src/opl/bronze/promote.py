@@ -51,7 +51,9 @@ class PromoteOutcome(Enum):
     ALREADY_PROMOTED = "already_promoted"
     # Bronze holds the batch and staging no longer does, so the promotable count
     # could not be re-derived: "already promoted" here is inferred from bronze
-    # alone and the log must not claim a verified match.
+    # alone and the log must not claim a verified match. The REJECT count is not
+    # re-derivable either -- same missing source -- so this is the one outcome whose
+    # `rejected_rows` is None rather than a number.
     ALREADY_PROMOTED_STAGING_GONE = "already_promoted_staging_gone"
     NOTHING_INGESTED = "nothing_ingested"
 
@@ -61,7 +63,16 @@ class PromoteResult:
     batch_id: str
     outcome: PromoteOutcome
     appended_rows: int
-    rejected_rows: int
+    # None means NOT KNOWABLE, which is a different thing from 0 and only one
+    # outcome produces it: ALREADY_PROMOTED_STAGING_GONE, where the count's only
+    # source (staging) no longer holds the batch. It used to be reported as 0 -- a
+    # placeholder that read as a derived count, and `promote_batch.py` printed it to
+    # the operator as "0 rejected row(s) ... stay in quarantine", a claim about the
+    # quarantine table that nothing had checked. Optional rather than a sentinel
+    # int: a magic -1 is still an int, so it survives arithmetic and comparisons
+    # silently, whereas None makes every consumer face the case (and a type checker
+    # point at the ones that do not).
+    rejected_rows: int | None
     # What bronze already held for this batch before the call. Kept because the
     # skip-path log has to print the number it decided on, not just the verdict.
     bronze_rows: int
@@ -135,8 +146,11 @@ def plan_promotion(
             batch_id, PromoteOutcome.ALREADY_PROMOTED, 0, staged_rejected, bronze_rows
         )
     if bronze_rows > 0 and staged_total == 0:
+        # rejected_rows=None, not 0: `staged_rejected` is 0 here because staging holds
+        # NO row of this batch, which says nothing about how many of its rows are in
+        # quarantine. Whatever the caller reports must not pass that off as a count.
         return PromoteResult(
-            batch_id, PromoteOutcome.ALREADY_PROMOTED_STAGING_GONE, 0, 0, bronze_rows
+            batch_id, PromoteOutcome.ALREADY_PROMOTED_STAGING_GONE, 0, None, bronze_rows
         )
     if bronze_rows > 0:
         raise PromoteRefused(

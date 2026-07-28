@@ -12,7 +12,7 @@ import sys
 from pyspark.sql import SparkSession
 
 from opl.bronze.autoloader import BRONZE_ESTAB_STAGING
-from opl.bronze.promote import PromoteOutcome, promote_batch
+from opl.bronze.promote import BATCH_COLUMN, PromoteOutcome, promote_batch
 from opl.bronze.rules import rules_for
 from opl.config import DEFAULT
 
@@ -62,10 +62,23 @@ def main(argv: list[str] | None = None) -> None:
     else:
         print(f"promote_batch: appended {result.appended_rows} rows "
               f"(batch {result.batch_id}) to {tbl}")
-    # The rejects of this batch were left in quarantine. For the operator job
-    # that number is the point: a human read them and accepted them.
-    print(f"promote_batch: {result.rejected_rows} rejected row(s) of batch "
-          f"{result.batch_id} stay in quarantine, out of {tbl}")
+    # The rejects of this batch were left in quarantine. For the operator job that
+    # number is the point: a human read them and accepted them. It is only a number
+    # when the promote could derive it -- `rejected_rows is None` says the batch's
+    # rejects were counted from staging and staging no longer holds the batch, so this
+    # task has no count. It used to print that case as "0 rejected row(s) ... stay in
+    # quarantine", which is a claim about the quarantine table nothing verified, and
+    # exactly what the ALREADY_PROMOTED_STAGING_GONE branch above refuses to do about
+    # the promotable count.
+    if result.rejected_rows is None:
+        print(f"promote_batch: how many rows of batch {result.batch_id} are in "
+              "quarantine is NOT knowable from here -- that count comes from the "
+              "staging table, which no longer holds this batch. Read it from the "
+              f"quarantine table itself (SELECT count(*) ... WHERE {BATCH_COLUMN} = "
+              f"'{result.batch_id}'); this task promoted nothing out of it either way")
+    else:
+        print(f"promote_batch: {result.rejected_rows} rejected row(s) of batch "
+              f"{result.batch_id} stay in quarantine, out of {tbl}")
     # Runs on the promote paths and after the append, deliberately: this DDL is
     # what fails in the repair-run scenario the idempotent append exists for, so a
     # re-run must still reach it. A refused promote raises above and never gets
