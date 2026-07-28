@@ -51,8 +51,12 @@ Three parts, deliberately separated by risk:
    stay in quarantine. Its two safety properties sit in two different places:
    *isolation* comes from living outside the ingestion flow, which is what keeps
    anything automated from reaching it; *validation* comes from `promote_batch`,
-   which refuses the sentinel its `batch_id` parameter defaults to and any
-   `batch_id` matching no staging row. The default itself guards nothing — before
+   which refuses the sentinel its `batch_id` parameter defaults to, and any
+   `batch_id` that names nothing in either staging or bronze. (The ingestion
+   flow's own promote passes an `--in-flow` token declaring that its `batch_id`
+   is the run executing it, which is what lets a scheduled run with no new files
+   succeed as a no-op; the operator job omits it, so a mistyped id there is
+   still refused.) The default itself guards nothing — before
    that check existed, running the job with no `--params` matched no rows,
    appended nothing and exited 0, reporting SUCCESS for a batch it never
    promoted. Both stranded batches above were recovered with it (9,506,870 rows
@@ -70,9 +74,14 @@ Three parts, deliberately separated by risk:
   quarantine and re-promote. That is now a bounded, documented operation rather
   than a dead end, but it is still manual.
 - Re-running the triage job is safe, which matters because "I am not sure the
-  first invocation took" is the expected operator state: `promote_batch` is
-  idempotent per `_batch_id` — it skips the append when bronze already holds that
-  batch — so a second invocation cannot double-count the batch.
+  first invocation took" is the expected operator state: `promote_batch` decides
+  from row COUNTS, not from "any row present". It skips the append when bronze
+  holds *all* of the batch's promotable rows, recognises an already-promoted batch
+  whose staging rows are gone, and **refuses on a partial**, printing both counts
+  — because bronze is append-only with no per-row identity, so "append the
+  missing ones" is indistinguishable from "append everything twice". The gate's
+  quarantine append follows the same rule, so a repaired gate task cannot double
+  the rejects a human is triaging.
 - Rate-based gating trades a hard stop for a monitoring obligation: rejects
   would accumulate silently unless someone watches them. The alert must be on
   the **trend** of the quarantine, not on the presence of rows in it — otherwise

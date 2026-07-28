@@ -27,8 +27,11 @@
 #   * ISOLATION is this job's job -- living outside the ingestion flow is what
 #     keeps anything automated from reaching it.
 #   * VALIDATION is promote_batch.py's job. The batch_id default below is a
-#     SENTINEL, i.e. a value the script refuses, alongside any batch_id matching
-#     no staging row. It is NOT what makes the job safe: before that check
+#     SENTINEL, i.e. a value the script refuses, alongside any batch_id that
+#     names nothing in staging or bronze. This job also omits the ingestion
+#     flow's --in-flow token on purpose, so an empty batch is refused here even
+#     though it is a legitimate no-op there. It is NOT what makes the job safe:
+#     before that check
 #     existed, running this job with no --params matched no rows, appended
 #     nothing and exited 0 -- a green run for a batch it never promoted. A
 #     job-parameter default cannot validate anything.

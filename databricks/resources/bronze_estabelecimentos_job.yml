@@ -43,7 +43,13 @@ resources:
           environment_key: opl_env
           spark_python_task:
             python_file: ../src/promote_batch.py
-            parameters: ["{{job.run_id}}"]
+            # --in-flow declares "this batch_id is the run executing this task",
+            # which is the ONLY caller that can say so truthfully. It is what
+            # lets a scheduled run whose batch is empty (no new file arrived)
+            # succeed as a no-op instead of being refused. The operator job
+            # deliberately omits it, so a mistyped batch_id there is still
+            # refused rather than exiting 0 having promoted nothing.
+            parameters: ["{{job.run_id}}", "--in-flow"]
 
         - task_key: fail_on_dq
           depends_on: [{ task_key: check_bad_rows, outcome: "false" }]
