@@ -3,14 +3,31 @@ from pathlib import Path
 
 import pytest
 
+from opl.bronze import unzip_volume
 from opl.bronze.unzip_volume import CorruptZipError, unzip_dir
 
 
-def _make_zip(dir_, zip_name, inner_name, payload: bytes):
+def _make_zip(dir_, zip_name, inner_name, payload: bytes, compress=zipfile.ZIP_STORED):
     p = dir_ / zip_name
-    with zipfile.ZipFile(p, "w") as z:
+    with zipfile.ZipFile(p, "w", compress) as z:
         z.writestr(inner_name, payload)
     return p
+
+
+def _corrupt_member_data(src: Path, dst: Path, run: int = 64) -> Path:
+    """Copy ``src`` to ``dst`` with ``run`` bytes of the member's compressed data
+    flipped, same length, so every offset and the whole central directory stay
+    valid. ``zipfile`` accepts the archive and only fails while reading the member
+    -- the shape of a member that survived a bad transfer with correct byte counts.
+    """
+    raw = bytearray(src.read_bytes())
+    cd_start = raw.index(b"PK\x01\x02")
+    mid = cd_start // 2
+    assert mid + run < cd_start, "the flipped run must land inside the member data"
+    for i in range(mid, mid + run):
+        raw[i] ^= 0xFF
+    dst.write_bytes(bytes(raw))
+    return dst
 
 
 def _short_write(src: Path, dst: Path, dropped: int) -> Path:
@@ -86,6 +103,53 @@ def test_short_written_zip_raises_a_clear_error_instead_of_einval(tmp_path):
     assert "-1024" in message
     assert not isinstance(excinfo.value, OSError)  # not the raw EINVAL seek
     assert not list(dest.iterdir())  # nothing half-written left behind
+
+
+def test_a_failure_inside_the_member_copy_leaves_no_partial_file(tmp_path, monkeypatch):
+    """The path that can actually strand a half-written file. The guard above fires
+    BEFORE anything is created, so "nothing left behind" is free there; here the
+    ``.tmp`` already exists and holds bytes when the copy dies.
+
+    Why it matters beyond tidiness: the ``.tmp`` is written into the landing subdir
+    that the Estabelecimentos Auto Loader reads with NO ``pathGlobFilter`` (only the
+    lookup stream filters ``*CSV`` -- see ``opl.bronze.autoloader``), so an orphan
+    is a file that stream will discover and ingest as though it were a complete CSV.
+    The idempotence skip cannot save it either: that compares sizes of the FINAL
+    name, which a ``.tmp`` never reaches."""
+    zips, dest = tmp_path / "z", tmp_path / "d"
+    zips.mkdir(), dest.mkdir()
+    _make_zip(zips, "Estabelecimentos1.zip", "F.K1.ESTABELE", b"a" * 4096)
+
+    def die_mid_copy(src, out, length=None):
+        out.write(src.read(512))  # a genuinely partial file, already on disk
+        out.flush()
+        raise TimeoutError("simulated stall partway through the member copy")
+
+    monkeypatch.setattr(unzip_volume.shutil, "copyfileobj", die_mid_copy)
+
+    with pytest.raises(TimeoutError):
+        unzip_dir(zips, dest)
+
+    assert not list(dest.iterdir()), "a partial .tmp was left in the Auto Loader's path"
+
+
+def test_a_corrupt_member_leaves_no_partial_file(tmp_path):
+    """Same guarantee on the shape that needs no patching to produce: a member whose
+    deflate stream is damaged. ``zipfile`` only notices at the CRC check after the
+    last byte, i.e. once the ``.tmp`` exists (and, for a real multi-GB member, is
+    largely written)."""
+    zips, dest = tmp_path / "z", tmp_path / "d"
+    zips.mkdir(), dest.mkdir()
+    good = _make_zip(
+        tmp_path, "good.zip", "F.K1.ESTABELE",
+        bytes(i % 251 for i in range(200_000)), compress=zipfile.ZIP_DEFLATED,
+    )
+    _corrupt_member_data(good, zips / "Estabelecimentos1.zip")
+
+    with pytest.raises(zipfile.BadZipFile):
+        unzip_dir(zips, dest)
+
+    assert not list(dest.iterdir())
 
 
 def test_multi_member_zip_raises(tmp_path):

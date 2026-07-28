@@ -10,8 +10,12 @@ topology of ADR 0002/0004.
 
 The logic is pure ``zipfile`` over directories: no Spark/Java, unit-tested
 locally with tmp dirs. Idempotent -- a zip whose inner file already exists at
-the expected uncompressed size is skipped, so re-runs are safe and a run that
-died mid-extract (leaving only a ``.tmp``) re-extracts next time.
+the expected uncompressed size is skipped, so re-runs are safe; a member that
+failed to extract leaves nothing behind and is re-extracted next time.
+
+Nothing half-written is allowed to survive in ``dest_dir``, because that dir is
+what the Estabelecimentos Auto Loader reads with no ``pathGlobFilter``: an
+orphaned ``.tmp`` would be discovered and ingested as if it were a complete CSV.
 
 Defense in depth against a bad input object: a zip that is missing bytes yet
 still carries its original tail (see ``_reject_negative_header_offset``) is
@@ -38,9 +42,10 @@ def unzip_dir(zips_dir: str | Path, dest_dir: str | Path) -> list[Path]:
     same convention as ``opl.extraction.landing.unzip_single``). If the inner
     file already exists in ``dest_dir`` with size == the zip's recorded
     uncompressed size (``ZipInfo.file_size``), it is skipped untouched;
-    otherwise it is streamed out to a ``.tmp`` name and atomically renamed over
-    the target, then its size is verified. Returns the dest paths (extracted and
-    skipped alike) in processing order."""
+    otherwise it is streamed out to a ``.tmp`` name, size-verified, and atomically
+    renamed over the target -- and any failure in between removes that ``.tmp``,
+    so ``dest_dir`` never holds a partial file. Returns the dest paths (extracted
+    and skipped alike) in processing order."""
     zips_dir = Path(zips_dir)
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -70,17 +75,37 @@ def _unzip_one(zip_path: Path, dest_dir: Path) -> Path:
         _reject_negative_header_offset(zip_path, info)
 
         tmp = dest.with_name(dest.name + ".tmp")
-        with z.open(info) as src, open(tmp, "wb") as out:
-            shutil.copyfileobj(src, out, _COPY_CHUNK)
+        # NO failure between creating the .tmp and the atomic rename may leave it
+        # behind. `dest_dir` is the landing subdir the Estabelecimentos Auto Loader
+        # reads with NO pathGlobFilter (only the lookup stream filters `*CSV` --
+        # see opl.bronze.autoloader), so an orphaned .tmp is a file that stream
+        # discovers and ingests as if it were a complete CSV. Nor does the
+        # idempotence skip above catch it: that compares the size of the FINAL
+        # name, which a .tmp never reaches. Covers a mid-copy failure (a stalled
+        # FUSE read, a damaged member `zipfile` only rejects at its trailing CRC)
+        # as well as the size mismatch.
+        try:
+            with z.open(info) as src, open(tmp, "wb") as out:
+                shutil.copyfileobj(src, out, _COPY_CHUNK)
 
-        extracted_size = tmp.stat().st_size
-        if extracted_size != info.file_size:
-            tmp.unlink()
-            raise ValueError(
-                f"{zip_path.name}: extracted {extracted_size} bytes, "
-                f"expected {info.file_size}"
-            )
-        os.replace(tmp, dest)  # atomic; replaces existing target on Windows too.
+            extracted_size = tmp.stat().st_size
+            if extracted_size != info.file_size:
+                raise ValueError(
+                    f"{zip_path.name}: extracted {extracted_size} bytes, "
+                    f"expected {info.file_size}"
+                )
+            os.replace(tmp, dest)  # atomic; replaces existing target on Windows too.
+        except BaseException:
+            # BaseException, not Exception: a KeyboardInterrupt/SystemExit landing
+            # mid-copy strands exactly the same file. missing_ok because a
+            # successful os.replace has already consumed the .tmp.
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                # Never mask the real failure with a cleanup one -- but never go
+                # quiet either: an operator told nothing assumes the orphan is gone.
+                print(f"  cleanup: could not remove {tmp}: {cleanup_exc} -- STILL THERE")
+            raise
     return dest
 
 
