@@ -7,8 +7,10 @@ the lookup job and the Estabelecimentos job, which quarantine to different table
 (`bronze_cnpj_lookup_quarantine` vs `bronze_cnpj_estab_quarantine`). This message
 is the first instruction a triager gets — ADR 0006's workflow starts with "a
 human has read the quarantine" — and while it was hardcoded to the lookup table
-it sent two real Estabelecimentos runs to a table holding 7,408 unrelated F1.2
-lookup rows.
+it sent two real Estabelecimentos runs to the wrong table entirely: the lookup
+quarantine, which `dq_gate.py` OVERWRITES with the lookup gate's own rejects on
+every lookup run and which therefore never contains an Estabelecimentos row. A
+triager following that message finds no trace of the batch that was blocked.
 
 Raises (instead of sys.exit) so the failure carries the reason into the run
 output as a normal task error, not an opaque INTERNAL_ERROR."""

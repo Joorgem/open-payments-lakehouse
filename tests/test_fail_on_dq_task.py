@@ -25,7 +25,8 @@ _spec.loader.exec_module(task)
 
 def test_it_names_the_estabelecimentos_quarantine_table():
     """The defect this locks down: the estab job's failures pointed operators at
-    the lookup quarantine, a table holding 7,408 unrelated F1.2 rows."""
+    the lookup quarantine -- a table `dq_gate.py` overwrites with the LOOKUP
+    gate's rejects, so it holds nothing about the batch that was blocked."""
     with pytest.raises(RuntimeError) as excinfo:
         task.main(["bronze_cnpj_estab_quarantine"])
 
