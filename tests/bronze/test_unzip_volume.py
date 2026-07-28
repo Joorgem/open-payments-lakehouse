@@ -13,21 +13,24 @@ def _make_zip(dir_, zip_name, inner_name, payload: bytes):
     return p
 
 
-def _short_write(src: Path, dst: Path, cut_at: int, gap: int) -> Path:
-    """Write ``src`` to ``dst`` with ``gap`` bytes dropped from the MIDDLE of the
-    member data, leaving the central directory and EOCD byte-identical.
+def _short_write(src: Path, dst: Path, dropped: int) -> Path:
+    """Write ``src`` to ``dst`` with its first ``dropped`` bytes missing, leaving
+    the central directory and EOCD byte-identical.
 
-    This is the exact shape of the F1.3 incident object: a single PUT landed
-    273,373,127 of 341,333,959 bytes with the tail intact, so the EOCD still
-    advertised the original offsets. CPython then computes
-    ``concat = ecd_location - size_cd - offset_cd`` = -gap and shifts every
-    member's ``header_offset`` by it, yielding a negative offset. Note that
+    This is the shape of the F1.3 incident object: the pinned SDK retried a failed
+    PUT without rewinding the body, so what landed was ``original[67960832:]`` --
+    273,373,127 of 341,333,959 bytes, a dropped PREFIX with the tail intact, so the
+    EOCD still advertised the original offsets. (A gap in the middle produces the
+    identical arithmetic, which is why the observation alone could not tell the two
+    apart and the mechanism had to; see the F1.3 evidence doc.) CPython then
+    computes ``concat = ecd_location - size_cd - offset_cd`` = -dropped and shifts
+    every member's ``header_offset`` by it, yielding a negative offset. Note that
     ``ZipFile(...)`` and ``infolist()`` both SUCCEED on such a file -- only
     ``z.open(member)`` breaks, as a negative seek."""
     raw = src.read_bytes()
     cd_start = raw.index(b"PK\x01\x02")
-    assert 0 < cut_at < cut_at + gap < cd_start, "cut must land inside the member data"
-    dst.write_bytes(raw[:cut_at] + raw[cut_at + gap:])
+    assert 0 < dropped < cd_start, "the drop must land inside the member data"
+    dst.write_bytes(raw[dropped:])
     return dst
 
 
@@ -62,13 +65,13 @@ def test_re_extracts_when_size_mismatches(tmp_path):
 
 
 def test_short_written_zip_raises_a_clear_error_instead_of_einval(tmp_path):
-    """A zip that is short in the middle but keeps its tail must be rejected with
+    """A zip that is short at the front but keeps its tail must be rejected with
     a message that names the problem, not with the raw
     ``OSError: [Errno 22] Invalid argument`` that a negative seek produces."""
     zips, dest = tmp_path / "z", tmp_path / "d"
     zips.mkdir(), dest.mkdir()
     good = _make_zip(tmp_path, "good.zip", "F.K1.ESTABELE", b"a" * 4096)
-    bad = _short_write(good, zips / "Estabelecimentos1.zip", cut_at=2000, gap=1024)
+    bad = _short_write(good, zips / "Estabelecimentos1.zip", dropped=1024)
 
     # The fixture only proves something if it genuinely reproduces the incident.
     with zipfile.ZipFile(bad) as z:

@@ -81,13 +81,26 @@ def unzip_single(zip_path: Path, dest_dir: Path) -> Path:
 def upload_to_volume(w: WorkspaceClient, local_path: Path, volume_dir: str) -> str:
     """PUT ``local_path`` into ``volume_dir`` and verify the landed byte count.
 
-    WHY the verification: a single-PUT ``w.files.upload()`` of a 341 MB zip was
-    observed to return without error having written only 273 MB -- bytes missing
-    from the MIDDLE of the object, tail intact. Nothing downstream noticed until
-    ``zipfile`` computed a negative member offset from the still-original central
-    directory and died on an EINVAL seek, two job runs later. So every upload is
-    checked against the source size here, at the only point where the truth is
-    still cheap to establish.
+    WHY the verification: a single-PUT ``w.files.upload()`` of a 341,333,959-byte
+    zip returned without error having stored only 273,373,127 -- the object was
+    ``original[67960832:]``, i.e. a dropped PREFIX with the tail (and therefore
+    the original central directory) intact. That is a bug in the pinned SDK, not
+    an inference: in ``databricks-sdk`` <= 0.41.0 ``_BaseClient._perform`` rewinds
+    the request body only inside its ``if error is not None`` branch, so a raised
+    ``ConnectionError``/``Timeout`` skips the rewind; ``retried()`` re-sends from
+    the offset where the stream failed and ``requests`` recomputes
+    ``Content-Length`` as ``st_size - tell()``. The retry is thus a complete,
+    well-formed PUT of the remainder, which the server stores -- and
+    341,333,959 - 67,960,832 is exactly the 273,373,127 observed. Fixed upstream
+    in databricks-sdk-py#878, released 0.42.0; this repo is pinned to 0.40.0, so
+    this check stands in for that fix. (An earlier account read the loss as a gap
+    in the MIDDLE; that was retracted -- a dropped prefix and a middle gap yield
+    identical arithmetic downstream, and the object's head was never read before
+    it was deleted, so only the mechanism settles it.) Nothing downstream noticed
+    until ``zipfile`` computed a negative member offset from the still-original
+    central directory and died on an EINVAL seek, two job runs later. So every
+    upload is checked against the source size here, at the only point where the
+    truth is still cheap to establish.
 
     WHY the cleanup: an upload that fails may leave nothing behind (a PUT that
     timed out at the SDK's 5-minute default left no object at all) or a partial
