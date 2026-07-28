@@ -9,9 +9,10 @@ the promote both filter on `_batch_id == run_id`, so a bad batch no longer
 wedges every later clean batch. Running it against the real 2026-06
 Estabelecimentos snapshot exposed what that still does not solve.
 
-Measured on real data across four batches (42,780,915 rows promoted):
+Measured on real data across four batches. The staging counts below total
+42,780,919; the 42,780,915 rows promoted differ by exactly the four rejects:
 
-| batch | rows | rejected | reason |
+| batch | staging rows | rejected | reason |
 |---|---|---|---|
 | parts 1–2 | 9,506,870 | 0 | — |
 | parts 3–5 | 14,260,305 | 0 | — |
