@@ -12,13 +12,19 @@ from opl.bronze.autoloader import (
     bronze_stream,
     checkpoint_location,
 )
+from opl.bronze.promote import require_batch_id
 from opl.config import DEFAULT
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    args = sys.argv[1:] if argv is None else argv
+    # Refuse before Spark: this used to default to the literal "manual", which is
+    # worse than crashing. The gate and the promote both filter
+    # _batch_id == {{job.run_id}}, so rows tagged "manual" reach staging and are
+    # then never evaluated, never promoted and never reported -- a silent hole.
+    batch_id = require_batch_id(args[0] if args else "", action="ingest")
     spark = SparkSession.builder.getOrCreate()
-    batch_id = sys.argv[1] if len(sys.argv) > 1 else "manual"
-    month = sys.argv[2] if len(sys.argv) > 2 else DEFAULT.month
+    month = args[1] if len(args) > 1 else DEFAULT.month
     df = bronze_stream(spark, DEFAULT, "estabelecimentos",
                        DEFAULT.landing_table("estabelecimentos", month),
                        "bronze_cnpj_estab")

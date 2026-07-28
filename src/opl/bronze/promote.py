@@ -51,7 +51,9 @@ class PromoteOutcome(Enum):
     ALREADY_PROMOTED = "already_promoted"
     # Bronze holds the batch and staging no longer does, so the promotable count
     # could not be re-derived: "already promoted" here is inferred from bronze
-    # alone and the log must not claim a verified match.
+    # alone and the log must not claim a verified match. The REJECT count is not
+    # re-derivable either -- same missing source -- so this is the one outcome whose
+    # `rejected_rows` is None rather than a number.
     ALREADY_PROMOTED_STAGING_GONE = "already_promoted_staging_gone"
     NOTHING_INGESTED = "nothing_ingested"
 
@@ -61,14 +63,23 @@ class PromoteResult:
     batch_id: str
     outcome: PromoteOutcome
     appended_rows: int
-    rejected_rows: int
+    # None means NOT KNOWABLE, which is a different thing from 0 and only one
+    # outcome produces it: ALREADY_PROMOTED_STAGING_GONE, where the count's only
+    # source (staging) no longer holds the batch. It used to be reported as 0 -- a
+    # placeholder that read as a derived count, and `promote_batch.py` printed it to
+    # the operator as "0 rejected row(s) ... stay in quarantine", a claim about the
+    # quarantine table that nothing had checked. Optional rather than a sentinel
+    # int: a magic -1 is still an int, so it survives arithmetic and comparisons
+    # silently, whereas None makes every consumer face the case (and a type checker
+    # point at the ones that do not).
+    rejected_rows: int | None
     # What bronze already held for this batch before the call. Kept because the
     # skip-path log has to print the number it decided on, not just the verdict.
     bronze_rows: int
 
 
-def require_batch_id(batch_id: str | None) -> str:
-    """Return the batch id to promote, or refuse if none was really given.
+def require_batch_id(batch_id: str | None, *, action: str = "promote") -> str:
+    """Return the batch id to work on, or refuse if none was really given.
 
     A job-parameter default is not validation: the sentinel below simply matched
     no staging rows, so the promote appended nothing and exited 0 -- a forgotten
@@ -77,16 +88,25 @@ def require_batch_id(batch_id: str | None) -> str:
     This is the ONLY guard that runs before bronze is consulted, and it can:
     a blank or the sentinel is not an id at all, so no batch was ever ingested
     under it and it cannot name an already-promoted batch. Every other refusal
-    has to wait until both counts are known -- see `plan_promotion`."""
+    has to wait until both counts are known -- see `plan_promotion`.
+
+    SHARED WITH THE DQ GATE TASK, which faces the identical accident (a task run
+    with no parameters) and used to answer it with a bare `IndexError` naming a
+    list index. `action` is what that costs: the message has to say which task is
+    refusing, since "refusing to promote" from the gate would misreport where the
+    run stopped. Everything after it is the same in both cases -- the id is the same
+    id, found the same way -- and one guard is why it cannot drift."""
     candidate = (batch_id or "").strip()
     if not candidate or candidate == SENTINEL_BATCH_ID:
         raise PromoteRefused(
-            f"refusing to promote: batch_id={batch_id!r} names no batch. Pass the "
-            "_batch_id of the batch to promote -- it is the run id of the run that "
+            f"refusing to {action}: batch_id={batch_id!r} names no batch. Pass the "
+            f"_batch_id of the batch to {action} -- it is the run id of the run that "
             "ingested it, printed by that run's dq_gate_batch task as 'batch=<id>' "
             "(or list them with: SELECT _batch_id, count(*) FROM "
-            "<staging table> GROUP BY 1). Example: databricks bundle run "
-            "repromote_triaged_batch -t free --params batch_id=315230730740144"
+            "<staging table> GROUP BY 1). In the ingestion flow every task takes it "
+            "as its first parameter, {{job.run_id}}; an operator recovering a batch "
+            "passes it by hand: databricks bundle run repromote_triaged_batch -t "
+            "free --params batch_id=315230730740144"
         )
     return candidate
 
@@ -135,8 +155,11 @@ def plan_promotion(
             batch_id, PromoteOutcome.ALREADY_PROMOTED, 0, staged_rejected, bronze_rows
         )
     if bronze_rows > 0 and staged_total == 0:
+        # rejected_rows=None, not 0: `staged_rejected` is 0 here because staging holds
+        # NO row of this batch, which says nothing about how many of its rows are in
+        # quarantine. Whatever the caller reports must not pass that off as a count.
         return PromoteResult(
-            batch_id, PromoteOutcome.ALREADY_PROMOTED_STAGING_GONE, 0, 0, bronze_rows
+            batch_id, PromoteOutcome.ALREADY_PROMOTED_STAGING_GONE, 0, None, bronze_rows
         )
     if bronze_rows > 0:
         raise PromoteRefused(

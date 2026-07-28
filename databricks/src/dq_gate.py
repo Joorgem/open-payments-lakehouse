@@ -12,11 +12,10 @@ deliberate follow-up for the multi-month phase.
 from pyspark.sql import SparkSession
 
 from databricks.sdk.runtime import dbutils
+from opl.bronze.autoloader import BRONZE_QUARANTINE as QUARANTINE
 from opl.bronze.autoloader import BRONZE_STAGING
 from opl.bronze.dq import split
 from opl.config import DEFAULT
-
-QUARANTINE = "bronze_cnpj_lookup_quarantine"
 
 
 def main() -> None:
