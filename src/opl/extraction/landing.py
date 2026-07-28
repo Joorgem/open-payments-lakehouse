@@ -54,6 +54,13 @@ def upload_client(**auth: object) -> WorkspaceClient:
 
 
 def unzip_single(zip_path: Path, dest_dir: Path) -> Path:
+    # Same "exactly one inner member, then extract" job as
+    # opl.bronze.unzip_volume, deliberately without that module's
+    # negative-header-offset guard: this only ever opens a zip just downloaded to
+    # local disk whose byte count WebDavClient already checked against the WebDAV
+    # manifest, so the short-archive-with-intact-tail case the guard diagnoses
+    # cannot reach here. unzip_volume opens Volume objects landed by a PUT, where
+    # it can and did.
     zip_path = Path(zip_path)
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)

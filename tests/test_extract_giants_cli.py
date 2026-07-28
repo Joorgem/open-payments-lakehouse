@@ -76,6 +76,22 @@ def test_run_without_upload_builds_no_client(tmp_path, monkeypatch):
     assert client.downloaded == ["2026-07/Estabelecimentos1.zip"]
 
 
+def test_summary_reports_the_failure_count(tmp_path, monkeypatch, capsys):
+    """A run whose every upload died printed `1/1 downloaded, 0 uploaded` -- the
+    same line a --no-upload run prints. The failure count has to be in it."""
+    monkeypatch.setattr(cli, "upload_client", lambda **_auth: object())
+
+    def boom(*_a, **_kw):
+        raise TimeoutError("Timed out after 0:05:00")
+
+    monkeypatch.setattr(cli, "upload_zips", boom)
+    client = FakeClient(present_names={"Estabelecimentos1.zip"})
+    rc = cli.run(client, "2026-07", "Estabelecimentos", [1], str(tmp_path), upload=True)
+
+    assert rc == 1
+    assert "done: 1/1 downloaded, 0 uploaded (1 failed)" in capsys.readouterr().out
+
+
 def test_parse_parts_defaults_to_every_part():
     assert cli._parse_parts(None, "Estabelecimentos") == list(range(10))
 

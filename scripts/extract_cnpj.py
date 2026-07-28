@@ -92,7 +92,7 @@ def run(
             else:
                 print(f"  downloaded+unzipped {fname} -> {inner} ({inner.stat().st_size} B)")
             landed += 1
-        except Exception as exc:  # noqa: BLE001 - any land failure must fail the run
+        except Exception as exc:  # any land failure must fail the run
             print(f"  ERROR {fname}: {exc}")
             had_error = True
     print(f"done: {landed} files")

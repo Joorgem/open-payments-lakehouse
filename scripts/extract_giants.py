@@ -65,7 +65,7 @@ def run(
     w = upload_client() if upload else None
     downloaded = 0
     uploaded = 0
-    had_error = False
+    failed = 0
     for i in parts:
         try:
             local_paths = download_parts(client, month, group, local_dir, parts=[i])
@@ -77,12 +77,15 @@ def run(
                 print(f"  landed {zp.name} -> {target} ({zp.stat().st_size} B)")
             else:
                 print(f"  downloaded {zp.name} -> {zp} ({zp.stat().st_size} B)")
-        except Exception as exc:  # noqa: BLE001 - any part failure must fail the run
+        except Exception as exc:  # any part failure must fail the run
             print(f"  ERROR {group}{i}.zip: {exc}")
-            had_error = True
+            failed += 1
+    # The failure count belongs in the summary: without it "10/10 downloaded,
+    # 0 uploaded" is the same line whether uploading was off or every upload died.
     suffix = f", {uploaded} uploaded" if upload else ""
-    print(f"done: {downloaded}/{len(parts)} downloaded{suffix}")
-    return 1 if had_error else 0
+    failures = f" ({failed} failed)" if failed else ""
+    print(f"done: {downloaded}/{len(parts)} downloaded{suffix}{failures}")
+    return 1 if failed else 0
 
 
 def main() -> int:

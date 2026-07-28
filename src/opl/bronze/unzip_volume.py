@@ -46,6 +46,9 @@ def unzip_dir(zips_dir: str | Path, dest_dir: str | Path) -> list[Path]:
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     results: list[Path] = []
+    # Fail-fast on purpose: a corrupt part aborts the batch rather than being
+    # collected, so the operator re-uploads and re-runs instead of discovering
+    # the next bad part only after a full pass over the good ones.
     for zip_path in sorted(zips_dir.glob("*.zip")):
         results.append(_unzip_one(zip_path, dest_dir))
     return results

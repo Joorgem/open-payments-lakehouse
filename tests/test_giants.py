@@ -49,14 +49,18 @@ def test_download_parts_missing_on_server_raises(tmp_path):
         download_parts(client, "2026-06", "Estabelecimentos", tmp_path, parts=[1])
 
 
-def test_upload_zips_targets_zips_subdir(tmp_path):
-    w = mock.Mock()
+def test_upload_zips_targets_zips_subdir(tmp_path, fake_workspace_client):
     f = tmp_path / "Estabelecimentos1.zip"
     f.write_bytes(b"zip")
-    # upload_to_volume verifies the landed size, so the fake must report it back.
-    w.files.get_metadata.return_value.content_length = f.stat().st_size
-    targets = upload_zips(w, [f], DEFAULT, "estabelecimentos", "2026-06")
-    assert targets == [
-        "/Volumes/workspace/default/landing/cnpj/2026-06/zips/estabelecimentos/Estabelecimentos1.zip"
-    ]
-    w.files.upload.assert_called_once()
+    # The shared double (not a bare Mock) so this still fails if upload_to_volume
+    # ever stops verifying the landed size or starts deleting a good object.
+    w = fake_workspace_client(f.stat().st_size)
+    target = (
+        "/Volumes/workspace/default/landing/cnpj/2026-06/zips/estabelecimentos"
+        "/Estabelecimentos1.zip"
+    )
+
+    assert upload_zips(w, [f], DEFAULT, "estabelecimentos", "2026-06") == [target]
+    assert w.files.uploads == [(target, True)]
+    assert w.files.metadata_calls == [target]
+    assert w.files.deletes == []
