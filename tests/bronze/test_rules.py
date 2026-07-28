@@ -40,6 +40,40 @@ def test_estabelecimentos_rules_evaluate():
         assert out[("1234567", "0001", "95")] == "bad_cnpj_basico_length"
         assert out[("12345678", None, "95")] == "null_or_empty_cnpj_ordem"
         assert out[("12345678", "0001", None)] == "null_or_empty_cnpj_dv"
+        # The replacement char is the ONLY in-band evidence that a byte was lost:
+        # Java's cp1252 decoder substitutes U+FFFD silently where Python raises
+        # (ADR 0006). Without this assertion the rule could be deleted from the
+        # estabelecimentos set with the suite still green.
+        assert out[("87654321", "0001", "95")] == "encoding_replacement_char"
+    finally:
+        spark.stop()
+
+
+def test_rescued_data_outranks_the_estabelecimentos_rules():
+    """The universal rescued_data_present check sits above every per-table rule
+    (dq._reject_reason), so a rescued row must report that and not the per-table
+    reason it also violates -- rescued data means the parse itself is suspect, so
+    a narrower reason would misdirect the triage."""
+    spark = local_session("test-estab-rescued")
+    try:
+        # Explicit schema: _rescued_data would be all-null in the clean row and
+        # type inference cannot determine an all-null column's type.
+        schema = StructType([StructField(c, StringType()) for c in (
+            "cnpj_basico", "cnpj_ordem", "cnpj_dv", "nome_fantasia", "logradouro",
+            "_rescued_data",
+        )])
+        df = spark.createDataFrame(
+            [
+                # Violates bad_cnpj_basico_length AND carries rescued data.
+                ("1234567", "0001", "95", "X", "Y", '{"_c30":"31 extra"}'),
+                ("12345678", "0001", "95", "X", "Y", None),
+            ],
+            schema,
+        )
+        out = {r.cnpj_basico: r[REJECT_COLUMN]
+               for r in evaluate(df, rules=rules_for("estabelecimentos")).collect()}
+        assert out["1234567"] == "rescued_data_present"
+        assert out["12345678"] is None
     finally:
         spark.stop()
 
