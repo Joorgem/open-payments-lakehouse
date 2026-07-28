@@ -15,6 +15,13 @@ from opl.config import OplConfig
 RECORD_SOURCE = "rfb_cnpj_webdav"
 BRONZE_STAGING = "bronze_cnpj_lookup_staging"
 BRONZE_ESTAB_STAGING = "bronze_cnpj_estab_staging"
+# The quarantine each gate writes. They live here, not in the job scripts, so the
+# gate that writes one, the promote that points an operator at it, the fail_on_dq
+# message that names it and the test that locks the wiring all read ONE spelling.
+# Before this, promote_batch could not name the table in its recovery hint (it had
+# no access to the constant) and the wiring test had to parse the script's source.
+BRONZE_QUARANTINE = "bronze_cnpj_lookup_quarantine"
+BRONZE_ESTAB_QUARANTINE = "bronze_cnpj_estab_quarantine"
 
 
 def schema_location(cfg: OplConfig, table_key: str = "bronze_cnpj_lookup") -> str:

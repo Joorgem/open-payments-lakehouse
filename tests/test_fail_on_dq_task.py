@@ -16,6 +16,11 @@ from pathlib import Path
 
 import pytest
 
+from opl.bronze import autoloader as _tables
+from opl.bronze.autoloader import BRONZE_ESTAB_QUARANTINE
+
+_TABLES_MODULE = _tables.__name__
+
 _REPO = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location(
     "fail_on_dq_task", _REPO / "databricks" / "src" / "fail_on_dq.py"
@@ -61,24 +66,31 @@ def test_it_still_fails_the_run_when_no_table_is_passed():
 
 
 def _gate_quarantine(gate_module: str, root: Path = _REPO) -> str:
-    """The table a gate task writes rejects to, read WITHOUT importing the module.
+    """The table a gate task writes rejects to — now a real reference, not a parse.
 
-    dq_gate.py and dq_gate_batch.py cannot be imported outside a workspace --
-    `from databricks.sdk.runtime import dbutils` raises at import time -- so
-    parsing the source is the only way to assert against their constants locally.
-    `ast` over the module body rather than a regex over the text, so a table name
-    that merely appears in a comment or a nested scope cannot satisfy the lock.
-    (The clean fix is to lift these constants into the opl wheel, where both the
-    gates and this test could import them; see the report on this change.)"""
+    This used to `ast.parse` the gate's source, because those modules cannot be
+    imported outside a workspace (`from databricks.sdk.runtime import dbutils`
+    raises at import) and the constants lived only inside them. The clean fix it
+    pointed at has since been made: both quarantine names live in
+    `opl.bronze.autoloader`, the gates import them, and so does this test — so the
+    lock compares symbols instead of scraping text."""
     source = (root / "databricks" / "src" / gate_module).read_text(encoding="utf-8")
-    for node in ast.parse(source, filename=gate_module).body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "QUARANTINE" for t in node.targets
-        ):
-            value = ast.literal_eval(node.value)
-            assert isinstance(value, str), f"{gate_module}: QUARANTINE is not a string"
-            return value
-    raise AssertionError(f"{gate_module} defines no module-level QUARANTINE")
+    imported = [
+        alias.name
+        for node in ast.parse(source, filename=gate_module).body
+        if isinstance(node, ast.ImportFrom) and node.module == _TABLES_MODULE
+        for alias in node.names
+        if alias.asname == "QUARANTINE"
+    ]
+    assert len(imported) == 1, (
+        f"{gate_module} does not import exactly one {_TABLES_MODULE} name as "
+        f"QUARANTINE (found {imported}) -- either it went back to a local literal "
+        "or it renamed something, and this lock would stop seeing what it writes"
+    )
+    # Resolve the imported NAME against the wheel, so the lock reads the gate's own
+    # choice and then the real value. A hardcoded module→constant map would pass
+    # even if a gate imported the other table's constant, which a probe confirmed.
+    return getattr(_tables, imported[0])
 
 
 # The `parameters:` of the fail_on_dq task specifically -- both job YAMLs carry
@@ -125,10 +137,14 @@ def test_each_bronze_job_passes_the_quarantine_its_own_gate_writes():
     assert lookup != estab
 
 
-def test_the_wiring_lock_catches_a_gate_whose_constant_drifts(tmp_path):
+def test_the_wiring_lock_catches_a_yaml_that_drifts_from_its_gate(tmp_path):
     """Proves the lock above can fail. A check that reads two files passes just as
     happily on a typo in its own extraction as on correct wiring, so: copy the
-    estab pair, change the gate's constant, and require the assertion to fire."""
+    estab pair, drift the YAML off the gate, and require the assertion to fire.
+
+    Two other drift shapes are covered by `_gate_quarantine`'s own assertion rather
+    than here — a gate importing the OTHER table's constant, and a gate going back
+    to a local literal. Both were confirmed to fail the suite by mutation probe."""
     src, resources = tmp_path / "databricks" / "src", tmp_path / "databricks" / "resources"
     src.mkdir(parents=True), resources.mkdir(parents=True)
     (resources / "bronze_estabelecimentos_job.yml").write_text(
@@ -137,13 +153,24 @@ def test_the_wiring_lock_catches_a_gate_whose_constant_drifts(tmp_path):
         ),
         encoding="utf-8",
     )
-    original = (_REPO / "databricks" / "src" / "dq_gate_batch.py").read_text(encoding="utf-8")
+    # The real gate, unmutated: `_gate_quarantine` parses its import to learn which
+    # table it writes, so a stub would trip that check instead of the one under test.
+    (src / "dq_gate_batch.py").write_text(
+        (_REPO / "databricks" / "src" / "dq_gate_batch.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    # Mutate the half that can still drift. The gate's table name is no longer a
+    # literal in its source (both gates import it from the wheel), so the drift a
+    # reader should fear now lives in the YAML: a job handing fail_on_dq a table
+    # its own gate does not write.
+    job = resources / "bronze_estabelecimentos_job.yml"
+    original = job.read_text(encoding="utf-8")
     drifted = original.replace(
-        f'QUARANTINE = "{_gate_quarantine("dq_gate_batch.py")}"',
-        'QUARANTINE = "bronze_cnpj_estab_quarantine_v2"',
+        f'parameters: ["{BRONZE_ESTAB_QUARANTINE}"]',
+        'parameters: ["bronze_cnpj_estab_quarantine_v2"]',
     )
     assert drifted != original, "the mutation did not apply -- this test proves nothing"
-    (src / "dq_gate_batch.py").write_text(drifted, encoding="utf-8")
+    job.write_text(drifted, encoding="utf-8")
 
     with pytest.raises(AssertionError, match="different table"):
         _assert_job_points_at_its_own_gate(

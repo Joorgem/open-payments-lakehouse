@@ -11,7 +11,7 @@ import sys
 
 from pyspark.sql import SparkSession
 
-from opl.bronze.autoloader import BRONZE_ESTAB_STAGING
+from opl.bronze.autoloader import BRONZE_ESTAB_QUARANTINE, BRONZE_ESTAB_STAGING
 from opl.bronze.promote import BATCH_COLUMN, PromoteOutcome, promote_batch
 from opl.bronze.rules import rules_for
 from opl.config import DEFAULT
@@ -74,8 +74,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"promote_batch: how many rows of batch {result.batch_id} are in "
               "quarantine is NOT knowable from here -- that count comes from the "
               "staging table, which no longer holds this batch. Read it from the "
-              f"quarantine table itself (SELECT count(*) ... WHERE {BATCH_COLUMN} = "
-              f"'{result.batch_id}'); this task promoted nothing out of it either way")
+              "quarantine table itself: SELECT count(*) FROM "
+              f"{DEFAULT.table(BRONZE_ESTAB_QUARANTINE)} WHERE {BATCH_COLUMN} = "
+              f"'{result.batch_id}'; this task promoted nothing out of it either way")
     else:
         print(f"promote_batch: {result.rejected_rows} rejected row(s) of batch "
               f"{result.batch_id} stay in quarantine, out of {tbl}")

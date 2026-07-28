@@ -12,13 +12,12 @@ import sys
 
 from pyspark.sql import SparkSession
 
+from opl.bronze.autoloader import BRONZE_ESTAB_QUARANTINE as QUARANTINE
 from opl.bronze.autoloader import BRONZE_ESTAB_STAGING
 from opl.bronze.dq import evaluate, split
 from opl.bronze.promote import batch_rows, require_batch_id, rows_of_batch, tally
 from opl.bronze.rules import rules_for
 from opl.config import DEFAULT
-
-QUARANTINE = "bronze_cnpj_estab_quarantine"
 
 
 def main(argv: list[str] | None = None) -> None:
