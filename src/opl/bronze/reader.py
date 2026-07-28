@@ -16,6 +16,22 @@ def csv_read_options() -> dict[str, str]:
         "quote": CSV_DIALECT["quotechar"],   # '"'
         "encoding": CSV_DIALECT["encoding"],  # "cp1252" (Java alias of windows-1252)
         "mode": "PERMISSIVE",
+        # RFB ships records with literal newlines inside quoted fields -- valid
+        # CSV per RFC 4180, measured at 1 record in Estabelecimentos6 and 3 in
+        # Estabelecimentos8 (of 4,753,435 each). Spark's default multiLine=false
+        # splits each one into a NULL-tailed "parent" (which satisfies every DQ
+        # rule and gets promoted) plus a garbage "fragment"; the row count still
+        # matches the source, so no count check can catch it.
+        #
+        # Cost, stated because it is real and unmeasured here: with multiLine
+        # Spark cannot split one file across tasks, so the unit of parallelism
+        # becomes the file, not the 128 MB block. Accepted for this workload --
+        # 10 Estabelecimentos parts of ~340 MB plus one ~2 GB part give enough
+        # files to keep the cluster busy, and the lookup files are single-part
+        # and small enough that a file was already one task. No benchmark was
+        # run; the trade is correctness for a parallelism ceiling we can live
+        # with, and it must be revisited if a stage ever ingests one huge file.
+        "multiLine": "true",
     }
 
 

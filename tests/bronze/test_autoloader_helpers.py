@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from pyspark.sql import functions as F
 
 import opl.bronze.autoloader as al
@@ -80,6 +82,47 @@ def test_lookup_stream_requests_csv_path_glob(monkeypatch):
     bronze_lookup_stream(spark=None, cfg=DEFAULT)
     assert captured["table"] == "lookup"
     assert captured["path_glob_filter"] == "*CSV"
+
+
+def test_bronze_stream_forwards_multiline_to_the_cloudfiles_read(monkeypatch):
+    # F1.3 run-1 incident guard: the streaming path must carry multiLine=true,
+    # otherwise a quoted field containing a literal newline (valid CSV per RFC
+    # 4180; 1 such record in Estabelecimentos6, 3 in Estabelecimentos8) is split
+    # into a NULL-tailed parent row that passes DQ plus a garbage fragment.
+    # tests/bronze/test_reader_multiline.py proves the parse on real bytes; this
+    # asserts the Auto Loader reader actually receives the option. Spark-free:
+    # readStream is a recording double.
+    opts: dict[str, object] = {}
+
+    class _FakeDF:
+        def withColumn(self, *_a, **_k):
+            return self
+
+    class _RecordingReader:
+        def option(self, key, value):
+            opts[key] = value
+            return self
+
+        def schema(self, _struct):
+            return self
+
+        def load(self, path):
+            opts["__load_path"] = path
+            return _FakeDF()
+
+    class _FakeReadStream:
+        def format(self, fmt):
+            opts["__format"] = fmt
+            return _RecordingReader()
+
+    monkeypatch.setattr(al.F, "col", lambda _name: None)
+    spark = SimpleNamespace(readStream=_FakeReadStream())
+
+    for table in ("estabelecimentos", "lookup"):
+        opts.clear()
+        al.bronze_stream(spark, DEFAULT, table, "/some/dir", f"bronze_{table}")
+        assert opts["__format"] == "cloudFiles"
+        assert opts["multiLine"] == "true", f"{table}: {opts}"
 
 
 def test_lookup_type_column_maps_paths():

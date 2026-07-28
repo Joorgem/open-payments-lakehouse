@@ -13,6 +13,11 @@ def test_options_are_cp1252_semicolon_quoted_headerless():
     assert o["quote"] == '"'
     assert o["header"] == "false"
     assert o["mode"] == "PERMISSIVE"
+    # Deliberate change on top of what F1.2 shipped: RFB quotes fields that
+    # contain literal newlines, so the record separator cannot be trusted.
+    # Pinned here so it cannot be dropped silently -- see
+    # tests/bronze/test_reader_multiline.py for the incident it fixes.
+    assert o["multiLine"] == "true"
 
 
 def test_reads_real_cp1252_bytes_preserving_accents_and_leading_zeros(tmp_path):
