@@ -1,0 +1,38 @@
+# databricks/resources/repromote_batch_job.yml
+# Operator tool, deliberately NOT part of the ingestion flow.
+#
+# WHY it exists: the batch-scoped gate blocks promotion of a batch that holds
+# any rejected row, and a later normal run ingests new files under a NEW
+# _batch_id -- so the blocked batch is never revisited and its good rows sit in
+# staging with nowhere to go. That is not hypothetical: on 2026-07-27 run
+# 315230730740144 ingested 9,506,871 rows of real RFB data, exactly one of them
+# malformed (an unescaped quote shifted the fields; see the evidence doc), and
+# the other 9,506,870 were stranded.
+#
+# This job re-runs the promote step alone against an explicitly named batch,
+# for use AFTER a human has read the quarantine table and accepted the
+# rejects. It is not a gate bypass: promote_batch re-applies the same DQ rules
+# and appends only the rows that pass, so rejected rows stay out of bronze and
+# remain in quarantine. Separate job so nothing in the automated path can reach
+# it, and batch_id has no usable default so it cannot run by accident.
+resources:
+  jobs:
+    repromote_triaged_batch:
+      name: opl-repromote-triaged-batch
+      parameters:
+        - name: batch_id
+          default: "REQUIRED-PASS-A-BATCH-ID"
+      tasks:
+        - task_key: promote
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/promote_batch.py
+            parameters: ["{{job.parameters.batch_id}}"]
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl
