@@ -56,10 +56,17 @@ variables):
 - CLI: installed via winget (`Databricks.DatabricksCLI`, v1.8+). Its dir is on the
   **User** `PATH`, but (same caveat as `JAVA_HOME` above) an agent/tool shell
   spawned from a process that predates the setting will not see it — export
-  inline in that case:
+  inline in that case. Resolve the winget packages dir from the environment rather
+  than hardcoding it: the literal path contains the operator's Windows username,
+  which is what the run-evidence docs redact as `<WINGET-PACKAGES-DIR>` and must
+  not be committed here either.
   ```bash
-  export PATH="/c/Users/jorge/AppData/Local/Microsoft/WinGet/Packages/Databricks.DatabricksCLI_Microsoft.Winget.Source_8wekyb3d8bbwe:$PATH"
+  # Git Bash: $LOCALAPPDATA is a Windows-style path, so convert it first.
+  export PATH="$(cygpath -u "$LOCALAPPDATA")/Microsoft/WinGet/Packages/Databricks.DatabricksCLI_Microsoft.Winget.Source_8wekyb3d8bbwe:$PATH"
   ```
+  If that dir has been renamed by a winget upgrade, find it with
+  `winget list --id Databricks.DatabricksCLI` or
+  `ls "$(cygpath -u "$LOCALAPPDATA")/Microsoft/WinGet/Packages" | grep -i databricks`.
 - CLI profile: `opl-free` (configured via `databricks configure --profile opl-free`).
 - Secrets live in a git-ignored `.env` (never committed) with `DATABRICKS_HOST`
   and `DATABRICKS_TOKEN`; source it before Databricks CLI/SDK commands:
