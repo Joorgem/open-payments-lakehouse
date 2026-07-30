@@ -1,9 +1,12 @@
 # scripts/extract_giants.py
 """Extract multi-part CNPJ 'giant' tables (Empresas / Estabelecimentos / Socios)
 from the RFB WebDAV share: download the selected .zip parts (resumable, size-
-verified) and — with --upload — land the ZIPs (not CSVs; Files API caps single
-PUTs at 5 GiB) into the UC Volume zips subdir. Extraction runs OFF Databricks
-(two-layer topology, ADR 0002). Unzip happens later, on Databricks."""
+verified) and — with --upload — land the ZIPs (not CSVs: part 0 is
+2,128,818,559 B zipped against 6,780,467,695 B unzipped, so under a third of the
+bytes on the wire) into the UC Volume zips subdir. Extraction runs OFF
+Databricks (two-layer topology, ADR 0002). Unzip happens later, on Databricks.
+The old reason — a 5 GiB single-PUT ceiling — was the databricks-sdk 0.40 pin's,
+not the Files API's, and is gone since ADR 0007 adopted multipart uploads."""
 from __future__ import annotations
 
 import argparse

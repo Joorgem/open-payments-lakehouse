@@ -116,7 +116,7 @@ def test_a_failure_inside_the_member_copy_leaves_no_partial_file(tmp_path, monke
     (a correctness property -- that stream reads it with NO ``pathGlobFilter``, so a
     partial there is ingested as a complete CSV, and the idempotence skip compares
     sizes of the FINAL name, which a ``.tmp`` never reaches), and the staging dir must
-    not keep it either (housekeeping -- a real member is up to ~14 GB of Volume
+    not keep it either (housekeeping -- a real member is up to 6.78 GB of Volume
     quota)."""
     zips, dest, staging = tmp_path / "z", tmp_path / "d", tmp_path / "t"
     zips.mkdir(), dest.mkdir()

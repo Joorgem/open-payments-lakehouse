@@ -46,7 +46,11 @@ that both paths parse the RFB files byte-identically.
   non-issue: there are enough files to keep the cluster busy, and the lookup
   files were already one task each.
 - **Part 0 is the case this ADR exists to flag, and it has now been run.** Part 0
-  is 2,128,818,559 B compressed, roughly 14 GB of CSV, so under `multiLine=true`
+  is 2,128,818,559 B compressed, 6,780,467,695 B of CSV (recorded here as
+  "roughly 14 GB" when this ADR was written; re-measured in F1.4 against the
+  Volume — the conclusion below is unaffected, because the ~9 min single-task
+  read that justifies the ceiling was really measured and only the size
+  attributed to that file was wrong), so under `multiLine=true`
   it was read, parsed and written by a **single task**: 29,093,533 rows in a run
   of about nine minutes, taking bronze to 71,874,448 rows. Wall clocks in
   [`docs/f1.3-estabelecimentos-run-evidence.md`](../f1.3-estabelecimentos-run-evidence.md).

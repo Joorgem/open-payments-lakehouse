@@ -1,12 +1,22 @@
 """Unzip RFB part zips already staged inside a UC Volume into the table landing
 subdir, ON Databricks (serverless, over ``/Volumes/...`` FUSE paths).
 
-WHY this exists: the Files API caps a single-PUT upload at 5 GiB (databricks-sdk
-0.40), but the largest RFB parts (Estabelecimentos part 0's inner CSV is ~14 GB
-uncompressed) exceed that. So the giants are uploaded as their compressed ZIPs
-(which fit under the cap) into a ``zips`` subdir, then unzipped in place on the
-cluster into the table landing subdir -- the two-layer control-plane/data-plane
-topology of ADR 0002/0004.
+WHY this exists: the giants are uploaded as their compressed ZIPs into a
+``zips`` subdir and unzipped in place on the cluster into the table landing
+subdir -- the two-layer control-plane/data-plane topology of ADR 0002/0004.
+
+The reason has changed, and the old one should not be repeated. This was
+originally forced by a 5 GiB single-PUT ceiling, which Estabelecimentos part 0's
+inner CSV (6,780,467,695 B / 6.78 GB, measured) exceeded. That ceiling was never
+a Files API property -- it belonged to the ``databricks-sdk`` 0.40 pin then in
+force -- and since ADR 0007 adopted the multipart upload path it does not exist
+at all: a 6.78 GB object would upload fine today.
+
+What keeps the design is arithmetic, not a limit. Part 0's ZIP is
+2,128,818,559 B against 6,780,467,695 B unzipped, so uploading compressed moves
+under a third of the bytes over a link measured at ~67 MB/min -- roughly 53 min
+saved on that part alone -- and the unzip runs on the cluster where the bytes
+already are. It also keeps the Volume from holding both copies of every giant.
 
 The logic is pure ``zipfile`` over directories: no Spark/Java, unit-tested
 locally with tmp dirs. Idempotent -- a zip whose inner file already exists at
@@ -33,7 +43,7 @@ import shutil
 import zipfile
 from pathlib import Path
 
-_COPY_CHUNK = 8 << 20  # 8 MiB -- stream members; never .read() a ~14 GB CSV whole.
+_COPY_CHUNK = 8 << 20  # 8 MiB -- stream members; never .read() a 6.78 GB CSV whole.
 
 
 class CorruptZipError(ValueError):
@@ -129,7 +139,7 @@ def _unzip_one(zip_path: Path, dest_dir: Path, tmp_dir: Path) -> Path:
             except OSError as cleanup_exc:
                 # Never mask the real failure with a cleanup one -- but never go quiet
                 # either: what is left is no longer ingestible, yet a member of this
-                # size is up to ~14 GB of Volume quota nobody knows about.
+                # size is up to 6.78 GB of Volume quota nobody knows about.
                 print(f"  cleanup: could not remove {tmp}: {cleanup_exc} -- STILL THERE "
                       "(harmless to ingestion: no stream reads that dir; it does hold "
                       "space until the next run truncates it)")

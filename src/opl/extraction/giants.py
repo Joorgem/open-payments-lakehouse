@@ -1,8 +1,12 @@
 # src/opl/extraction/giants.py
 """Giants extraction: download multi-part RFB zips (resumable, mid-stream
 retry via WebDavClient) and land the ZIPs in a UC Volume subdir. ZIPs — not
-CSVs — because the Files API caps single-PUT uploads at 5 GiB and part 0's
-unzipped CSV exceeds it; unzip happens on Databricks (unzip_volume module)."""
+CSVs — because part 0's ZIP is 2,128,818,559 B against 6,780,467,695 B unzipped:
+under a third of the bytes over the wire, and the unzip then runs on the cluster
+where the bytes already are (unzip_volume module). This used to be forced by a
+5 GiB single-PUT ceiling — a property of the old databricks-sdk 0.40 pin, not of
+the Files API — which no longer exists now that ADR 0007 has adopted the
+multipart upload path. The choice survives the reason that created it."""
 from __future__ import annotations
 
 from pathlib import Path
