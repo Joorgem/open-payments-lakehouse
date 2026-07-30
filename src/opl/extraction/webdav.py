@@ -73,6 +73,27 @@ def _request_with_retry(request_fn: Callable[[], requests.Response]) -> requests
     raise last_error
 
 
+def _range_start(response) -> int | None:
+    """First byte offset a `Content-Range` header declares, or None.
+
+    None means "this response does not prove where its body starts", which the
+    caller must treat as NOT a resume. Absent header, an unsatisfied-range form
+    (`bytes */N`), a non-`bytes` unit and any unparseable value all land here on
+    purpose: the caller's choice is append-or-truncate, and truncating a good
+    resume merely costs bytes while appending a bad one corrupts the file."""
+    raw = (response.headers or {}).get("Content-Range")
+    if not raw:
+        return None
+    prefix, _, spec = raw.strip().partition(" ")
+    if prefix != "bytes":
+        return None
+    start, _, _ = spec.partition("-")
+    try:
+        return int(start)
+    except ValueError:
+        return None
+
+
 class WebDavClient:
     def __init__(self, base_url: str, token: str, session: requests.Session | None = None):
         self.base_url = base_url.rstrip("/")
@@ -145,11 +166,18 @@ class WebDavClient:
 
                 r.raise_for_status()
 
-                # Only treat this as a genuine resume if the server actually honored
-                # the Range request (206 Partial Content). A server that ignores Range
-                # and replies 200 sends the FULL body, so appending it onto existing
-                # partial bytes would corrupt the file — fall back to writing fresh.
-                resumed = resume_from > 0 and r.status_code == 206
+                # A 206 is not enough. A server that replies 206 while ignoring the
+                # Range sends the FULL body, and appending that onto the bytes
+                # already on disk yields a file of resume_from + full_size: the
+                # right shape, the wrong bytes, caught only by the size check at
+                # the very end. So the response has to PROVE where its body starts.
+                # An unprovable start is treated as no resume -- re-fetching from 0
+                # costs bandwidth; appending a misread body costs correctness.
+                resumed = (
+                    resume_from > 0
+                    and r.status_code == 206
+                    and _range_start(r) == resume_from
+                )
                 effective_start = resume_from if resumed else 0
                 mode = "ab" if resumed else "wb"
 
