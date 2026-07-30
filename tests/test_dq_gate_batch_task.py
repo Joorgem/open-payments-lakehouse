@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import pytest
 
 from opl.bronze.promote import PromoteRefused
+from opl.bronze.registry import UnknownTable
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "databricks" / "src" / "dq_gate_batch.py"
 _spec = importlib.util.spec_from_file_location("dq_gate_batch_task", _SCRIPT)
@@ -96,7 +97,7 @@ def _wire(monkeypatch, *, already: int, good_count: int = 6, bad_count: int = 4)
 def test_it_appends_this_batch_s_rejects_and_publishes_the_count(monkeypatch, capsys):
     seen = _wire(monkeypatch, already=0)
 
-    task.main(["999"])
+    task.main(["estabelecimentos", "999"])
 
     assert seen.read_tables == [(_STAGING, "999")]
     assert seen.bad.saved == [_QUARANTINE]
@@ -114,7 +115,7 @@ def test_a_repair_run_does_not_append_the_same_rejects_twice(monkeypatch, capsys
     this table the measured history a rate-based gate will be built on."""
     seen = _wire(monkeypatch, already=4, bad_count=4)
 
-    task.main(["999"])
+    task.main(["estabelecimentos", "999"])
 
     assert seen.bad.saved == []
     assert seen.presence_tables == [(_QUARANTINE, "999")]
@@ -134,7 +135,7 @@ def test_a_quarantine_holding_a_different_count_is_refused(monkeypatch):
     seen = _wire(monkeypatch, already=8, bad_count=4)
 
     with pytest.raises(RuntimeError) as excinfo:
-        task.main(["999"])
+        task.main(["estabelecimentos", "999"])
 
     message = str(excinfo.value)
     assert "8" in message and "4" in message
@@ -148,7 +149,7 @@ def test_a_clean_batch_still_appends_so_the_quarantine_table_exists(monkeypatch)
     creates the table triagers and the future rate gate query."""
     seen = _wire(monkeypatch, already=0, bad_count=0)
 
-    task.main(["999"])
+    task.main(["estabelecimentos", "999"])
 
     assert seen.bad.saved == [_QUARANTINE]
     assert seen.published == [("bad_row_count", 0)]
@@ -165,11 +166,14 @@ def test_no_batch_id_at_all_is_refused_with_an_operator_message(monkeypatch):
     It refuses before the batch is read and before anything is written -- no
     quarantine append, and no `bad_row_count` published, since the condition task
     downstream branches on that value and must not see one from a run that never
-    identified a batch."""
+    identified a batch.
+
+    The table is valid in this argv, so the batch-id refusal is the only one that
+    can fire -- the table is resolved first."""
     seen = _wire(monkeypatch, already=0)
 
     with pytest.raises(PromoteRefused, match="names no batch") as excinfo:
-        task.main([])
+        task.main(["estabelecimentos"])
 
     # It says which task stopped: a shared message that still read "refusing to
     # promote" would send the operator to the wrong end of the flow.
@@ -179,6 +183,43 @@ def test_no_batch_id_at_all_is_refused_with_an_operator_message(monkeypatch):
     assert seen.published == []
 
 
+def test_an_unknown_table_is_refused_before_spark_and_before_the_batch_id(monkeypatch):
+    """A mistyped table is refused by the registry, naming the registered ones.
+
+    Before the batch id, deliberately: this argv carries a valid batch id, so the
+    only refusal that can fire is the table one. And before Spark -- nothing about
+    it needs a session, and an operator reading a Databricks run log should not
+    have waited for one to be told what to type instead."""
+    seen = _wire(monkeypatch, already=0)
+
+    with pytest.raises(UnknownTable) as excinfo:
+        task.main(["estabelecimento", "999"])  # a real typo: singular
+
+    assert "estabelecimentos" in str(excinfo.value)
+    assert seen.read_tables == []
+    assert seen.bad.saved == []
+    assert seen.published == []
+
+
+def test_the_gate_scopes_the_lookup_to_one_batch_too(monkeypatch):
+    """The lookup's own gate is gone, so it now runs through this one.
+
+    This is carry-forward #7 paid as a consequence: the deleted `dq_gate.py`
+    evaluated the WHOLE lookup staging table and OVERWROTE the quarantine, so one
+    historical bad row wedged every later clean batch and the quarantine held only
+    the most recent run's rejects. Same task, different table parameter -- and the
+    coordinates it resolves are the lookup's, not estab's."""
+    seen = _wire(monkeypatch, already=0, bad_count=2)
+
+    task.main(["lookup", "777"])
+
+    assert seen.read_tables == [("workspace.default.bronze_cnpj_lookup_staging", "777")]
+    assert seen.bad.saved == ["workspace.default.bronze_cnpj_lookup_quarantine"]
+    # Append, not overwrite: the whole point of inheriting this gate.
+    assert seen.bad.write_options == [("format", "delta"), ("mode", "append")]
+    assert seen.published == [("bad_row_count", 2)]
+
+
 def test_it_counts_both_sides_of_the_batch_in_one_pass(monkeypatch):
     """It used to compute the split three times over a batch of up to ~29M rows:
     `bad.write`, `bad.count()`, `good.count()`. There are two actions here -- count
@@ -186,6 +227,6 @@ def test_it_counts_both_sides_of_the_batch_in_one_pass(monkeypatch):
     fails the test if either frame is counted separately."""
     seen = _wire(monkeypatch, already=0)
 
-    task.main(["999"])
+    task.main(["estabelecimentos", "999"])
 
     assert seen.tally_calls == 1

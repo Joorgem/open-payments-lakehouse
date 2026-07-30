@@ -1,9 +1,10 @@
-"""Which table each job task touches, locked BEFORE the registry refactor moves it.
+"""Which table each job task touches.
 
-These are characterization tests: they assert today's behaviour so the refactor
-that follows can only preserve it. The defect they exist to prevent is real and
-documented in bronze_estabelecimentos_job.yml -- a hardcoded quarantine name
-"sent estab triagers to a table full of unrelated F1.2 lookup rows".
+Written as characterization tests BEFORE the registry refactor moved any of it:
+they asserted the wiring as it stood so the refactor could only preserve it. The
+defect they exist to prevent is real and documented in
+bronze_estabelecimentos_job.yml -- a hardcoded quarantine name "sent estab
+triagers to a table full of unrelated F1.2 lookup rows".
 
 Job scripts under databricks/src are entry points, not part of the opl wheel, so
 they are loaded by path with the same importlib pattern the other task tests use.
@@ -17,85 +18,57 @@ Rewrite each one against the registry -- feed it a table key, assert the same
 resolved coordinates -- rather than deleting it. Which property each one exists
 to preserve is written in its own docstring, for exactly this moment.
 
-That already happened once, on schedule: Task 6 parameterised the two ingest
-scripts, and their `EXPECTED_TABLES` entries went red exactly as predicted --
-a script that reads the registry has no module constants left to enumerate. They
-were rewritten below, not deleted, into the property that replaces the old one:
-the coordinates must come from ONE resolved spec, so a table's staging and
-quarantine cannot drift apart. The gate and promote entries still hold today's
-constants; they are Task 7's turn."""
+That already happened twice, on schedule. Task 6 parameterised the two ingest
+scripts, and their `EXPECTED_TABLES` entries went red exactly as predicted -- a
+script that reads the registry has no module constants left to enumerate. Task 7
+collapsed the two gates into one and the two promotes into one, which took the
+last four entries with it, and `EXPECTED_TABLES` along with them: there is no job
+task left under databricks/src that names a bronze table, so there is nothing
+anywhere for a constant-enumerating lock to read.
+
+Nothing was dropped. Each entry was rewritten into the property that replaces it:
+every coordinate must be a field of the ONE spec `main()` resolved from argv, so
+a table's staging, bronze and quarantine cannot drift apart -- which is the drift
+that "sent estab triagers to a table full of unrelated F1.2 lookup rows". The
+helpers that resolved module constants (`_load`, `_bound_table`) went with the
+constants they read; `_deref` below is `_bound_table`'s surviving half."""
 from __future__ import annotations
 
 import ast
-import importlib.util
 from pathlib import Path
 
 import pytest
 
-from opl.config import DEFAULT
-
 _SRC = Path(__file__).resolve().parents[1] / "databricks" / "src"
 
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(f"{name}_wiring", _SRC / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-# (script, the qualified tables its module-level wiring resolves to)
-#
-# The two ingest scripts are deliberately absent. They used to be here
-# (`bronze_ingest` -> lookup staging, `bronze_estab_ingest` -> estab staging) and
-# both entries went red the moment Task 6 pointed them at the registry, because
-# neither script imports a table constant any more -- there is nothing for this
-# test to enumerate. What replaces it for them is the pair of tests further down:
-# the source must go through `table_spec`, and every coordinate must be an
-# attribute of the ONE spec it resolved.
-EXPECTED_TABLES = {
-    "dq_gate_batch": {
-        "workspace.default.bronze_cnpj_estab_staging",
-        "workspace.default.bronze_cnpj_estab_quarantine",
-    },
-    "promote_batch": {
-        "workspace.default.bronze_cnpj_estab_staging",
-        "workspace.default.bronze_cnpj_estabelecimentos",
-        "workspace.default.bronze_cnpj_estab_quarantine",
-    },
-}
+# Every job task under databricks/src that resolves a table. Enumerated rather
+# than globbed: a new entry point must be a deliberate addition to this list, and
+# a glob would silently give a newly-added script a free pass. `smoke.py` is the
+# only other script there and it touches no table at all.
+_TABLE_TASKS = [
+    "bronze_ingest",
+    "bronze_lookup_ingest",
+    "unzip_table",
+    "dq_gate_batch",
+    "promote_batch",
+    "fail_on_dq",
+]
 
 
-@pytest.mark.parametrize("script,expected", sorted(EXPECTED_TABLES.items()))
-def test_each_task_resolves_the_tables_it_is_supposed_to(script, expected):
-    """Every table name the script's source mentions, via the constants it imports.
+@pytest.mark.parametrize("script", _TABLE_TASKS)
+def test_no_task_names_a_bronze_table_directly_any_more(script):
+    """The collapse's whole point. A task that spells a table name is a task
+    whose staging/quarantine pair can drift from the one the registry declares --
+    which is how a triager was sent to a table full of unrelated rows.
 
-    Asserted as a SET, not a substring search: a script that starts touching a
-    second table is exactly the regression this locks against, and a substring
-    check would not see it."""
-    from opl.config import DEFAULT
-    module = _load(script)
-    names = {
-        DEFAULT.table(value)
-        for key, value in vars(module).items()
-        if key.isupper() and isinstance(value, str) and value.startswith("bronze_cnpj_")
-    }
-    # promote_batch names its bronze table in a module constant; the staging and
-    # quarantine arrive as imported constants, which vars() also exposes.
-    assert names == expected, f"{script} resolves {names}, expected {expected}"
-
-
-@pytest.mark.parametrize("script", ["bronze_ingest", "bronze_lookup_ingest"])
-def test_the_parameterised_ingest_resolves_its_tables_from_the_registry(script):
-    """The characterization above asserted module constants. The parameterised
-    scripts have none by design -- they read the registry -- so what must hold now
-    is that they go through `table_spec` rather than naming a table themselves."""
+    Comment lines are stripped before the check: a comment that cites the table a
+    real incident happened in is this repo's house style, and is not wiring."""
     source = (_SRC / f"{script}.py").read_text(encoding="utf-8")
-    assert "table_spec(" in source
-    assert "bronze_cnpj_" not in source, (
-        f"{script}.py names a table directly; it must resolve names through "
-        "the registry so a table's staging/quarantine pair cannot drift"
+    code = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith("#")
     )
+    assert "bronze_cnpj_" not in code, f"{script}.py names a bronze table directly"
+    assert "table_spec(" in code
 
 
 def _main_of(script: str) -> ast.FunctionDef:
@@ -144,14 +117,15 @@ def _locals_of(main: ast.FunctionDef, script: str) -> dict[str, ast.expr]:
     return dict(pairs)
 
 
-def _bound_table(expr: ast.expr, scope: dict[str, ast.expr], module, where: str) -> str:
-    """The qualified table an argument expression evaluates to, TODAY.
+def _deref(expr: ast.expr, scope: dict[str, ast.expr], where: str) -> ast.expr:
+    """Follow an argument through one or more local hops (`tbl`, `quarantine`).
 
-    Follows `DEFAULT.table(X)` and one or more hops through a local (`tbl`,
-    `quarantine`), resolving a constant NAME against the loaded module so the
-    answer is the real coordinate rather than the identifier's spelling. Any shape
-    it does not understand raises instead of returning something -- an
-    unrecognised call site must be a red test, never a quiet pass."""
+    `_bound_table`'s surviving half. That helper then resolved the identifier it
+    landed on against the loaded module, because the table was a module constant;
+    no task has one any more, so what it lands on is a spec field and `_spec_field`
+    takes over. Any shape it does not understand raises instead of returning
+    something -- an unrecognised call site must be a red test, never a quiet
+    pass."""
     seen: set[str] = set()
     while isinstance(expr, ast.Name):
         assert expr.id not in seen, f"{where}: {expr.id} resolves in a cycle"
@@ -161,21 +135,7 @@ def _bound_table(expr: ast.expr, scope: dict[str, ast.expr], module, where: str)
         )
         seen.add(expr.id)
         expr = scope[expr.id]
-    assert (
-        isinstance(expr, ast.Call)
-        and isinstance(expr.func, ast.Attribute)
-        and expr.func.attr == "table"
-        and isinstance(expr.func.value, ast.Name)
-        and expr.func.value.id == "DEFAULT"
-    ), f"{where}: expected a DEFAULT.table(...) call, got {ast.dump(expr)[:120]}"
-    assert len(expr.args) == 1 and not expr.keywords, f"{where}: unexpected DEFAULT.table args"
-    arg = expr.args[0]
-    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-        return DEFAULT.table(arg.value)
-    assert isinstance(arg, ast.Name), f"{where}: DEFAULT.table({ast.dump(arg)[:80]})"
-    value = getattr(module, arg.id, None)
-    assert isinstance(value, str), f"{where}: {arg.id} is not a str constant on the module"
-    return DEFAULT.table(value)
+    return expr
 
 
 def _spec_field(expr: ast.expr, where: str) -> str:
@@ -292,99 +252,176 @@ def test_the_lookup_ingest_writes_the_lookup_tables_and_only_those():
     assert bound == {"checkpoint": "table_key", "written": "staging"}
 
 
-def test_the_estab_promote_binds_each_table_to_the_argument_it_feeds_today():
-    """Which table each PARAMETER receives -- not merely which names the file mentions.
+def _resolved_spec(main: ast.FunctionDef, scope: dict[str, ast.expr], script: str) -> ast.Call:
+    """The one `table_spec(...)` call, checked to be argv-driven and bound to `spec`.
 
-    The test above enumerates module-level constants, and a mutation probe proved
-    that is not enough on its own: redirecting `staging_table=` to the quarantine
-    constant and `bronze_table=` to a literal, while leaving every constant
-    imported, kept it green. That mutation is a promote which reads the quarantine
-    and appends into the lookup table, and Task 7 rewrites exactly these call
-    sites, so the binding is the thing that has to be pinned.
+    Shared by the gate and the promote, which the ingest tests spell out inline
+    because the lookup ingest's requirement is the opposite one (a literal)."""
+    resolved = _sole_call(main, "table_spec", script)
+    assert not any(isinstance(arg, ast.Constant) for arg in resolved.args), (
+        f"{script}.py resolves its spec from a literal; the table is a job parameter, "
+        "and a literal here pins every job that runs this file to one table"
+    )
+    assert scope.get("spec") is resolved, (
+        f"{script}.py main() no longer binds the table_spec(...) result to `spec`, so "
+        "this lock cannot tell which spec the coordinates below came from"
+    )
+    return resolved
 
-    Locks bindings as they stand, NOT a post-refactor rule: `bronze_table` is fed
-    a local assigned from a module constant and `staging_table` an imported one,
-    and both shapes are resolved to the coordinate they produce."""
-    module = _load("promote_batch")
+
+def _qualified_spec_fields(main: ast.FunctionDef, script: str) -> list[str]:
+    """Every spec field that main() hands to `DEFAULT.table(...)`, as a sorted list.
+
+    A list rather than a set: a task that qualified the same coordinate twice under
+    two different names would be invisible to a set, and this is the lock that has
+    to see a task touching a table it should not."""
+    return sorted(
+        _spec_field(_table_arg(node, f"{script} DEFAULT.table"), f"{script} DEFAULT.table")
+        for node in ast.walk(main)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "table"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "DEFAULT"
+    )
+
+
+def test_the_promote_binds_every_coordinate_to_the_one_resolved_spec():
+    """Which spec FIELD each argument receives -- not merely that a registry is read.
+
+    What `EXPECTED_TABLES["promote_batch"]` used to pin, restated. That entry
+    enumerated module constants, and a mutation probe proved it was not enough on
+    its own: redirecting `staging_table=` to the quarantine constant and
+    `bronze_table=` to a literal, while leaving every constant imported, kept it
+    green. That mutation is a promote which reads the quarantine and appends into
+    the lookup table. Parameterising made the same redirect cheaper, not harder --
+    `spec.quarantine` for `spec.staging` is one identifier -- so the binding is
+    what has to be pinned.
+
+    The last assertion is the set the old entry was: exactly the three coordinates
+    of one table, no fourth, and each qualified exactly once."""
     main = _main_of("promote_batch")
     scope = _locals_of(main, "promote_batch")
+    _resolved_spec(main, scope, "promote_batch")
     call = _sole_call(main, "promote_batch", "promote_batch")
     bound = {
-        kw.arg: _bound_table(kw.value, scope, module, f"promote_batch {kw.arg}=")
+        kw.arg: _spec_field(
+            _table_arg(
+                _deref(kw.value, scope, f"promote_batch {kw.arg}="),
+                f"promote_batch {kw.arg}=",
+            ),
+            f"promote_batch {kw.arg}=",
+        )
         for kw in call.keywords
         if kw.arg in {"staging_table", "bronze_table"}
     }
-    assert bound == {
-        "staging_table": "workspace.default.bronze_cnpj_estab_staging",
-        "bronze_table": "workspace.default.bronze_cnpj_estabelecimentos",
-    }
+    assert bound == {"staging_table": "staging", "bronze_table": "bronze"}
+    # The quarantine is named in the recovery hint only, so it has no keyword to
+    # bind; it is covered by the whole-main sweep below.
+    assert _qualified_spec_fields(main, "promote_batch") == [
+        "bronze", "quarantine", "staging",
+    ]
 
 
-def test_the_estab_gate_reads_staging_and_writes_the_estab_quarantine_today():
-    """Same binding lock on the gate: the table it READS the batch from and the
-    table it WRITES rejects to must stay distinct and stay these two.
+def test_the_gate_binds_the_table_it_reads_and_the_table_it_writes_to_one_spec():
+    """What `EXPECTED_TABLES["dq_gate_batch"]` pinned, restated: the table the gate
+    READS the batch from and the table it WRITES rejects to must stay distinct, and
+    must be the staging and quarantine of the SAME resolved spec.
 
     Collapsing them is not hypothetical -- a gate that reads its batch from the
     quarantine, or writes rejects into staging, is a one-identifier edit at either
-    call site, and every constant would still be imported afterwards."""
-    module = _load("dq_gate_batch")
+    call site, and `table_spec(` would still be in the source afterwards."""
     main = _main_of("dq_gate_batch")
     scope = _locals_of(main, "dq_gate_batch")
+    _resolved_spec(main, scope, "dq_gate_batch")
     read = _sole_call(main, "batch_rows", "dq_gate_batch")
     assert len(read.args) >= 2, "batch_rows() no longer takes the table positionally"
     written = _sole_call(main, "saveAsTable", "dq_gate_batch")
     assert len(written.args) >= 1, "saveAsTable() no longer takes the table positionally"
-    assert _bound_table(read.args[1], scope, module, "dq_gate_batch batch_rows table") == (
-        "workspace.default.bronze_cnpj_estab_staging"
-    )
-    assert _bound_table(written.args[0], scope, module, "dq_gate_batch saveAsTable") == (
-        "workspace.default.bronze_cnpj_estab_quarantine"
-    )
+    bound = {
+        "read": _spec_field(
+            _table_arg(
+                _deref(read.args[1], scope, "dq_gate_batch batch_rows table"),
+                "dq_gate_batch batch_rows table",
+            ),
+            "dq_gate_batch batch_rows table",
+        ),
+        "written": _spec_field(
+            _table_arg(
+                _deref(written.args[0], scope, "dq_gate_batch saveAsTable"),
+                "dq_gate_batch saveAsTable",
+            ),
+            "dq_gate_batch saveAsTable",
+        ),
+    }
+    assert bound == {"read": "staging", "written": "quarantine"}
+    assert _qualified_spec_fields(main, "dq_gate_batch") == ["quarantine", "staging"]
 
 
-def test_the_two_gates_scope_differently_today():
-    """dq_gate is whole-table; dq_gate_batch is batch-scoped. The refactor
-    collapses them onto the batch-scoped one, which is carry-forward #7."""
-    whole = (_SRC / "dq_gate.py").read_text(encoding="utf-8")
+def test_the_one_surviving_gate_is_the_batch_scoped_one():
+    """What `test_the_two_gates_scope_differently_today` locked, after the collapse.
+
+    It pinned that `dq_gate.py` was whole-table and `dq_gate_batch.py` was
+    batch-scoped, so the collapse could only go one way. It went that way: the
+    whole-table gate is gone and the lookup inherits batch scoping, which is
+    carry-forward #7 paid as a consequence. A gate that quietly went back to
+    evaluating the whole staging table would re-wedge every clean batch behind one
+    historical bad row, so the surviving direction is asserted, not assumed."""
+    assert not (_SRC / "dq_gate.py").exists(), (
+        "the whole-table gate is back; the lookup would stop being batch-scoped"
+    )
     scoped = (_SRC / "dq_gate_batch.py").read_text(encoding="utf-8")
-    assert "batch_rows(" not in whole
     assert "batch_rows(" in scoped
 
 
-def test_the_lookup_promote_overwrites_and_the_estab_promote_appends():
-    """The semantic difference the lookup migration has to resolve: an overwrite
-    from the WHOLE staging table would write 2x the rows once a second batch
-    exists, which moving the lookup files creates."""
-    lookup = (_SRC / "promote.py").read_text(encoding="utf-8")
-    estab = (_SRC / "promote_batch.py").read_text(encoding="utf-8")
-    assert 'mode("overwrite")' in lookup
-    assert "promote_batch(" in estab
-    # Both sides of the asymmetry, not just the lookup one. `promote_batch(` alone
-    # says the estab task DELEGATES to the shared helper, which is a weaker claim
-    # than the name of this test makes: it would still hold if that helper started
-    # overwriting. The estab bronze table is the 71.9M-row one, so an overwrite
-    # from a single batch's staging rows is the destructive direction.
-    assert 'mode("overwrite")' not in estab
+def test_the_one_surviving_promote_appends_a_batch_for_every_table():
+    """What `test_the_lookup_promote_overwrites_and_the_estab_promote_appends`
+    locked, after the collapse -- and the one semantic change this refactor makes.
 
-
-@pytest.mark.parametrize(
-    "script,rule_set",
-    [("dq_gate_batch", "estabelecimentos"), ("promote_batch", "estabelecimentos")],
-)
-def test_each_task_uses_its_own_rule_set(script, rule_set):
-    source = (_SRC / f"{script}.py").read_text(encoding="utf-8")
-    assert f'rules_for("{rule_set}")' in source
-
-
-def test_the_estab_constraints_are_the_ones_bronze_carries_today():
+    The deleted `promote.py` overwrote the lookup's bronze table from the WHOLE
+    staging table, which writes 2x the rows the moment a second batch exists. The
+    lookup now goes through the batch promote instead. `promote_batch(` alone
+    would be a weaker claim than this test's name -- it would still hold if the
+    shared helper started overwriting -- so the absence of an overwrite is
+    asserted too. Bronze holds 71.9M estab rows; an overwrite from one batch's
+    staging rows is the destructive direction."""
+    assert not (_SRC / "promote.py").exists(), (
+        "the overwriting promote is back; a second lookup batch would double its rows"
+    )
     source = (_SRC / "promote_batch.py").read_text(encoding="utf-8")
-    assert "cnpj_basico SET NOT NULL" in source
-    assert "cnpj_basico_len8" in source
-    assert "length(trim(cnpj_basico)) = 8" in source
+    assert "promote_batch(" in source
+    assert 'mode("overwrite")' not in source
 
 
-def test_the_lookup_constraints_are_the_ones_bronze_carries_today():
-    source = (_SRC / "promote.py").read_text(encoding="utf-8")
-    assert "codigo SET NOT NULL" in source
-    assert "codigo_not_blank" in source
-    assert "length(trim(codigo)) > 0" in source
+@pytest.mark.parametrize("script", ["dq_gate_batch", "promote_batch"])
+def test_each_task_takes_its_rule_set_from_the_spec_it_resolved(script):
+    """What `test_each_task_uses_its_own_rule_set` locked, restated.
+
+    It asserted the literal `rules_for("estabelecimentos")` in each source. One
+    task serves every table now, so the rule set has to follow the SAME spec the
+    coordinates came from -- a task gating estab rows against the lookup's rules
+    would pass rows the estab contract rejects."""
+    main = _main_of(script)
+    scope = _locals_of(main, script)
+    _resolved_spec(main, scope, script)
+    call = _sole_call(main, "rules_for", script)
+    assert len(call.args) == 1, f"{script}.py: rules_for() no longer takes one argument"
+    assert _spec_field(call.args[0], f"{script} rules_for") == "contract"
+
+
+def test_the_promote_takes_its_constraint_ddl_from_the_spec():
+    """What the two `..._constraints_are_the_ones_bronze_carries_today` tests
+    locked, restated -- the DDL itself is now Task 4's
+    `test_the_constraints_are_the_ones_the_live_tables_carry`, against the
+    registry, so re-spelling it here would be a copy that can drift.
+
+    What is left for this file is the wiring: the promote must issue the resolved
+    spec's statements and hold no DDL of its own. `cnpj_basico` exists in three of
+    the four CNPJ contracts, so a constraint copied back into this script would
+    look correct while asserting another table's key."""
+    source = (_SRC / "promote_batch.py").read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith("#")
+    )
+    assert "ALTER TABLE" not in code, "promote_batch.py spells DDL of its own again"
+    assert "spec.constraints" in code

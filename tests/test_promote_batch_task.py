@@ -21,6 +21,7 @@ from opl.bronze.promote import (
     PromoteResult,
     plan_promotion,
 )
+from opl.bronze.registry import UnknownTable
 from opl.bronze.rules import rules_for
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "databricks" / "src" / "promote_batch.py"
@@ -71,7 +72,7 @@ def test_it_promotes_estab_staging_into_estab_bronze(monkeypatch):
     spark = _stub_session(monkeypatch)
     seen = _record_promote(monkeypatch, _result(PromoteOutcome.APPENDED, appended=7))
 
-    task.main(["999"])
+    task.main(["estabelecimentos", "999"])
 
     assert seen["batch_id"] == "999"
     assert seen["staging_table"] == "workspace.default.bronze_cnpj_estab_staging"
@@ -87,7 +88,7 @@ def test_it_reasserts_the_constraints_on_an_already_promoted_batch(monkeypatch, 
     _record_promote(monkeypatch,
                     _result(PromoteOutcome.ALREADY_PROMOTED, rejected=4, bronze_rows=9506870))
 
-    task.main(["999"])
+    task.main(["estabelecimentos", "999"])
 
     assert len(spark.statements) == 3
     assert any("ADD CONSTRAINT cnpj_basico_len8" in s for s in spark.statements)
@@ -108,7 +109,7 @@ def test_a_repromote_after_a_rebuild_that_dropped_staging_still_reaches_the_ddl(
         _result(PromoteOutcome.ALREADY_PROMOTED_STAGING_GONE, bronze_rows=9506870),
     )
 
-    task.main(["315230730740144"])
+    task.main(["estabelecimentos", "315230730740144"])
 
     assert len(spark.statements) == 3
     out = capsys.readouterr().out
@@ -135,7 +136,7 @@ def test_it_never_reports_a_reject_count_it_could_not_re_derive(monkeypatch, cap
     assert planned.outcome is PromoteOutcome.ALREADY_PROMOTED_STAGING_GONE
     _record_promote(monkeypatch, planned)
 
-    task.main(["315230730740144"])
+    task.main(["estabelecimentos", "315230730740144"])
 
     out = capsys.readouterr().out
     assert "rejected row(s) of batch" not in out  # no count is a fact here
@@ -147,7 +148,7 @@ def test_it_reports_the_accepted_reject_count(monkeypatch, capsys):
     _record_promote(monkeypatch,
                     _result(PromoteOutcome.APPENDED, appended=9506870, rejected=1))
 
-    task.main(["999"])
+    task.main(["estabelecimentos", "999"])
 
     out = capsys.readouterr().out
     assert "appended 9506870 rows" in out
@@ -163,7 +164,7 @@ def test_the_in_flow_flag_marks_the_batch_id_as_this_run_s_own(monkeypatch):
     _stub_session(monkeypatch)
     seen = _record_promote(monkeypatch, _result(PromoteOutcome.APPENDED, appended=7))
 
-    task.main(["999", task.IN_FLOW_FLAG])
+    task.main(["estabelecimentos", "999", task.IN_FLOW_FLAG])
 
     assert seen["batch_id"] == "999"  # the flag is not mistaken for the batch id
     assert seen["in_flow"] is True
@@ -175,7 +176,7 @@ def test_without_the_flag_the_promote_is_strict(monkeypatch):
     _stub_session(monkeypatch)
     seen = _record_promote(monkeypatch, _result(PromoteOutcome.APPENDED, appended=7))
 
-    task.main(["999"])
+    task.main(["estabelecimentos", "999"])
 
     assert seen["in_flow"] is False
 
@@ -187,7 +188,7 @@ def test_a_run_that_ingested_nothing_succeeds_and_runs_no_ddl(monkeypatch, capsy
     spark = _stub_session(monkeypatch)
     _record_promote(monkeypatch, _result(PromoteOutcome.NOTHING_INGESTED))
 
-    task.main(["999", task.IN_FLOW_FLAG])
+    task.main(["estabelecimentos", "999", task.IN_FLOW_FLAG])
 
     out = capsys.readouterr().out
     assert "ingested no rows" in out and "nothing to promote" in out
@@ -201,18 +202,79 @@ def test_a_refused_promote_runs_no_ddl(monkeypatch):
     _record_promote(monkeypatch, raises=PromoteRefused("nope"))
 
     with pytest.raises(PromoteRefused):
-        task.main(["999"])
+        task.main(["estabelecimentos", "999"])
 
     assert spark.statements == []
 
 
-def test_no_argument_at_all_is_refused_by_the_real_guard(monkeypatch):
+def test_no_batch_id_at_all_is_refused_by_the_real_guard(monkeypatch):
     """End to end through the real `promote_batch`: a missing batch_id reaches
     neither a table nor the DDL. This is the forgotten-`--params` operator run
-    that used to print 'appended 0 rows' and exit 0."""
+    that used to print 'appended 0 rows' and exit 0.
+
+    The table is valid in this argv, so the batch-id refusal is the only one that
+    can fire -- the table is resolved first."""
     spark = _stub_session(monkeypatch)
 
     with pytest.raises(PromoteRefused, match="names no batch"):
-        task.main([])
+        task.main(["estabelecimentos"])
 
     assert spark.statements == []
+
+
+def test_an_unknown_table_is_refused_before_spark_and_before_the_batch_id(monkeypatch):
+    """A mistyped table is refused by the registry, naming the registered ones.
+
+    The batch id is valid here, so the table refusal is the only one that can
+    fire, and it happens before a serverless session is started -- nothing about
+    it needs Spark."""
+    spark = _stub_session(monkeypatch)
+
+    with pytest.raises(UnknownTable) as excinfo:
+        task.main(["estabelecimento", "999"])  # a real typo: singular
+
+    assert "estabelecimentos" in str(excinfo.value)
+    assert spark.statements == []
+
+
+def test_it_promotes_the_lookup_with_the_lookup_s_own_constraints(monkeypatch):
+    """The same task, a different table -- and the DDL is that table's, not estab's.
+
+    This is the reason the constraint DDL moved into the registry instead of being
+    copied into a second promote: `cnpj_basico` exists in three of the four CNPJ
+    contracts, so an estab constraint asserted against another table would look
+    plausible in review. `codigo` is the lookup's key, and estab has no such
+    column, so a leaked estab constraint here would be visible rather than merely
+    wrong."""
+    spark = _stub_session(monkeypatch)
+    seen = _record_promote(monkeypatch, _result(PromoteOutcome.APPENDED, appended=7))
+
+    task.main(["lookup", "777"])
+
+    assert seen["staging_table"] == "workspace.default.bronze_cnpj_lookup_staging"
+    assert seen["bronze_table"] == "workspace.default.bronze_cnpj_lookup"
+    assert [n for n, _ in seen["rules"]] == [n for n, _ in rules_for("lookup")]
+    assert any("codigo SET NOT NULL" in s for s in spark.statements)
+    assert any("ADD CONSTRAINT codigo_not_blank" in s for s in spark.statements)
+    assert not any("cnpj_basico" in s for s in spark.statements)
+    # Every statement targets the LOOKUP bronze table: the `{table}` placeholder is
+    # filled by the caller, so a promote that filled it from the wrong local would
+    # run one table's DDL against another's.
+    assert all("workspace.default.bronze_cnpj_lookup " in s for s in spark.statements)
+
+
+def test_the_lookup_promote_appends_a_batch_rather_than_overwriting(monkeypatch):
+    """The semantic change this collapse makes, asserted rather than assumed.
+
+    The deleted `promote.py` did `mode("overwrite")` over the WHOLE lookup staging
+    table. It now goes through the shared batch promote, which appends one
+    `_batch_id` -- correct (an overwrite from whole staging writes 2x the rows the
+    moment a second batch exists) but not a no-op: the lookup's bronze table has to
+    start clean, which a controlled reload handles separately."""
+    _stub_session(monkeypatch)
+    seen = _record_promote(monkeypatch, _result(PromoteOutcome.APPENDED, appended=7))
+
+    task.main(["lookup", "777", task.IN_FLOW_FLAG])
+
+    assert seen["batch_id"] == "777"  # scoped to one batch, not the whole table
+    assert seen["in_flow"] is True
