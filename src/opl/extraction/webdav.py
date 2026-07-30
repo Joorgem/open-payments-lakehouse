@@ -27,6 +27,14 @@ _BACKOFF_BASE = 0.5  # seconds: 0.5, 1, 2, 4 (2**n * base for n in 0..3)
 # (_MAX_ATTEMPTS). A connection that dies DURING iter_content triggers a fresh
 # ranged request resuming from the bytes already on disk, up to this many times.
 _MAX_STREAM_RESUMES = 8
+
+# How many times download() may throw away a partial file and start over from
+# byte 0. A restart sends NO Range header, so the reply is a plain 200 whose body
+# genuinely is the whole file -- the one request shape that cannot be misread.
+# One attempt is therefore the entire budget: a server that still answers
+# unverifiably after that is not having a bad moment, it cannot serve this file
+# in a form we can check, and looping would re-fetch the same unusable bytes.
+_MAX_RESTARTS = 1
 _STREAM_ERRORS = (
     requests.exceptions.ChunkedEncodingError,
     requests.exceptions.ConnectionError,
@@ -35,7 +43,10 @@ _STREAM_ERRORS = (
 
 
 class IntegrityError(Exception):
-    """Downloaded file size did not match the expected/advertised size."""
+    """A finished download could not be trusted.
+
+    Either the file size did not match the expected/advertised size, or the
+    server never answered with a body whose position we could verify."""
 
 
 @dataclass(frozen=True)
@@ -143,7 +154,38 @@ class WebDavClient:
             stream=True, timeout=120,
         ))
 
-    def download(self, rel_path: str, dest: Path, expected_size: int | None = None) -> Path:
+    def _stream_to(self, r: requests.Response, dest: Path, mode: str) -> None:
+        """Write the response body to `dest`, opened in `mode`.
+
+        Deliberately lets _STREAM_ERRORS escape: the caller decides whether the
+        bytes flushed so far are worth resuming from."""
+        with open(dest, mode) as f:
+            for chunk in r.iter_content(chunk_size=1 << 20):
+                if chunk:
+                    f.write(chunk)
+
+    def _restart_from_scratch(
+        self, rel_path: str, dest: Path, expected_size: int | None,
+        restarts: int, why: str,
+    ) -> Path:
+        """Throw the partial file away and download it again from byte 0.
+
+        This is the only correct answer when a response tells us the bytes on
+        disk cannot be built on. Writing the body we were handed is NOT an
+        alternative: we asked for a range, so that body may legitimately start at
+        byte N, and saving it as if it were whole yields a file of total - N
+        bytes that only the final size check would catch."""
+        if restarts >= _MAX_RESTARTS:
+            raise IntegrityError(
+                f"{rel_path}: {why}, and starting over from byte 0 hit it again -- "
+                f"this server cannot serve this file in a form we can verify"
+            )
+        if dest.exists():
+            dest.unlink()
+        return self.download(rel_path, dest, expected_size, _restarts=restarts + 1)
+
+    def download(self, rel_path: str, dest: Path, expected_size: int | None = None,
+                 _restarts: int = 0) -> Path:
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         resumes = 0
@@ -152,6 +194,12 @@ class WebDavClient:
             # may have left more bytes on disk since the previous request.
             resume_from = dest.stat().st_size if dest.exists() else 0
             r = self._open_ranged(rel_path, resume_from)
+            # Set when the response proves the bytes on disk cannot be built on.
+            # The restart is deferred until after `finally` has closed this
+            # response: recursing from inside the try would pin a streaming
+            # connection open for the whole re-download.
+            restart_reason: str | None = None
+            target: int | None = None
             try:
                 if r.status_code == 416:
                     # Server says the requested range is beyond the resource's size,
@@ -160,49 +208,63 @@ class WebDavClient:
                     if expected_size is not None and already_done:
                         return dest
                     # Stale/inconsistent partial file: discard it and re-fetch fresh.
-                    if dest.exists():
-                        dest.unlink()
-                    return self.download(rel_path, dest, expected_size)
+                    restart_reason = "server called the resume range unsatisfiable"
+                else:
+                    r.raise_for_status()
 
-                r.raise_for_status()
+                    # A 206 is not enough. A server that replies 206 while ignoring the
+                    # Range sends the FULL body, and appending that onto the bytes
+                    # already on disk yields a file of resume_from + full_size: the
+                    # right shape, the wrong bytes, caught only by the size check at
+                    # the very end. So the response has to PROVE where its body starts.
+                    #
+                    # An unprovable start cannot be salvaged by writing the body
+                    # fresh instead of appending it, either: we sent a Range, so the
+                    # body may really begin at byte N, and "wb" would then save
+                    # total - N bytes. The only safe reading is that this response
+                    # settles nothing -- drop the partial and re-ask without a Range.
+                    if (
+                        resume_from > 0
+                        and r.status_code == 206
+                        and _range_start(r) != resume_from
+                    ):
+                        restart_reason = (
+                            "server answered the resume with a 206 that does not prove "
+                            "where its body starts"
+                        )
 
-                # A 206 is not enough. A server that replies 206 while ignoring the
-                # Range sends the FULL body, and appending that onto the bytes
-                # already on disk yields a file of resume_from + full_size: the
-                # right shape, the wrong bytes, caught only by the size check at
-                # the very end. So the response has to PROVE where its body starts.
-                # An unprovable start is treated as no resume -- re-fetching from 0
-                # costs bandwidth; appending a misread body costs correctness.
-                resumed = (
-                    resume_from > 0
-                    and r.status_code == 206
-                    and _range_start(r) == resume_from
-                )
-                effective_start = resume_from if resumed else 0
-                mode = "ab" if resumed else "wb"
+                if restart_reason is None:
+                    # Past this point a 206 has PROVEN its body starts at resume_from,
+                    # so the status code alone is now a safe thing to branch on. A 200
+                    # needs no proof: it is the whole file by definition.
+                    resumed = resume_from > 0 and r.status_code == 206
+                    effective_start = resume_from if resumed else 0
+                    mode = "ab" if resumed else "wb"
 
-                try:
-                    with open(dest, mode) as f:
-                        for chunk in r.iter_content(chunk_size=1 << 20):
-                            if chunk:
-                                f.write(chunk)
-                except _STREAM_ERRORS:
-                    # Body died mid-transfer: the bytes flushed so far stay on disk.
-                    # Resume from the new size, up to _MAX_STREAM_RESUMES times.
-                    if resumes >= _MAX_STREAM_RESUMES:
-                        raise
-                    _sleep(_BACKOFF_BASE * (2 ** min(resumes, 3)))
-                    resumes += 1
-                    continue
+                    try:
+                        self._stream_to(r, dest, mode)
+                    except _STREAM_ERRORS:
+                        # Body died mid-transfer: the bytes flushed so far stay on disk.
+                        # Resume from the new size, up to _MAX_STREAM_RESUMES times.
+                        if resumes >= _MAX_STREAM_RESUMES:
+                            raise
+                        _sleep(_BACKOFF_BASE * (2 ** min(resumes, 3)))
+                        resumes += 1
+                        continue
 
-                target = expected_size
-                if target is None:
-                    cl = r.headers.get("Content-Length")
-                    target = (effective_start + int(cl)) if cl else None
+                    target = expected_size
+                    if target is None:
+                        cl = r.headers.get("Content-Length")
+                        target = (effective_start + int(cl)) if cl else None
             finally:
                 close = getattr(r, "close", None)
                 if callable(close):
                     close()
+
+            if restart_reason is not None:
+                return self._restart_from_scratch(
+                    rel_path, dest, expected_size, _restarts, restart_reason
+                )
 
             actual = dest.stat().st_size
             if target is not None and actual != target:

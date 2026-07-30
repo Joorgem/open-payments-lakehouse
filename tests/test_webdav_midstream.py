@@ -147,23 +147,111 @@ def test_range_start_is_none_when_the_header_is_absent_or_junk():
 
 
 def test_a_206_that_ignored_the_range_is_not_treated_as_a_resume(tmp_path):
-    """A 206 whose body starts at 0 must TRUNCATE, not append.
+    """A 206 whose body starts at 0 must not be appended.
 
     Appending it onto the K bytes already on disk yields a file of
     K + full_size -- right shape, wrong bytes, and the size check is the only
-    thing that would catch it."""
+    thing that would catch it. The client drops the partial and re-asks with no
+    Range instead."""
     dest = tmp_path / "part.zip"
     dest.write_bytes(b"A" * 4)  # a partial file already on disk
 
     body = b"B" * 10
     client, script = _client_with([
+        # asked for byte 4, told "this body starts at 0" -- unusable either way
         ("bytes=4-", _FlakyResponse(
             206, body, headers={"Content-Range": f"bytes 0-{len(body) - 1}/{len(body)}"})),
+        # the restart carries no Range, so this 200 body really is the whole file
+        (None, _FlakyResponse(200, body)),
     ])
 
     client.download("x/part.zip", dest, expected_size=len(body))
 
     assert dest.read_bytes() == body, "the stale prefix must be discarded, not appended to"
+    assert not script
+
+
+def test_a_206_with_no_content_range_restarts_instead_of_saving_a_short_file(tmp_path):
+    """The header being ABSENT is a distinct case from it pointing at the wrong
+    offset, and the more dangerous one to get wrong.
+
+    The body here is the correct tail -- the server did honour the Range, it just
+    failed to say so. Writing it with "wb" (the obvious "treat as not resumed")
+    would leave 6 bytes of a 10-byte file and die on the size check, turning a
+    recoverable transfer into a hard failure. Only a restart is safe."""
+    dest = tmp_path / "part.zip"
+    dest.write_bytes(b"XXXX")  # 4 stale bytes
+
+    full = b"0123456789"
+    client, script = _client_with([
+        # a 206 with Content-Length but NO Content-Range: RFC-illegal, unprovable
+        ("bytes=4-", _FlakyResponse(206, full[4:])),
+        (None, _FlakyResponse(200, full)),
+    ])
+
+    client.download("x/part.zip", dest, expected_size=len(full))
+
+    assert dest.read_bytes() == full
+    assert not script
+
+
+def test_two_unprovable_answers_in_a_row_raise_instead_of_recursing_forever(
+        tmp_path, monkeypatch):
+    """The restart must be budgeted. A server that answers unprovably every time
+    would otherwise recurse until the stack gives out."""
+    monkeypatch.setattr(webdav, "_sleep", lambda s: None)
+    dest = tmp_path / "part.zip"
+    dest.write_bytes(b"XXXX")
+
+    full = b"0123456789"
+    client, script = _client_with([
+        # 1: unprovable 206 -> spends the single restart
+        ("bytes=4-", _FlakyResponse(206, full[4:])),
+        # 2: the restart itself, a 200 that dies after 3 bytes
+        (None, _FlakyResponse(200, full, die_after=3)),
+        # 3: the mid-stream resume comes back unprovable again -- budget gone
+        ("bytes=3-", _FlakyResponse(206, full[3:])),
+    ])
+
+    with pytest.raises(webdav.IntegrityError, match="cannot serve this file"):
+        client.download("x/part.zip", dest, expected_size=len(full))
+    assert not script
+
+
+def test_a_416_on_a_stale_partial_still_discards_and_refetches(tmp_path):
+    """Regression guard for the 416 branch, which now shares the restart budget.
+
+    416 with a partial that is NOT the full size means the bytes on disk are
+    stale, and the pre-existing behaviour -- drop them, fetch again from 0 --
+    must survive being routed through _restart_from_scratch."""
+    dest = tmp_path / "part.zip"
+    dest.write_bytes(b"abc")  # 3 stale bytes, but the file is 6 long
+
+    full = b"abcdef"
+    client, script = _client_with([
+        ("bytes=3-", _FlakyResponse(416, b"")),
+        (None, _FlakyResponse(200, full)),
+    ])
+
+    client.download("x/part.zip", dest, expected_size=len(full))
+
+    assert dest.read_bytes() == full
+    assert not script
+
+
+def test_a_416_that_repeats_after_the_restart_raises(tmp_path):
+    """A server 416-ing even a Range-less request cannot be satisfied; before the
+    budget existed this recursed until the stack ran out."""
+    dest = tmp_path / "part.zip"
+    dest.write_bytes(b"abc")
+
+    client, script = _client_with([
+        ("bytes=3-", _FlakyResponse(416, b"")),
+        (None, _FlakyResponse(416, b"")),
+    ])
+
+    with pytest.raises(webdav.IntegrityError, match="cannot serve this file"):
+        client.download("x/part.zip", dest, expected_size=6)
     assert not script
 
 
