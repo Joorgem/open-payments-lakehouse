@@ -10,6 +10,11 @@ from pyspark.sql import functions as F
 from opl.bronze.lookup_routing import LOOKUP_SUFFIX
 from opl.bronze.reader import csv_read_options
 from opl.bronze.schema import struct_for
+from opl.bronze.snapshot import (
+    SNAPSHOT_MONTH_COLUMN,
+    SNAPSHOT_REF_DATE_COLUMN,
+    ref_date_column,
+)
 from opl.config import OplConfig
 
 RECORD_SOURCE = "rfb_cnpj_webdav"
@@ -33,12 +38,31 @@ def checkpoint_location(cfg: OplConfig, table_key: str = "bronze_cnpj_lookup") -
 
 
 def add_audit_columns(
-    df: DataFrame, batch_id: str, record_source: str = RECORD_SOURCE
+    df: DataFrame,
+    batch_id: str,
+    snapshot_month: str,
+    record_source: str = RECORD_SOURCE,
 ) -> DataFrame:
+    """Stamp the ingestion audit columns onto a bronze stream.
+
+    `snapshot_month` is REQUIRED and has no default. A default would be one of
+    two things, both bad: `opl.config`'s pinned month, which is how F1.2's ingest
+    entry point silently tied every row to 2026-06, or the current month, which
+    invents a fact. The F1.2 evidence doc recorded the seam this closes --
+    "ingesting a second month requires parameterizing the month and adding a
+    snapshot key".
+
+    Expects `_source_file` on `df`; every bronze stream adds it (see
+    `bronze_stream`), and the reference date is derived from it."""
     return (
         df.withColumn("_ingested_at", F.current_timestamp())
         .withColumn("_record_source", F.lit(record_source))
         .withColumn("_batch_id", F.lit(batch_id))
+        .withColumn(SNAPSHOT_MONTH_COLUMN, F.lit(snapshot_month))
+        .withColumn(
+            SNAPSHOT_REF_DATE_COLUMN,
+            ref_date_column(F.col("_source_file"), snapshot_month),
+        )
     )
 
 

@@ -28,7 +28,10 @@ def main(argv: list[str] | None = None) -> None:
     df = bronze_stream(spark, DEFAULT, "estabelecimentos",
                        DEFAULT.landing_table("estabelecimentos", month),
                        "bronze_cnpj_estab")
-    audited = add_audit_columns(df, batch_id=batch_id)
+    # The SAME `month` the stream read from -- one local, fed to both, so the
+    # snapshot the rows are stamped with cannot drift from the folder they came
+    # out of.
+    audited = add_audit_columns(df, batch_id=batch_id, snapshot_month=month)
     query = (
         audited.writeStream.format("delta")
         .option("checkpointLocation", checkpoint_location(DEFAULT, "bronze_cnpj_estab"))

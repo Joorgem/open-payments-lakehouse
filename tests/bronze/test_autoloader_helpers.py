@@ -1,5 +1,7 @@
+import datetime as dt
 from types import SimpleNamespace
 
+import pytest
 from pyspark.sql import functions as F
 
 import opl.bronze.autoloader as al
@@ -12,22 +14,49 @@ from opl.bronze.autoloader import (
     lookup_type_column,
     schema_location,
 )
+from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN
 from opl.config import DEFAULT
 from opl.spark import local_session
+
+_SOURCE_FILE = "/Volumes/workspace/default/landing/cnpj/2026-06/lookups/F.K03200$Z.D60613.CNAECSV"
 
 
 def test_audit_columns_added_with_constant_values():
     spark = local_session("test-audit")
     try:
-        df = spark.createDataFrame([("01", "AÇÃO")], ["codigo", "descricao"])
-        out = add_audit_columns(df, batch_id="run-123")
-        assert {"_ingested_at", "_record_source", "_batch_id"} <= set(out.columns)
+        df = spark.createDataFrame(
+            [("01", "AÇÃO", _SOURCE_FILE)], ["codigo", "descricao", "_source_file"]
+        )
+        out = add_audit_columns(df, batch_id="run-123", snapshot_month="2026-06")
+        assert {
+            "_ingested_at",
+            "_record_source",
+            "_batch_id",
+            SNAPSHOT_MONTH_COLUMN,
+            SNAPSHOT_REF_DATE_COLUMN,
+        } <= set(out.columns)
         row = out.collect()[0]
         assert row["_batch_id"] == "run-123"
         assert row["_record_source"] == RECORD_SOURCE
         assert row["_ingested_at"] is not None
+        # The operational identity is the parameter; the business fact is the
+        # date the RFB declares, which is NOT month-end. Both, side by side.
+        assert row[SNAPSHOT_MONTH_COLUMN] == "2026-06"
+        assert row[SNAPSHOT_REF_DATE_COLUMN] == dt.date(2026, 6, 13)
     finally:
         spark.stop()
+
+
+def test_the_snapshot_month_has_no_default():
+    """A defaulted month is the F1.2 defect itself, so the absence of the default
+    is the thing worth locking.
+
+    Either candidate default is wrong: `opl.config`'s pinned month is exactly how
+    every F1.2 row was silently tied to 2026-06, and the current month invents a
+    fact about data the RFB published whenever it published it. Spark-free -- the
+    TypeError comes from the signature, before the body runs."""
+    with pytest.raises(TypeError, match="snapshot_month"):
+        add_audit_columns(object(), batch_id="run-123")
 
 
 def test_state_locations_are_separate_and_not_under_table_dir():

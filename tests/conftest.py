@@ -1,5 +1,5 @@
 # tests/conftest.py
-"""Shared hermetic doubles for the Databricks Files API.
+"""Shared hermetic doubles for the Databricks Files API, plus the Spark session.
 
 Every test that exercises an upload path uses this double rather than a bare
 ``mock.Mock()``: a Mock auto-creates whatever attribute is asked of it, so a
@@ -9,9 +9,49 @@ absence is visible.
 """
 from __future__ import annotations
 
+import os
+import sys
 from types import SimpleNamespace
 
 import pytest
+
+
+def _pin_pyspark_interpreter() -> None:
+    """Make Spark's Python workers run the interpreter the driver runs.
+
+    Measured, not theoretical: without this the workers launch from the first
+    ``python`` on PATH (3.14 on this machine) against a 3.12 driver, and every
+    Spark test dies inside py4j with ``AssertionError: SRE module mismatch`` --
+    a message that names neither Python nor PATH. It has to happen BEFORE a
+    SparkContext exists, because that is when the worker command is captured.
+
+    Called at import as well as from the fixture: several older test modules
+    build their own session via ``opl.spark.local_session`` and never see the
+    fixture, and they were failing this way before this file pinned it.
+    """
+    os.environ["PYSPARK_PYTHON"] = sys.executable
+    os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
+
+
+_pin_pyspark_interpreter()
+
+
+@pytest.fixture(scope="session")
+def spark():
+    """The one local Delta-enabled session the Spark tests share.
+
+    Wraps ``opl.spark.local_session`` rather than building a second session:
+    that factory documents itself as mirroring what Databricks applies on DBR
+    16.4, and a copy of its config here would be a copy that drifts. Imported
+    inside the fixture so that collecting the Spark-free tests does not require
+    pyspark to be installed. Task 10 hardens this.
+    """
+    _pin_pyspark_interpreter()
+    from opl.spark import local_session
+
+    session = local_session("test-suite")
+    yield session
+    session.stop()
 
 
 class FakeFilesApi:
