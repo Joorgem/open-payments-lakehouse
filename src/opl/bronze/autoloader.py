@@ -19,6 +19,12 @@ from opl.bronze.snapshot import (
 from opl.config import OplConfig
 
 RECORD_SOURCE = "rfb_cnpj_webdav"
+# The one spelling of the column that records WHICH LANDED FILE a row came out of.
+# It lives here because this is where the column is created, and it is a constant
+# rather than a literal because `opl.bronze.retention` reads it back to decide which
+# files may be deleted from the Volume: two spellings of it would be a rename in one
+# place that makes the retention query return nothing and silently reclaim nothing.
+SOURCE_FILE_COLUMN = "_source_file"
 # NO table-name constants here. BRONZE_STAGING / BRONZE_ESTAB_STAGING /
 # BRONZE_QUARANTINE / BRONZE_ESTAB_QUARANTINE lived here until F1.4 Task 8 and
 # were a SECOND spelling of names `opl.bronze.registry` already owns -- one import
@@ -61,7 +67,7 @@ def add_audit_columns(
         .withColumn(SNAPSHOT_MONTH_COLUMN, F.lit(snapshot_month))
         .withColumn(
             SNAPSHOT_REF_DATE_COLUMN,
-            ref_date_column(F.col("_source_file"), snapshot_month),
+            ref_date_column(F.col(SOURCE_FILE_COLUMN), snapshot_month),
         )
     )
 
@@ -106,7 +112,7 @@ def bronze_stream(
     for k, v in csv_read_options().items():
         reader = reader.option(k, v)
     df = reader.load(source_dir)
-    return df.withColumn("_source_file", F.col("_metadata.file_path"))
+    return df.withColumn(SOURCE_FILE_COLUMN, F.col("_metadata.file_path"))
 
 
 def bronze_lookup_stream(

@@ -1,0 +1,145 @@
+# databricks/src/reclaim_landing.py
+"""Job task (runs after promote): delete the inner files THIS batch put in bronze.
+
+Depends on promote, and only on its success: a file may go only once bronze
+proves it holds that file's rows. The zips are never touched -- they live in a
+sibling `zips/<table>` dir and are the only way back to the source if a parse
+defect is found after ingestion, which is exactly what happened twice in F1.3.
+
+WHAT THIS TASK IS ALLOWED TO FAIL ON, because "never fail the job" is not the
+same as "never raise". The argument guards still raise, before Spark and before
+anything is deleted: an unknown table (`table_spec`) or a batch id that names no
+batch (`require_batch_id`) means this task does not know WHICH files it would be
+reclaiming, and reclaiming under a guess is how the wrong table's landing dir
+gets emptied. What never raises is the deletion itself -- past that point the
+rows are already in bronze, so a file that cannot be removed is a quota problem,
+not a data problem, and must not turn a green ingestion red.
+
+argv: [table, batch_id, month]"""
+import sys
+
+from pyspark.sql import SparkSession
+
+from opl.bronze.promote import require_batch_id
+from opl.bronze.registry import table_spec
+from opl.bronze.retention import (
+    LandingScope,
+    RetentionOutcome,
+    delete_files,
+    files_of_batch,
+    require_month,
+    scope_to_landing_dir,
+)
+from opl.config import DEFAULT
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = sys.argv[1:] if argv is None else argv
+    # Table first and before Spark, like every other task here: a mistyped table
+    # is refused by the registry naming the valid ones. It matters more here than
+    # anywhere else -- the table decides both which rows are read as proof AND
+    # which directory the deletes are confined to.
+    spec = table_spec(args[0] if args else "")
+    batch_id = require_batch_id(args[1] if len(args) > 1 else "", action="reclaim")
+    # The SAME default and position as bronze_ingest.py's month, because it has to
+    # be the same month: the files this batch proved were read out of that month's
+    # landing dir, and a WRONG-but-well-formed month here puts every proven file
+    # outside the scope and reclaims nothing (loudly -- see the REFUSED lines below).
+    #
+    # A MALFORMED one is a different matter and is refused outright, here, before
+    # the session: this value is interpolated raw into `landing_table` below, so it
+    # is not checked BY the delete boundary, it is half OF it -- `2026-06/zips`
+    # moves that boundary onto the raw ZIPs and every zip then passes containment
+    # as "inside". `require_month` carries the full argument.
+    month = require_month(args[2] if len(args) > 2 else DEFAULT.month)
+    spark = SparkSession.builder.getOrCreate()
+    bronze = DEFAULT.table(spec.bronze)
+    if not spark.catalog.tableExists(bronze):
+        # Split out from the empty proof set below because it means something
+        # else entirely: the authority this task defers to does not exist. A
+        # reader who saw only "nothing is proven persisted" could conclude the
+        # batch was already reclaimed; the files are landed and bronze is gone.
+        print(f"reclaim_landing: {bronze} does not exist, so nothing can be proven "
+              f"persisted and nothing is deleted. The landed files of batch {batch_id} "
+              "are still in the Volume, which is the recoverable direction -- re-run "
+              "the ingest and promote for this month before reclaiming anything")
+        return
+    proven = files_of_batch(spark, bronze, batch_id)
+    if not proven:
+        _report_nothing_proven(bronze, batch_id, spec.name)
+        return
+    landing_dir = DEFAULT.landing_table(spec.subdir, month)
+    scope = scope_to_landing_dir(proven, landing_dir)
+    outcome = delete_files(scope.inside)
+    _report(outcome, scope, batch_id=batch_id, table=spec.name, landing_dir=landing_dir)
+
+
+def _report_nothing_proven(bronze: str, batch_id: str, table: str) -> None:
+    """Bronze exists and holds no file of this batch: delete nothing, say why.
+
+    THE DECISION: return green having deleted nothing, and name the causes rather
+    than shrug. The safe action is the same for every cause -- an empty proof set
+    proves nothing, so nothing may go -- but the causes are not the same event and
+    the operator's next move differs, so a bare "nothing to do" would hide two of
+    them. It does not raise, because the first cause below is the pipeline's own
+    legitimate quiet path and failing it would turn every no-new-file run red;
+    and because in all three cases the bytes simply stay, which is the direction
+    that loses nothing."""
+    print(f"reclaim_landing: {bronze} holds no row of batch {batch_id} -- nothing is "
+          "proven persisted, so NOTHING WAS DELETED and the landed files stay. One of: "
+          f"(a) this run's ingest found no new file for {table}, the flow's legitimate "
+          "no-op, and there is genuinely nothing to reclaim; (b) the batch id names no "
+          "batch this table ever ingested -- a well-formed id passed by hand is "
+          "indistinguishable from a typo here, and require_batch_id only refuses a "
+          "blank or the sentinel; (c) bronze was rebuilt after the promote, which "
+          "destroyed the proof while leaving the files. Only (a) needs nothing done: "
+          f"check with SELECT count(*) FROM {bronze} WHERE _batch_id = '{batch_id}'")
+
+
+def _report(
+    outcome: RetentionOutcome,
+    scope: LandingScope,
+    *,
+    batch_id: str,
+    table: str,
+    landing_dir: str,
+) -> None:
+    """What the run log says happened. Four outcomes, none of them collapsed.
+
+    Modelled on `landing._discard_remote`, which reports deleted / already-absent
+    / STILL THERE apart for the reason this task needs too: an operator told
+    nothing assumes the file is gone, and a file that could not be removed still
+    holds Volume quota nobody knows about. The fourth -- refused -- is this task's
+    own and is the loudest, because it says bronze holds rows sourced from outside
+    the dir this table's stream reads."""
+    print(f"reclaim_landing: batch={batch_id} table={table} "
+          f"deleted={len(outcome.deleted)} already_absent={len(outcome.absent)} "
+          f"failed={len(outcome.failed)} refused={len(scope.outside)}")
+    for path, reason in outcome.failed:
+        print(f"  STILL THERE: {path} -- {reason}")
+    for path in scope.outside:
+        # Not deleting it is the easy half. The hard half is that a row like this
+        # should not exist: it means this table's stream read a file outside the
+        # dir it was pointed at, which is how an F1.3 probe.txt in
+        # `zips/estabelecimentos/` ended up in the lookup staging table.
+        print(f"  REFUSED (left untouched): {path} -- bronze credits it to batch "
+              f"{batch_id}, but it is not under {landing_dir}. This reclaim deletes "
+              "only files in the dir this table's Auto Loader reads, so the zips and "
+              "every other table's files are out of reach by construction. Investigate "
+              "how a row of this table came from there before reclaiming anything else")
+    if outcome.deleted or not outcome.absent:
+        return
+    # Every single file already gone. That is the expected shape of an idempotent
+    # re-run -- and it is ALSO exactly what a path form this code cannot resolve
+    # looks like, since an unlink of a path that exists nowhere raises
+    # FileNotFoundError just like one that was already reclaimed. Two very
+    # different facts with one signature, so the log refuses to let them read alike.
+    print(f"  NOTE: all {len(outcome.absent)} proven file(s) were already gone and no "
+          "byte was reclaimed. Expected on a repair run or a second reclaim of the "
+          "same batch. If this is the FIRST reclaim of this batch, do not read it as "
+          "success -- check that the files are really absent from the Volume "
+          f"(databricks fs ls dbfs:{landing_dir}) before assuming the space was freed")
+
+
+if __name__ == "__main__":
+    main()

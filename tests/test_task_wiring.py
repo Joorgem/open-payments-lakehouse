@@ -52,6 +52,7 @@ _TABLE_TASKS = [
     "dq_gate_batch",
     "promote_batch",
     "fail_on_dq",
+    "reclaim_landing",
 ]
 
 
@@ -391,6 +392,44 @@ def test_the_one_surviving_promote_appends_a_batch_for_every_table():
     source = (_SRC / "promote_batch.py").read_text(encoding="utf-8")
     assert "promote_batch(" in source
     assert 'mode("overwrite")' not in source
+
+
+def test_the_reclaim_proves_persistence_from_bronze_and_deletes_only_under_landing():
+    """The one task that DELETES, so the two coordinates it binds are the two that
+    decide whether a file survives.
+
+    WHICH TABLE PROVES IT: `spec.bronze`, never `spec.staging`. Staging holds rows
+    that have been read but not yet promoted, so a file whose rows are only there
+    has not been proven persisted -- and once its bytes are gone the only way back
+    is re-unzipping the source. `spec.staging` for `spec.bronze` is a
+    one-identifier edit that leaves `table_spec(` in the source and every other
+    test in this file green, which is exactly the class of edit this module was
+    written for.
+
+    WHICH DIRECTORY IS IN REACH: `spec.subdir`, this table's own landing dir. Its
+    sibling `zips/<table>` holds the only copies of the source, and the last
+    assertion is what keeps them unreachable: bronze is the only coordinate this
+    task qualifies at all."""
+    main = _main_of("reclaim_landing")
+    scope = _locals_of(main, "reclaim_landing")
+    _resolved_spec(main, scope, "reclaim_landing")
+    proof = _sole_call(main, "files_of_batch", "reclaim_landing")
+    assert len(proof.args) >= 2, "files_of_batch() no longer takes the table positionally"
+    bound = {
+        "proof": _spec_field(
+            _table_arg(
+                _deref(proof.args[1], scope, "reclaim_landing files_of_batch table"),
+                "reclaim_landing files_of_batch table",
+            ),
+            "reclaim_landing files_of_batch table",
+        ),
+        "deletes_under": _spec_field(
+            _sole_call(main, "landing_table", "reclaim_landing").args[0],
+            "reclaim_landing landing_table",
+        ),
+    }
+    assert bound == {"proof": "bronze", "deletes_under": "subdir"}
+    assert _qualified_spec_fields(main, "reclaim_landing") == ["bronze"]
 
 
 @pytest.mark.parametrize("script", ["dq_gate_batch", "promote_batch"])
