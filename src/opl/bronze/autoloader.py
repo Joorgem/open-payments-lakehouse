@@ -9,6 +9,7 @@ from pyspark.sql import functions as F
 
 from opl.bronze.lookup_routing import LOOKUP_SUFFIX
 from opl.bronze.reader import csv_read_options
+from opl.bronze.registry import table_spec
 from opl.bronze.schema import struct_for
 from opl.bronze.snapshot import (
     SNAPSHOT_MONTH_COLUMN,
@@ -18,15 +19,14 @@ from opl.bronze.snapshot import (
 from opl.config import OplConfig
 
 RECORD_SOURCE = "rfb_cnpj_webdav"
-BRONZE_STAGING = "bronze_cnpj_lookup_staging"
-BRONZE_ESTAB_STAGING = "bronze_cnpj_estab_staging"
-# The quarantine each gate writes. They live here, not in the job scripts, so the
-# gate that writes one, the promote that points an operator at it, the fail_on_dq
-# message that names it and the test that locks the wiring all read ONE spelling.
-# Before this, promote_batch could not name the table in its recovery hint (it had
-# no access to the constant) and the wiring test had to parse the script's source.
-BRONZE_QUARANTINE = "bronze_cnpj_lookup_quarantine"
-BRONZE_ESTAB_QUARANTINE = "bronze_cnpj_estab_quarantine"
+# NO table-name constants here. BRONZE_STAGING / BRONZE_ESTAB_STAGING /
+# BRONZE_QUARANTINE / BRONZE_ESTAB_QUARANTINE lived here until F1.4 Task 8 and
+# were a SECOND spelling of names `opl.bronze.registry` already owns -- one import
+# away from re-creating the drift the registry exists to prevent, which is the
+# drift that once sent an estab triager to a table holding no trace of the batch
+# that had been blocked. Every staging/bronze/quarantine name now comes from
+# `table_spec(...)`. `RECORD_SOURCE` stays: it names where the BYTES came from
+# (the RFB WebDAV), which is a property of this ingest, not of a table.
 
 
 def schema_location(cfg: OplConfig, table_key: str = "bronze_cnpj_lookup") -> str:
@@ -80,18 +80,21 @@ def bronze_stream(
     table: str,
     source_dir: str,
     table_key: str,
-    path_glob_filter: str | None = None,
 ) -> DataFrame:
     """Generalized cloudFiles bronze read for any contract table. Reads
     ``source_dir`` with the ``struct_for(table)`` schema and the shared CSV
     options, adds ``_source_file``. Lookup-specific columns are added by the
     caller (see ``bronze_lookup_stream``).
 
-    ``path_glob_filter`` restricts ingestion to files whose *basename* matches
-    the glob (Auto Loader's ``pathGlobFilter``). It is set only by callers whose
-    ``source_dir`` is a shared root that Auto Loader walks recursively (the
-    lookup stream reads the whole month root); callers that point at a dedicated
-    per-table subdir leave it ``None`` so no legitimate file is filtered out."""
+    NO GLOB, and no parameter for one. cloudFiles walks ``source_dir``
+    RECURSIVELY -- an F1.3 probe.txt planted in the ``zips/estabelecimentos/``
+    subdir was ingested by the lookup stream reading the month root (staging
+    7408 -> 7409) -- so a stream pointed at a shared root needed a
+    ``pathGlobFilter`` to stay out of its neighbours' files. Every stream now
+    reads its OWN per-table subdir, which removes the shared root and with it the
+    need. That is deliberately structural: a glob is a discovery RULE, so a source
+    filename drifting out of its pattern would silently under-ingest, with nothing
+    downstream able to tell an empty batch from a missed one."""
     reader = (
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "csv")
@@ -100,15 +103,6 @@ def bronze_stream(
         .option("rescuedDataColumn", "_rescued_data")
         .schema(struct_for(table))
     )
-    if path_glob_filter is not None:
-        # F1.3 Task 6 probe (empirical): a probe.txt planted in the
-        # cnpj/<month>/zips/estabelecimentos/ subdir WAS ingested by the lookup
-        # stream (staging 7408 -> 7409) -- cloudFiles discovers the month root
-        # recursively. pathGlobFilter="*CSV" excludes non-CSV subdir files (incl.
-        # the .ESTABELE giant extracts) while still matching the lookup *…CSV
-        # files. Only the lookup stream passes it; the estab ingest reads its own
-        # subdir and must NOT filter (its files end in .ESTABELE, not *CSV).
-        reader = reader.option("pathGlobFilter", path_glob_filter)
     for k, v in csv_read_options().items():
         reader = reader.option(k, v)
     df = reader.load(source_dir)
@@ -118,9 +112,17 @@ def bronze_stream(
 def bronze_lookup_stream(
     spark: SparkSession, cfg: OplConfig, month: str | None = None
 ) -> DataFrame:
+    spec = table_spec("lookup")
     df = bronze_stream(
-        spark, cfg, "lookup", cfg.landing_cnpj_month(month), "bronze_cnpj_lookup",
-        path_glob_filter="*CSV",
+        spark,
+        cfg,
+        spec.contract,
+        # Its OWN subdir, not the month root the six lookups used to sit loose in.
+        # `spec.subdir` and not the literal: the directory name is the registry's
+        # to own -- that is why `subdir` is a field of its own and not derived
+        # from the table key.
+        cfg.landing_table(spec.subdir, month),
+        spec.table_key,
     )
     return df.withColumn(
         "lookup_type", lookup_type_column(F.col("_metadata.file_path"))

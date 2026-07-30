@@ -14,12 +14,90 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from opl.config import OplConfig
 from opl.contracts.cnpj_schemas import TABLES
 
 # How a table's raw files reach the Volume.
 LANDING_ZIPS = "zips"    # PUT the zip, unzip in the Volume (multi-part groups)
 LANDING_LOCAL = "local"  # unzip locally, PUT the inner file (the tiny lookups)
 LANDING_MODES = frozenset({LANDING_ZIPS, LANDING_LOCAL})
+
+# Values that make the derivation below independent of any real table or month --
+# they are joined into a path and the added component is read back out, so they
+# only have to be non-empty and contain no separator.
+_LAYOUT_PROBE_TABLE = "__probe__"
+_LAYOUT_PROBE_MONTH = "__month__"
+
+# What disqualifies a `subdir` from being a single directory name. Both separators
+# because Windows `os.path` accepts either; the aliases because each resolves
+# `landing_table(...)` back onto a directory that already exists -- `""` and `"."`
+# onto the month root (the F1.4b blocker itself), `".."` onto `cnpj/`, every month.
+_PATH_SEPARATORS = ("/", "\\")
+_RELATIVE_ALIASES = frozenset({"", ".", ".."})
+
+
+def _component_under(path: str, prefix: str) -> str:
+    """The single directory `path` adds directly under `prefix`.
+
+    Raises rather than returning something wrong if `path` is not under `prefix`:
+    that means the Volume layout moved, and a guard that silently derives the
+    empty string from a moved layout reserves nothing while still looking green."""
+    if not path.startswith(f"{prefix}/"):
+        raise ValueError(
+            f"the Volume layout moved: {path!r} is no longer under {prefix!r}, so "
+            "RESERVED_SUBDIRS can no longer derive the names it has to reserve"
+        )
+    return path[len(prefix) + 1:].split("/", 1)[0]
+
+
+def _reserved_subdirs() -> frozenset[str]:
+    """Directory names no table's `subdir` may claim.
+
+    DERIVED from `OplConfig`, not restated as a literal list, so the guard cannot
+    drift from the layout it guards: renaming the zips directory in one place moves
+    this reservation with it, where a literal would go on reserving a name nothing
+    uses and stop reserving the one that matters.
+
+    `zips` is the LIVE collision and the reason this exists. `landing_zips` puts
+    every table's raw ZIPs at `cnpj/<month>/zips/<table>`, a SIBLING of each
+    table's `landing_table` dir -- so a table registered with `subdir="zips"` would
+    get `cnpj/<month>/zips` as its source dir, and because cloudFiles walks a source
+    dir RECURSIVELY (F1.3, empirically: a probe.txt planted in
+    `zips/estabelecimentos/` was ingested by a stream reading the month root) that
+    one stream would swallow every other table's ZIPs and the multi-gigabyte
+    `.ESTABELE` extracts. Subdir UNIQUENESS cannot see this: `zips` collides with no
+    other table's subdir.
+
+    `_tmp`, `_schemas` and `_checkpoints` are reserved DEFENSIVELY, and are a weaker
+    case worth stating honestly: all three live under `volume_root`, not under
+    `cnpj/<month>`, so `cnpj/<month>/_tmp` would not actually collide with
+    `volume_root/_tmp` today. They are refused because a leading-underscore
+    directory means "state, not data" everywhere else in this Volume, and an
+    operator listing a month who found `_schemas` there would read it as state.
+
+    `_tmp` is derived like `zips`. `_schemas` and `_checkpoints` are literals: they
+    are built by `opl.bronze.autoloader.schema_location` / `checkpoint_location`,
+    and `autoloader` imports THIS module, so deriving them would be a cycle. If
+    either is renamed there and not here, this guard stops reserving the old name --
+    the only consequence is that the weaker defensive half goes stale; the live
+    `zips` collision stays covered either way."""
+    cfg = OplConfig()
+    month_root = cfg.landing_cnpj_month(_LAYOUT_PROBE_MONTH)
+    return frozenset(
+        {
+            _component_under(
+                cfg.landing_zips(_LAYOUT_PROBE_TABLE, _LAYOUT_PROBE_MONTH), month_root
+            ),
+            _component_under(
+                cfg.landing_tmp(_LAYOUT_PROBE_TABLE, _LAYOUT_PROBE_MONTH), cfg.volume_root
+            ),
+            "_schemas",
+            "_checkpoints",
+        }
+    )
+
+
+RESERVED_SUBDIRS = _reserved_subdirs()
 
 
 class UnknownTable(ValueError):
@@ -165,5 +243,88 @@ def _assert_landing_modes_known() -> None:
             )
 
 
+def _malformed_subdir_reason(subdir: str) -> str | None:
+    """Why `subdir` is not a single directory name, or None if it is."""
+    if any(sep in subdir for sep in _PATH_SEPARATORS):
+        return "contains a path separator"
+    if subdir.strip() in _RELATIVE_ALIASES:
+        return "is blank or names an existing directory instead of a new one"
+    return None
+
+
+def _assert_subdirs_are_single_path_components() -> None:
+    """Fail at import if a `subdir` is a PATH rather than a directory name.
+
+    A DECISION, not a fallout: a landing subdir is ONE component by definition, so
+    a `/` in it is not a value to be checked against the reserved list -- it is
+    MALFORMED. The alternative was to normalise and check only the first component,
+    i.e. to accept nesting as long as the root is unreserved. Rejected: that is the
+    strictly stronger claim (`we support nested landing dirs`) and it would have to
+    hold against every directory that ever appears under a table dir, forever.
+    Refusing nesting outright is one rule that needs no such forecast.
+
+    What it closes, both reached PAST the two checks that look total:
+    `subdir="zips/estabelecimentos"` collides with no table (uniqueness passes) and
+    does not equal `"zips"` (the reserved check passes), yet reads INSIDE the
+    layout-owned zips dir. `subdir="lookups/x"` reads inside another table's source
+    dir, where that table's stream discovers it RECURSIVELY -- the exact defect this
+    branch exists to remove, re-entered through the guard built for it.
+
+    `""` and `"."` are refused for a sharper reason: both resolve
+    `landing_table(...)` to `cnpj/<month>` itself, which is the F1.4b blocker
+    verbatim -- a stream on the month root, recursively discovering every table's
+    files. `".."` escapes to `cnpj/`, which contains every MONTH.
+
+    Both separators, not `os.sep`: this repo is developed on Windows and runs on
+    Databricks Linux, and Windows `os.path` accepts `/` and `\\` alike -- so a
+    backslash that looks inert where it is written is a real separator where it
+    runs. Ordered BEFORE the reserved-name check, which is what makes that check's
+    exact-string comparison total rather than partial."""
+    for spec in REGISTRY.values():
+        reason = _malformed_subdir_reason(spec.subdir)
+        if reason is not None:
+            raise ValueError(
+                f"{spec.name} declares subdir {spec.subdir!r}, which {reason}. A landing "
+                "subdir names ONE directory directly under cnpj/<month>; it is not a path. "
+                "A nested value puts this table's stream INSIDE a directory that already "
+                "belongs to something else -- the layout's own (zips/...) or another "
+                "table's -- and cloudFiles walks a source dir RECURSIVELY, so the files "
+                "would be ingested by both tables, or the whole month root by this one. "
+                "Use a single directory name."
+            )
+
+
+def _assert_no_table_claims_a_reserved_subdir() -> None:
+    """Fail at import if a spec's `subdir` names a directory the layout owns.
+
+    Beside the other two and for the same reason: a value that is wrong is refused
+    where it is DECLARED. This one has to be here and cannot be left to a consumer,
+    because the consumer would not fail -- `bronze_stream` would load
+    `cnpj/<month>/zips` perfectly happily and ingest tens of gigabytes of another
+    table's files into this table's staging, which is a successful run.
+
+    Not covered by `test_no_two_tables_share_a_landing_subdir`: that test compares
+    tables against EACH OTHER, and a reserved name collides with no table at all.
+
+    Compares EXACT strings, which is total only because
+    `_assert_subdirs_are_single_path_components` runs first and has already refused
+    everything that is not one directory name. Reorder them and this check goes
+    partial again: `zips/estabelecimentos` would sail past it."""
+    for spec in REGISTRY.values():
+        if spec.subdir in RESERVED_SUBDIRS:
+            raise ValueError(
+                f"{spec.name} claims landing subdir {spec.subdir!r}, which is reserved by "
+                f"the Volume layout ({', '.join(sorted(RESERVED_SUBDIRS))}). Its stream "
+                "would read that directory, and cloudFiles walks a source dir RECURSIVELY "
+                "-- so it would ingest every other table's files underneath it, the raw "
+                "ZIPs and the multi-gigabyte .ESTABELE extracts included, without erroring. "
+                "Give the table a landing subdir of its own."
+            )
+
+
 _assert_contracts_exist()
 _assert_landing_modes_known()
+# Shape before content: the reserved-name check compares exact strings, so it is
+# total only over values already known to be a single directory name.
+_assert_subdirs_are_single_path_components()
+_assert_no_table_claims_a_reserved_subdir()

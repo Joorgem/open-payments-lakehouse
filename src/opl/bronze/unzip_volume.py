@@ -105,11 +105,10 @@ def _unzip_one(zip_path: Path, dest_dir: Path, tmp_dir: Path) -> Path:
 
         tmp = tmp_dir / (dest.name + ".tmp")
         # The .tmp goes in `tmp_dir`, NOT beside `dest`: `dest_dir` is the landing
-        # subdir the Estabelecimentos Auto Loader reads with NO pathGlobFilter (only
-        # the lookup stream filters `*CSV` -- see opl.bronze.autoloader), so a .tmp
-        # there is a file that stream discovers and ingests as if it were a complete
-        # 30-column CSV. Nor does the idempotence skip above catch it: that compares
-        # the size of the FINAL name, which a .tmp never reaches. Writing it
+        # subdir the Estabelecimentos Auto Loader reads with NO pathGlobFilter, so a
+        # .tmp there is a file that stream discovers and ingests as if it were a
+        # complete 30-column CSV. Nor does the idempotence skip above catch it: that
+        # compares the size of the FINAL name, which a .tmp never reaches. Writing it
         # elsewhere is what makes that unreachable; the cleanup below then only
         # tidies up, and is allowed to fail without costing the guarantee. It used to
         # be the guarantee, and an unlink that fails on a FUSE path (the handler

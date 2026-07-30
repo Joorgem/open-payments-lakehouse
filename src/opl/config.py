@@ -34,15 +34,13 @@ class OplConfig:
         """Where a writer may stage a half-written file before it is a landed file.
 
         DELIBERATELY OUTSIDE `landing_cnpj_root`, and therefore outside every dir an
-        Auto Loader reads: the estabelecimentos stream reads `landing_table(...)` with
-        NO pathGlobFilter, and the lookup stream reads `landing_cnpj_month(...)`
-        RECURSIVELY (empirically -- an F1.3 probe planted in the `zips/` subdir was
-        ingested, which is why that stream carries `pathGlobFilter="*CSV"`). A
-        temporary anywhere under the month root would depend on a glob to stay
-        invisible; one under `volume_root` cannot be reached by either source path at
-        all. It sits beside `_schemas/` and `_checkpoints/` (see
-        `opl.bronze.autoloader`), the same convention for state that lives in the
-        Volume but is not data.
+        Auto Loader reads: every stream reads its own `landing_table(...)` subdir with
+        NO glob, and cloudFiles walks a source dir RECURSIVELY (empirically -- an F1.3
+        probe planted in the `zips/` subdir was ingested by a stream reading the month
+        root). A temporary anywhere under a watched dir would depend on a glob to stay
+        invisible; one under `volume_root` cannot be reached by any source path at all.
+        It sits beside `_schemas/` and `_checkpoints/` (see `opl.bronze.autoloader`),
+        the same convention for state that lives in the Volume but is not data.
 
         STILL THE SAME FILESYSTEM as `landing_table`, which is what makes
         `os.replace` from here into there work: one UC Volume is one FUSE mount, so

@@ -1,4 +1,5 @@
 import datetime as dt
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -6,14 +7,15 @@ from pyspark.sql import functions as F
 
 import opl.bronze.autoloader as al
 from opl.bronze.autoloader import (
-    BRONZE_ESTAB_STAGING,
     RECORD_SOURCE,
     add_audit_columns,
     bronze_lookup_stream,
+    bronze_stream,
     checkpoint_location,
     lookup_type_column,
     schema_location,
 )
+from opl.bronze.registry import table_spec
 from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN
 from opl.config import DEFAULT
 from opl.spark import local_session
@@ -67,10 +69,6 @@ def test_state_locations_are_separate_and_not_under_table_dir():
     assert "_schemas" in sl and "_checkpoints" in cl
 
 
-def test_estab_staging_constant():
-    assert BRONZE_ESTAB_STAGING == "bronze_cnpj_estab_staging"
-
-
 def test_state_locations_default_are_f12_golden():
     # F1.2 shipped exactly these paths; the refactor must not move them.
     assert schema_location(DEFAULT) == \
@@ -87,30 +85,52 @@ def test_state_locations_estab_are_siblings():
     assert sl != schema_location(DEFAULT) and cl != checkpoint_location(DEFAULT)
 
 
-def test_lookup_stream_requests_csv_path_glob(monkeypatch):
-    # F1.3 Task 6 subdir-isolation regression guard: the lookup stream reads the
-    # cnpj/<month> root, which Auto Loader walks recursively. It MUST forward
-    # pathGlobFilter="*CSV" to bronze_stream so non-CSV files planted in sibling
-    # subdirs (empirically a probe.txt in zips/estabelecimentos/ was ingested,
-    # staging 7408->7409, before this) are excluded. Spark-free: bronze_stream
-    # and the lookup_type column builder are stubbed.
+def test_bronze_stream_no_longer_accepts_a_path_glob_filter():
+    """Removed, not merely unused: a dead parameter invites its return, and the
+    hazard it patched is now structural -- every stream reads its own subdir, so
+    there is nothing for a glob to exclude.
+
+    A glob is a DISCOVERY rule, which is why it was rejected for the estab stream
+    in F1.3: a naming drift would silently under-ingest with nothing downstream
+    able to see it."""
+    assert "path_glob_filter" not in inspect.signature(bronze_stream).parameters
+
+
+def test_the_lookup_stream_reads_its_own_subdirectory_not_the_month_root(monkeypatch):
+    """The F1.4b blocker, fixed structurally. The month root does not isolate
+    `*CSV`, so landing Empresas (`.EMPRECSV`) or Socios (`.SOCIOCSV`) there would
+    have contaminated the lookup table -- and cloudFiles walks a source dir
+    RECURSIVELY (empirically: an F1.3 probe.txt planted in
+    `cnpj/<month>/zips/estabelecimentos/` was ingested by this stream, staging
+    7408->7409), so the month root reaches every sibling too.
+
+    Asserted on the stream's own source_dir, not on `landing_table` alone: what
+    regressed here would be this call reverting to `landing_cnpj_month(...)`, and
+    a config-level assertion cannot see that. Spark-free: `bronze_stream` and the
+    lookup_type column builder are stubbed."""
     captured: dict[str, object] = {}
 
     class _FakeDF:
         def withColumn(self, *_a, **_k):
             return self
 
-    def _fake_bronze_stream(spark, cfg, table, source_dir, table_key, path_glob_filter=None):
-        captured.update(table=table, path_glob_filter=path_glob_filter)
+    def _fake_bronze_stream(spark, cfg, table, source_dir, table_key):
+        captured.update(table=table, source_dir=source_dir, table_key=table_key)
         return _FakeDF()
 
     monkeypatch.setattr(al, "bronze_stream", _fake_bronze_stream)
     monkeypatch.setattr(al, "lookup_type_column", lambda _col: None)
     monkeypatch.setattr(al.F, "col", lambda _name: None)
 
-    bronze_lookup_stream(spark=None, cfg=DEFAULT)
-    assert captured["table"] == "lookup"
-    assert captured["path_glob_filter"] == "*CSV"
+    bronze_lookup_stream(spark=None, cfg=DEFAULT, month="2026-06")
+
+    spec = table_spec("lookup")
+    assert captured["table"] == spec.contract
+    assert captured["table_key"] == spec.table_key
+    # `spec.subdir`, never the literal: the directory name is the registry's to
+    # own, which is why `subdir` is a field of its own rather than the table key.
+    assert captured["source_dir"] == DEFAULT.landing_table(spec.subdir, "2026-06")
+    assert captured["source_dir"] != DEFAULT.landing_cnpj_month("2026-06")
 
 
 def test_bronze_stream_forwards_multiline_to_the_cloudfiles_read(monkeypatch):

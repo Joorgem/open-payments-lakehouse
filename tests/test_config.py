@@ -23,12 +23,12 @@ def test_month_path_and_table_helpers():
 
 def test_the_unzip_staging_dir_is_outside_every_dir_an_auto_loader_reads():
     """`landing_tmp` exists so a half-written file is never created where a stream
-    can see it. Two source paths have to miss it: the estabelecimentos stream reads
-    `landing_table(...)` with no pathGlobFilter, and the lookup stream reads
-    `landing_cnpj_month(...)` recursively. Being outside the month root clears both
-    without relying on a glob -- while staying inside `volume_root`, i.e. inside the
-    one UC Volume, which is what lets os.replace rename out of it into the landing
-    dir (a cross-filesystem replace raises EXDEV)."""
+    can see it. Every stream reads its own `landing_table(...)` subdir with no glob,
+    and cloudFiles walks a source dir recursively (empirically, an F1.3 probe planted
+    in `zips/` was ingested by a stream reading the month root). Being outside the
+    month root clears every source path without relying on a glob -- while staying
+    inside `volume_root`, i.e. inside the one UC Volume, which is what lets os.replace
+    rename out of it into the landing dir (a cross-filesystem replace raises EXDEV)."""
     staging = DEFAULT.landing_tmp("estabelecimentos", "2026-07")
 
     assert staging == "/Volumes/workspace/default/landing/_tmp/cnpj/2026-07/estabelecimentos"

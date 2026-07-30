@@ -17,9 +17,15 @@ from opl.bronze.registry import (
     LANDING_LOCAL,
     LANDING_ZIPS,
     REGISTRY,
+    RESERVED_SUBDIRS,
+    BronzeTable,
     UnknownTable,
+    _assert_no_table_claims_a_reserved_subdir,
+    _assert_subdirs_are_single_path_components,
+    _malformed_subdir_reason,
     table_spec,
 )
+from opl.config import DEFAULT
 from opl.contracts.cnpj_schemas import TABLES
 
 
@@ -80,6 +86,117 @@ def test_no_two_tables_share_a_landing_subdir():
             f"{spec.name}.subdir == {spec.subdir!r}, already used by {seen[spec.subdir]}"
         )
         seen[spec.subdir] = spec.name
+
+
+def test_no_table_claims_a_directory_the_volume_layout_owns():
+    """The hole `test_no_two_tables_share_a_landing_subdir` structurally cannot see.
+
+    That test compares tables against EACH OTHER. `subdir="zips"` collides with no
+    table, so it passes -- and hands that table `cnpj/<month>/zips` as its source
+    dir, which cloudFiles walks RECURSIVELY (F1.3, empirically: a probe.txt in
+    `zips/estabelecimentos/` was ingested by a stream reading the month root). That
+    one stream would swallow every other table's raw ZIPs and the multi-gigabyte
+    `.ESTABELE` extracts, and it would do so as a SUCCESSFUL run -- which is why the
+    refusal is at import and not left to a consumer to notice."""
+    for spec in REGISTRY.values():
+        assert spec.subdir not in RESERVED_SUBDIRS, (
+            f"{spec.name}.subdir == {spec.subdir!r}, reserved by the Volume layout"
+        )
+
+
+def test_the_reserved_names_are_the_layout_s_own_and_not_a_stale_list():
+    """Pins the DERIVATION, not just the values.
+
+    `zips` is asserted against the path `landing_zips` actually builds, so renaming
+    that directory without moving the reservation fails here rather than leaving a
+    guard that reserves a name nothing uses. The literal on the right is the point:
+    it is what an operator sees in the Volume."""
+    assert DEFAULT.landing_zips("t", "2026-06").startswith(
+        f"{DEFAULT.landing_cnpj_month('2026-06')}/zips/"
+    )
+    assert DEFAULT.landing_tmp("t", "2026-06").startswith(f"{DEFAULT.volume_root}/_tmp/")
+    assert RESERVED_SUBDIRS == frozenset({"zips", "_tmp", "_schemas", "_checkpoints"})
+
+
+def test_a_table_claiming_a_reserved_subdir_is_refused_by_name(monkeypatch):
+    """The refusal itself, exercised -- the test above only proves today's entries
+    are clean, which would stay green if the guard were deleted.
+
+    Synthesised rather than committed to REGISTRY for obvious reasons: the entry
+    this refuses cannot exist in source, because it would break the import of every
+    module that reads the registry."""
+    trap = BronzeTable(
+        name="socios",
+        contract="lookup",
+        table_key="bronze_cnpj_socios",
+        staging="bronze_cnpj_socios_staging",
+        bronze="bronze_cnpj_socios",
+        quarantine="bronze_cnpj_socios_quarantine",
+        subdir="zips",
+        landing=LANDING_ZIPS,
+        prefix="Socios",
+        constraints=(),
+    )
+    monkeypatch.setitem(REGISTRY, "socios", trap)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_no_table_claims_a_reserved_subdir()
+    message = str(excinfo.value)
+    assert "socios" in message and "'zips'" in message
+    # The operator has to be told WHY, not just refused: the reason is recursion.
+    assert "RECURSIVELY" in message
+
+
+@pytest.mark.parametrize(
+    "subdir",
+    [
+        "zips/estabelecimentos",  # inside the layout-owned zips dir
+        "lookups/x",              # inside another table's source dir
+        "zips\\estabelecimentos",  # Windows os.path accepts this separator too
+        "",   # resolves landing_table(...) to the month root -- the F1.4b blocker
+        ".",  # likewise
+        "..",  # escapes to cnpj/, which contains every month
+    ],
+)
+def test_a_subdir_that_is_a_path_rather_than_a_name_is_refused(monkeypatch, subdir):
+    """The hole in BOTH checks above, which each look total and are not.
+
+    `zips/estabelecimentos` collides with no table, so uniqueness passes, and it
+    does not equal `"zips"`, so the reserved-name check passes -- yet its stream
+    reads INSIDE the layout-owned zips dir. `lookups/x` reads inside another
+    table's source dir, where that table's stream discovers it recursively. Same
+    defect class as the reserved names, reached past the guard built for them.
+
+    `""` and `"."` are the sharpest: both make `landing_table(...)` the month root,
+    which is precisely the state this whole branch removed."""
+    trap = BronzeTable(
+        name="socios",
+        contract="lookup",
+        table_key="bronze_cnpj_socios",
+        staging="bronze_cnpj_socios_staging",
+        bronze="bronze_cnpj_socios",
+        quarantine="bronze_cnpj_socios_quarantine",
+        subdir=subdir,
+        landing=LANDING_ZIPS,
+        prefix="Socios",
+        constraints=(),
+    )
+    monkeypatch.setitem(REGISTRY, "socios", trap)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_subdirs_are_single_path_components()
+    message = str(excinfo.value)
+    assert "socios" in message and repr(subdir) in message
+    # Refused as MALFORMED, not as one more reserved name -- the distinction is the
+    # decision recorded in the guard, and the message has to carry it.
+    assert "ONE directory" in message
+
+
+def test_the_live_subdirs_are_single_directory_names():
+    for spec in REGISTRY.values():
+        assert _malformed_subdir_reason(spec.subdir) is None, (
+            f"{spec.name}.subdir == {spec.subdir!r} is not a single directory name"
+        )
 
 
 def test_no_two_tables_share_a_file_prefix():
