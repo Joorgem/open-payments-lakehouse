@@ -15,7 +15,15 @@ CONSTRUCTION once a script takes its table from a job parameter instead of a
 module constant. That is this net doing its job on schedule, not a broken test.
 Rewrite each one against the registry -- feed it a table key, assert the same
 resolved coordinates -- rather than deleting it. Which property each one exists
-to preserve is written in its own docstring, for exactly this moment."""
+to preserve is written in its own docstring, for exactly this moment.
+
+That already happened once, on schedule: Task 6 parameterised the two ingest
+scripts, and their `EXPECTED_TABLES` entries went red exactly as predicted --
+a script that reads the registry has no module constants left to enumerate. They
+were rewritten below, not deleted, into the property that replaces the old one:
+the coordinates must come from ONE resolved spec, so a table's staging and
+quarantine cannot drift apart. The gate and promote entries still hold today's
+constants; they are Task 7's turn."""
 from __future__ import annotations
 
 import ast
@@ -37,9 +45,15 @@ def _load(name: str):
 
 
 # (script, the qualified tables its module-level wiring resolves to)
+#
+# The two ingest scripts are deliberately absent. They used to be here
+# (`bronze_ingest` -> lookup staging, `bronze_estab_ingest` -> estab staging) and
+# both entries went red the moment Task 6 pointed them at the registry, because
+# neither script imports a table constant any more -- there is nothing for this
+# test to enumerate. What replaces it for them is the pair of tests further down:
+# the source must go through `table_spec`, and every coordinate must be an
+# attribute of the ONE spec it resolved.
 EXPECTED_TABLES = {
-    "bronze_ingest": {"workspace.default.bronze_cnpj_lookup_staging"},
-    "bronze_estab_ingest": {"workspace.default.bronze_cnpj_estab_staging"},
     "dq_gate_batch": {
         "workspace.default.bronze_cnpj_estab_staging",
         "workspace.default.bronze_cnpj_estab_quarantine",
@@ -69,6 +83,19 @@ def test_each_task_resolves_the_tables_it_is_supposed_to(script, expected):
     # promote_batch names its bronze table in a module constant; the staging and
     # quarantine arrive as imported constants, which vars() also exposes.
     assert names == expected, f"{script} resolves {names}, expected {expected}"
+
+
+@pytest.mark.parametrize("script", ["bronze_ingest", "bronze_lookup_ingest"])
+def test_the_parameterised_ingest_resolves_its_tables_from_the_registry(script):
+    """The characterization above asserted module constants. The parameterised
+    scripts have none by design -- they read the registry -- so what must hold now
+    is that they go through `table_spec` rather than naming a table themselves."""
+    source = (_SRC / f"{script}.py").read_text(encoding="utf-8")
+    assert "table_spec(" in source
+    assert "bronze_cnpj_" not in source, (
+        f"{script}.py names a table directly; it must resolve names through "
+        "the registry so a table's staging/quarantine pair cannot drift"
+    )
 
 
 def _main_of(script: str) -> ast.FunctionDef:
@@ -149,6 +176,120 @@ def _bound_table(expr: ast.expr, scope: dict[str, ast.expr], module, where: str)
     value = getattr(module, arg.id, None)
     assert isinstance(value, str), f"{where}: {arg.id} is not a str constant on the module"
     return DEFAULT.table(value)
+
+
+def _spec_field(expr: ast.expr, where: str) -> str:
+    """The `spec.<field>` an argument is, or a failure saying it is not one.
+
+    The parameterised twin of `_bound_table`: there is no constant to resolve any
+    more, so what an argument must be is a field of the spec `main()` resolved."""
+    assert (
+        isinstance(expr, ast.Attribute)
+        and isinstance(expr.value, ast.Name)
+        and expr.value.id == "spec"
+    ), f"{where}: expected a field of the resolved spec, got {ast.dump(expr)[:120]}"
+    return expr.attr
+
+
+def _table_arg(expr: ast.expr, where: str) -> ast.expr:
+    """The single argument of a `DEFAULT.table(...)` call."""
+    assert (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Attribute)
+        and expr.func.attr == "table"
+    ), f"{where}: expected a DEFAULT.table(...) call, got {ast.dump(expr)[:120]}"
+    assert len(expr.args) == 1 and not expr.keywords, f"{where}: unexpected DEFAULT.table args"
+    return expr.args[0]
+
+
+def test_the_parameterised_ingest_binds_every_coordinate_to_the_one_resolved_spec():
+    """Which spec FIELD each argument receives -- not merely that a registry is read.
+
+    This closes a gap that was graded Minor while the ingest scripts were
+    per-table: nothing locked their call sites, so a literal redirect inside one
+    passed the whole suite. Parameterising them makes the redirect cheaper, not
+    harder -- `spec.quarantine` in place of `spec.staging`, or a second
+    `table_spec("lookup")` -- and both leave `table_spec(` in the source, so the
+    source-level test above stays green through either. What is pinned here is
+    that ONE spec, resolved from argv rather than from a literal, feeds every
+    coordinate: the schema read with, the dir read from, the checkpoint deciding
+    which files are new, and the table written to."""
+    main = _main_of("bronze_ingest")
+    scope = _locals_of(main, "bronze_ingest")
+    resolved = _sole_call(main, "table_spec", "bronze_ingest")
+    assert not any(isinstance(arg, ast.Constant) for arg in resolved.args), (
+        "bronze_ingest.py resolves its spec from a literal; the table is a job "
+        "parameter, and a literal here pins every job that runs this file to one table"
+    )
+    assert scope.get("spec") is resolved, (
+        "bronze_ingest.py main() no longer binds the table_spec(...) result to `spec`, "
+        "so this lock cannot tell which spec the coordinates below came from"
+    )
+    stream = _sole_call(main, "bronze_stream", "bronze_ingest")
+    assert len(stream.args) >= 5, "bronze_stream() no longer takes contract/table_key here"
+    bound = {
+        "contract": _spec_field(stream.args[2], "bronze_stream contract"),
+        "source_dir": _spec_field(
+            _sole_call(main, "landing_table", "bronze_ingest").args[0], "landing_table"
+        ),
+        "checkpoint": _spec_field(
+            _sole_call(main, "checkpoint_location", "bronze_ingest").args[1], "checkpoint"
+        ),
+        "written": _spec_field(
+            _table_arg(_sole_call(main, "toTable", "bronze_ingest").args[0], "toTable"),
+            "toTable",
+        ),
+    }
+    assert bound == {
+        "contract": "contract",
+        "source_dir": "subdir",
+        "checkpoint": "table_key",
+        "written": "staging",
+    }
+
+
+def test_the_lookup_ingest_writes_the_lookup_tables_and_only_those():
+    """What `EXPECTED_TABLES["bronze_ingest"]` used to pin, restated for the registry.
+
+    The old entry asserted that script's write target resolved to lookup staging.
+    The registry rewrite dropped the constant that lock read, so for one commit the
+    lookup ingest was protected LESS than before: retargeting it to
+    `table_spec("estabelecimentos")` cross-wired lookup rows into estab staging,
+    under the estab checkpoint, with every test green.
+
+    Note the inversion against the parameterised script above: there a string
+    literal is the defect, because the table is a job parameter. Here the literal
+    is the REQUIREMENT -- this entry point exists for exactly one table, and any
+    other value silently redirects it."""
+    main = _main_of("bronze_lookup_ingest")
+    scope = _locals_of(main, "bronze_lookup_ingest")
+    resolved = _sole_call(main, "table_spec", "bronze_lookup_ingest")
+    assert (
+        len(resolved.args) == 1
+        and isinstance(resolved.args[0], ast.Constant)
+        and resolved.args[0].value == "lookup"
+    ), (
+        "bronze_lookup_ingest.py resolves a spec that is not the lookup's; this entry "
+        "point is the lookup's alone, and any other table here writes its rows into "
+        f"another table's staging -- got {ast.dump(resolved)[:120]}"
+    )
+    assert scope.get("spec") is resolved, (
+        "bronze_lookup_ingest.py main() no longer binds the table_spec(...) result to "
+        "`spec`, so this lock cannot tell which spec the coordinates below came from"
+    )
+    bound = {
+        "checkpoint": _spec_field(
+            _sole_call(main, "checkpoint_location", "bronze_lookup_ingest").args[1],
+            "checkpoint",
+        ),
+        "written": _spec_field(
+            _table_arg(
+                _sole_call(main, "toTable", "bronze_lookup_ingest").args[0], "toTable"
+            ),
+            "toTable",
+        ),
+    }
+    assert bound == {"checkpoint": "table_key", "written": "staging"}
 
 
 def test_the_estab_promote_binds_each_table_to_the_argument_it_feeds_today():
