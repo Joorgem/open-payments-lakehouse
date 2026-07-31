@@ -39,6 +39,13 @@ def download_parts(client: WebDavClient, month: str, group: str, dest_dir: Path,
 
 
 def upload_zips(w: WorkspaceClient, local_paths: list[Path], cfg: OplConfig,
-                table: str, month: str) -> list[str]:
-    volume_dir = cfg.landing_zips(table, month)
+                subdir: str, month: str) -> list[str]:
+    """PUT each zip into `cnpj/<month>/zips/<subdir>`.
+
+    `subdir` is the REGISTRY's `subdir` for the table these zips feed, not the
+    FILE_GROUPS key that used to be passed here: `unzip_table.py` reads this
+    directory back as `landing_zips(spec.subdir, month)`, so the two strings have to
+    be the same one. They were two, agreeing only because estabelecimentos spells
+    both the same way -- the lookup does not ("lookup" against "lookups")."""
+    volume_dir = cfg.landing_zips(subdir, month)
     return [upload_to_volume(w, p, volume_dir) for p in local_paths]

@@ -10,6 +10,13 @@ SHARE_TOKEN = "YggdBLfdninEJX9"  # gitleaks:allow — public Nextcloud share id 
 WEBDAV_BASE = "https://arquivos.receitafederal.gov.br/public.php/webdav"
 
 # Dev recorte: the six lookup tables + Simples — small, complete, no 10-part giants.
+# A DOWNLOAD set, not a landing set, and the difference became visible in F1.4a:
+# `extract_cnpj.py` puts each inner file in the landing dir of the bronze table that
+# reads it, and `simples` has no registry entry, so landing it is REFUSED (it used to
+# go to the month root, which no stream reads any more). It stays in the recorte
+# because ADR 0003 defines this list as the full dev capture and `--no-upload` still
+# captures all of it; an upload run must name `--groups` without Simples until a
+# `simples` bronze table exists.
 RECORTE_GROUPS: list[str] = [
     "Cnaes", "Motivos", "Municipios", "Naturezas", "Paises", "Qualificacoes", "Simples",
 ]

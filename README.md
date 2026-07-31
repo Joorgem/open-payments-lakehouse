@@ -82,12 +82,22 @@ uv run pytest                       # unit tests (Delta roundtrip needs a JDK; g
 docker compose up -d                # Postgres (host port 5433) + Redpanda
 uv run pytest -m integration
 
-uv run python scripts/extract_cnpj.py --month 2026-06   # real download + unzip + UC Volume upload
+# real download + unzip + UC Volume upload
+uv run python scripts/extract_cnpj.py --month 2026-06 \
+  --groups Cnaes,Motivos,Municipios,Naturezas,Paises,Qualificacoes
 ```
 
 The extraction command downloads and unzips locally either way. Uploading to
 the UC Volume needs Databricks credentials in a git-ignored `.env`
 (`opl-free` profile); pass `--no-upload` to just download and unzip.
+
+`--groups` is spelled out because each landed file goes to the landing directory
+of the bronze table that reads it, and that directory comes from
+`opl.bronze.registry`. The default group set is the wider dev recorte of
+[ADR 0003](docs/adr/0003-cnpj-extraction-layer.md), which also includes `Simples`
+— a table bronze does not register yet, so there is nowhere in the Volume for it
+to land and the run is refused before anything is downloaded. `--no-upload`
+captures the whole recorte, `Simples` included.
 
 ## Engineering approach
 

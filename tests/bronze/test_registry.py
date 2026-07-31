@@ -20,13 +20,17 @@ from opl.bronze.registry import (
     RESERVED_SUBDIRS,
     BronzeTable,
     UnknownTable,
+    _assert_contracts_exist,
     _assert_no_table_claims_a_reserved_subdir,
+    _assert_no_two_tables_share_a_contract,
+    _assert_prefixes_match_their_file_groups,
     _assert_subdirs_are_single_path_components,
     _malformed_subdir_reason,
+    spec_for_contract,
     table_spec,
 )
 from opl.config import DEFAULT
-from opl.contracts.cnpj_schemas import TABLES
+from opl.contracts.cnpj_schemas import FILE_GROUPS, TABLES
 
 
 def test_the_two_live_tables_keep_the_exact_names_they_have_today():
@@ -225,9 +229,167 @@ def test_no_two_tables_share_a_file_prefix():
         seen[spec.prefix] = spec.name
 
 
+def test_every_declared_prefix_agrees_with_the_file_group_that_downloads_it():
+    """`prefix` has no production reader -- `cnpj_source.expected_files` builds the
+    download list from `FILE_GROUPS[g]["prefix"]` -- so until F1.4a it was a SECOND
+    SPELLING of a live value with nothing asserting the two agreed. That is the
+    drift this whole registry exists to remove, present in the registry itself.
+
+    Kept and tied down rather than deleted, because the field carries a net F1.4b is
+    about to be tested by (see `test_no_two_tables_share_a_file_prefix`) and because
+    carry-forward #10 asked for the prefix to be DECLARED. What the assertion buys
+    is that the declaration can no longer be independently wrong: it either matches
+    the string the downloader uses, or the import fails."""
+    for spec in REGISTRY.values():
+        groups = [g for g in FILE_GROUPS.values() if g["table"] == spec.contract]
+        assert groups, f"{spec.name}: no FILE_GROUPS entry feeds {spec.contract!r}"
+        prefixes = {g["prefix"] for g in groups}
+        expected = next(iter(prefixes)) if len(prefixes) == 1 else None
+        assert spec.prefix == expected, (
+            f"{spec.name}.prefix == {spec.prefix!r} but its {len(groups)} file "
+            f"group(s) spell it {expected!r}"
+        )
+
+
+def test_a_prefix_that_disagrees_with_its_file_group_is_refused_at_import(monkeypatch):
+    """The refusal exercised, not just today's entries proved clean.
+
+    `Estabelecimento` (singular) is the probe on purpose: it is unique, it is a
+    single directory name, it names no reserved dir, and it passes every other check
+    in this file. What it does is go looking for files that are not there and
+    under-ingest without erroring -- the failure class this project rejected globs
+    for."""
+    trap = BronzeTable(
+        name="estabelecimentos",
+        contract="estabelecimentos",
+        table_key="bronze_cnpj_estab",
+        staging="bronze_cnpj_estab_staging",
+        bronze="bronze_cnpj_estabelecimentos",
+        quarantine="bronze_cnpj_estab_quarantine",
+        subdir="estabelecimentos",
+        landing=LANDING_ZIPS,
+        prefix="Estabelecimento",  # singular: a real typo, unique, silent
+        constraints=(),
+    )
+    monkeypatch.setitem(REGISTRY, "estabelecimentos", trap)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_prefixes_match_their_file_groups()
+    message = str(excinfo.value)
+    assert "'Estabelecimento'" in message and "'Estabelecimentos'" in message
+
+
+def test_a_table_fed_by_several_groups_must_declare_no_prefix(monkeypatch):
+    """The lookup's `None` is a real property, so the assertion has to hold in that
+    direction too: six differently-named files routed into one table by filename
+    suffix have no single prefix, and inventing one would look declarative while
+    matching nothing."""
+    trap = BronzeTable(
+        name="lookup",
+        contract="lookup",
+        table_key="bronze_cnpj_lookup",
+        staging="bronze_cnpj_lookup_staging",
+        bronze="bronze_cnpj_lookup",
+        quarantine="bronze_cnpj_lookup_quarantine",
+        subdir="lookups",
+        landing=LANDING_LOCAL,
+        prefix="Cnaes",  # one of the six, which is worse than none
+        constraints=(),
+    )
+    monkeypatch.setitem(REGISTRY, "lookup", trap)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_prefixes_match_their_file_groups()
+    assert "prefix=None" in str(excinfo.value)
+
+
+def test_a_file_group_resolves_to_the_table_that_owns_its_contract():
+    """What the extraction scripts ask, and the only question they may ask.
+
+    `FILE_GROUPS[g]["table"]` is a CONTRACT key, not a registry key, so this goes
+    through `spec_for_contract`. The six lookup groups collapse onto ONE spec, which
+    is what makes the landing dir single."""
+    assert spec_for_contract("estabelecimentos") is table_spec("estabelecimentos")
+    resolved = {spec_for_contract(FILE_GROUPS[g]["table"]).name
+                for g in ("Cnaes", "Motivos", "Qualificacoes")}
+    assert resolved == {"lookup"}
+
+
+def test_an_unregistered_contract_is_refused_and_says_what_to_do():
+    """Simples: a real RFB group, a real contract, no bronze table. The producer
+    must not answer this with the month root, which is where the six lookups used to
+    sit loose and which no stream reads any more."""
+    with pytest.raises(UnknownTable) as excinfo:
+        spec_for_contract("simples")
+    message = str(excinfo.value)
+    assert "simples" in message
+    assert "lookup" in message and "estabelecimentos" in message
+    assert "opl.bronze.registry" in message
+
+
+def test_a_contract_claimed_by_two_tables_is_refused_at_import(monkeypatch):
+    """What makes `spec_for_contract` single-valued, and therefore what makes the
+    producer's landing dir a fact rather than a dict-order accident.
+
+    The paste this refuses is F1.4b's: a `socios` entry copied from the lookup's and
+    renamed everywhere except `contract`. Resolution by contract would then answer
+    "lookup" with whichever entry came first, and socios' inner files would land in
+    the lookup's own landing dir -- the cross-table contamination this branch
+    removed."""
+    trap = BronzeTable(
+        name="socios",
+        contract="lookup",
+        table_key="bronze_cnpj_socios",
+        staging="bronze_cnpj_socios_staging",
+        bronze="bronze_cnpj_socios",
+        quarantine="bronze_cnpj_socios_quarantine",
+        subdir="socios",
+        landing=LANDING_ZIPS,
+        prefix=None,
+        constraints=(),
+    )
+    monkeypatch.setitem(REGISTRY, "socios", trap)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_no_two_tables_share_a_contract()
+    message = str(excinfo.value)
+    assert "socios" in message and "lookup" in message
+
+
 def test_every_registered_table_has_a_contract():
     for spec in REGISTRY.values():
         assert spec.contract in TABLES, f"{spec.name} names contract {spec.contract!r}"
+
+
+def test_a_contract_typo_in_source_is_refused_as_a_value_error_not_an_unknown_table(
+        monkeypatch):
+    """UnknownTable is for an OPERATOR-SUPPLIED table name at a job boundary -- that
+    is its docstring, and why it is a ValueError rather than a KeyError (so the prose
+    reaches a run log unquoted). A contract typo committed to SOURCE is none of
+    those: nobody supplied it, it is not an unknown *table*, and it breaks the import
+    of every module that reads the registry rather than one run. This guard raised
+    UnknownTable while its sibling `_assert_landing_modes_known` explained, in the
+    same file, why that is the wrong exception."""
+    trap = BronzeTable(
+        name="lookup",
+        contract="lookups",  # a real typo: plural
+        table_key="bronze_cnpj_lookup",
+        staging="bronze_cnpj_lookup_staging",
+        bronze="bronze_cnpj_lookup",
+        quarantine="bronze_cnpj_lookup_quarantine",
+        subdir="lookups",
+        landing=LANDING_LOCAL,
+        prefix=None,
+        constraints=(),
+    )
+    monkeypatch.setitem(REGISTRY, "lookup", trap)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_contracts_exist()
+    assert "lookups" in str(excinfo.value)
+    assert not isinstance(excinfo.value, UnknownTable), (
+        "a contract typo in source is not an operator's unknown table name"
+    )
 
 
 def test_every_constraint_references_a_column_of_its_own_contract():

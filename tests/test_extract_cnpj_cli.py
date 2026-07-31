@@ -14,7 +14,10 @@ from pathlib import Path
 
 import pytest
 
+from opl.bronze.registry import UnknownTable, table_spec
+from opl.config import DEFAULT
 from opl.extraction import landing
+from opl.extraction.cnpj_source import RECORTE_GROUPS
 from opl.extraction.webdav import FileEntry
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "extract_cnpj.py"
@@ -67,9 +70,11 @@ def test_upload_uses_the_shared_widened_timeout_client(tmp_path, monkeypatch):
     sentinel = object()
     monkeypatch.setattr(cli, "upload_client", lambda **_auth: sentinel)
     seen: list[object] = []
+    uploads: list[tuple[str, str]] = []
 
     def fake_upload_to_volume(w, inner, volume_dir):
         seen.append(w)
+        uploads.append((volume_dir, inner.name))
         return f"{volume_dir}/{inner.name}"
 
     monkeypatch.setattr(cli, "upload_to_volume", fake_upload_to_volume)
@@ -78,6 +83,138 @@ def test_upload_uses_the_shared_widened_timeout_client(tmp_path, monkeypatch):
 
     assert rc == 0
     assert seen == [sentinel]
+    # This stub asserted the CLIENT and ignored `volume_dir` entirely, which is why
+    # no test saw the target still being the month root after Task 8 moved the
+    # lookups into `lookups/`. Asserted here too, at the only other call site.
+    assert uploads == [
+        (DEFAULT.landing_table(table_spec("lookup").subdir, "2026-07"), "Cnaes.TXT")
+    ]
+
+
+def _record_targets(monkeypatch) -> list[str]:
+    targets: list[str] = []
+
+    def fake_upload_to_volume(w, inner, volume_dir):
+        targets.append(volume_dir)
+        return f"{volume_dir}/{inner.name}"
+
+    monkeypatch.setattr(cli, "upload_client", lambda **_auth: object())
+    monkeypatch.setattr(cli, "upload_to_volume", fake_upload_to_volume)
+    return targets
+
+
+def test_the_lookups_land_in_the_registered_subdir_and_not_the_month_root(
+        tmp_path, monkeypatch):
+    """THE DEFECT THIS FILE MISSED. Task 8 moved the six lookup CSVs out of the
+    month root into `lookups/` so `bronze_lookup_stream` could read its own
+    directory with no `pathGlobFilter` -- and moved them with a one-off migration
+    script, leaving this producer landing new months in the month root.
+
+    Nothing would have failed: the files would land, the job would run, and
+    `bronze_lookup_ingest` would report SUCCESS having ingested zero rows, because
+    an empty source dir is indistinguishable from nothing-new-to-read. So the
+    target is asserted against the registry AND against the month root by name --
+    the second assertion is the regression, and the first is what makes it a
+    registry answer rather than a literal that can drift from `spec.subdir`."""
+    targets = _record_targets(monkeypatch)
+    client = FakeClient(present_names={"Cnaes.zip", "Municipios.zip"})
+
+    rc = cli.run(client, "2026-07", ["Cnaes", "Municipios"], str(tmp_path), upload=True)
+
+    expected = DEFAULT.landing_table(table_spec("lookup").subdir, "2026-07")
+    assert rc == 0
+    assert targets == [expected, expected]
+    assert DEFAULT.landing_cnpj_month("2026-07") not in targets
+    assert expected.endswith("/2026-07/lookups")
+
+
+def test_a_group_with_no_registered_table_is_refused_before_any_download(
+        tmp_path, monkeypatch):
+    """Simples: in `RECORTE_GROUPS`, and in no registry entry.
+
+    Refusing is the decision. The alternative was to keep landing it in the month
+    root, which is where nothing reads and where the six lookups' own defect lived
+    -- and which would be landing several GB of inner CSV into a Free Edition
+    Volume for a table no job can name.
+
+    BEFORE the download, and asserted on `client.downloaded`: inside the loop the
+    `except Exception` would have turned this into a per-file ERROR line after the
+    bytes were already on the wire."""
+    _record_targets(monkeypatch)
+    client = FakeClient(present_names={"Simples.zip"})
+
+    with pytest.raises(UnknownTable) as excinfo:
+        cli.run(client, "2026-07", ["Simples"], str(tmp_path), upload=True)
+
+    message = str(excinfo.value)
+    assert "simples" in message
+    assert "opl.bronze.registry" in message and "--no-upload" in message
+    assert client.downloaded == []
+
+
+def test_the_same_group_still_downloads_with_no_upload(tmp_path, monkeypatch):
+    """The other half of the ruling above: the registry answers "where in the
+    VOLUME", so a capture that lands nothing never asks it. That is what keeps ADR
+    0003's full dev recorte -- Simples included -- downloadable."""
+    def boom(**_auth):
+        raise AssertionError("no WorkspaceClient may be built when --no-upload is set")
+
+    monkeypatch.setattr(cli, "upload_client", boom)
+    client = FakeClient(present_names={"Simples.zip"})
+
+    assert cli.run(client, "2026-07", ["Simples"], str(tmp_path), upload=False) == 0
+    assert client.downloaded == ["2026-07/Simples.zip"]
+
+
+def test_a_zips_landed_group_is_refused_and_named_the_script_that_takes_it(
+        tmp_path, monkeypatch):
+    """The registry owns HOW a table's bytes reach the Volume, and this script is
+    the LOCAL producer. Symmetric to `extract_giants.py` refusing a single-part
+    group, and to `unzip_table.py` / `bronze_ingest.py` refusing anything that is
+    not zips -- the refusal that was missing on the producer side.
+
+    Before the fix this call landed a 6.7 GB `.ESTABELE` extract in the month root;
+    routing it through the registry alone would have landed it in
+    `estabelecimentos/`, which the estab ingest reads -- correct by accident, at
+    three times the bytes and skipping the in-Volume unzip the flow expects."""
+    _record_targets(monkeypatch)
+    client = FakeClient(present_names={"Estabelecimentos0.zip"})
+
+    with pytest.raises(ValueError) as excinfo:
+        cli.run(client, "2026-07", ["Estabelecimentos"], str(tmp_path), upload=True)
+
+    message = str(excinfo.value)
+    assert "extract_giants.py" in message and "zips" in message
+    assert client.downloaded == []
+
+
+def test_main_maps_a_landing_refusal_to_the_usage_exit_code(monkeypatch, capsys):
+    """`--groups Simples` is a usage mistake, and this repo hands an operator a
+    message, not a traceback. rc=2 is what `_parse_groups`' unknown name already
+    returns, and this is the same kind of event."""
+    monkeypatch.setattr(cli, "upload_client", lambda **_auth: object())
+    monkeypatch.setattr(
+        cli, "WebDavClient",
+        lambda *_a, **_kw: FakeClient(present_names={"Simples.zip"}),
+    )
+    monkeypatch.setattr(
+        sys, "argv",
+        ["extract_cnpj.py", "--month", "2026-07", "--groups", "Simples"],
+    )
+
+    assert cli.main() == 2
+    assert "no bronze table is registered" in capsys.readouterr().out
+
+
+def test_every_lookup_group_of_the_recorte_lands_in_the_one_lookup_subdir():
+    """Six differently-named files, ONE landing dir -- the property the routing by
+    filename suffix rests on. Read off the resolver rather than off the registry, so
+    a per-group target reintroduced here (a `Cnaes/` dir of its own, say) fails:
+    the lookup stream reads exactly one directory."""
+    lookups = [g for g in RECORTE_GROUPS if g != "Simples"]
+    assert len(lookups) == 6
+    dirs = {cli._landing_dir(group, "2026-07") for group in lookups}
+    assert dirs == {DEFAULT.landing_table(table_spec("lookup").subdir, "2026-07")}
 
 
 def test_run_without_upload_builds_no_client(tmp_path, monkeypatch):

@@ -9,10 +9,16 @@ from pathlib import Path
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
 from databricks.sdk.errors import NotFound
-from opl.config import DEFAULT
 
-LANDING_VOLUME_DIR = DEFAULT.landing_cnpj_root
 UPLOAD_PROFILE = "opl-free"
+
+# NO LANDING_VOLUME_DIR here. It was `DEFAULT.landing_cnpj_root` under a second name,
+# and both of its readers used it as `f"{LANDING_VOLUME_DIR}/{month}"` -- the month
+# ROOT, which is exactly the target F1.4a moved the six lookup CSVs out of and the
+# one directory no stream reads any more. Every landing target now comes from
+# `OplConfig.landing_table(spec.subdir, month)` with the subdir from
+# `opl.bronze.registry`, so the alias that made the wrong dir the easy one to reach
+# is gone rather than merely unused.
 
 # WHAT THIS BOUNDS, re-derived against the multipart path adopted in ADR 0007.
 # `retry_timeout_seconds` is the SDK's total wall-clock budget for ONE retried
