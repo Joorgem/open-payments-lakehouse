@@ -74,6 +74,24 @@ resources:
             # to a table full of unrelated F1.2 lookup rows.
             parameters: ["lookup"]
 
+      # NO reclaim_landing TASK, where bronze_estabelecimentos_job.yml has one --
+      # and the spec says the lookup shares "the registry, the gate, the promote and
+      # the retention". It shares the retention MODULE; it cannot share the task.
+      #
+      # The reason recorded when this was written was the weak half of the truth
+      # ("a handful of small files whose retention buys no meaningful Volume
+      # quota"). The real one: reclaim_landing deletes a landed file once bronze
+      # proves it holds its rows, and its whole safety argument is that the zip in
+      # the sibling zips/<table> dir is still the way back when a parse defect turns
+      # up after ingestion -- which happened twice in F1.3. The lookup lands LOCAL
+      # (opl.bronze.registry): scripts/extract_cnpj.py unzips on the extraction host
+      # and PUTs only the inner file, so no zip of it ever reaches the Volume -- a
+      # read-only listing of cnpj/<month>/zips/ holds estabelecimentos and nothing
+      # else. The six landed CSVs are therefore the ONLY copy in this workspace, and
+      # recovery would mean re-downloading a monthly snapshot the RFB may already
+      # have rotated. reclaim_landing.py now REFUSES any table that does not land as
+      # zips for exactly this reason, so adding the task here would fail the job
+      # rather than reclaim anything.
       environments:
         - environment_key: opl_env
           spec:

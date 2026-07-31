@@ -61,7 +61,8 @@ Three parts, deliberately separated by risk:
    appended nothing and exited 0, reporting SUCCESS for a batch it never
    promoted. Both stranded batches above were recovered with it (9,506,870 rows
    each).
-3. **Defer rate-based gating to F1.4**, specified here rather than left as a
+3. **Defer rate-based gating — to no phase yet** (this said "to F1.4" when the
+   ADR was accepted; corrected in F1.4a, see below), specified here rather than left as a
    vague intention: block promotion when the reject *rate* exceeds a threshold,
    otherwise quarantine and continue. The threshold must be chosen against
    measured history, not guessed — the observed baseline is ~1e-7. This keeps
@@ -69,8 +70,19 @@ Three parts, deliberately separated by risk:
    bad rows: a wrong encoding, a schema shift, a changed delimiter or a
    truncated file all move the rate by orders of magnitude.
 
+   **Which phase, corrected in F1.4a.** This item named F1.4, and F1.4 has since
+   been scoped without it: the F1.4a design excludes it by name as carry-forward
+   #3 (§4.8, "does not resolve the carry-forwards that are not this phase's"), and
+   the F1.4b outline (§5) does not pick it up either. So the specification above
+   stands and the schedule attached to it does not — it is **unplaced**, and will
+   stay unplaced until a phase claims it. Corrected here rather than left standing
+   because a deferral that names a phase reads as planned work to anyone who does
+   not go and check whether that phase took it, which is the same failure mode as
+   a docstring that promises a guard nobody wrote.
+
 ## Consequences
-- Until F1.4, every run with a reject fails and needs a human to read the
+- Until rate-based gating ships — which no phase has yet claimed, see Decision 3
+  — every run with a reject fails and needs a human to read the
   quarantine and re-promote. That is now a bounded, documented operation rather
   than a dead end, but it is still manual.
 - Re-running the triage job is safe, which matters because "I am not sure the
@@ -86,8 +98,10 @@ Three parts, deliberately separated by risk:
   would accumulate silently unless someone watches them. The alert must be on
   the **trend** of the quarantine, not on the presence of rows in it — otherwise
   the threshold just relocates the noise.
-- Two known gaps stay open and are carried into F1.4, both of them cases where
-  bronze accepts damage without a signal:
+- Two known gaps stay open and are carried into F1.4b — unlike Decision 3 these
+  two are placed: the F1.4a design (§4.8) moves carry-forwards #4 and #5 to F1.4b,
+  where new rule sets for `empresas` and `socios` are being authored anyway and the
+  checks are cheap. Both are cases where bronze accepts damage without a signal:
   - **No completeness rule.** A row whose entire trailing tail is NULL passes
     all key rules. ADR 0005's fix removes the known cause of that shape, not the
     class. A field-count or trailing-NULL check would have made the original
