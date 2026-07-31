@@ -499,12 +499,6 @@ def _assert_no_two_tables_share_a_landing_subdir() -> None:
         seen[spec.subdir] = spec.name
 
 
-# The three spec fields that name a REAL Delta table, checked in ONE namespace.
-# `table_key` is deliberately not among them -- it is a Volume path component, not a
-# table; see `_assert_no_two_tables_share_a_checkpoint_namespace`.
-_DELTA_NAME_ROLES = ("staging", "bronze", "quarantine")
-
-
 def _assert_no_two_tables_share_a_delta_name() -> None:
     """Fail at import if two specs name the same Delta table in any of the three
     roles that name one.
@@ -528,11 +522,25 @@ def _assert_no_two_tables_share_a_delta_name() -> None:
     estabelecimentos entry with the staging/bronze/quarantine triple left unchanged
     imported CLEAN.
 
+    The three fields are spelled out rather than looped over by name with `getattr`.
+    `getattr(spec, role)` would be shorter and would type as `Any`, so renaming a
+    field of `BronzeTable` would break this guard silently as far as any static check
+    is concerned -- and a guard that reads its subject reflectively is the one place
+    that cost is not worth paying. It also matches
+    `test_no_two_tables_share_a_staging_bronze_or_quarantine_name`, which asserts this
+    same property in the same shape.
+
+    `table_key` is deliberately absent: it is a Volume path component, not a table.
+    See `_assert_no_two_tables_share_a_checkpoint_namespace`.
+
     A plain ValueError: nothing here is an unknown table."""
     seen: dict[str, str] = {}
     for spec in REGISTRY.values():
-        for role in _DELTA_NAME_ROLES:
-            name = getattr(spec, role)
+        for role, name in (
+            ("staging", spec.staging),
+            ("bronze", spec.bronze),
+            ("quarantine", spec.quarantine),
+        ):
             owner = f"{spec.name}.{role}"
             if name in seen:
                 raise ValueError(

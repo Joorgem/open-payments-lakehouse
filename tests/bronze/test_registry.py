@@ -206,14 +206,42 @@ def _module_level_guard_wiring() -> tuple[set[str], set[str]]:
         for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name.startswith("_assert_")
     }
-    called = {
-        node.value.func.id
-        for node in tree.body
-        if isinstance(node, ast.Expr)
-        and isinstance(node.value, ast.Call)
-        and isinstance(node.value.func, ast.Name)
-    }
-    return defined, called
+    return defined, _names_called_where_the_module_body_runs(tree)
+
+
+def _names_called_where_the_module_body_runs(tree: ast.Module) -> set[str]:
+    """Every bare name called from code that executes on import.
+
+    Descends into module-level `if`/`try`/`with` bodies but NOT into function, class
+    or lambda bodies -- a call inside a `def` runs when that def is called, which is
+    the whole distinction this file is trying to draw.
+
+    Broader than matching a bare top-level call statement, which is what this did
+    first. That version reported a guard wired as `if True: _assert_x()` as UNWIRED,
+    telling a contributor to add a call that is already there and already running.
+    A wiring test whose diagnosis can be wrong about working code gets working code
+    "fixed".
+
+    The residual limit, stated because it is real: a guard called under a module-level
+    `if` that is FALSE at import counts as wired here. Accepted -- the alternative is
+    evaluating module-level conditions statically, and nothing in this module has ever
+    had a conditional guard call. What this rules out is the case that actually
+    happens: the call deleted, or a new guard never wired at all."""
+    called: set[str] = set()
+
+    def walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(
+                child,
+                ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda,
+            ):
+                continue
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+                called.add(child.func.id)
+            walk(child)
+
+    walk(tree)
+    return called
 
 
 def test_every_guard_this_module_defines_is_actually_called_at_import():
@@ -240,8 +268,14 @@ def test_every_guard_this_module_defines_is_actually_called_at_import():
     before the reserved-name check is what makes that check's exact-string comparison
     total. Wiring and ordering are separate properties; this closes the first."""
     defined, called = _module_level_guard_wiring()
-    # Guard the guard: a parse that found nothing would satisfy `defined <= called`.
-    assert len(defined) >= 9, f"only found {sorted(defined)} -- the AST walk is wrong"
+    # Guard the guard: a walk that found nothing satisfies `defined <= called`
+    # vacuously. Named guards rather than a count -- a count says "the AST walk is
+    # wrong" at the phase that legitimately retires one, which is a false accusation
+    # pointed at the wrong file.
+    assert {"_assert_contracts_exist", "_assert_landing_modes_known"} <= defined, (
+        f"the AST walk found {sorted(defined)}, missing guards this module certainly "
+        "defines -- the walk is broken, not the module"
+    )
     unwired = defined - called
     assert not unwired, (
         f"registry.py defines {sorted(unwired)} but never calls them at module "
