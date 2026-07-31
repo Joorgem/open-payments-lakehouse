@@ -265,6 +265,43 @@ def test_no_month_at_all_is_refused_rather_than_defaulted(monkeypatch):
     assert spark.asked == [] and deleted == []
 
 
+def test_a_table_with_no_zip_in_the_volume_is_refused_before_spark_and_any_delete(
+        monkeypatch):
+    """THE ONE CASE WHERE THIS TASK COULD DELETE THE LAST COPY.
+
+    Both this task's docstring and `opl.bronze.retention`'s rest on "the zips are
+    the only way back to the source", which F1.3's incidents 3 and 4 made concrete:
+    two parse defects found AFTER ingestion, both fixed by re-reading the source. A
+    `local`-landed table has no zip in the Volume at all -- `extract_cnpj.py` unzips
+    on the extraction host and PUTs only the inner file, so `cnpj/<month>/zips/`
+    holds `estabelecimentos` and nothing else. Its landed files are the single copy
+    in the workspace, and recovery means re-downloading a monthly snapshot the RFB
+    may have rotated.
+
+    `bronze_ingest.py` and `unzip_table.py` already refuse on this same field. This
+    task, the only one that DELETES, did not -- and it is invoked BY HAND with a
+    positional table name, so the caller who can reach it is precisely the one the
+    guard is for. The proof set is a real landed lookup CSV, so what the refusal
+    prevents is a delete this test would otherwise have recorded."""
+    spark = _stub_session(monkeypatch)
+    _stub_proof(
+        monkeypatch,
+        ["/Volumes/workspace/default/landing/cnpj/2026-06/lookups/F.K03200$Z.D60613.CNAECSV"],
+    )
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError) as excinfo:
+        task.main(["lookup", "999", "2026-06"])
+
+    message = str(excinfo.value)
+    assert "lookup" in message
+    # The reason has to be the ABSENT ARCHIVE, not the landing mode that detects it:
+    # an operator reading "landing='local'" mid-incident learns nothing about why the
+    # bytes may not go.
+    assert "NO ARCHIVE" in message and "single copy" in message
+    assert spark.asked == [] and deleted == []
+
+
 def test_no_batch_id_at_all_is_refused_by_the_shared_guard(monkeypatch):
     """The forgotten-`--params` operator run. The same guard the promote and the
     gate use, so its message cannot drift -- `action="reclaim"` is what makes it

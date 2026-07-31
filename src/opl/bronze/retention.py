@@ -9,6 +9,17 @@ WHY THE ZIPS STAY: F1.3's incidents 3 and 4 were PARSING defects found AFTER
 ingestion, and fixing them required re-reading the source. The zip preserves that
 capability at roughly a third of the bytes; a consumed CSV preserves nothing.
 
+AND WHERE THERE IS NO ZIP, NOTHING MAY BE RECLAIMED AT ALL. The paragraph above
+is the whole safety argument of this module, and it is a statement about the
+`zips`-landed tables only: a `local`-landed table's zip never reaches the Volume
+(`scripts/extract_cnpj.py` unzips on the extraction host and PUTs only the inner
+file), so its landed file is the single copy in the workspace and "recovery" means
+re-downloading a monthly snapshot the RFB may have rotated. These functions do not
+know a table's landing mode and deliberately decide nothing -- the refusal lives at
+the boundary, in `databricks/src/reclaim_landing.py`, beside the argument guards.
+Until the F1.4a review it lived nowhere, and this docstring's promise was
+load-bearing for a table it did not hold for.
+
 WHY THE UNIT IS THE FILE AND NOT THE DIRECTORY: F1.3 ingests incrementally --
 several batches per month -- so deleting a table's landing dir on one batch's
 promote would destroy parts that are landed but not yet ingested.

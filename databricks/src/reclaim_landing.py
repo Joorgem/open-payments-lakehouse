@@ -6,6 +6,10 @@ proves it holds that file's rows. The zips are never touched -- they live in a
 sibling `zips/<table>` dir and are the only way back to the source if a parse
 defect is found after ingestion, which is exactly what happened twice in F1.3.
 
+THAT ARGUMENT ASSUMES A ZIP EXISTS IN THE VOLUME, which is true only for a table
+whose landing mode is `zips`, so this task refuses every other one -- see
+`_cannot_reclaim`.
+
 WHAT THIS TASK IS ALLOWED TO FAIL ON, because "never fail the job" is not the
 same as "never raise". The argument guards still raise, before Spark and before
 anything is deleted: an unknown table (`table_spec`), a batch id that names no
@@ -22,7 +26,7 @@ import sys
 from pyspark.sql import SparkSession
 
 from opl.bronze.promote import require_batch_id
-from opl.bronze.registry import table_spec
+from opl.bronze.registry import LANDING_ZIPS, BronzeTable, table_spec
 from opl.bronze.retention import (
     LandingScope,
     RetentionOutcome,
@@ -33,6 +37,42 @@ from opl.bronze.retention import (
 from opl.config import DEFAULT, require_month
 
 
+def _cannot_reclaim(spec: BronzeTable) -> str:
+    """Why this task refuses a table that does not land as zips.
+
+    THE REASON IS AN ABSENT ARCHIVE, not a landing mode -- the mode is only how the
+    absence is detected. Both this module's docstring and `opl.bronze.retention`'s
+    rest on "the zips are the only way back to the source", and F1.3's incidents 3
+    and 4 were parse defects found AFTER ingestion whose fix required re-reading
+    that source. For a `local`-landed table there is no zip in the Volume to go
+    back to: `scripts/extract_cnpj.py` unzips on the extraction host and PUTs only
+    the inner file, so a read-only listing of `cnpj/<month>/zips/` holds
+    `estabelecimentos` and nothing else. The six lookup CSVs under `lookups/` are
+    the ONLY copy in the workspace, and recovery would mean a fresh WebDAV download
+    of a monthly snapshot the RFB may have rotated -- from a share ADR 0003
+    measured at ~50% transient 500s.
+
+    Refused rather than left to the operator's judgement because the ONE caller
+    that can reach it is an operator: no job YAML runs this task for such a table
+    (bronze_job.yml deliberately has no reclaim task), and the recorded procedure
+    invokes this file by hand with a positional table name. `bronze_ingest.py` and
+    `unzip_table.py` already refuse the same way; this task, the only one that
+    DELETES, was the one that did not.
+
+    Compares against LANDING_ZIPS rather than for LANDING_LOCAL, so a third landing
+    mode added later is refused by default instead of inheriting a delete."""
+    return (
+        f"refusing to reclaim {spec.name}: it does not land as zips "
+        f"(landing={spec.landing!r}), so NO ARCHIVE OF IT EXISTS IN THE VOLUME to "
+        "recover from. Its files are unzipped on the extraction host and only the "
+        "inner file is PUT, which makes the landed file the single copy in this "
+        "workspace -- deleting it would leave a fresh RFB download of a snapshot "
+        "that may already have been rotated as the only way back. This task's whole "
+        "safety argument is the zip in the sibling zips/ dir, and for this table "
+        "there is none."
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     # Table first and before Spark, like every other task here: a mistyped table
@@ -40,6 +80,11 @@ def main(argv: list[str] | None = None) -> None:
     # anywhere else -- the table decides both which rows are read as proof AND
     # which directory the deletes are confined to.
     spec = table_spec(args[0] if args else "")
+    if spec.landing != LANDING_ZIPS:
+        # Before the batch id and before Spark, because it is not a fact about this
+        # run: no batch of this table may ever be reclaimed, so nothing after this
+        # point needs to be resolved to know that.
+        raise ValueError(_cannot_reclaim(spec))
     batch_id = require_batch_id(args[1] if len(args) > 1 else "", action="reclaim")
     # NO DEFAULT, by the same guard the two ingest tasks use -- it has to be the
     # SAME month the ingest was given, because the files this batch proved were read
