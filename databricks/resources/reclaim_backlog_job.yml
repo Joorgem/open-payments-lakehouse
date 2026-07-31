@@ -1,0 +1,60 @@
+# databricks/resources/reclaim_backlog_job.yml
+# TEMPORARY operator job, added for the F1.4a migration and REMOVED in the commit
+# that follows the successful run. Like the backfill job it replaces a one-time
+# `databricks jobs submit`: a resource is reviewable and recorded in the
+# deployment state, where a submit exists only in somebody's scrollback.
+#
+# WHY IT IS NEEDED AT ALL. `reclaim_landing` is already a task of
+# bronze_estabelecimentos_job.yml, but the 16.74 GB backlog was promoted before
+# that task existed, so no live run owns those files. Re-running the ingestion job
+# to reach the task is explicitly the wrong move: it would re-unzip and re-read
+# 5.26 GB of zips, and its Auto Loader has already consumed them, so the batch it
+# created would be EMPTY and would reclaim nothing -- `files_of_batch` would
+# return no path and the task would correctly report "nothing is proven
+# persisted". Hence the same script, invoked against the batch id that really
+# holds those rows.
+#
+# HOW IT WAS RUN:
+#     databricks bundle run reclaim_backlog -t free --profile opl-free \
+#       --params table=estabelecimentos,batch_id=118868417561350,month=2026-06
+#
+# NO SENTINEL DEFAULTS ARE NEEDED beyond batch_id's, and that one is required:
+# `require_batch_id` refuses it, and a batch id that names nothing in bronze makes
+# `files_of_batch` empty, which deletes nothing and says so. `require_month`
+# refuses a blank month, and the month is half the delete boundary -- a
+# well-formed but wrong month puts every proven file OUTSIDE the scope and
+# reclaims nothing rather than reclaiming the wrong thing.
+resources:
+  jobs:
+    reclaim_backlog:
+      name: opl-reclaim-backlog
+      parameters:
+        - name: table
+          # A real table, for repromote_batch_job.yml's reason: `table_spec`
+          # refuses anything unregistered before Spark, and the table decides both
+          # which rows count as proof AND which directory the deletes are confined
+          # to, so the two can never disagree.
+          default: "estabelecimentos"
+        - name: batch_id
+          # The same sentinel promote_batch/reclaim_landing refuse, because a job
+          # parameter must have SOME default and no batch id is a safe one.
+          default: "REQUIRED-PASS-A-BATCH-ID"
+        - name: month
+          default: "2026-06"
+      tasks:
+        - task_key: reclaim
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/reclaim_landing.py
+            parameters:
+              - "{{job.parameters.table}}"
+              - "{{job.parameters.batch_id}}"
+              - "{{job.parameters.month}}"
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl
