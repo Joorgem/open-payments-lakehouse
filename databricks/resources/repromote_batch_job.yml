@@ -23,6 +23,13 @@
 # and appends only the rows that pass, so rejected rows stay out of bronze and
 # remain in quarantine.
 #
+# HOW AN OPERATOR RUNS IT, now that promote_batch takes the table first:
+#     databricks bundle run repromote_triaged_batch -t free \
+#       --params table=estabelecimentos,batch_id=315230730740144
+# Both parameters, always. A batch id belongs to exactly one table's ingest, and
+# the `table` default below is a REAL table rather than a sentinel -- see why
+# there.
+#
 # Two safety properties, deliberately in two different places:
 #   * ISOLATION is this job's job -- living outside the ingestion flow is what
 #     keeps anything automated from reaching it.
@@ -40,6 +47,21 @@ resources:
     repromote_triaged_batch:
       name: opl-repromote-triaged-batch
       parameters:
+        - name: table
+          # A REAL table rather than a sentinel, and no second sentinel is needed
+          # here, because neither wrong-default case can promote anything:
+          #   * --params forgotten entirely: batch_id is the sentinel below and
+          #     promote_batch refuses it before Spark. The table never matters.
+          #   * only batch_id passed: the table silently becomes this default,
+          #     which is the dangerous-looking case -- but a batch id belongs to
+          #     exactly one table's ingest, so a lookup batch resolved against
+          #     estabelecimentos finds zero rows in ITS staging and bronze, and
+          #     an empty batch without --in-flow is refused (that is exactly what
+          #     --in-flow is withheld from this job for). It ends red, having
+          #     promoted nothing, not green having promoted nothing.
+          # table_spec still refuses any unregistered name, so a typo is refused
+          # too, before Spark, naming the valid tables.
+          default: "estabelecimentos"
         - name: batch_id
           # Sentinel refused by promote_batch (opl.bronze.promote.SENTINEL_BATCH_ID),
           # because a job parameter has to have SOME default and no id is valid.
@@ -50,7 +72,7 @@ resources:
           environment_key: opl_env
           spark_python_task:
             python_file: ../src/promote_batch.py
-            parameters: ["{{job.parameters.batch_id}}"]
+            parameters: ["{{job.parameters.table}}", "{{job.parameters.batch_id}}"]
 
       environments:
         - environment_key: opl_env

@@ -8,7 +8,7 @@ land through the local-unzip path because unzipping a 22 KB file on serverless
 Spark is absurd. Forcing that into the shared shape would be the premature
 abstraction the registry deliberately avoids.
 
-argv: [batch_id, month]"""
+argv: [batch_id, month] -- both REQUIRED, neither defaulted."""
 import sys
 
 from pyspark.sql import SparkSession
@@ -20,7 +20,7 @@ from opl.bronze.autoloader import (
 )
 from opl.bronze.promote import require_batch_id
 from opl.bronze.registry import table_spec
-from opl.config import DEFAULT
+from opl.config import DEFAULT, require_month
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -29,7 +29,12 @@ def main(argv: list[str] | None = None) -> None:
     # from, so they are never evaluated, promoted or reported -- a silent hole,
     # not a failure.
     batch_id = require_batch_id(args[0] if args else "", action="ingest")
-    month = args[1] if len(args) > 1 else DEFAULT.month
+    # NO DEFAULT, and the seam below is why it matters most here: this ONE local
+    # feeds both the stream's source dir and `snapshot_month`. `else DEFAULT.month`
+    # therefore did not merely guess -- it fed the config's pinned month into the
+    # parameter that was given no default precisely so that could not happen, and
+    # read the matching 2026-06 landing dir. Internally consistent, wrong, silent.
+    month = require_month(args[1] if len(args) > 1 else None, action="ingest")
     spec = table_spec("lookup")
     spark = SparkSession.builder.getOrCreate()
     # The month goes to the stream AND to the audit columns, from one local: this

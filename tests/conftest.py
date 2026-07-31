@@ -9,31 +9,9 @@ absence is visible.
 """
 from __future__ import annotations
 
-import os
-import sys
 from types import SimpleNamespace
 
 import pytest
-
-
-def _pin_pyspark_interpreter() -> None:
-    """Make Spark's Python workers run the interpreter the driver runs.
-
-    Measured, not theoretical: without this the workers launch from the first
-    ``python`` on PATH (3.14 on this machine) against a 3.12 driver, and every
-    Spark test dies inside py4j with ``AssertionError: SRE module mismatch`` --
-    a message that names neither Python nor PATH. It has to happen BEFORE a
-    SparkContext exists, because that is when the worker command is captured.
-
-    Called at import as well as from the fixture: several older test modules
-    build their own session via ``opl.spark.local_session`` and never see the
-    fixture, and they were failing this way before this file pinned it.
-    """
-    os.environ["PYSPARK_PYTHON"] = sys.executable
-    os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
-
-
-_pin_pyspark_interpreter()
 
 
 @pytest.fixture(scope="session")
@@ -42,11 +20,21 @@ def spark():
 
     Wraps ``opl.spark.local_session`` rather than building a second session:
     that factory documents itself as mirroring what Databricks applies on DBR
-    16.4, and a copy of its config here would be a copy that drifts. Imported
-    inside the fixture so that collecting the Spark-free tests does not require
-    pyspark to be installed. Task 10 hardens this.
+    16.4, and a copy of its config here would be a copy that drifts. Everything
+    the suite needs declared -- bounded parallelism, an explicit driver memory,
+    and the Python worker interpreter -- is declared THERE, for that reason.
+    Imported inside the fixture so that collecting the Spark-free tests does not
+    require pyspark to be installed.
+
+    SESSION-SCOPED, AND THIS FIXTURE IS THE ONLY THING ALLOWED TO STOP IT. The
+    JVM behind ``local_session`` is process-wide: ``getOrCreate`` hands every
+    caller the SAME session, so a test that built "its own" via ``local_session``
+    and stopped it in a ``finally`` was stopping the one the rest of the suite
+    was still using. That was safe only by alphabetical accident -- the stoppers
+    happened to sort before their victims -- and the symptom when the accident
+    ends is a py4j error in an unrelated test, naming neither the stop nor the
+    module that made it. Every Spark test now takes this fixture instead.
     """
-    _pin_pyspark_interpreter()
     from opl.spark import local_session
 
     session = local_session("test-suite")

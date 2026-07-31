@@ -18,35 +18,30 @@ from opl.bronze.autoloader import (
 from opl.bronze.registry import table_spec
 from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN
 from opl.config import DEFAULT
-from opl.spark import local_session
 
 _SOURCE_FILE = "/Volumes/workspace/default/landing/cnpj/2026-06/lookups/F.K03200$Z.D60613.CNAECSV"
 
 
-def test_audit_columns_added_with_constant_values():
-    spark = local_session("test-audit")
-    try:
-        df = spark.createDataFrame(
-            [("01", "AÇÃO", _SOURCE_FILE)], ["codigo", "descricao", "_source_file"]
-        )
-        out = add_audit_columns(df, batch_id="run-123", snapshot_month="2026-06")
-        assert {
-            "_ingested_at",
-            "_record_source",
-            "_batch_id",
-            SNAPSHOT_MONTH_COLUMN,
-            SNAPSHOT_REF_DATE_COLUMN,
-        } <= set(out.columns)
-        row = out.collect()[0]
-        assert row["_batch_id"] == "run-123"
-        assert row["_record_source"] == RECORD_SOURCE
-        assert row["_ingested_at"] is not None
-        # The operational identity is the parameter; the business fact is the
-        # date the RFB declares, which is NOT month-end. Both, side by side.
-        assert row[SNAPSHOT_MONTH_COLUMN] == "2026-06"
-        assert row[SNAPSHOT_REF_DATE_COLUMN] == dt.date(2026, 6, 13)
-    finally:
-        spark.stop()
+def test_audit_columns_added_with_constant_values(spark):
+    df = spark.createDataFrame(
+        [("01", "AÇÃO", _SOURCE_FILE)], ["codigo", "descricao", "_source_file"]
+    )
+    out = add_audit_columns(df, batch_id="run-123", snapshot_month="2026-06")
+    assert {
+        "_ingested_at",
+        "_record_source",
+        "_batch_id",
+        SNAPSHOT_MONTH_COLUMN,
+        SNAPSHOT_REF_DATE_COLUMN,
+    } <= set(out.columns)
+    row = out.collect()[0]
+    assert row["_batch_id"] == "run-123"
+    assert row["_record_source"] == RECORD_SOURCE
+    assert row["_ingested_at"] is not None
+    # The operational identity is the parameter; the business fact is the
+    # date the RFB declares, which is NOT month-end. Both, side by side.
+    assert row[SNAPSHOT_MONTH_COLUMN] == "2026-06"
+    assert row[SNAPSHOT_REF_DATE_COLUMN] == dt.date(2026, 6, 13)
 
 
 def test_the_snapshot_month_has_no_default():
@@ -174,25 +169,21 @@ def test_bronze_stream_forwards_multiline_to_the_cloudfiles_read(monkeypatch):
         assert opts["multiLine"] == "true", f"{table}: {opts}"
 
 
-def test_lookup_type_column_maps_paths():
-    spark = local_session("test-lookup-col")
-    try:
-        df = spark.createDataFrame(
-            [
-                ("/Volumes/workspace/default/landing/cnpj/2026-06/F.K03200$Z.D60613.CNAECSV",),
-                ("/Volumes/workspace/default/landing/cnpj/2026-06/F.K03200$Z.D60613.QUALSCSV",),
-                ("/some/other/file.txt",),
-                ("/Volumes/x/F.K03200$Z.D60613.CNAECSV.bak",),
-            ],
-            ["path"],
-        )
-        out = {
-            r.path.rsplit("/", 1)[-1]: r.lt
-            for r in df.withColumn("lt", lookup_type_column(F.col("path"))).collect()
-        }
-        assert out["F.K03200$Z.D60613.CNAECSV"] == "cnae"
-        assert out["F.K03200$Z.D60613.QUALSCSV"] == "qualificacao"
-        assert out["file.txt"] is None
-        assert out["F.K03200$Z.D60613.CNAECSV.bak"] is None
-    finally:
-        spark.stop()
+def test_lookup_type_column_maps_paths(spark):
+    df = spark.createDataFrame(
+        [
+            ("/Volumes/workspace/default/landing/cnpj/2026-06/F.K03200$Z.D60613.CNAECSV",),
+            ("/Volumes/workspace/default/landing/cnpj/2026-06/F.K03200$Z.D60613.QUALSCSV",),
+            ("/some/other/file.txt",),
+            ("/Volumes/x/F.K03200$Z.D60613.CNAECSV.bak",),
+        ],
+        ["path"],
+    )
+    out = {
+        r.path.rsplit("/", 1)[-1]: r.lt
+        for r in df.withColumn("lt", lookup_type_column(F.col("path"))).collect()
+    }
+    assert out["F.K03200$Z.D60613.CNAECSV"] == "cnae"
+    assert out["F.K03200$Z.D60613.QUALSCSV"] == "qualificacao"
+    assert out["file.txt"] is None
+    assert out["F.K03200$Z.D60613.CNAECSV.bak"] is None

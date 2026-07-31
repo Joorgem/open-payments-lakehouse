@@ -74,3 +74,37 @@ def test_unzipping_an_unknown_table_is_refused_naming_the_real_ones():
     with pytest.raises(UnknownTable) as excinfo:
         task.main(["estabelecimento", "2026-06"])  # a real typo: singular
     assert "estabelecimentos" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("argv", [["estabelecimentos"], ["estabelecimentos", ""],
+                                  ["estabelecimentos", "   "]])
+def test_an_unzip_without_a_month_is_refused_rather_than_defaulted(argv, monkeypatch):
+    """The FOURTH site of one defect on this branch, and the last one left.
+
+    `add_audit_columns` refused a defaulted `snapshot_month` -- that is the ruling,
+    not a site. `reclaim_landing` and both ingest tasks contradicted it by
+    substituting `opl.config`'s pinned month anyway. This task was the fourth, and
+    it is the earliest link in the chain: the month picks BOTH
+    dirs it uses -- which zips are read and where the inner files are written -- so
+    a defaulted month extracted 2026-06 into 2026-06 and then let the ingest that
+    follows read exactly what it had just written. Every layer agreed about the
+    wrong month, which is precisely why nothing in the log could say so.
+
+    NOT VACUOUS: under the fallback this argv succeeded. The table is valid and
+    lands as zips, so `main` went on to call `unzip_dir` against the 2026-06 dirs.
+    `unzip_dir` is stubbed to fail loudly here rather than left unstubbed, so a
+    regression that restored the default cannot pass by quietly doing nothing.
+
+    Refused AFTER the landing-mode check on purpose: a table that has no zips to
+    unzip is a wronger thing to be asked than a missing month, and reordering the
+    two would change which refusal an operator sees for `["lookup"]`."""
+    task = _load("unzip_table")
+    monkeypatch.setattr(task, "unzip_dir", _fail_if_called)
+
+    with pytest.raises(ValueError, match="no month was given") as excinfo:
+        task.main(argv)
+    assert "{{job.parameters.month}}" in str(excinfo.value)
+
+
+def _fail_if_called(*_a, **_k):
+    raise AssertionError("unzip_dir was reached with an unvalidated month")

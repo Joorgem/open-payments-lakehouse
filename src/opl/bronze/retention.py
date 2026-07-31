@@ -26,7 +26,6 @@ conditions, both required.
 """
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -53,9 +52,6 @@ _PARENT = ".."
 # where it runs -- and here the two halves disagree, which is worse than either.
 # See `scope_to_landing_dir` for what that costs.
 _BACKSLASH = "\\"
-# A month is `YYYY-MM` and nothing else. Anchored, and digits rather than `[^/]`,
-# because this value is interpolated into the path that BOUNDS every delete.
-_MONTH = re.compile(r"^\d{4}-\d{2}$")
 
 
 @dataclass(frozen=True)
@@ -113,44 +109,6 @@ def files_of_batch(spark: SparkSession, bronze_table: str, batch_id: str) -> lis
         .collect()
     )
     return sorted(row[SOURCE_FILE_COLUMN] for row in rows if row[SOURCE_FILE_COLUMN])
-
-
-def require_month(month: str | None) -> str:
-    """Return the month to reclaim under, or refuse if it is not one.
-
-    A MALFORMED value, not a suspicious one -- the same framing as
-    `registry._assert_subdirs_are_single_path_components`, and refused for the
-    stronger version of that check's reason. A month names ONE directory under
-    `cnpj/`; it is `YYYY-MM`, not a path.
-
-    WHY IT IS REFUSED HERE AND NOT LEFT TO THE CONTAINMENT CHECK, which is the
-    tempting reading: `landing_table(subdir, month)` interpolates this value RAW,
-    so the month is not checked BY the boundary, it is half OF the boundary.
-    `month="2026-06/zips"` makes the containment root
-    `cnpj/2026-06/zips/<table>` -- the zips directory itself -- and
-    `scope_to_landing_dir` then admits every zip under it as "inside", correctly,
-    against a root it was handed. The zips are the only way back to the source.
-
-    That guard exists to be INDEPENDENT of whether bronze holds rows sourced from
-    `zips/`. Such rows are not hypothetical -- a pre-Task-8 stream reading the
-    month root discovered files recursively, which is the documented F1.3
-    probe.txt mechanism -- so an unvalidated month re-couples the guard to the
-    one assumption it was built to stop trusting.
-
-    Refuses BEFORE Spark, like `table_spec` and `require_batch_id`: nothing about
-    a malformed month needs a serverless session to diagnose."""
-    candidate = month or ""
-    if not _MONTH.match(candidate):
-        raise ValueError(
-            f"refusing to reclaim: month={month!r} is not a month. It has to be "
-            "YYYY-MM (e.g. 2026-06), because it names ONE directory under cnpj/ and "
-            "is interpolated into the landing path that BOUNDS every delete this "
-            "task makes -- it is not a path, and a value with a separator in it "
-            "moves that boundary onto another directory. '2026-06/zips' would point "
-            "it at the raw ZIPs, which are the only way back to the source. Pass the "
-            "same month the ingest task was given."
-        )
-    return candidate
 
 
 def fuse_path(source_file: str) -> str:

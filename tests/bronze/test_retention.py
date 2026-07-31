@@ -22,7 +22,6 @@ import pytest
 from opl.bronze.retention import (
     delete_files,
     fuse_path,
-    require_month,
     scope_to_landing_dir,
 )
 
@@ -134,32 +133,6 @@ def test_a_candidate_carrying_a_backslash_is_refused_whatever_posix_reads_it_as(
     a bypass waiting for the reachability to change."""
     escape = f"{_LANDING}/..\\..\\zips\\estabelecimentos\\Estabelecimentos1.zip"
     assert scope_to_landing_dir([escape], _LANDING).outside == (escape,)
-
-
-@pytest.mark.parametrize(
-    "month",
-    ["2026-06/zips", "2026-06/..", "..", ".", "", "  ", "2026-6", "26-06",
-     "2026-06 ", "/2026-06", "2026-06\\zips", "2026-06/estabelecimentos"],
-)
-def test_a_month_that_is_not_a_month_is_refused(month):
-    """The month is not decoration here: it is HALF the delete boundary.
-
-    `landing_table(subdir, month)` interpolates it raw, so `month="2026-06/zips"`
-    makes the containment root `cnpj/2026-06/zips/<table>` -- the ZIPS DIRECTORY
-    ITSELF -- and the guard below would then dutifully admit every zip as
-    "inside". That is not a hypothetical input: bronze rows whose `_source_file`
-    sits under `zips/` are what a pre-Task-8 month-root stream produced, which is
-    the documented F1.3 probe.txt mechanism.
-
-    The whole point of the containment guard is to be INDEPENDENT of whether
-    bronze holds such rows. An unvalidated month re-couples it to that
-    assumption -- the one assumption the guard exists to stop making."""
-    with pytest.raises(ValueError, match="month"):
-        require_month(month)
-
-
-def test_a_real_month_is_accepted_unchanged():
-    assert require_month("2026-06") == "2026-06"
 
 
 def test_the_dbfs_uri_form_resolves_to_the_fuse_path_it_names():

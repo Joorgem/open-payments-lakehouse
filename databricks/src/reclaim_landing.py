@@ -8,14 +8,15 @@ defect is found after ingestion, which is exactly what happened twice in F1.3.
 
 WHAT THIS TASK IS ALLOWED TO FAIL ON, because "never fail the job" is not the
 same as "never raise". The argument guards still raise, before Spark and before
-anything is deleted: an unknown table (`table_spec`) or a batch id that names no
-batch (`require_batch_id`) means this task does not know WHICH files it would be
-reclaiming, and reclaiming under a guess is how the wrong table's landing dir
-gets emptied. What never raises is the deletion itself -- past that point the
-rows are already in bronze, so a file that cannot be removed is a quota problem,
-not a data problem, and must not turn a green ingestion red.
+anything is deleted: an unknown table (`table_spec`), a batch id that names no
+batch (`require_batch_id`) or an absent/malformed month (`require_month`) each
+mean this task does not know WHICH files it would be reclaiming, and reclaiming
+under a guess is how the wrong table's landing dir gets emptied. What never
+raises is the deletion itself -- past that point the rows are already in bronze,
+so a file that cannot be removed is a quota problem, not a data problem, and must
+not turn a green ingestion red.
 
-argv: [table, batch_id, month]"""
+argv: [table, batch_id, month] -- all three REQUIRED, none defaulted."""
 import sys
 
 from pyspark.sql import SparkSession
@@ -27,10 +28,9 @@ from opl.bronze.retention import (
     RetentionOutcome,
     delete_files,
     files_of_batch,
-    require_month,
     scope_to_landing_dir,
 )
-from opl.config import DEFAULT
+from opl.config import DEFAULT, require_month
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -41,17 +41,19 @@ def main(argv: list[str] | None = None) -> None:
     # which directory the deletes are confined to.
     spec = table_spec(args[0] if args else "")
     batch_id = require_batch_id(args[1] if len(args) > 1 else "", action="reclaim")
-    # The SAME default and position as bronze_ingest.py's month, because it has to
-    # be the same month: the files this batch proved were read out of that month's
-    # landing dir, and a WRONG-but-well-formed month here puts every proven file
-    # outside the scope and reclaims nothing (loudly -- see the REFUSED lines below).
+    # NO DEFAULT, by the same guard the two ingest tasks use -- it has to be the
+    # SAME month the ingest was given, because the files this batch proved were read
+    # out of that month's landing dir, and a WRONG-but-well-formed month puts every
+    # proven file outside the scope and reclaims nothing.
     #
-    # A MALFORMED one is a different matter and is refused outright, here, before
-    # the session: this value is interpolated raw into `landing_table` below, so it
-    # is not checked BY the delete boundary, it is half OF it -- `2026-06/zips`
-    # moves that boundary onto the raw ZIPs and every zip then passes containment
-    # as "inside". `require_month` carries the full argument.
-    month = require_month(args[2] if len(args) > 2 else DEFAULT.month)
+    # What makes it worth a crash rather than a fallback is specific to this task:
+    # `DEFAULT.month` equals the job YAML's own default, so an omission stayed
+    # invisible until the first run for another month -- and then this task printed
+    # REFUSED for every proven file and exited green, a log that reads exactly like
+    # the containment guard catching a real F1.3-style incident. `require_month`
+    # carries the rest of the argument, including why a malformed month is half of
+    # the delete boundary rather than something the boundary checks.
+    month = require_month(args[2] if len(args) > 2 else None, action="reclaim")
     spark = SparkSession.builder.getOrCreate()
     bronze = DEFAULT.table(spec.bronze)
     if not spark.catalog.tableExists(bronze):

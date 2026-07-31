@@ -34,7 +34,6 @@ from opl.bronze.promote import (
     require_batch_id,
 )
 from opl.bronze.rules import rules_for
-from opl.spark import local_session
 
 _ESTAB_RULES = rules_for("estabelecimentos")
 
@@ -76,10 +75,20 @@ def test_a_batch_id_that_names_no_batch_is_refused_before_spark(batch_id):
 
 
 def test_the_refusal_tells_the_operator_how_to_find_the_batch_id():
+    """...and how to pass it, WITH its table.
+
+    The `table=` half was added in F1.4: promote_batch now takes the table first,
+    and the operator job's `table` parameter has a real default, so a copy-pasted
+    `--params batch_id=<id>` silently repromotes against whatever that default
+    names. This is the message a triager reads mid-incident, so an invocation it
+    can paste has to be the CURRENT one -- a stale one here is the same class of
+    defect as the hardcoded quarantine name that sent estab triagers to the
+    lookup table."""
     with pytest.raises(PromoteRefused) as excinfo:
         require_batch_id(SENTINEL_BATCH_ID)
     message = str(excinfo.value)
-    assert "dq_gate_batch" in message and "--params batch_id=" in message
+    assert "dq_gate_batch" in message
+    assert "--params table=estabelecimentos,batch_id=" in message
 
 
 def test_a_real_batch_id_is_accepted_and_stripped():
@@ -174,13 +183,6 @@ def test_a_batch_absent_from_bronze_is_planned_for_append():
 
     assert result.outcome is PromoteOutcome.APPENDED
     assert (result.appended_rows, result.rejected_rows) == (2, 1)
-
-
-@pytest.fixture(scope="module")
-def spark():
-    session = local_session("test-promote")
-    yield session
-    session.stop()
 
 
 @pytest.fixture

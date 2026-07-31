@@ -1,29 +1,47 @@
+# databricks/resources/bronze_job.yml
+# One job YAML PER TABLE, deliberately -- not one for_each_task over the
+# registry, even though the task lists below are now near-identical:
+#   * for_each shares a single {{job.run_id}} across its iterations, hence one
+#     _batch_id for every table. The gate, promote_batch and the repromote
+#     operator job all assume one batch = one table's ingest, so collapsing
+#     these files would break the batch model to save declarative YAML.
+#   * Failure domains stay apart. Estabelecimentos' ~9-minute single-task read
+#     has nothing in common with these six tiny lookups' runtime profile, and in
+#     one job a failure on the giant blocks the small tables.
 resources:
   jobs:
     bronze_cnpj_lookup:
       name: opl-bronze-cnpj-lookup
+      parameters:
+        - name: month
+          default: "2026-06"
       tasks:
         - task_key: ingest
           environment_key: opl_env
           max_retries: 0
           spark_python_task:
-            python_file: ../src/bronze_ingest.py
-            parameters: ["{{job.run_id}}"]
+            python_file: ../src/bronze_lookup_ingest.py
+            # The lookup keeps its own entry point rather than taking `table`
+            # like bronze_ingest.py: it routes six differently-named files into
+            # ONE table by filename suffix, which is a genuine difference and
+            # not a parameter. argv: [batch_id, month].
+            parameters: ["{{job.run_id}}", "{{job.parameters.month}}"]
 
-        - task_key: dq_gate
+        - task_key: dq_gate_batch
           depends_on:
             - task_key: ingest
           environment_key: opl_env
           max_retries: 0
           spark_python_task:
-            python_file: ../src/dq_gate.py
+            python_file: ../src/dq_gate_batch.py
+            parameters: ["lookup", "{{job.run_id}}"]
 
         - task_key: check_bad_rows
           depends_on:
-            - task_key: dq_gate
+            - task_key: dq_gate_batch
           condition_task:
             op: EQUAL_TO
-            left: "{{tasks.dq_gate.values.bad_row_count}}"
+            left: "{{tasks.dq_gate_batch.values.bad_row_count}}"
             right: "0"
 
         - task_key: promote
@@ -33,7 +51,14 @@ resources:
           environment_key: opl_env
           max_retries: 0
           spark_python_task:
-            python_file: ../src/promote.py
+            python_file: ../src/promote_batch.py
+            # --in-flow declares "this batch_id is the run executing this task",
+            # which is the ONLY caller that can say so truthfully. It is what
+            # lets a scheduled run whose batch is empty (no new file arrived)
+            # succeed as a no-op instead of being refused. The operator job
+            # deliberately omits it, so a mistyped batch_id there is still
+            # refused rather than exiting 0 having promoted nothing.
+            parameters: ["lookup", "{{job.run_id}}", "--in-flow"]
 
         - task_key: fail_on_dq
           depends_on:
@@ -43,10 +68,11 @@ resources:
           max_retries: 0
           spark_python_task:
             python_file: ../src/fail_on_dq.py
-            # The quarantine THIS job writes (must match QUARANTINE in
-            # ../src/dq_gate.py). fail_on_dq is shared with the Estabelecimentos
-            # job, which quarantines elsewhere.
-            parameters: ["bronze_cnpj_lookup_quarantine"]
+            # The TABLE, not a quarantine name. fail_on_dq derives the
+            # quarantine from the registry, so this cannot drift from what the
+            # gate wrote -- the drift that once sent Estabelecimentos triagers
+            # to a table full of unrelated F1.2 lookup rows.
+            parameters: ["lookup"]
 
       environments:
         - environment_key: opl_env

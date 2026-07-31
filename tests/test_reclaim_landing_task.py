@@ -241,6 +241,30 @@ def test_a_month_that_is_not_a_month_is_refused_before_spark_and_before_any_dele
     assert spark.asked == [] and deleted == []
 
 
+def test_no_month_at_all_is_refused_rather_than_defaulted(monkeypatch):
+    """The task must not answer a missing month with `opl.config`'s pinned one.
+
+    Same ruling as `add_audit_columns`' `snapshot_month`, which was deliberately
+    given no default because the pinned month is how F1.2 tied every row to
+    2026-06 silently. Here the stake is higher: this month is half the delete
+    boundary, not a label.
+
+    THE PROOF SET IS 2026-06 ON PURPOSE. It is what the old fallback would have
+    produced -- `DEFAULT.month` is "2026-06", identical to the job YAML's own
+    default -- so under the fallback this call succeeded, deleted the file and
+    looked correct, and stayed looking correct until the first run for another
+    month. A test that used some other month would have passed against the
+    fallback too, and would be pinning nothing."""
+    spark = _stub_session(monkeypatch)
+    _stub_proof(monkeypatch, [_PART])
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError, match="no month was given"):
+        task.main(["estabelecimentos", "999"])
+
+    assert spark.asked == [] and deleted == []
+
+
 def test_no_batch_id_at_all_is_refused_by_the_shared_guard(monkeypatch):
     """The forgotten-`--params` operator run. The same guard the promote and the
     gate use, so its message cannot drift -- `action="reclaim"` is what makes it

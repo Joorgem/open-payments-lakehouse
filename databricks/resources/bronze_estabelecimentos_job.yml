@@ -1,4 +1,11 @@
 # databricks/resources/bronze_estabelecimentos_job.yml
+# One job YAML PER TABLE, deliberately -- not one for_each_task over the
+# registry. Same two reasons as bronze_job.yml: for_each shares a single
+# {{job.run_id}} and therefore one _batch_id across tables, which contradicts
+# the one-batch-is-one-table's-ingest assumption the gate, promote_batch and the
+# repromote operator job all rest on; and this job's ~9-minute single-task read
+# has no runtime profile in common with the six tiny lookups, so a failure here
+# must not block them.
 resources:
   jobs:
     bronze_cnpj_estabelecimentos:
@@ -11,16 +18,16 @@ resources:
           max_retries: 0
           environment_key: opl_env
           spark_python_task:
-            python_file: ../src/unzip_estabelecimentos.py
-            parameters: ["{{job.parameters.month}}"]
+            python_file: ../src/unzip_table.py
+            parameters: ["estabelecimentos", "{{job.parameters.month}}"]
 
         - task_key: ingest
           depends_on: [{ task_key: unzip }]
           max_retries: 0
           environment_key: opl_env
           spark_python_task:
-            python_file: ../src/bronze_estab_ingest.py
-            parameters: ["{{job.run_id}}", "{{job.parameters.month}}"]
+            python_file: ../src/bronze_ingest.py
+            parameters: ["estabelecimentos", "{{job.run_id}}", "{{job.parameters.month}}"]
 
         - task_key: dq_gate_batch
           depends_on: [{ task_key: ingest }]
@@ -28,7 +35,7 @@ resources:
           environment_key: opl_env
           spark_python_task:
             python_file: ../src/dq_gate_batch.py
-            parameters: ["{{job.run_id}}"]
+            parameters: ["estabelecimentos", "{{job.run_id}}"]
 
         - task_key: check_bad_rows
           depends_on: [{ task_key: dq_gate_batch }]
@@ -49,7 +56,7 @@ resources:
             # succeed as a no-op instead of being refused. The operator job
             # deliberately omits it, so a mistyped batch_id there is still
             # refused rather than exiting 0 having promoted nothing.
-            parameters: ["{{job.run_id}}", "--in-flow"]
+            parameters: ["estabelecimentos", "{{job.run_id}}", "--in-flow"]
 
         - task_key: fail_on_dq
           depends_on: [{ task_key: check_bad_rows, outcome: "false" }]
@@ -57,11 +64,33 @@ resources:
           environment_key: opl_env
           spark_python_task:
             python_file: ../src/fail_on_dq.py
-            # The quarantine THIS job writes (must match QUARANTINE in
-            # ../src/dq_gate_batch.py). fail_on_dq is shared with the lookup job,
-            # which quarantines elsewhere; hardcoding one of them sent estab
-            # triagers to a table full of unrelated F1.2 lookup rows.
-            parameters: ["bronze_cnpj_estab_quarantine"]
+            # The TABLE, not a quarantine name. It used to be the quarantine
+            # name hardcoded here, and that hardcoding sent estab triagers to a
+            # table full of unrelated F1.2 lookup rows. fail_on_dq now derives
+            # the quarantine from the registry, so the string that could be
+            # wrong no longer exists in this file.
+            parameters: ["estabelecimentos"]
+
+        - task_key: reclaim_landing
+          depends_on: [{ task_key: promote }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/reclaim_landing.py
+            # Deletes only the inner files bronze proves it holds rows of, for
+            # THIS batch. Depends on promote and nothing else: a file may go only
+            # after the rows are persisted. The zips in the sibling zips/ dir are
+            # never touched -- they are the only way back to the source when a
+            # parse defect is found after ingestion, which happened twice in F1.3.
+            #
+            # The month is NOT optional here and is not decoration. It is half of
+            # the delete boundary: `landing_table(subdir, month)` is the only dir
+            # the deletes are confined to, so omitting it would silently fall back
+            # to DEFAULT.month and scope the reclaim at a month this run never
+            # ingested. reclaim_landing refuses anything that is not YYYY-MM
+            # before Spark starts, so a run_id passed here raises instead.
+            parameters:
+              ["estabelecimentos", "{{job.run_id}}", "{{job.parameters.month}}"]
 
       environments:
         - environment_key: opl_env

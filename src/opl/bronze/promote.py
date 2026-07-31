@@ -104,9 +104,12 @@ def require_batch_id(batch_id: str | None, *, action: str = "promote") -> str:
             "ingested it, printed by that run's dq_gate_batch task as 'batch=<id>' "
             "(or list them with: SELECT _batch_id, count(*) FROM "
             "<staging table> GROUP BY 1). In the ingestion flow every task takes it "
-            "as its first parameter, {{job.run_id}}; an operator recovering a batch "
-            "passes it by hand: databricks bundle run repromote_triaged_batch -t "
-            "free --params batch_id=315230730740144"
+            "as {{job.run_id}}, right after the table; an operator recovering a batch "
+            "passes it by hand, WITH the table -- a batch id belongs to exactly one "
+            "table's ingest, and the operator job's table default is a real table, so "
+            "omitting it recovers against the wrong one: databricks bundle run "
+            "repromote_triaged_batch -t free "
+            "--params table=estabelecimentos,batch_id=315230730740144"
         )
     return candidate
 

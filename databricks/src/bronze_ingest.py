@@ -8,7 +8,7 @@ YAML, not another copy of this file. The lookup keeps its own entry point
 (bronze_lookup_ingest.py) because it routes six differently-named files into one
 table by filename suffix -- a genuine difference, not a parameter.
 
-argv: [table, batch_id, month]"""
+argv: [table, batch_id, month] -- all three REQUIRED, none defaulted."""
 import sys
 
 from pyspark.sql import SparkSession
@@ -16,7 +16,7 @@ from pyspark.sql import SparkSession
 from opl.bronze.autoloader import add_audit_columns, bronze_stream, checkpoint_location
 from opl.bronze.promote import require_batch_id
 from opl.bronze.registry import LANDING_ZIPS, BronzeTable, table_spec
-from opl.config import DEFAULT
+from opl.config import DEFAULT, require_month
 
 
 def _cannot_ingest(spec: BronzeTable) -> str:
@@ -62,7 +62,18 @@ def main(argv: list[str] | None = None) -> None:
         # they are declared, so this comparison cannot swallow a typo.
         raise ValueError(_cannot_ingest(spec))
     batch_id = require_batch_id(args[1] if len(args) > 1 else "", action="ingest")
-    month = args[2] if len(args) > 2 else DEFAULT.month
+    # NO DEFAULT. This local is handed to `add_audit_columns(snapshot_month=...)`
+    # below, and that parameter was deliberately given no default so the config's
+    # pinned month could never be supplied silently -- which is exactly what
+    # `else DEFAULT.month` here used to do. The guard was satisfied by the one
+    # value it exists to refuse, which made the no-default decorative, and a
+    # decorative guard is worse than none because the next reader believes the
+    # hole is closed. Both job YAMLs always pass {{job.parameters.month}}, so the
+    # fallback was only ever reachable by a manual or misconfigured run -- the
+    # case that must be loud, since it stamped `_snapshot_month = 2026-06` on rows
+    # read from the 2026-06 landing dir and was indistinguishable from a correct
+    # run in both the log and the data.
+    month = require_month(args[2] if len(args) > 2 else None, action="ingest")
     spark = SparkSession.builder.getOrCreate()
     df = bronze_stream(
         spark,

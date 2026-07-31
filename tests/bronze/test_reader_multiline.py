@@ -36,7 +36,6 @@ import io
 
 from opl.bronze.reader import read_csv_batch
 from opl.contracts.cnpj_schemas import columns_for
-from opl.spark import local_session
 
 _ESTAB_COLUMNS = columns_for("estabelecimentos")  # 30 columns, order is authoritative
 
@@ -72,7 +71,8 @@ def _expected_fields(record: str) -> list[str | None]:
 
 # --- RFC 4180 section 2.6: literal newline inside a quoted field -------------
 
-def test_quoted_field_with_embedded_newline_stays_one_record(tmp_path):
+
+def test_quoted_field_with_embedded_newline_stays_one_record(spark, tmp_path):
     # Modeled on part 6 record 4,266,421: nome_fantasia == 'RIZZ CAMPOLIM\n'.
     broken = _estab_row("02546226", "RIZZ CAMPOLIM\n")
     f = tmp_path / "K3241.K03200Y6.D60613.ESTABELE"
@@ -82,33 +82,29 @@ def test_quoted_field_with_embedded_newline_stays_one_record(tmp_path):
         _estab_row("87654321", "MERCADO SÃO JOÃO"),
     ])
 
-    spark = local_session("test-multiline-estab")
-    try:
-        rows = read_csv_batch(spark, str(f), "estabelecimentos").collect()
-        # 3 records in, 3 records out: the embedded newline must NOT split a row.
-        assert len(rows) == 3, \
-            f"record split: {[r.cnpj_basico for r in rows]}"
-        by_key = {r.cnpj_basico: r for r in rows}
-        assert set(by_key) == {"12345678", "02546226", "87654321"}
-        hit = by_key["02546226"]
-        assert hit.nome_fantasia == "RIZZ CAMPOLIM\n"   # newline preserved in-field
-        # The tell of the incident: on a split record every trailing column of
-        # the surviving "parent" row is NULL, which passes every DQ rule.
-        assert hit.data_situacao_especial == "20260131"
-        assert hit.uf == "SP"
-        assert hit.correio_eletronico == "CONTATO@EXEMPLO.COM.BR"
-        # Strongest form of the same check: the record carrying the newline must
-        # have the *same* null pattern as a clean record. (Quoted empty fields
-        # read as NULL -- Spark's default nullValue is "" -- so "no nulls at
-        # all" is not the invariant; "no nulls a clean row does not have" is.)
-        nulls = [c for c in _ESTAB_COLUMNS if hit[c] is None]
-        clean_nulls = [c for c in _ESTAB_COLUMNS if by_key["12345678"][c] is None]
-        assert nulls == clean_nulls
-    finally:
-        spark.stop()
+    rows = read_csv_batch(spark, str(f), "estabelecimentos").collect()
+    # 3 records in, 3 records out: the embedded newline must NOT split a row.
+    assert len(rows) == 3, \
+        f"record split: {[r.cnpj_basico for r in rows]}"
+    by_key = {r.cnpj_basico: r for r in rows}
+    assert set(by_key) == {"12345678", "02546226", "87654321"}
+    hit = by_key["02546226"]
+    assert hit.nome_fantasia == "RIZZ CAMPOLIM\n"   # newline preserved in-field
+    # The tell of the incident: on a split record every trailing column of
+    # the surviving "parent" row is NULL, which passes every DQ rule.
+    assert hit.data_situacao_especial == "20260131"
+    assert hit.uf == "SP"
+    assert hit.correio_eletronico == "CONTATO@EXEMPLO.COM.BR"
+    # Strongest form of the same check: the record carrying the newline must
+    # have the *same* null pattern as a clean record. (Quoted empty fields
+    # read as NULL -- Spark's default nullValue is "" -- so "no nulls at
+    # all" is not the invariant; "no nulls a clean row does not have" is.)
+    nulls = [c for c in _ESTAB_COLUMNS if hit[c] is None]
+    clean_nulls = [c for c in _ESTAB_COLUMNS if by_key["12345678"][c] is None]
+    assert nulls == clean_nulls
 
 
-def test_lookup_quoted_field_with_embedded_newline_stays_one_record(tmp_path):
+def test_lookup_quoted_field_with_embedded_newline_stays_one_record(spark, tmp_path):
     # Same latent defect on the F1.2 lookup shape. No landed lookup is known to
     # contain an embedded newline, so this guards the shared option, not a
     # reproduced incident.
@@ -119,18 +115,14 @@ def test_lookup_quoted_field_with_embedded_newline_stays_one_record(tmp_path):
         '"03";"SÃO JOÃO — SERVIÇOS"',
     ])
 
-    spark = local_session("test-multiline-lookup")
-    try:
-        rows = read_csv_batch(spark, str(f), "lookup").collect()
-        assert len(rows) == 3, f"record split: {[r.codigo for r in rows]}"
-        recs = {r.codigo: r.descricao for r in rows}
-        assert recs["02"] == "SERVIÇOS DE\nESCRITÓRIO"
-        assert recs["03"] == "SÃO JOÃO — SERVIÇOS"   # cp1252 0x80-0x9F still decodes
-    finally:
-        spark.stop()
+    rows = read_csv_batch(spark, str(f), "lookup").collect()
+    assert len(rows) == 3, f"record split: {[r.codigo for r in rows]}"
+    recs = {r.codigo: r.descricao for r in rows}
+    assert recs["02"] == "SERVIÇOS DE\nESCRITÓRIO"
+    assert recs["03"] == "SÃO JOÃO — SERVIÇOS"   # cp1252 0x80-0x9F still decodes
 
 
-def test_crlf_record_separator_also_parses(tmp_path):
+def test_crlf_record_separator_also_parses(spark, tmp_path):
     """RFB ships LF-only, but RFC 4180 section 2.1 specifies CRLF and nothing
     stops RFB from switching. Pinned so a future change of separator is a
     non-event; do NOT read this as a description of the current source bytes."""
@@ -140,17 +132,13 @@ def test_crlf_record_separator_also_parses(tmp_path):
         _estab_row("87654321", "MERCADO SÃO JOÃO"),
     ], newline="\r\n")
 
-    spark = local_session("test-crlf")
-    try:
-        rows = read_csv_batch(spark, str(f), "estabelecimentos").collect()
-        assert len(rows) == 2
-        by_key = {r.cnpj_basico: r for r in rows}
-        assert set(by_key) == {"12345678", "87654321"}
-        # A stray CR must not ride along on the last field of a record.
-        assert by_key["12345678"].data_situacao_especial == "20260131"
-        assert by_key["87654321"].nome_fantasia == "MERCADO SÃO JOÃO"
-    finally:
-        spark.stop()
+    rows = read_csv_batch(spark, str(f), "estabelecimentos").collect()
+    assert len(rows) == 2
+    by_key = {r.cnpj_basico: r for r in rows}
+    assert set(by_key) == {"12345678", "87654321"}
+    # A stray CR must not ride along on the last field of a record.
+    assert by_key["12345678"].data_situacao_especial == "20260131"
+    assert by_key["87654321"].nome_fantasia == "MERCADO SÃO JOÃO"
 
 
 # --- RFC 4180 section 2.7: doubled quote inside a quoted field ---------------
@@ -205,7 +193,7 @@ _REAL_LEADING = (
 )
 
 
-def test_doubled_quote_in_field_does_not_swallow_the_delimiter(tmp_path):
+def test_doubled_quote_in_field_does_not_swallow_the_delimiter(spark, tmp_path):
     """RFC 4180 section 2.7 on the real record that smuggles a ``;`` into a value.
 
     Against the pre-fix options (no ``escape``) this produced
@@ -216,23 +204,19 @@ def test_doubled_quote_in_field_does_not_swallow_the_delimiter(tmp_path):
     f = tmp_path / "K3241.K03200Y6.D60613.ESTABELE"
     _write_cp1252_csv(f, [_estab_row("12345678", "PADARIA AÇAÍ"), _REAL_DELIM_SMUGGLER])
 
-    spark = local_session("test-escape-delimiter")
-    try:
-        rows = read_csv_batch(spark, str(f), "estabelecimentos").collect()
-        assert len(rows) == 2, f"record split: {[r.cnpj_basico for r in rows]}"
-        hit = next(r for r in rows if r.cnpj_basico == "09516882")
-        # The two fields the defect corrupted, asserted as exact values.
-        assert hit.complemento == ': "A";'
-        assert hit.bairro == "DUCILIA CARONE"
-        # The delimiter was absorbed, so every later field shifted too.
-        assert hit.cep == "36520000"
-        assert hit.uf == "MG"
-        assert hit.correio_eletronico == "VISAO@KONET.COM.BR"
-    finally:
-        spark.stop()
+    rows = read_csv_batch(spark, str(f), "estabelecimentos").collect()
+    assert len(rows) == 2, f"record split: {[r.cnpj_basico for r in rows]}"
+    hit = next(r for r in rows if r.cnpj_basico == "09516882")
+    # The two fields the defect corrupted, asserted as exact values.
+    assert hit.complemento == ': "A";'
+    assert hit.bairro == "DUCILIA CARONE"
+    # The delimiter was absorbed, so every later field shifted too.
+    assert hit.cep == "36520000"
+    assert hit.uf == "MG"
+    assert hit.correio_eletronico == "VISAO@KONET.COM.BR"
 
 
-def test_real_doubled_quote_records_match_rfc4180_field_for_field(tmp_path):
+def test_real_doubled_quote_records_match_rfc4180_field_for_field(spark, tmp_path):
     """All 30 fields of six verbatim part-6 records, against Python's ``csv`` as
     the RFC 4180 oracle. Covers every doubled-quote position the real file
     contains: mid-text, beside a cp1252 high byte, three in one field, flush
@@ -245,37 +229,33 @@ def test_real_doubled_quote_records_match_rfc4180_field_for_field(tmp_path):
     f = tmp_path / "K3241.K03200Y6.D60613.ESTABELE"
     _write_cp1252_csv(f, records)
 
-    spark = local_session("test-escape-real-records")
-    try:
-        rows = read_csv_batch(spark, str(f), "estabelecimentos").collect()
-        assert len(rows) == len(records), f"record split: {[r.cnpj_basico for r in rows]}"
-        # Diff built by hand, and across all rows before asserting, so a failure
-        # names every offending record and column and prints both values; a bare
-        # list-vs-list assert truncates them and stops at the first bad row.
-        diffs = [
-            f"{row.cnpj_basico}.{c}: got {g!r} want {e!r}"
-            for row in rows
-            for c, g, e in zip(
-                _ESTAB_COLUMNS,
-                [row[col] for col in _ESTAB_COLUMNS],
-                expected[row.cnpj_basico],
-                strict=True,   # all three are the 30 contract columns
-            )
-            if g != e
-        ]
-        assert not diffs, "deviates from RFC 4180 -- " + "; ".join(diffs)
-        # Spot-check the headline values so a broken oracle cannot make this pass.
-        by_key = {r.cnpj_basico: r for r in rows}
-        assert by_key["09730578"].logradouro == 'RUA "I" S/N - ENFRENTE A IGREJA CATÓLICA'
-        assert by_key["09980568"].logradouro == 'QUADRA 40 BLOCO "K" APTº 01'
-        assert by_key["09747664"].complemento == 'QUADRA "02\' LOTE "15"'
-        assert by_key["09921938"].logradouro == 'RUA "D"'
-        assert by_key["10085335"].bairro == '"SUCUPIRA'
-    finally:
-        spark.stop()
+    rows = read_csv_batch(spark, str(f), "estabelecimentos").collect()
+    assert len(rows) == len(records), f"record split: {[r.cnpj_basico for r in rows]}"
+    # Diff built by hand, and across all rows before asserting, so a failure
+    # names every offending record and column and prints both values; a bare
+    # list-vs-list assert truncates them and stops at the first bad row.
+    diffs = [
+        f"{row.cnpj_basico}.{c}: got {g!r} want {e!r}"
+        for row in rows
+        for c, g, e in zip(
+            _ESTAB_COLUMNS,
+            [row[col] for col in _ESTAB_COLUMNS],
+            expected[row.cnpj_basico],
+            strict=True,   # all three are the 30 contract columns
+        )
+        if g != e
+    ]
+    assert not diffs, "deviates from RFC 4180 -- " + "; ".join(diffs)
+    # Spot-check the headline values so a broken oracle cannot make this pass.
+    by_key = {r.cnpj_basico: r for r in rows}
+    assert by_key["09730578"].logradouro == 'RUA "I" S/N - ENFRENTE A IGREJA CATÓLICA'
+    assert by_key["09980568"].logradouro == 'QUADRA 40 BLOCO "K" APTº 01'
+    assert by_key["09747664"].complemento == 'QUADRA "02\' LOTE "15"'
+    assert by_key["09921938"].logradouro == 'RUA "D"'
+    assert by_key["10085335"].bairro == '"SUCUPIRA'
 
 
-def test_lookup_doubled_quote_in_field(tmp_path):
+def test_lookup_doubled_quote_in_field(spark, tmp_path):
     """Section 2.7 on the F1.2 lookup shape. No landed lookup contains a doubled
     quote -- a full byte count of all six shows exactly 4 quotes per record, i.e.
     2 per field and none inside a value -- so this guards the shared option
@@ -287,13 +267,9 @@ def test_lookup_doubled_quote_in_field(tmp_path):
         '"03";": ""A"";"',                  # doubled quote plus an in-value ";"
     ])
 
-    spark = local_session("test-escape-lookup")
-    try:
-        rows = read_csv_batch(spark, str(f), "lookup").collect()
-        assert len(rows) == 3, f"record split: {[r.codigo for r in rows]}"
-        recs = {r.codigo: r.descricao for r in rows}
-        assert recs["01"] == "AÇÃO E TECNOLOGIA"      # unquoting is unchanged
-        assert recs["02"] == 'RUA "I" — SERVIÇOS'
-        assert recs["03"] == ': "A";'
-    finally:
-        spark.stop()
+    rows = read_csv_batch(spark, str(f), "lookup").collect()
+    assert len(rows) == 3, f"record split: {[r.codigo for r in rows]}"
+    recs = {r.codigo: r.descricao for r in rows}
+    assert recs["01"] == "AÇÃO E TECNOLOGIA"      # unquoting is unchanged
+    assert recs["02"] == 'RUA "I" — SERVIÇOS'
+    assert recs["03"] == ': "A";'
