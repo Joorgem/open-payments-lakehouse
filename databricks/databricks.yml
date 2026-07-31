@@ -14,25 +14,22 @@ targets:
     mode: development
     default: true
 
+# NOTE for whoever next needs to run something from `scripts/` as a job task:
+# the bundle root is `databricks/`, so `scripts/` is OUTSIDE the sync root and
+# `bundle validate` refuses such a `python_file` with "is not contained in sync
+# root path". The F1.4a backfill got there by temporarily adding
+#
+#     sync:
+#       paths: [".", "../scripts"]
+#
+# which moves the sync root to the repo root; the CLI then recomputes every
+# resource's python_file for the new layout (`files/databricks/src/...` instead
+# of `files/src/...`), verified with `bundle validate --output json`. It was
+# reverted with the job resource it existed for -- see
+# docs/f1.4a-migration-evidence.md -- because the permanent jobs should not carry
+# that layout indirection for a one-off that has already run.
 include:
   - resources/*.yml
-
-# TEMPORARY, for the F1.4a migration only -- removed in the same commit that
-# removes resources/backfill_snapshot_columns_job.yml.
-#
-# The bundle root is `databricks/`, so `scripts/` sits OUTSIDE the sync root and
-# `bundle validate` refuses a `python_file` pointing at it ("is not contained in
-# sync root path"). Listing `../scripts` here moves the sync root up to the repo
-# root so the one-off backfill script can be a real job task.
-#
-# It is not left in place because it changes the workspace file layout for EVERY
-# resource (`files/databricks/src/...` instead of `files/src/...`), and the
-# permanent jobs should not carry that indirection for a script that has already
-# run and, by its own month guard, can never usefully run again.
-sync:
-  paths:
-    - .
-    - ../scripts
 
 artifacts:
   opl_wheel:
