@@ -184,41 +184,53 @@ def _unprovable_ref_date() -> Column:
     return F.col(SNAPSHOT_REF_DATE_COLUMN).isNull()
 
 
+# --- WHY THE RULE SETS BELOW ARE ORDERED THE WAY THEY ARE --------------------
+#
+# Module level rather than inside `rules_for`'s docstring, for a boring reason
+# with a real consequence: this prose grew past the point where the function
+# reading it stayed under the project's 50-line limit. It is the reasoning, not
+# the function, so it lives here and the function stays a dict and a return.
+#
+# ORDER IS THE CONTRACT, not a detail, because only the FIRST matching rule's
+# reason is recorded. Required-field rules run first as a group, then the shape
+# check, then the encoding check: a row missing a key field is described by what
+# is MISSING rather than by the shape of what is left, and a row whose bytes are
+# damaged is only reported as such once nothing simpler explains it. Pinned per
+# contract in tests/bronze/test_rules.py.
+#
+# One consequence of grouping, called out because it changed a live table's
+# output: estabelecimentos used to run `bad_cnpj_basico_length` BETWEEN
+# `null_or_empty_cnpj_basico` and `null_or_empty_cnpj_ordem`. A row that is both
+# short in cnpj_basico and blank in a later required column now reports the blank
+# column. Both reasons are true of that row and it is rejected either way -- a
+# reporting change, not a gate change.
+#
+# `unprovable_snapshot_ref_date` is LAST, below even the encoding check, and for
+# a reason the position alone does not carry: it is the only rule here that
+# describes the FILE rather than the row, so when it fires it fires for every row
+# of that file at once. Ranked any higher it would become the reason printed
+# across a whole quarantine, burying the per-row defects -- a truncated record, a
+# lost byte -- that a triager can act on. A row is judged by what is wrong with
+# IT, and only then by where it came from.
+#
+# NOT ON LOOKUP, which is a scope line rather than a claim that lookup cannot
+# drift: its rows carry `_snapshot_ref_date` too, so a lookup filename changing
+# shape still goes unremarked. KNOWN GAP, and the reason it is a gap rather than
+# a decision is worth being exact about -- the measurement that would justify
+# closing it already exists (7,408 rows of bronze_cnpj_lookup, null_ref_date=0,
+# same evidence doc). What holds it open is only that the lookup set is pinned
+# byte-for-byte to what F1.2 shipped, and F1.4b's scope is the three tables it
+# introduces. Adding a new way for the one table already in production to go red
+# belongs in a change that says so, not as a rider on this one.
+
+
 def rules_for(table: str) -> list[tuple[str, Callable[[], Column]]]:
     """The ordered rule set for `table`, first-match-wins. KeyError if unknown.
 
-    ORDER IS THE CONTRACT, not a detail, because only the FIRST matching rule's
-    reason is recorded. Required-field rules run first as a group, then the
-    shape check, then the encoding check: a row missing a key field is described
-    by what is MISSING rather than by the shape of what is left, and a row whose
-    bytes are damaged is only reported as such once nothing simpler explains it.
-    Pinned per contract in tests/bronze/test_rules.py.
-
-    One consequence of grouping, called out because it changed a live table's
-    output: estabelecimentos used to run `bad_cnpj_basico_length` BETWEEN
-    `null_or_empty_cnpj_basico` and `null_or_empty_cnpj_ordem`. A row that is both
-    short in cnpj_basico and blank in a later required column now reports the
-    blank column. Both reasons are true of that row and it is rejected either
-    way -- a reporting change, not a gate change.
-
-    `unprovable_snapshot_ref_date` is LAST, below even the encoding check, and for
-    a reason the position alone does not carry: it is the only rule here that
-    describes the FILE rather than the row, so when it fires it fires for every
-    row of that file at once. Ranked any higher it would become the reason printed
-    across a whole quarantine, burying the per-row defects -- a truncated record, a
-    lost byte -- that a triager can act on. A row is judged by what is wrong with
-    IT, and only then by where it came from."""
+    Order is part of the contract -- see the comment block above this function
+    for what each set's ordering buys and why `unprovable_snapshot_ref_date` is
+    last. Pinned per contract in tests/bronze/test_rules.py."""
     tables = {
-        # NOT on lookup, and this is a scope line rather than a claim that lookup
-        # cannot drift: its rows carry `_snapshot_ref_date` too, so a lookup
-        # filename changing shape still goes unremarked. KNOWN GAP, and the reason
-        # it is a gap rather than a decision is worth being exact about -- the
-        # measurement that would justify closing it already exists (7,408 rows of
-        # bronze_cnpj_lookup, null_ref_date=0, same evidence doc). What holds it
-        # open is only that the lookup set is pinned byte-for-byte to what F1.2
-        # shipped, and F1.4b's scope is the three tables it introduces. Adding a
-        # new way for the one table already in production to go red belongs in a
-        # change that says so, not as a rider on this one.
         "lookup": [
             *_required_rules("lookup"),
             ("encoding_replacement_char", _encoding_check("lookup")),

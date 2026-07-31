@@ -20,53 +20,65 @@ import sys
 
 from pyspark.sql import SparkSession
 
-from opl.bronze.dq import evaluate, split
+from opl.bronze.dq import evaluate, skip_notice, split
 from opl.bronze.promote import batch_rows, require_batch_id, rows_of_batch, tally
 from opl.bronze.registry import table_spec
 from opl.bronze.rules import rules_for
 from opl.config import DEFAULT
 
+# --- WHY `main` RESOLVES WHAT IT RESOLVES, IN THE ORDER IT DOES --------------
+#
+# Moved out of the function rather than deleted: this is reasoning about the
+# task, not part of it, and inside `main` it was most of a function already past
+# the project's 50-line limit.
+#
+# ARGUMENTS: table first, then the batch id -- both refused before Spark, for the
+# reason the batch-id guard documents: an operator should not wait for a
+# serverless session to be told which argument is wrong. An absent argument is
+# passed through as "" rather than indexed, the same way promote_batch.py does
+# it, because `args[0]` on an empty argv answered a task run without parameters
+# with a bare `IndexError: list index out of range`, which names a list index and
+# not the missing job parameter.
+#
+# COORDINATES: staging, quarantine and rule set all come off the ONE resolved
+# spec, so the table this reads a batch from and the table it writes that batch's
+# rejects to cannot drift apart -- the drift that "sent estab triagers to a table
+# full of unrelated F1.2 lookup rows".
+#
+# IDEMPOTENCE, for the same reason the promote has it: max_retries is 0, so no
+# automatic retry can re-run this task, but an explicit Repair (or a re-run of
+# this task alone) re-executes it under the SAME run id -- and the append was
+# bare, so it put the identical reject rows in quarantine a second time. A triager
+# then sees 2 rows for 1 damaged record and cannot tell duplication from two real
+# defects, and ADR 0006 designates this table as the measured history a rate-based
+# gate will be built on, so the duplicates feed a metric.
+#
+# It is keyed on the row count for this `_batch_id`, not on "are there any rows",
+# for the reason `opl.bronze.promote.plan_promotion` documents at length: a count
+# read as a boolean cannot see a partial batch. Not Delta's `txnAppId`/
+# `txnVersion` idempotent-write options either: those skip any write whose version
+# is <= the last one recorded for the app id, which would silently drop the
+# rejects of any batch processed out of order.
+
 
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
-    # Table first, then the batch id -- both refused before Spark, for the reason
-    # the batch-id guard documents: an operator should not wait for a serverless
-    # session to be told which argument is wrong. An absent argument is passed
-    # through as "" rather than indexed, the same way promote_batch.py does it,
-    # because `args[0]` on an empty argv answered a task run without parameters
-    # with a bare `IndexError: list index out of range`, which names a list index
-    # and not the missing job parameter.
-    #
-    # Staging, quarantine and rule set all come off the ONE resolved spec, so the
-    # table this reads a batch from and the table it writes that batch's rejects
-    # to cannot drift apart -- the drift that "sent estab triagers to a table full
-    # of unrelated F1.2 lookup rows".
     spec = table_spec(args[0] if args else "")
     batch_id = require_batch_id(args[1] if len(args) > 1 else "", action="gate")
     spark = SparkSession.builder.getOrCreate()
     quarantine = DEFAULT.table(spec.quarantine)
     rules = rules_for(spec.contract)
-    batch = batch_rows(spark, DEFAULT.table(spec.staging), batch_id)
+    staging = DEFAULT.table(spec.staging)
+    batch = batch_rows(spark, staging, batch_id)
+    _announce_skipped_rules(batch.columns, rules, staging)
     # ONE pass for both counts. This task used to compute the split three times
     # over a batch of up to ~29M rows -- `bad.write`, `bad.count()`, `good.count()`
     # -- for the two things it actually does: count both sides and write the
     # rejects. `split` below re-derives the reject column, which is a second plan,
     # not a second scan of an already-counted frame.
     good_count, bad_count = tally(evaluate(batch, rules))
-    # IDEMPOTENCE, for the same reason the promote has it: max_retries is 0, so no
-    # automatic retry can re-run this task, but an explicit Repair (or a re-run of
-    # this task alone) re-executes it under the SAME run id -- and the append was
-    # bare, so it put the identical reject rows in quarantine a second time. A
-    # triager then sees 2 rows for 1 damaged record and cannot tell duplication
-    # from two real defects, and ADR 0006 designates this table as the measured
-    # history a rate-based gate will be built on, so the duplicates feed a metric.
-    #
-    # Keyed on the row count for this `_batch_id`, not on "are there any rows",
-    # for the reason `opl.bronze.promote.plan_promotion` documents at length: a
-    # count read as a boolean cannot see a partial batch. Not Delta's
-    # `txnAppId`/`txnVersion` idempotent-write options either: those skip any
-    # write whose version is <= the last one recorded for the app id, which would
-    # silently drop the rejects of any batch processed out of order.
+    # Idempotent append, keyed on the count already there -- see the comment block
+    # above this function for why a count and not a boolean.
     already = rows_of_batch(spark, quarantine, batch_id)
     if already == 0:
         _, bad = split(batch, rules)
@@ -90,6 +102,24 @@ def main(argv: list[str] | None = None) -> None:
         )
     print(f"dq_gate_batch: batch={batch_id} good={good_count} bad={bad_count}")
     _publish("bad_row_count", bad_count)
+
+
+def _announce_skipped_rules(columns, rules, source: str) -> None:
+    """Say which rules will NOT run against this batch, before anything is counted
+    or written. Nothing at all when they all run.
+
+    A rule whose declared column the frame does not carry is SKIPPED, correctly --
+    but a gate that quietly stops applying one of its rules and then reports the
+    batch clean is indistinguishable, in this log, from a gate that applied it and
+    found nothing. That is how a control disappears rather than fails.
+
+    Printed rather than raised: the pre-F1.4a staging shape is a legitimate input
+    (the documented rebuild procedure leaves staging in place), so the silence was
+    the defect, not the skip. Emitted HERE and not in `dq.evaluate`, which runs in
+    unit tests on bare frames constantly and must not become noisy."""
+    notice = skip_notice(columns, rules, task="dq_gate_batch", source=source)
+    if notice is not None:
+        print(notice)
 
 
 def _publish(key: str, value: int) -> None:

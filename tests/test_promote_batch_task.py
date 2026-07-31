@@ -23,6 +23,7 @@ from opl.bronze.promote import (
 )
 from opl.bronze.registry import UnknownTable
 from opl.bronze.rules import rules_for
+from opl.contracts.cnpj_schemas import TABLES
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "databricks" / "src" / "promote_batch.py"
 _spec = importlib.util.spec_from_file_location("promote_batch_task", _SCRIPT)
@@ -31,18 +32,36 @@ task = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(task)
 
 
+class FakeStagingRead:
+    """`spark.read.table(t)` answering only `.columns`.
+
+    The task asks the staging table what columns it has so it can report the
+    rules that will not run against it. Schema only: no rows, no scan, and no
+    `.count()` -- the frame the promote itself works on is built inside
+    `promote_batch`, which this file stubs out."""
+
+    def __init__(self, columns: list[str]) -> None:
+        self.columns = columns
+        self.asked: list[str] = []
+
+    def table(self, name: str) -> FakeStagingRead:
+        self.asked.append(name)
+        return self
+
+
 class FakeSpark:
     """Records the SQL the task issues. Nothing else of a session is used."""
 
-    def __init__(self) -> None:
+    def __init__(self, staging_columns: list[str] | None = None) -> None:
         self.statements: list[str] = []
+        self.read = FakeStagingRead([] if staging_columns is None else staging_columns)
 
     def sql(self, statement: str) -> None:
         self.statements.append(statement)
 
 
-def _stub_session(monkeypatch) -> FakeSpark:
-    spark = FakeSpark()
+def _stub_session(monkeypatch, staging_columns: list[str] | None = None) -> FakeSpark:
+    spark = FakeSpark(staging_columns)
     monkeypatch.setattr(
         task, "SparkSession",
         SimpleNamespace(builder=SimpleNamespace(getOrCreate=lambda: spark)),
@@ -278,3 +297,63 @@ def test_the_lookup_promote_appends_a_batch_rather_than_overwriting(monkeypatch)
 
     assert seen["batch_id"] == "777"  # scoped to one batch, not the whole table
     assert seen["in_flow"] is True
+
+
+# --- the skipped rule must be audible in the run log -------------------------
+
+# The live `bronze_cnpj_estab_staging` shape: 30 contract columns plus the 5 audit
+# columns `add_audit_columns` wrote BEFORE F1.4a added the two snapshot ones.
+# Bronze is 37. No estabelecimentos ingest has run since F1.4a, so this is what a
+# repromote of a pre-F1.4a batch evaluates today -- not a hypothetical frame.
+_PRE_F14A_STAGING_COLUMNS = [
+    *TABLES["estabelecimentos"],
+    "_ingested_at", "_record_source", "_batch_id", "_source_file", "_rescued_data",
+]
+
+
+def test_a_rule_skipped_for_a_missing_column_is_named_in_the_run_log(monkeypatch, capsys):
+    """The promote's half, and the one where the silence actually costs something.
+
+    This is the reachable silent path in full: `plan_promotion`'s docstring
+    records that the documented rebuild drops bronze while LEAVING staging, so a
+    repromote of a pre-F1.4a batch evaluates a 35-column frame, `REQUIRES_COLUMN`
+    correctly skips `unprovable_snapshot_ref_date`, every row reads clean, and the
+    rows are appended into 37-column bronze where Delta fills the absent column
+    with NULL. The rule exists to refuse exactly that NULL. Nothing failed --
+    the control simply was not there, and the log said nothing about it.
+
+    It cannot be an error: the rebuild procedure is documented and legitimate, and
+    raising would make it unrunnable. So the fix is that the run log says which
+    rule did not run, over which column, and what the rows carry as a result."""
+    assert len(_PRE_F14A_STAGING_COLUMNS) == 35, "the shape measured on the live table"
+    spark = _stub_session(monkeypatch, _PRE_F14A_STAGING_COLUMNS)
+    _record_promote(monkeypatch, _result(PromoteOutcome.APPENDED, appended=7))
+
+    task.main(["estabelecimentos", "999"])
+
+    out = capsys.readouterr().out
+    assert "unprovable_snapshot_ref_date" in out
+    assert "_snapshot_ref_date" in out
+    assert "workspace.default.bronze_cnpj_estab_staging" in out
+    assert "NULL" in out
+    # The schema was read from the staging table the promote reads its rows from,
+    # not from some other coordinate -- a notice about the wrong table would be
+    # worse than no notice.
+    assert spark.read.asked == ["workspace.default.bronze_cnpj_estab_staging"]
+    # And the promote still did its job and said so.
+    assert "appended 7 rows" in out
+    assert len(spark.statements) == 3
+
+
+def test_a_staging_table_carrying_every_column_prints_no_notice(monkeypatch, capsys):
+    """Silence on the healthy path -- every post-F1.4a ingest. A line printed by
+    every run is one an operator learns to scroll past."""
+    _stub_session(monkeypatch, [*_PRE_F14A_STAGING_COLUMNS,
+                                "_snapshot_month", "_snapshot_ref_date"])
+    _record_promote(monkeypatch, _result(PromoteOutcome.APPENDED, appended=7))
+
+    task.main(["estabelecimentos", "999"])
+
+    out = capsys.readouterr().out
+    assert "unprovable_snapshot_ref_date" not in out
+    assert "NOT CHECKED" not in out

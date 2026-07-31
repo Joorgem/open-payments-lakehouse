@@ -115,6 +115,12 @@ def _gate_quarantine(table: str) -> str:
     frame.format = lambda fmt: frame
     frame.mode = lambda mode: frame
     frame.saveAsTable = written.append
+    # The gate asks the batch frame which columns it has, so it can name the rules
+    # that will not run against it. Empty is the honest answer for a double that
+    # carries no schema, and it makes this test exercise the noisy path -- which is
+    # fine here: what is locked below is WHICH TABLE the gate writes to, and a
+    # notice on stdout does not move that.
+    frame.columns = []
     gate.SparkSession = SimpleNamespace(builder=SimpleNamespace(getOrCreate=lambda: None))
     gate.batch_rows = lambda spark, tbl, batch_id: frame
     gate.evaluate = lambda df, rules=None: df
