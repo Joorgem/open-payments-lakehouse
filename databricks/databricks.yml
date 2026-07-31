@@ -17,6 +17,23 @@ targets:
 include:
   - resources/*.yml
 
+# TEMPORARY, for the F1.4a migration only -- removed in the same commit that
+# removes resources/backfill_snapshot_columns_job.yml.
+#
+# The bundle root is `databricks/`, so `scripts/` sits OUTSIDE the sync root and
+# `bundle validate` refuses a `python_file` pointing at it ("is not contained in
+# sync root path"). Listing `../scripts` here moves the sync root up to the repo
+# root so the one-off backfill script can be a real job task.
+#
+# It is not left in place because it changes the workspace file layout for EVERY
+# resource (`files/databricks/src/...` instead of `files/src/...`), and the
+# permanent jobs should not carry that indirection for a script that has already
+# run and, by its own month guard, can never usefully run again.
+sync:
+  paths:
+    - .
+    - ../scripts
+
 artifacts:
   opl_wheel:
     type: whl

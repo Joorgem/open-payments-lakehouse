@@ -1,0 +1,53 @@
+# databricks/resources/backfill_snapshot_columns_job.yml
+# TEMPORARY operator job, added for the F1.4a migration and REMOVED in the commit
+# that follows the successful run. It is in the bundle rather than a one-time
+# `databricks jobs submit` because this is a portfolio repo: a resource is
+# reviewable, re-deployable and shows up in the deployment state, where a submit
+# is a shell invocation that exists only in somebody's scrollback.
+#
+# WHY IT IS TEMPORARY. `scripts/backfill_snapshot_columns.py` is a one-off by
+# construction -- it refuses any month the table does not already carry, so after
+# the run it can only ever repeat itself. A job resource that can only repeat a
+# completed one-off is a button whose only remaining function is to rewrite a
+# 71.9M-row table, and leaving it deployed beside the real ingestion jobs would
+# mean the bundle no longer describes the pipeline.
+#
+# HOW IT WAS RUN:
+#     databricks bundle run backfill_snapshot_columns -t free --profile opl-free \
+#       --params table=estabelecimentos,month=2026-06
+#
+# max_retries: 0, like every task in this bundle. It matters more here: the script
+# prints the Delta RESTORE version BEFORE it writes, and an automatic retry would
+# baseline its own row count off whatever the first attempt left behind -- exactly
+# the unsafe re-run the script's own failure message warns against.
+resources:
+  jobs:
+    backfill_snapshot_columns:
+      name: opl-backfill-snapshot-columns
+      parameters:
+        - name: table
+          # A real table rather than a sentinel, for the same reason
+          # repromote_batch_job.yml gives: `table_spec` refuses anything
+          # unregistered before Spark, and the month below cannot be defaulted
+          # into anything harmful because the script refuses a month the table
+          # does not already carry.
+          default: "estabelecimentos"
+        - name: month
+          # NOT a sentinel and NOT omitted: `require_month` refuses a blank, and
+          # `refuse_contradicting_month` refuses any month other than the one the
+          # table already carries. Both refusals land before the write.
+          default: "2026-06"
+      tasks:
+        - task_key: backfill
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../../scripts/backfill_snapshot_columns.py
+            parameters: ["{{job.parameters.table}}", "{{job.parameters.month}}"]
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl
