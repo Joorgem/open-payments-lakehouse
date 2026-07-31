@@ -382,4 +382,33 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # BARE CALL, NOT `raise SystemExit(main())`, and the difference is not stylistic
+    # -- it decides whether a SUCCESSFUL run is reported as a success.
+    #
+    # This script runs as a Databricks `spark_python_task` (that is what the module
+    # docstring's "Run ON Databricks" means), and serverless executes the file
+    # inside an IPython shell. There, SystemExit is an uncaught exception rather
+    # than a process exit: on 2026-07-31 this exact line took a run that had
+    # printed every expected number and its own "DONE" line and reported it as
+    #     Task backfill failed ... SystemExit: 0
+    # with life_cycle_state INTERNAL_ERROR.
+    #
+    # It got worse than a misleading status. INTERNAL_ERROR is a harness-level
+    # error, not a clean task failure, so Databricks RETRIED the task -- past
+    # `max_retries: 0`, which does not apply to it -- and the 71.9M-row overwrite
+    # ran a second time. It was harmless only by luck of design:
+    # `refuse_contradicting_month` permits a repeat with the SAME month and the
+    # write is idempotent. For a script whose failure message warns that a second
+    # run baselines its row count off whatever the first left behind, an exit
+    # convention that can silently trigger that second run is a defect.
+    #
+    # Every task in `databricks/src/` already calls `main()` bare, which is why
+    # none of them has ever shown this. `scripts/extract_cnpj.py` keeps
+    # `raise SystemExit(main())` correctly: it is a LOCAL CLI, where SystemExit is
+    # the exit code. This file is the one script in `scripts/` that runs on the
+    # workspace, so it follows the workspace's convention instead.
+    #
+    # Errors are unaffected: `main` RAISES (ValueError/RuntimeError) rather than
+    # exiting, which is what carries the numbers into the run output -- see the
+    # module docstring and `databricks/src/fail_on_dq.py`.
+    main()
