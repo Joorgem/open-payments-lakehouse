@@ -14,9 +14,13 @@ at all: a 6.78 GB object would upload fine today.
 
 What keeps the design is arithmetic, not a limit. Part 0's ZIP is
 2,128,818,559 B against 6,780,467,695 B unzipped, so uploading compressed moves
-under a third of the bytes over a link measured at ~67 MB/min -- roughly 53 min
-saved on that part alone -- and the unzip runs on the cluster where the bytes
-already are. It also keeps the Volume from holding both copies of every giant.
+under a third of the bytes -- **~69 min saved on that part alone**, which is ADR
+0007's figure and is deliberately NOT re-derived here: this comment carried its own
+estimate ("roughly 53 min") against the ADR's ~32 min for the same file at the same
+~67 MB/min, one rate and two byte counts producing two answers. The ADR owns the
+minutes now; if the measured rate changes, it changes in one place. The unzip also
+runs on the cluster where the bytes already are, and this keeps the Volume from
+holding both copies of every giant.
 
 The logic is pure ``zipfile`` over directories: no Spark/Java, unit-tested
 locally with tmp dirs. Idempotent -- a zip whose inner file already exists at

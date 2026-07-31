@@ -114,10 +114,19 @@ Two consequences were followed through rather than left implicit:
   forced by the 5 GiB single-PUT ceiling of the 0.40 pin; that ceiling is gone
   and a 6.78 GB object would upload fine today. Uploading compressed stays
   because part 0 is 2,128,818,559 B against 6,780,467,695 B unzipped — under a
-  third of the bytes, ~53 min saved on that part alone — and because the Volume
-  would otherwise hold both copies. Comments in `opl.bronze.unzip_volume`,
-  `opl.extraction.giants` and `scripts/extract_giants.py` were rewritten to give
-  the surviving reason rather than the retired one.
+  third of the bytes — and because the Volume would otherwise hold both copies.
+  At the same ~67 MB/min the timeout above is sized with, that is ~101 min for the
+  CSV against ~32 min for the ZIP, so **~69 min saved on that part alone**.
+  Comments in `opl.bronze.unzip_volume`, `opl.extraction.giants` and
+  `scripts/extract_giants.py` were rewritten to give the surviving reason rather
+  than the retired one.
+  **The minutes are stated once, here, and cited rather than re-derived there.**
+  This bullet first said "~53 min" while the timeout bullet above derived "~32 min"
+  from the same rate and the same two byte counts — two independent estimates where
+  only one could be right, and no throughput reproduces 53 (it would need
+  ~88 MB/min, which contradicts the ~32 min sitting six lines up). Same failure mode
+  as a duplicated guard: the second copy is not wrong on its own, it is wrong by
+  drifting.
 - **What this does not settle.** Multipart has not yet been exercised against
   this workspace at scale — F1.4b's ~15 GB is the first real run, and it is the
   validation, not a repeat of something already measured. Per-part retry is
