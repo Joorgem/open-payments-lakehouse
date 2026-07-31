@@ -134,29 +134,37 @@ def test_upload_zips_takes_the_registry_subdir_and_not_a_free_string():
 
 def test_landing_zips_for_an_unregistered_table_is_refused_before_any_download(
         tmp_path, monkeypatch):
-    """Empresas and Socios have FILE_GROUPS entries and no registry entry until
-    F1.4b. Landing their zips would put ~20 GB in a Free Edition Volume under a
-    directory name no `unzip_table.py` run can name -- the waste this branch just
-    reclaimed 16.7 GB of. Refused before the first byte."""
+    """Landing zips for a group with no bronze table would put gigabytes in a Free
+    Edition Volume under a directory name no `unzip_table.py` run can name -- the
+    waste this branch reclaimed 16.7 GB of. Refused before the first byte.
+
+    SIMPLES, because F1.4b registered Empresas and Socios and this test used to ride
+    on their absence. The property is about a FILE_GROUPS entry with no registry
+    entry, not about those two tables, and Simples is that case today: a real RFB
+    group, a real contract in `cnpj_schemas.TABLES`, no bronze table. When Simples is
+    registered, this test needs the next such group -- and if there is none, the
+    property has no witness left and the test should be retired deliberately rather
+    than repointed at something that does not demonstrate it."""
     monkeypatch.setattr(cli, "upload_client", lambda **_auth: object())
     monkeypatch.setattr(cli, "upload_zips", lambda *_a, **_kw: pytest.fail("uploaded"))
-    client = FakeClient(present_names={"Empresas1.zip"})
+    client = FakeClient(present_names={"Simples0.zip"})
 
-    with pytest.raises(UnknownTable, match="empresas"):
-        cli.run(client, "2026-07", "Empresas", [1], str(tmp_path), upload=True)
+    with pytest.raises(UnknownTable, match="simples"):
+        cli.run(client, "2026-07", "Simples", [0], str(tmp_path), upload=True)
 
     assert client.downloaded == []
 
 
 def test_an_unregistered_table_still_downloads_with_upload_off(tmp_path, monkeypatch):
     """The registry answers "where in the VOLUME", so a download-only capture never
-    asks it -- which is what keeps Empresas and Socios fetchable before F1.4b
-    registers them."""
+    asks it -- which is what keeps a group fetchable before anything registers its
+    table. Simples for the reason given above: it is the unregistered group now that
+    Empresas and Socios are entries."""
     monkeypatch.setattr(cli, "upload_client", lambda **_auth: pytest.fail("built"))
-    client = FakeClient(present_names={"Empresas1.zip"})
+    client = FakeClient(present_names={"Simples0.zip"})
 
-    assert cli.run(client, "2026-07", "Empresas", [1], str(tmp_path), upload=False) == 0
-    assert client.downloaded == ["2026-07/Empresas1.zip"]
+    assert cli.run(client, "2026-07", "Simples", [0], str(tmp_path), upload=False) == 0
+    assert client.downloaded == ["2026-07/Simples0.zip"]
 
 
 def test_parse_parts_defaults_to_every_part():
