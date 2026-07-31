@@ -20,7 +20,23 @@ requires-python = ">=3.12,<3.13"
 # egress/serverless install budget can't complete that download). Local
 # dev/CI installs it via the 'spark' extra below.
 dependencies = [
-    "databricks-sdk==0.40.0",
+    # Floor: 0.42.0 fixed databricks-sdk-py#878 (<=0.41.0 rewound the request
+    # body only inside `_perform`'s `if error is not None` branch, so a raised
+    # ConnectionError/Timeout skipped the rewind and the retry PUT only the
+    # remainder -- the silently short object of F1.3 incident 1). The floor is
+    # set far above that, at a current release, because ADR 0007 adopts the
+    # multipart upload path deliberately; see that ADR for the version bisect.
+    # Ceiling is the NEXT MINOR, not a wide range, and that is the point: in the
+    # 0.40 -> 0.123 span we bisected, minor releases silently rewrote the upload
+    # path three times (0.45.0 introduced multipart above 5 MiB; 0.69.0 rewrote
+    # it as parallel presigned parts; 0.72.0 raised the threshold to 50 MiB).
+    # None of those were breaking changes by the project's own reckoning -- #878
+    # itself shipped under "Internal Changes" -- so a permissive ceiling means
+    # absorbing an upload-semantics change without noticing, which is precisely
+    # how F1.3 lost 1.37 GB of a part. Raising this bound is therefore a
+    # deliberate act that requires re-reading the upload path and re-checking
+    # UPLOAD_RETRY_TIMEOUT_SECONDS in opl.extraction.landing against it.
+    "databricks-sdk>=0.123.0,<0.124.0",
     "requests==2.32.3",
 ]
 

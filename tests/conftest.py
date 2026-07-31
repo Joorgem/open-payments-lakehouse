@@ -1,5 +1,5 @@
 # tests/conftest.py
-"""Shared hermetic doubles for the Databricks Files API.
+"""Shared hermetic doubles for the Databricks Files API, plus the Spark session.
 
 Every test that exercises an upload path uses this double rather than a bare
 ``mock.Mock()``: a Mock auto-creates whatever attribute is asked of it, so a
@@ -12,6 +12,34 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.fixture(scope="session")
+def spark():
+    """The one local Delta-enabled session the Spark tests share.
+
+    Wraps ``opl.spark.local_session`` rather than building a second session:
+    that factory documents itself as mirroring what Databricks applies on DBR
+    16.4, and a copy of its config here would be a copy that drifts. Everything
+    the suite needs declared -- bounded parallelism, an explicit driver memory,
+    and the Python worker interpreter -- is declared THERE, for that reason.
+    Imported inside the fixture so that collecting the Spark-free tests does not
+    require pyspark to be installed.
+
+    SESSION-SCOPED, AND THIS FIXTURE IS THE ONLY THING ALLOWED TO STOP IT. The
+    JVM behind ``local_session`` is process-wide: ``getOrCreate`` hands every
+    caller the SAME session, so a test that built "its own" via ``local_session``
+    and stopped it in a ``finally`` was stopping the one the rest of the suite
+    was still using. That was safe only by alphabetical accident -- the stoppers
+    happened to sort before their victims -- and the symptom when the accident
+    ends is a py4j error in an unrelated test, naming neither the stop nor the
+    module that made it. Every Spark test now takes this fixture instead.
+    """
+    from opl.spark import local_session
+
+    session = local_session("test-suite")
+    yield session
+    session.stop()
 
 
 class FakeFilesApi:

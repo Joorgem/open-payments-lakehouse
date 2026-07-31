@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from opl.bronze.registry import LANDING_LOCAL, spec_for_contract
+from opl.config import DEFAULT
 from opl.contracts.cnpj_schemas import FILE_GROUPS
 from opl.extraction.cnpj_source import (
     RECORTE_GROUPS,
@@ -13,12 +15,7 @@ from opl.extraction.cnpj_source import (
     WEBDAV_BASE,
     expected_files,
 )
-from opl.extraction.landing import (
-    LANDING_VOLUME_DIR,
-    unzip_single,
-    upload_client,
-    upload_to_volume,
-)
+from opl.extraction.landing import unzip_single, upload_client, upload_to_volume
 from opl.extraction.webdav import WebDavClient
 
 
@@ -42,6 +39,67 @@ def _parse_groups(raw: str | None) -> list[str] | None:
     return names
 
 
+def _landing_dir(group: str, month: str) -> str:
+    """The Volume directory `group`'s inner file must be PUT into.
+
+    THROUGH THE REGISTRY, because this function is the PRODUCER of the directory
+    the lookup's Auto Loader reads. It did not exist until the F1.4a review: the
+    target was `landing_cnpj_root/<month>`, the month ROOT, which is where the six
+    lookup CSVs used to sit loose. Task 8 moved them into `lookups/` and deleted
+    the `pathGlobFilter` that had kept the stream out of its neighbours' files --
+    with a one-off migration script, leaving this producer pointed at the old
+    place. The next `extract_cnpj.py --month 2026-07` would therefore have landed
+    the six files where `bronze_lookup_stream` no longer looks, and
+    `bronze_lookup_ingest` would have reported SUCCESS having ingested zero rows:
+    an empty source dir is indistinguishable from nothing-new-to-read, which is
+    the hazard this branch recorded and believed it had closed.
+
+    `FILE_GROUPS[group]["table"]` is a CONTRACT key, so the resolution goes through
+    `spec_for_contract` and not `table_spec` -- see that function for the F1.4b
+    paste it refuses.
+
+    NO FALLBACK for a spec whose `subdir` is not a usable directory name, and none
+    is possible: `registry._assert_subdirs_are_single_path_components` refuses such
+    a spec at IMPORT, `""` and `"."` by name, precisely because both resolve
+    `landing_table(...)` back onto the month root. A branch here would be a second
+    route to the state that guard exists to make unreachable.
+
+    A group whose table does not land LOCAL is refused rather than landed: the
+    landing mode is the registry's answer to HOW a table's bytes reach the Volume,
+    and this script is the LOCAL producer (unzip on the extraction host, PUT the
+    inner file). Symmetric to `extract_giants.py` refusing a single-part group, and
+    to `unzip_table.py` / `bronze_ingest.py` refusing anything that is not zips."""
+    spec = spec_for_contract(FILE_GROUPS[group]["table"])
+    if spec.landing != LANDING_LOCAL:
+        raise ValueError(
+            f"{group} feeds {spec.name}, which lands as {spec.landing!r}, not "
+            f"{LANDING_LOCAL!r} -- this script unzips locally and PUTs the inner "
+            "file, which for a zips-landed table would send the multi-gigabyte "
+            "extract over the wire instead of the third of the bytes its zip is, "
+            "and would skip the in-Volume unzip the job flow expects. Use "
+            "scripts/extract_giants.py for it, or --no-upload to download only."
+        )
+    return DEFAULT.landing_table(spec.subdir, month)
+
+
+def _landing_dirs_by_file(groups: list[str], month: str) -> dict[str, str]:
+    """Every expected filename mapped to the Volume dir its inner file lands in.
+
+    Resolved for EVERY group up front, not per file inside the download loop: an
+    unregistered group is a configuration answer that will be the same for all of
+    its files, and inside the loop the `except Exception` would turn it into a
+    per-file ERROR line only after the bytes were already on the wire -- over a
+    link ADR 0003 measured at ~50% transient 500s, for payloads up to Simples'
+    several-GB inner CSV. Bad input is refused before the work starts, the same
+    ruling `require_month` holds for the job tasks."""
+    out: dict[str, str] = {}
+    for group in groups:
+        volume_dir = _landing_dir(group, month)
+        for fname in expected_files([group]):
+            out[fname] = volume_dir
+    return out
+
+
 def run(
     client,
     month: str,
@@ -62,7 +120,15 @@ def run(
           download/unzip/upload step raised.
         2 if require_complete is set and the month is incomplete (no
           downloads are attempted in that case).
+
+    Raises before the first network call if any group has no landing dir.
     """
+    # BEFORE the listing, so a group with nowhere to land costs no request at all.
+    # Only when uploading: the registry answers "where in the VOLUME does this
+    # land", a question a --no-upload capture never asks -- which is what keeps the
+    # full dev recorte of ADR 0003 (Simples included) downloadable while nothing may
+    # be LANDED without a registered home.
+    targets = _landing_dirs_by_file(groups, month) if upload else {}
     entries = {e.name: e for e in client.list_dir(month)}
     expected = expected_files(groups)
     missing = [f for f in expected if f not in entries]
@@ -87,7 +153,7 @@ def run(
             zp = client.download(entry.rel_path, local_dir / fname, expected_size=entry.size)
             inner = unzip_single(zp, local_dir / "unz")
             if w is not None:
-                target = upload_to_volume(w, inner, f"{LANDING_VOLUME_DIR}/{month}")
+                target = upload_to_volume(w, inner, targets[fname])
                 print(f"  landed {fname} -> {target} ({inner.stat().st_size} B)")
             else:
                 print(f"  downloaded+unzipped {fname} -> {inner} ({inner.stat().st_size} B)")
@@ -120,14 +186,24 @@ def main() -> int:
 
     client = WebDavClient(WEBDAV_BASE, SHARE_TOKEN)
 
-    return run(
-        client,
-        args.month,
-        groups,
-        args.dest,
-        upload=not args.no_upload,
-        require_complete=args.require_complete,
-    )
+    try:
+        return run(
+            client,
+            args.month,
+            groups,
+            args.dest,
+            upload=not args.no_upload,
+            require_complete=args.require_complete,
+        )
+    except ValueError as exc:
+        # The only ValueError `run` lets out is the landing-target refusal, raised
+        # before any byte moves (every per-file failure is caught in its loop and
+        # counted). Reported as rc=2 like the unknown-group refusal above, because
+        # it is the same kind of event -- a usage error -- and a traceback is not
+        # what this repo hands an operator. `UnknownTable` is a ValueError by
+        # design, for exactly this: the message is prose meant to be read.
+        print(f"error: {exc}")
+        return 2
 
 
 if __name__ == "__main__":

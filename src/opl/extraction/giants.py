@@ -1,8 +1,12 @@
 # src/opl/extraction/giants.py
 """Giants extraction: download multi-part RFB zips (resumable, mid-stream
 retry via WebDavClient) and land the ZIPs in a UC Volume subdir. ZIPs — not
-CSVs — because the Files API caps single-PUT uploads at 5 GiB and part 0's
-unzipped CSV exceeds it; unzip happens on Databricks (unzip_volume module)."""
+CSVs — because part 0's ZIP is 2,128,818,559 B against 6,780,467,695 B unzipped:
+under a third of the bytes over the wire, and the unzip then runs on the cluster
+where the bytes already are (unzip_volume module). This used to be forced by a
+5 GiB single-PUT ceiling — a property of the old databricks-sdk 0.40 pin, not of
+the Files API — which no longer exists now that ADR 0007 has adopted the
+multipart upload path. The choice survives the reason that created it."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -35,6 +39,13 @@ def download_parts(client: WebDavClient, month: str, group: str, dest_dir: Path,
 
 
 def upload_zips(w: WorkspaceClient, local_paths: list[Path], cfg: OplConfig,
-                table: str, month: str) -> list[str]:
-    volume_dir = cfg.landing_zips(table, month)
+                subdir: str, month: str) -> list[str]:
+    """PUT each zip into `cnpj/<month>/zips/<subdir>`.
+
+    `subdir` is the REGISTRY's `subdir` for the table these zips feed, not the
+    FILE_GROUPS key that used to be passed here: `unzip_table.py` reads this
+    directory back as `landing_zips(spec.subdir, month)`, so the two strings have to
+    be the same one. They were two, agreeing only because estabelecimentos spells
+    both the same way -- the lookup does not ("lookup" against "lookups")."""
+    volume_dir = cfg.landing_zips(subdir, month)
     return [upload_to_volume(w, p, volume_dir) for p in local_paths]

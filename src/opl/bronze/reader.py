@@ -59,7 +59,7 @@ def csv_read_options() -> dict[str, str]:
         # ten parts in total (nine of ~320-370 MB plus part 0 at 2,128,818,559 B),
         # enough files to keep the cluster busy, and the lookup files are
         # single-part and small enough that a file was already one task. Part 0 is
-        # the one-huge-file case: ~14 GB of CSV in a single task ingested
+        # the one-huge-file case: 6.78 GB of CSV in a single task ingested
         # 29,093,533 rows in about nine minutes, so the ceiling is livable at this
         # scale. One run, nothing isolated -- a data point, not a benchmark; the
         # trade is correctness for a known parallelism ceiling (ADR 0005).

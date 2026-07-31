@@ -9,28 +9,57 @@ from pathlib import Path
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
 from databricks.sdk.errors import NotFound
-from opl.config import DEFAULT
 
-LANDING_VOLUME_DIR = DEFAULT.landing_cnpj_root
 UPLOAD_PROFILE = "opl-free"
 
-# WHY widen this: `retry_timeout_seconds` is the SDK's TOTAL wall-clock budget
-# for one API call across every attempt (`_base_client.py:78`, default 300 s),
-# and `retried()` only checks that deadline BETWEEN attempts (sdk retries.py).
-# So the budget never interrupts a PUT in flight; what it does is make the first
-# retryable failure fatal once the budget is spent -- which is how a long upload
-# ends as `Timed out after 0:05:00`: some attempt failed and there was no time
-# left to retry it. Estabelecimentos3.zip (366,824,247 B) died that way. At the
-# ~67 MB/min measured upstream to this workspace a ~340 MB part needs ~5 min,
-# i.e. the whole default budget, so a part that size spends it inside its first
-# attempt and has no retry left. (What that first failure was is not recorded,
-# and duration alone cannot produce this error, so no size threshold is claimed
-# here -- the widening is justified by the mechanism, not by a correlation.)
-# The largest payload is bigger still:
-# extract_cnpj.py PUTs uncompressed inner CSVs (Simples' is several GB,
-# up to the Files API's 5 GiB single-PUT cap => ~75 min at that rate). 2 h
-# covers one full attempt of the worst case plus room for a retry.
-UPLOAD_RETRY_TIMEOUT_SECONDS = 2 * 60 * 60
+# NO LANDING_VOLUME_DIR here. It was `DEFAULT.landing_cnpj_root` under a second name,
+# and both of its readers used it as `f"{LANDING_VOLUME_DIR}/{month}"` -- the month
+# ROOT, which is exactly the target F1.4a moved the six lookup CSVs out of and the
+# one directory no stream reads any more. Every landing target now comes from
+# `OplConfig.landing_table(spec.subdir, month)` with the subdir from
+# `opl.bronze.registry`, so the alias that made the wrong dir the easy one to reach
+# is gone rather than merely unused.
+
+# WHAT THIS BOUNDS, re-derived against the multipart path adopted in ADR 0007.
+# `retry_timeout_seconds` is the SDK's total wall-clock budget for ONE retried
+# operation across all its attempts, and `retried()` checks that deadline only
+# BETWEEN attempts (sdk retries.py). So it never interrupts a request in flight;
+# what it does is make the first retryable failure fatal once the budget is
+# spent. That mechanism is unchanged -- what changed is the unit of work it
+# applies to.
+#
+# Under the old single-PUT path the unit was the whole file, which is why this
+# was once 2 h: Estabelecimentos0.zip is 2,128,818,559 B, ~32 min at the
+# ~67 MB/min measured upstream to this workspace, and 2 h covered one attempt
+# plus a retry. Under multipart there is NO whole-file operation to bound. In
+# databricks-sdk 0.123.0 the budget is applied per operation, in two places:
+#   * `_BaseClient.do` -- each control-plane call (initiate-upload, fetch part
+#     URLs, complete-upload);
+#   * `_retry_cloud_idempotent_operation` (mixins/files.py) -- each presigned
+#     part PUT to cloud storage, together with
+#     `experimental_files_ext_cloud_api_max_retries` (3).
+# The largest unit is therefore ONE PART, not one file.
+#
+# Sizing it, from measured part geometry (see ADR 0007). The SDK picks the
+# smallest part size giving <= 100 parts: Estabelecimentos0.zip lands on 50 MiB
+# parts (41 of them), every other zip we upload on 10 MiB parts. Uploads run
+# `files_ext_multipart_upload_default_parallelism` = 10 parts concurrently, so
+# the ~67 MB/min link is shared ten ways and a single 50 MiB part takes
+# ~52.4 MB / (67/10 MB/min) ~= 7.8 min of wall clock -- an order of magnitude
+# longer than the same part would take alone. That is the number this budget has
+# to clear.
+#
+# 30 min is ~3.8x that worst-case part, so the largest part can fail and be
+# retried the 3 times the cloud-retry cap allows without the budget going flat
+# mid-way. Note the SDK's own 300 s default is SMALLER than one worst-case part
+# here, which would recreate the F1.3 failure exactly at part granularity: the
+# budget spent inside the first attempt, so the first retryable failure is fatal
+# (that is how Estabelecimentos3.zip, 366,824,247 B, died as
+# `Timed out after 0:05:00`). So this stays explicit rather than reverting to
+# the default -- but it is 30 min because a part takes ~8 min, not 2 h because a
+# file takes ~32 min. The old value is not merely oversized now, it is sized
+# against an operation that no longer exists.
+UPLOAD_RETRY_TIMEOUT_SECONDS = 30 * 60
 # `http_timeout_seconds` is deliberately NOT touched: it is the per-socket
 # connect/read inactivity timeout handed straight to `requests`
 # (`_base_client.py:95`, default 60 s), not part of the budget above. No
@@ -45,17 +74,39 @@ def upload_client(**auth: object) -> WorkspaceClient:
     """Build the WorkspaceClient every Volume upload path must use.
 
     `retry_timeout_seconds` is a Config field, not a WorkspaceClient.__init__
-    kwarg (databricks-sdk 0.40), so it has to travel through an explicit Config;
-    passing it to the client raises TypeError. `auth` defaults to the local
-    `opl-free` CLI profile; tests pass an explicit host/token so this factory
-    needs no credentials.
+    kwarg, so it has to travel through an explicit Config; passing it to the
+    client raises `TypeError: WorkspaceClient.__init__() got an unexpected
+    keyword argument 'retry_timeout_seconds'`. True of the old 0.40.0 pin and
+    re-verified against 0.123.0 -- `WorkspaceClient.__init__` still takes no
+    **kwargs and exposes no retry/timeout parameter.
+
+    WHY THE BUDGET IS SET AFTER CONSTRUCTION rather than passed as a Config
+    kwarg, which reads like a pointless two-step: since databricks-sdk 0.123.0
+    `Config.__init__` ends with `_resolve_host_metadata()`, a best-effort GET of
+    `{host}/.well-known/databricks-config` used to discover `account_id` /
+    `workspace_id` / `discovery_url`. It builds its probe client from
+    `self.retry_timeout_seconds` -- the SDK's own comment there says it does that
+    to avoid "blocking Config() initialization for ~5 minutes when the host is
+    unreachable". The consequence for us is the inverse of the intent: handing
+    the widened upload budget to `Config(...)` hands it to that probe too, so an
+    unreachable or blackholed host makes `upload_client()` block for the whole
+    budget -- 2 h under the old value -- before falling back and doing anything.
+    Constructing with the SDK default and raising the budget afterwards keeps the
+    discovery probe on the SDK's own 300 s bound while the uploads that follow
+    get the 30 min they need. Verified: the client reads the field when it builds
+    its `_BaseClient`, so assigning before `WorkspaceClient(...)` takes effect.
+
+    We do not need what the probe resolves -- `auth` carries an explicit host and
+    token (or the `opl-free` CLI profile) -- but the SDK exposes no way to skip
+    it, so bounding it is the available lever. Tests neutralise it outright;
+    a hermetic unit test must not depend on DNS.
+
+    `auth` defaults to the local `opl-free` CLI profile; tests pass an explicit
+    host/token so this factory needs no credentials.
     """
-    return WorkspaceClient(
-        config=Config(
-            retry_timeout_seconds=UPLOAD_RETRY_TIMEOUT_SECONDS,
-            **(auth or {"profile": UPLOAD_PROFILE}),
-        )
-    )
+    config = Config(**(auth or {"profile": UPLOAD_PROFILE}))
+    config.retry_timeout_seconds = UPLOAD_RETRY_TIMEOUT_SECONDS
+    return WorkspaceClient(config=config)
 
 
 def unzip_single(zip_path: Path, dest_dir: Path) -> Path:
@@ -84,17 +135,30 @@ def upload_to_volume(w: WorkspaceClient, local_path: Path, volume_dir: str) -> s
     WHY the verification: a single-PUT ``w.files.upload()`` of a 341,333,959-byte
     zip returned without error having stored only 273,373,127 -- the object was
     ``original[67960832:]``, i.e. a dropped PREFIX with the tail (and therefore
-    the original central directory) intact. That is a bug in the pinned SDK, not
-    an inference: in ``databricks-sdk`` <= 0.41.0 ``_BaseClient._perform`` rewinds
+    the original central directory) intact. That is a bug in the SDK version in
+    use when it happened, not an inference: in ``databricks-sdk`` <= 0.41.0
+    (this repo was pinned at 0.40.0 then) ``_BaseClient._perform`` rewinds
     the request body only inside its ``if error is not None`` branch, so a raised
     ``ConnectionError``/``Timeout`` skips the rewind; ``retried()`` re-sends from
     the offset where the stream failed and ``requests`` recomputes
     ``Content-Length`` as ``st_size - tell()``. The retry is thus a complete,
     well-formed PUT of the remainder, which the server stores -- and
     341,333,959 - 67,960,832 is exactly the 273,373,127 observed. Fixed upstream
-    in databricks-sdk-py#878, released 0.42.0; this repo is pinned to 0.40.0, so
-    this check stands in for that fix. (An earlier account read the loss as a gap
-    in the MIDDLE; that was retracted -- a dropped prefix and a middle gap yield
+    in databricks-sdk-py#878, released 0.42.0; this repo is far above that floor
+    now (ADR 0007) and no longer uses the single-PUT path at all.
+
+    So this check is DEFENCE IN DEPTH, not a stand-in for a fix we are missing.
+    It compares the landed object's ``content_length`` against the local file's
+    size, which is independent of how the bytes got there -- one PUT, or the 41
+    presigned parts Estabelecimentos0.zip is now split into. That independence is
+    the point: multipart moves the ways an upload can be short (a part silently
+    dropped, a part written twice, a complete-upload that commits a subset) but
+    does not remove them, and it enlarges the surface -- every part is its own
+    request, retried under its own budget, against presigned URLs that expire.
+    A whole-object size check is the one assertion that survives all of it, and
+    it was the only thing that caught the defect the first time. (An earlier
+    account read the loss as a gap in the MIDDLE; that was retracted -- a
+    dropped prefix and a middle gap yield
     identical arithmetic downstream, and the object's head was never read before
     it was deleted, so only the mechanism settles it.) Nothing downstream noticed
     until ``zipfile`` computed a negative member offset from the still-original
@@ -104,7 +168,9 @@ def upload_to_volume(w: WorkspaceClient, local_path: Path, volume_dir: str) -> s
 
     WHY the cleanup: an upload that fails may leave nothing behind (a PUT that
     timed out at the SDK's 5-minute default left no object at all) or a partial
-    one. A partial object is the dangerous case -- it reads as a valid zip until
+    one -- and under multipart an aborted or half-committed session is another
+    way to get one. A partial object is the dangerous case -- it reads as a
+    valid zip until
     ``z.open()``. So no failure path from the PUT onwards is allowed to leave a
     readable half-written object: the target is deleted before the error
     propagates. That guard spans the verification call too -- a 503 from

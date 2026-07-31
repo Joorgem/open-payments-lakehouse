@@ -1,14 +1,18 @@
 # scripts/extract_giants.py
 """Extract multi-part CNPJ 'giant' tables (Empresas / Estabelecimentos / Socios)
 from the RFB WebDAV share: download the selected .zip parts (resumable, size-
-verified) and — with --upload — land the ZIPs (not CSVs; Files API caps single
-PUTs at 5 GiB) into the UC Volume zips subdir. Extraction runs OFF Databricks
-(two-layer topology, ADR 0002). Unzip happens later, on Databricks."""
+verified) and — with --upload — land the ZIPs (not CSVs: part 0 is
+2,128,818,559 B zipped against 6,780,467,695 B unzipped, so under a third of the
+bytes on the wire) into the UC Volume zips subdir. Extraction runs OFF
+Databricks (two-layer topology, ADR 0002). Unzip happens later, on Databricks.
+The old reason — a 5 GiB single-PUT ceiling — was the databricks-sdk 0.40 pin's,
+not the Files API's, and is gone since ADR 0007 adopted multipart uploads."""
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
+from opl.bronze.registry import spec_for_contract
 from opl.config import DEFAULT
 from opl.contracts.cnpj_schemas import FILE_GROUPS
 from opl.extraction.cnpj_source import SHARE_TOKEN, WEBDAV_BASE
@@ -58,7 +62,20 @@ def run(
         1 if any part was missing on the server, failed its size check, or any
           download/upload step raised.
     """
-    table = FILE_GROUPS[group]["table"]
+    # The zips land in the dir `unzip_table.py` READS BACK, and that dir is the
+    # registry's `subdir`: this script used to spell it `FILE_GROUPS[group]["table"]`
+    # while the unzip task spells it `landing_zips(spec.subdir, ...)`. Identical for
+    # estabelecimentos and DIVERGENT for the lookup ("lookup" against "lookups"), so
+    # the agreement was a coincidence of one entry -- one F1.4b paste away from
+    # landing a table's zips in a directory nothing unzips, which surfaces as an
+    # ingest that reports SUCCESS over an empty source dir.
+    #
+    # Resolved before the first download and ONLY when uploading, so a download-only
+    # capture of a table with no registry entry yet (Empresas and Socios until
+    # F1.4b) still works, while landing its zips is refused: 20 GB of zips in a Free
+    # Edition Volume that no unzip task and no ingest can name is the waste this
+    # branch just reclaimed 16.7 GB of.
+    subdir = spec_for_contract(FILE_GROUPS[group]["table"]).subdir if upload else None
     local_dir = Path(dest) / month / "giants"
     print(f"giants {month} {group} parts={parts} upload={upload}")
 
@@ -72,7 +89,7 @@ def run(
             zp = local_paths[0]
             downloaded += 1
             if w is not None:
-                target = upload_zips(w, [zp], DEFAULT, table, month)[0]
+                target = upload_zips(w, [zp], DEFAULT, subdir, month)[0]
                 uploaded += 1
                 print(f"  landed {zp.name} -> {target} ({zp.stat().st_size} B)")
             else:
@@ -116,7 +133,15 @@ def main() -> int:
 
     client = WebDavClient(WEBDAV_BASE, SHARE_TOKEN)
 
-    return run(client, args.month, args.group, parts, args.dest, upload=args.upload)
+    try:
+        return run(client, args.month, args.group, parts, args.dest, upload=args.upload)
+    except ValueError as exc:
+        # The registry refusal above (`spec_for_contract` raises UnknownTable, a
+        # ValueError by design so its prose is readable) reaches an operator as the
+        # same rc=2 usage error as an unknown group, not as a traceback. Raised
+        # before any byte moves; every per-part failure is counted inside run().
+        print(f"error: {exc}")
+        return 2
 
 
 if __name__ == "__main__":

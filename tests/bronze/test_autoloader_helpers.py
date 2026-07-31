@@ -1,33 +1,89 @@
+import datetime as dt
+import inspect
 from types import SimpleNamespace
 
+import pytest
 from pyspark.sql import functions as F
 
 import opl.bronze.autoloader as al
 from opl.bronze.autoloader import (
-    BRONZE_ESTAB_STAGING,
     RECORD_SOURCE,
     add_audit_columns,
     bronze_lookup_stream,
+    bronze_stream,
     checkpoint_location,
     lookup_type_column,
     schema_location,
 )
+from opl.bronze.promote import BATCH_COLUMN
+from opl.bronze.registry import table_spec
+from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN
 from opl.config import DEFAULT
-from opl.spark import local_session
+
+_SOURCE_FILE = "/Volumes/workspace/default/landing/cnpj/2026-06/lookups/F.K03200$Z.D60613.CNAECSV"
 
 
-def test_audit_columns_added_with_constant_values():
-    spark = local_session("test-audit")
-    try:
-        df = spark.createDataFrame([("01", "AÇÃO")], ["codigo", "descricao"])
-        out = add_audit_columns(df, batch_id="run-123")
-        assert {"_ingested_at", "_record_source", "_batch_id"} <= set(out.columns)
-        row = out.collect()[0]
-        assert row["_batch_id"] == "run-123"
-        assert row["_record_source"] == RECORD_SOURCE
-        assert row["_ingested_at"] is not None
-    finally:
-        spark.stop()
+def test_audit_columns_added_with_constant_values(spark):
+    df = spark.createDataFrame(
+        [("01", "AÇÃO", _SOURCE_FILE)], ["codigo", "descricao", "_source_file"]
+    )
+    out = add_audit_columns(df, batch_id="run-123", snapshot_month="2026-06")
+    # BATCH_COLUMN, not the literal: this ingest WRITES the column that
+    # `promote.rows_of_batch` and `retention.files_of_batch` filter on, and it wrote
+    # it as a bare "_batch_id" until the F1.4a review. Asserted through the constant
+    # so a rename fails here instead of turning the promote into a silent no-op
+    # (0 rows of its own batch) and the reclaim into a delete of nothing.
+    assert {
+        "_ingested_at",
+        "_record_source",
+        BATCH_COLUMN,
+        SNAPSHOT_MONTH_COLUMN,
+        SNAPSHOT_REF_DATE_COLUMN,
+    } <= set(out.columns)
+    row = out.collect()[0]
+    assert row[BATCH_COLUMN] == "run-123"
+    assert row["_record_source"] == RECORD_SOURCE
+    assert row["_ingested_at"] is not None
+    # The operational identity is the parameter; the business fact is the
+    # date the RFB declares, which is NOT month-end. Both, side by side.
+    assert row[SNAPSHOT_MONTH_COLUMN] == "2026-06"
+    assert row[SNAPSHOT_REF_DATE_COLUMN] == dt.date(2026, 6, 13)
+
+
+def test_the_batch_column_written_here_follows_the_constant_the_readers_filter_on(
+        spark, monkeypatch):
+    """That the WRITE goes through the constant, not merely that the name matches.
+
+    The test above cannot tell a constant from a literal that happens to spell the
+    same thing, and that is exactly what this function held until the F1.4a review:
+    `"_batch_id"` inline, two lines above `SOURCE_FILE_COLUMN` used as a constant
+    BECAUSE "two spellings would silently reclaim nothing". Rebinding the constant is
+    what separates them -- with a literal the produced frame keeps `_batch_id` and
+    never grows the rebound name.
+
+    Why it matters which one it is: `promote.rows_of_batch` and
+    `retention.files_of_batch` FILTER on this constant. Rename it and six imports
+    raise; rename the literal and the promote counts 0 rows of its own batch and
+    reports success having appended nothing."""
+    monkeypatch.setattr(al, "BATCH_COLUMN", "_batch_id_probe")
+    df = spark.createDataFrame(
+        [("01", "AÇÃO", _SOURCE_FILE)], ["codigo", "descricao", "_source_file"]
+    )
+    out = add_audit_columns(df, batch_id="run-123", snapshot_month="2026-06")
+    assert "_batch_id_probe" in out.columns
+    assert BATCH_COLUMN not in out.columns
+
+
+def test_the_snapshot_month_has_no_default():
+    """A defaulted month is the F1.2 defect itself, so the absence of the default
+    is the thing worth locking.
+
+    Either candidate default is wrong: `opl.config`'s pinned month is exactly how
+    every F1.2 row was silently tied to 2026-06, and the current month invents a
+    fact about data the RFB published whenever it published it. Spark-free -- the
+    TypeError comes from the signature, before the body runs."""
+    with pytest.raises(TypeError, match="snapshot_month"):
+        add_audit_columns(object(), batch_id="run-123")
 
 
 def test_state_locations_are_separate_and_not_under_table_dir():
@@ -36,10 +92,6 @@ def test_state_locations_are_separate_and_not_under_table_dir():
     assert sl.startswith(DEFAULT.volume_root)
     assert cl.startswith(DEFAULT.volume_root)
     assert "_schemas" in sl and "_checkpoints" in cl
-
-
-def test_estab_staging_constant():
-    assert BRONZE_ESTAB_STAGING == "bronze_cnpj_estab_staging"
 
 
 def test_state_locations_default_are_f12_golden():
@@ -58,30 +110,52 @@ def test_state_locations_estab_are_siblings():
     assert sl != schema_location(DEFAULT) and cl != checkpoint_location(DEFAULT)
 
 
-def test_lookup_stream_requests_csv_path_glob(monkeypatch):
-    # F1.3 Task 6 subdir-isolation regression guard: the lookup stream reads the
-    # cnpj/<month> root, which Auto Loader walks recursively. It MUST forward
-    # pathGlobFilter="*CSV" to bronze_stream so non-CSV files planted in sibling
-    # subdirs (empirically a probe.txt in zips/estabelecimentos/ was ingested,
-    # staging 7408->7409, before this) are excluded. Spark-free: bronze_stream
-    # and the lookup_type column builder are stubbed.
+def test_bronze_stream_no_longer_accepts_a_path_glob_filter():
+    """Removed, not merely unused: a dead parameter invites its return, and the
+    hazard it patched is now structural -- every stream reads its own subdir, so
+    there is nothing for a glob to exclude.
+
+    A glob is a DISCOVERY rule, which is why it was rejected for the estab stream
+    in F1.3: a naming drift would silently under-ingest with nothing downstream
+    able to see it."""
+    assert "path_glob_filter" not in inspect.signature(bronze_stream).parameters
+
+
+def test_the_lookup_stream_reads_its_own_subdirectory_not_the_month_root(monkeypatch):
+    """The F1.4b blocker, fixed structurally. The month root does not isolate
+    `*CSV`, so landing Empresas (`.EMPRECSV`) or Socios (`.SOCIOCSV`) there would
+    have contaminated the lookup table -- and cloudFiles walks a source dir
+    RECURSIVELY (empirically: an F1.3 probe.txt planted in
+    `cnpj/<month>/zips/estabelecimentos/` was ingested by this stream, staging
+    7408->7409), so the month root reaches every sibling too.
+
+    Asserted on the stream's own source_dir, not on `landing_table` alone: what
+    regressed here would be this call reverting to `landing_cnpj_month(...)`, and
+    a config-level assertion cannot see that. Spark-free: `bronze_stream` and the
+    lookup_type column builder are stubbed."""
     captured: dict[str, object] = {}
 
     class _FakeDF:
         def withColumn(self, *_a, **_k):
             return self
 
-    def _fake_bronze_stream(spark, cfg, table, source_dir, table_key, path_glob_filter=None):
-        captured.update(table=table, path_glob_filter=path_glob_filter)
+    def _fake_bronze_stream(spark, cfg, table, source_dir, table_key):
+        captured.update(table=table, source_dir=source_dir, table_key=table_key)
         return _FakeDF()
 
     monkeypatch.setattr(al, "bronze_stream", _fake_bronze_stream)
     monkeypatch.setattr(al, "lookup_type_column", lambda _col: None)
     monkeypatch.setattr(al.F, "col", lambda _name: None)
 
-    bronze_lookup_stream(spark=None, cfg=DEFAULT)
-    assert captured["table"] == "lookup"
-    assert captured["path_glob_filter"] == "*CSV"
+    bronze_lookup_stream(spark=None, cfg=DEFAULT, month="2026-06")
+
+    spec = table_spec("lookup")
+    assert captured["table"] == spec.contract
+    assert captured["table_key"] == spec.table_key
+    # `spec.subdir`, never the literal: the directory name is the registry's to
+    # own, which is why `subdir` is a field of its own rather than the table key.
+    assert captured["source_dir"] == DEFAULT.landing_table(spec.subdir, "2026-06")
+    assert captured["source_dir"] != DEFAULT.landing_cnpj_month("2026-06")
 
 
 def test_bronze_stream_forwards_multiline_to_the_cloudfiles_read(monkeypatch):
@@ -125,25 +199,21 @@ def test_bronze_stream_forwards_multiline_to_the_cloudfiles_read(monkeypatch):
         assert opts["multiLine"] == "true", f"{table}: {opts}"
 
 
-def test_lookup_type_column_maps_paths():
-    spark = local_session("test-lookup-col")
-    try:
-        df = spark.createDataFrame(
-            [
-                ("/Volumes/workspace/default/landing/cnpj/2026-06/F.K03200$Z.D60613.CNAECSV",),
-                ("/Volumes/workspace/default/landing/cnpj/2026-06/F.K03200$Z.D60613.QUALSCSV",),
-                ("/some/other/file.txt",),
-                ("/Volumes/x/F.K03200$Z.D60613.CNAECSV.bak",),
-            ],
-            ["path"],
-        )
-        out = {
-            r.path.rsplit("/", 1)[-1]: r.lt
-            for r in df.withColumn("lt", lookup_type_column(F.col("path"))).collect()
-        }
-        assert out["F.K03200$Z.D60613.CNAECSV"] == "cnae"
-        assert out["F.K03200$Z.D60613.QUALSCSV"] == "qualificacao"
-        assert out["file.txt"] is None
-        assert out["F.K03200$Z.D60613.CNAECSV.bak"] is None
-    finally:
-        spark.stop()
+def test_lookup_type_column_maps_paths(spark):
+    df = spark.createDataFrame(
+        [
+            ("/Volumes/workspace/default/landing/cnpj/2026-06/F.K03200$Z.D60613.CNAECSV",),
+            ("/Volumes/workspace/default/landing/cnpj/2026-06/F.K03200$Z.D60613.QUALSCSV",),
+            ("/some/other/file.txt",),
+            ("/Volumes/x/F.K03200$Z.D60613.CNAECSV.bak",),
+        ],
+        ["path"],
+    )
+    out = {
+        r.path.rsplit("/", 1)[-1]: r.lt
+        for r in df.withColumn("lt", lookup_type_column(F.col("path"))).collect()
+    }
+    assert out["F.K03200$Z.D60613.CNAECSV"] == "cnae"
+    assert out["F.K03200$Z.D60613.QUALSCSV"] == "qualificacao"
+    assert out["file.txt"] is None
+    assert out["F.K03200$Z.D60613.CNAECSV.bak"] is None

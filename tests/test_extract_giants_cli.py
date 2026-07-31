@@ -8,12 +8,16 @@ WebDavClient.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import zipfile
 from pathlib import Path
 
 import pytest
 
+from opl.bronze.registry import UnknownTable, table_spec
+from opl.config import DEFAULT
 from opl.extraction import landing
+from opl.extraction.giants import upload_zips
 from opl.extraction.webdav import FileEntry
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "extract_giants.py"
@@ -90,6 +94,69 @@ def test_summary_reports_the_failure_count(tmp_path, monkeypatch, capsys):
 
     assert rc == 1
     assert "done: 1/1 downloaded, 0 uploaded (1 failed)" in capsys.readouterr().out
+
+
+def test_the_zips_land_in_the_dir_the_unzip_task_reads_back(tmp_path, monkeypatch):
+    """One field for one directory. This script spelled the zips dir
+    `FILE_GROUPS[group]["table"]` while `unzip_table.py` spells it
+    `landing_zips(spec.subdir, month)` -- identical for estabelecimentos and
+    DIVERGENT for the lookup ("lookup" against "lookups"), so the agreement was a
+    coincidence of the one entry F1.4b is about to copy-paste twice.
+
+    Asserted against `spec.subdir` and against the FILE_GROUPS key by name, because
+    the two are the same string for this table: what fails here is the SOURCE of the
+    string, which is the only thing that can drift."""
+    monkeypatch.setattr(cli, "upload_client", lambda **_auth: object())
+    seen: list[str] = []
+
+    def fake_upload_zips(w, paths, cfg, subdir, month):
+        seen.append(cfg.landing_zips(subdir, month))
+        return [f"/Volumes/x/{p.name}" for p in paths]
+
+    monkeypatch.setattr(cli, "upload_zips", fake_upload_zips)
+    client = FakeClient(present_names={"Estabelecimentos1.zip"})
+
+    rc = cli.run(client, "2026-07", "Estabelecimentos", [1], str(tmp_path), upload=True)
+
+    assert rc == 0
+    spec = table_spec("estabelecimentos")
+    assert seen == [DEFAULT.landing_zips(spec.subdir, "2026-07")]
+    assert seen == [(
+        "/Volumes/workspace/default/landing/cnpj/2026-07/zips/estabelecimentos"
+    )]
+
+
+def test_upload_zips_takes_the_registry_subdir_and_not_a_free_string():
+    """The library half: `upload_zips` builds `zips/<subdir>` from what it is given,
+    so the caller owning that string is what keeps it the registry's."""
+    assert "subdir" in inspect.signature(upload_zips).parameters
+
+
+def test_landing_zips_for_an_unregistered_table_is_refused_before_any_download(
+        tmp_path, monkeypatch):
+    """Empresas and Socios have FILE_GROUPS entries and no registry entry until
+    F1.4b. Landing their zips would put ~20 GB in a Free Edition Volume under a
+    directory name no `unzip_table.py` run can name -- the waste this branch just
+    reclaimed 16.7 GB of. Refused before the first byte."""
+    monkeypatch.setattr(cli, "upload_client", lambda **_auth: object())
+    monkeypatch.setattr(cli, "upload_zips", lambda *_a, **_kw: pytest.fail("uploaded"))
+    client = FakeClient(present_names={"Empresas1.zip"})
+
+    with pytest.raises(UnknownTable, match="empresas"):
+        cli.run(client, "2026-07", "Empresas", [1], str(tmp_path), upload=True)
+
+    assert client.downloaded == []
+
+
+def test_an_unregistered_table_still_downloads_with_upload_off(tmp_path, monkeypatch):
+    """The registry answers "where in the VOLUME", so a download-only capture never
+    asks it -- which is what keeps Empresas and Socios fetchable before F1.4b
+    registers them."""
+    monkeypatch.setattr(cli, "upload_client", lambda **_auth: pytest.fail("built"))
+    client = FakeClient(present_names={"Empresas1.zip"})
+
+    assert cli.run(client, "2026-07", "Empresas", [1], str(tmp_path), upload=False) == 0
+    assert client.downloaded == ["2026-07/Empresas1.zip"]
 
 
 def test_parse_parts_defaults_to_every_part():

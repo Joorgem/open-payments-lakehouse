@@ -7,33 +7,46 @@ Does not raise on rejected rows: the condition task owns that branch and
 fail_on_dq owns the hard stop. It DOES raise on the two states that are not DQ
 verdicts at all: no batch id given (the shared operator guard in
 `opl.bronze.promote`), and a quarantine table already holding a different number
-of rows for this batch than the batch has rejects -- see `main`."""
+of rows for this batch than the batch has rejects -- see `main`.
+
+Parameterised by table: this is the ONLY gate now. The lookup's whole-table gate
+(dq_gate.py) is gone, so the lookup inherits batch scoping -- evaluating one
+`_batch_id` instead of the whole staging table, which stops a single historical
+bad row from wedging every later clean batch. Its quarantine accumulates now
+instead of being overwritten, which is what ADR 0006 needs it to be.
+
+argv: [table, batch_id]"""
 import sys
 
 from pyspark.sql import SparkSession
 
-from opl.bronze.autoloader import BRONZE_ESTAB_QUARANTINE as QUARANTINE
-from opl.bronze.autoloader import BRONZE_ESTAB_STAGING
 from opl.bronze.dq import evaluate, split
 from opl.bronze.promote import batch_rows, require_batch_id, rows_of_batch, tally
+from opl.bronze.registry import table_spec
 from opl.bronze.rules import rules_for
 from opl.config import DEFAULT
 
 
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
-    # An absent argument is passed through as "" rather than indexed, the same way
-    # promote_batch.py does it: `require_batch_id` owns refusing it, with a message
-    # that tells the operator what to pass. `args[0]` here answered a task run
-    # without parameters with a bare `IndexError: list index out of range`, which
-    # names a list index and not the missing job parameter. Before the session, too:
-    # nothing about that refusal needs Spark, and an operator should not wait for a
-    # serverless session to be told the argument is missing.
-    batch_id = require_batch_id(args[0] if args else "", action="gate")
+    # Table first, then the batch id -- both refused before Spark, for the reason
+    # the batch-id guard documents: an operator should not wait for a serverless
+    # session to be told which argument is wrong. An absent argument is passed
+    # through as "" rather than indexed, the same way promote_batch.py does it,
+    # because `args[0]` on an empty argv answered a task run without parameters
+    # with a bare `IndexError: list index out of range`, which names a list index
+    # and not the missing job parameter.
+    #
+    # Staging, quarantine and rule set all come off the ONE resolved spec, so the
+    # table this reads a batch from and the table it writes that batch's rejects
+    # to cannot drift apart -- the drift that "sent estab triagers to a table full
+    # of unrelated F1.2 lookup rows".
+    spec = table_spec(args[0] if args else "")
+    batch_id = require_batch_id(args[1] if len(args) > 1 else "", action="gate")
     spark = SparkSession.builder.getOrCreate()
-    quarantine = DEFAULT.table(QUARANTINE)
-    rules = rules_for("estabelecimentos")
-    batch = batch_rows(spark, DEFAULT.table(BRONZE_ESTAB_STAGING), batch_id)
+    quarantine = DEFAULT.table(spec.quarantine)
+    rules = rules_for(spec.contract)
+    batch = batch_rows(spark, DEFAULT.table(spec.staging), batch_id)
     # ONE pass for both counts. This task used to compute the split three times
     # over a batch of up to ~29M rows -- `bad.write`, `bad.count()`, `good.count()`
     # -- for the two things it actually does: count both sides and write the

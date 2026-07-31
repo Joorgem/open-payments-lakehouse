@@ -39,7 +39,7 @@ next.
 
 | | Status |
 |---|---|
-| **Built (F0 + F1.1 + F1.2 + F1.3)** | Autonomous dev harness (uv lockfile, CI, secret scanning, dual-target version guard) · Docker stack (Redpanda + Postgres) · Databricks Unity Catalog Volume landing via a validated control-plane path · **CNPJ extraction → landing → versioned schema contracts** (WebDAV client with resume + retry, real data landed to a UC Volume) · **Bronze via Auto Loader → Delta with a blocking data-quality gate + quarantine**, deployed as a real 5-task Databricks Job (Asset Bundle) and **run for real** on Databricks Free Edition against the landed lookup files, including a deliberately corrupted batch that the gate blocked — verbatim evidence in [`docs/f1.2-bronze-run-evidence.md`](docs/f1.2-bronze-run-evidence.md) · **Multi-gigabyte Estabelecimentos ingestion: 71.9M rows in Delta** (all 10 RFB parts, 4.9 GB compressed), staged incrementally across runs (Auto Loader checkpoint picks up only new files), unzipped in-Volume on Databricks to stay under the Files API single-PUT ceiling, with a **batch-scoped** DQ gate and a triaged-batch re-promotion path — and four real incidents caught and fixed along the way, including a silently short-written upload and two CSV-parsing defects in our own reader that corrupted rows while every quality rule passed and the row count reconciled: [`docs/f1.3-estabelecimentos-run-evidence.md`](docs/f1.3-estabelecimentos-run-evidence.md), [ADR 0005](docs/adr/0005-csv-multiline-parallelism-ceiling.md), [ADR 0006](docs/adr/0006-bronze-dq-gate-policy.md) |
+| **Built (F0 + F1.1 + F1.2 + F1.3)** | Autonomous dev harness (uv lockfile, CI, secret scanning, dual-target version guard) · Docker stack (Redpanda + Postgres) · Databricks Unity Catalog Volume landing via a validated control-plane path · **CNPJ extraction → landing → versioned schema contracts** (WebDAV client with resume + retry, real data landed to a UC Volume) · **Bronze via Auto Loader → Delta with a blocking data-quality gate + quarantine**, deployed as a real 5-task Databricks Job (Asset Bundle) and **run for real** on Databricks Free Edition against the landed lookup files, including a deliberately corrupted batch that the gate blocked — verbatim evidence in [`docs/f1.2-bronze-run-evidence.md`](docs/f1.2-bronze-run-evidence.md) · **Multi-gigabyte Estabelecimentos ingestion: 71.9M rows in Delta** (all 10 RFB parts, 4.9 GB compressed), staged incrementally across runs (Auto Loader checkpoint picks up only new files), unzipped in-Volume on Databricks so only the compressed third of the bytes crosses the wire ([ADR 0007](docs/adr/0007-multipart-upload.md) — originally forced by a single-PUT ceiling that belonged to the old SDK pin, not to the Files API), with a **batch-scoped** DQ gate and a triaged-batch re-promotion path — and four real incidents caught and fixed along the way, including a silently short-written upload and two CSV-parsing defects in our own reader that corrupted rows while every quality rule passed and the row count reconciled: [`docs/f1.3-estabelecimentos-run-evidence.md`](docs/f1.3-estabelecimentos-run-evidence.md), [ADR 0005](docs/adr/0005-csv-multiline-parallelism-ceiling.md), [ADR 0006](docs/adr/0006-bronze-dq-gate-policy.md) |
 | **Roadmap — next** | Silver Data Vault 2.0 (hubs/links/sats, historized snapshots) |
 | **Roadmap — later** | Gold Kimball star (SCD2 dims, event-grain facts) · Unity Catalog governance (RBAC, column masking, lineage) · pipeline observability · an AI-assisted incident-triage (RCA) agent |
 
@@ -82,12 +82,22 @@ uv run pytest                       # unit tests (Delta roundtrip needs a JDK; g
 docker compose up -d                # Postgres (host port 5433) + Redpanda
 uv run pytest -m integration
 
-uv run python scripts/extract_cnpj.py --month 2026-06   # real download + unzip + UC Volume upload
+# real download + unzip + UC Volume upload
+uv run python scripts/extract_cnpj.py --month 2026-06 \
+  --groups Cnaes,Motivos,Municipios,Naturezas,Paises,Qualificacoes
 ```
 
 The extraction command downloads and unzips locally either way. Uploading to
 the UC Volume needs Databricks credentials in a git-ignored `.env`
 (`opl-free` profile); pass `--no-upload` to just download and unzip.
+
+`--groups` is spelled out because each landed file goes to the landing directory
+of the bronze table that reads it, and that directory comes from
+`opl.bronze.registry`. The default group set is the wider dev recorte of
+[ADR 0003](docs/adr/0003-cnpj-extraction-layer.md), which also includes `Simples`
+— a table bronze does not register yet, so there is nowhere in the Volume for it
+to land and the run is refused before anything is downloaded. `--no-upload`
+captures the whole recorte, `Simples` included.
 
 ## Engineering approach
 
