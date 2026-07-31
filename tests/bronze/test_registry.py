@@ -9,10 +9,13 @@ quarantine name "sent estab triagers to a table full of unrelated F1.2 lookup
 rows"."""
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+import ast
+from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 
 import pytest
 
+from opl.bronze import registry
 from opl.bronze.registry import (
     LANDING_LOCAL,
     LANDING_ZIPS,
@@ -22,7 +25,10 @@ from opl.bronze.registry import (
     UnknownTable,
     _assert_contracts_exist,
     _assert_no_table_claims_a_reserved_subdir,
+    _assert_no_two_tables_share_a_checkpoint_namespace,
     _assert_no_two_tables_share_a_contract,
+    _assert_no_two_tables_share_a_delta_name,
+    _assert_no_two_tables_share_a_landing_subdir,
     _assert_prefixes_match_their_file_groups,
     _assert_subdirs_are_single_path_components,
     _malformed_subdir_reason,
@@ -75,6 +81,176 @@ def test_no_two_tables_share_a_staging_bronze_or_quarantine_name():
             seen[value] = f"{spec.name}.{role}"
 
 
+def test_a_pasted_delta_name_is_refused_at_import(monkeypatch):
+    """The refusal exercised -- the test above only proves today's two entries are
+    clean, and would stay green with no guard behind it at all.
+
+    Verified by probe against the live registry before this guard existed: a paste
+    of the estabelecimentos entry renamed everywhere EXCEPT the staging/bronze/
+    quarantine triple IMPORTED CLEAN. Only the CI test above caught it, and a CI
+    test protects a merge -- it does not protect an ad-hoc job run against a branch
+    whose tests have not been run, which is exactly how these jobs get launched
+    while a phase is in flight.
+
+    Two tables on one Delta name is the defect class this registry exists to close:
+    appends from both land in one table, and `_batch_id` idempotence breaks because
+    `rows_of_batch` counts the other table's rows as this batch's.
+
+    `table_key` IS renamed here, unlike the rest of the paste, so that the collision
+    under test is unambiguously a Delta name. A guard that only checked `table_key`
+    would satisfy a version of this test that left it stale, and would be exactly as
+    wrong as no guard at all. `test_a_pasted_checkpoint_namespace_is_refused_at_
+    import` covers the stale `table_key` on its own."""
+    pasted = replace(
+        REGISTRY["estabelecimentos"],
+        name="empresas",
+        contract="empresas",
+        subdir="empresas",
+        prefix="Empresas",
+        table_key="bronze_cnpj_empresas",
+        # staging/bronze/quarantine deliberately NOT changed -- this IS the paste.
+    )
+    monkeypatch.setitem(REGISTRY, "empresas", pasted)
+
+    with pytest.raises(ValueError, match="both declare Delta table"):
+        _assert_no_two_tables_share_a_delta_name()
+
+
+def test_a_delta_name_reused_in_a_different_role_is_refused(monkeypatch):
+    """What makes the check ONE namespace over three roles rather than three
+    namespaces of one role each.
+
+    Three per-role checks would pass this: `bronze_cnpj_estab_staging` appears once
+    as a `staging` and once as a `quarantine`, so neither role's own namespace sees a
+    duplicate. The consequence is worse than a plain duplicate -- the promote reads
+    staging as trusted input while the triage writes rejects into the same table, so
+    rows refused by DQ get read back as if they had passed it.
+
+    Same defect class as the sibling test, reached past the shape of a guard that
+    looks total and is not."""
+    trap = replace(
+        REGISTRY["lookup"],
+        quarantine=REGISTRY["estabelecimentos"].staging,
+    )
+    monkeypatch.setitem(REGISTRY, "lookup", trap)
+
+    with pytest.raises(ValueError, match="both declare Delta table"):
+        _assert_no_two_tables_share_a_delta_name()
+
+
+def test_a_pasted_checkpoint_namespace_is_refused_at_import(monkeypatch):
+    """`table_key` is the fourth name a paste leaves stale, and the quietest.
+
+    It names no Delta table. It is the namespace under which `autoloader.
+    checkpoint_location` and `schema_location` put `_checkpoints/<table_key>` and
+    `_schemas/<table_key>` in the Volume, so two tables sharing one share an Auto
+    Loader CHECKPOINT -- and a checkpoint is a record of which files are already
+    processed. The second table's stream would start up believing the first's files
+    were its own and already ingested, and report SUCCESS having written nothing.
+    The shared `_schemas` entry compounds it by merging two unrelated schemas.
+
+    `test_every_registered_table_has_a_checkpoint_namespace_of_its_own` asserts the
+    same property, and for the reason given in the sibling tests above that is not
+    enough on its own."""
+    pasted = replace(
+        REGISTRY["estabelecimentos"],
+        name="empresas",
+        contract="empresas",
+        subdir="empresas",
+        prefix="Empresas",
+        staging="bronze_cnpj_empresas_staging",
+        bronze="bronze_cnpj_empresas",
+        quarantine="bronze_cnpj_empresas_quarantine",
+        # table_key deliberately NOT changed -- this IS the paste.
+    )
+    monkeypatch.setitem(REGISTRY, "empresas", pasted)
+
+    with pytest.raises(ValueError, match="both claim checkpoint namespace"):
+        _assert_no_two_tables_share_a_checkpoint_namespace()
+
+
+def test_a_table_key_may_equal_its_own_tables_bronze_name():
+    """Why the two guards above are two and not one loop over four roles.
+
+    The obvious implementation -- one `seen` dict, four roles, one pass -- refuses
+    the LIVE registry at import: `lookup.table_key` and `lookup.bronze` are both
+    `bronze_cnpj_lookup`, and that is correct, not drift. A checkpoint namespace and
+    a Delta table are different kinds of name in different namespaces, and one is
+    allowed to spell itself like the other. Folding them together would have made
+    the import of every module that reads the registry fail on the first run.
+
+    Pinned as a property rather than left to be rediscovered: the failure is loud but
+    the CAUSE is not obvious, and the natural fix on seeing it -- drop `table_key`
+    from the check -- silently reopens the checkpoint-collision hole above."""
+    lookup = table_spec("lookup")
+    assert lookup.table_key == lookup.bronze == "bronze_cnpj_lookup"
+    # Neither guard may object to that, today or after F1.4b adds two more tables.
+    _assert_no_two_tables_share_a_delta_name()
+    _assert_no_two_tables_share_a_checkpoint_namespace()
+
+
+def _module_level_guard_wiring() -> tuple[set[str], set[str]]:
+    """Every `_assert_*` the registry DEFINES, and every one it CALLS at module level.
+
+    Read off the AST rather than the module object, because that is the only place
+    the difference is visible: a guard that is defined and never called is a perfectly
+    ordinary function attribute at runtime, indistinguishable from a wired one.
+
+    `utf-8-sig`, not `utf-8`: Python's own tokenizer strips a leading BOM, so a
+    BOM'd registry.py imports fine and only THIS read would choke on it -- turning a
+    wiring regression into a SyntaxError from a test that never mentions encodings.
+    Not hypothetical; a Windows editor put one there while this test was written."""
+    tree = ast.parse(Path(registry.__file__).read_text(encoding="utf-8-sig"))
+    defined = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("_assert_")
+    }
+    called = {
+        node.value.func.id
+        for node in tree.body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+    }
+    return defined, called
+
+
+def test_every_guard_this_module_defines_is_actually_called_at_import():
+    """The test that makes every other refusal test in this file mean something.
+
+    Found by mutation probe while writing the two paste guards: commenting out ALL
+    THREE of their calls at the bottom of registry.py left this file 33/33 GREEN. The
+    refusal tests invoke the guard functions DIRECTLY, so they prove a function
+    refuses -- they say nothing about whether anything ever runs it. A guard that is
+    defined and unwired is worth exactly as much as no guard, and the entire point of
+    this phase is that these refusals happen AT IMPORT and not only in CI. Tests
+    named `..._at_import` that pass with the import wiring deleted are the vacuity an
+    F1.4a implementer already found once in this repo.
+
+    Structural rather than per-guard, so it does not have to be remembered: F1.4b and
+    every phase after it may add guards here, and each new one is covered by this the
+    moment it is written. The naming convention is the contract -- an `_assert_*` at
+    module level in registry.py is a guard, and a guard is called at import. A helper
+    that is not meant to run at import must not be named `_assert_*` (see
+    `_malformed_subdir_reason`, `_reserved_subdirs`, `_file_group_prefixes`).
+
+    Does NOT pin the ORDER of the calls, which is load-bearing for two of them and
+    documented in comments there -- `_assert_subdirs_are_single_path_components`
+    before the reserved-name check is what makes that check's exact-string comparison
+    total. Wiring and ordering are separate properties; this closes the first."""
+    defined, called = _module_level_guard_wiring()
+    # Guard the guard: a parse that found nothing would satisfy `defined <= called`.
+    assert len(defined) >= 9, f"only found {sorted(defined)} -- the AST walk is wrong"
+    unwired = defined - called
+    assert not unwired, (
+        f"registry.py defines {sorted(unwired)} but never calls them at module "
+        "import, so they refuse nothing -- a direct-call test of such a guard passes "
+        "while the registry it guards is unprotected. Add the call at the bottom of "
+        "the module."
+    )
+
+
 def test_no_two_tables_share_a_landing_subdir():
     """Same defect as a shared quarantine, one layer down in the Volume.
 
@@ -90,6 +266,38 @@ def test_no_two_tables_share_a_landing_subdir():
             f"{spec.name}.subdir == {spec.subdir!r}, already used by {seen[spec.subdir]}"
         )
         seen[spec.subdir] = spec.name
+
+
+def test_a_pasted_subdir_is_refused_at_import(monkeypatch):
+    """The paste F1.4b literally makes, refused where the value is DECLARED.
+
+    The test above names the property; until this guard existed nothing enforced it
+    outside CI. Verified by probe against the live registry: the estabelecimentos
+    entry pasted and renamed everywhere EXCEPT `subdir` IMPORTED CLEAN. `subdir` is
+    the field that does not contain the table's own bronze name, so a careful
+    find/replace over `bronze_cnpj_*` sails straight past it -- and a CI test does
+    not protect an ad-hoc run, or a branch whose tests have not been run.
+
+    What gets through is not an error and does not look like one. Both tables' streams
+    read the one landing dir, cloudFiles walks a source dir RECURSIVELY (F1.3,
+    empirically: a probe.txt planted in `zips/estabelecimentos/` was ingested by a
+    stream reading the month root), so each ingests the other's files -- and both runs
+    report SUCCESS."""
+    pasted = replace(
+        REGISTRY["estabelecimentos"],
+        name="empresas",
+        contract="empresas",
+        table_key="bronze_cnpj_empresas",
+        staging="bronze_cnpj_empresas_staging",
+        bronze="bronze_cnpj_empresas",
+        quarantine="bronze_cnpj_empresas_quarantine",
+        prefix="Empresas",
+        # subdir deliberately NOT changed -- this IS the paste.
+    )
+    monkeypatch.setitem(REGISTRY, "empresas", pasted)
+
+    with pytest.raises(ValueError, match="both claim landing subdir"):
+        _assert_no_two_tables_share_a_landing_subdir()
 
 
 def test_no_table_claims_a_directory_the_volume_layout_owns():

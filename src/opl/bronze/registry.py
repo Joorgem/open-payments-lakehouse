@@ -460,6 +460,132 @@ def _assert_no_table_claims_a_reserved_subdir() -> None:
             )
 
 
+def _assert_no_two_tables_share_a_landing_subdir() -> None:
+    """Fail at import if two specs land in the same directory.
+
+    AT IMPORT and not only in a test, because the consumer does not fail: two tables
+    on one subdir means each one's stream reads the other's files, and cloudFiles
+    walks a source dir RECURSIVELY -- so both ingest both, and both runs report
+    SUCCESS. This is the exact paste F1.4b makes (copy the estabelecimentos entry,
+    rename everything but `subdir`), and it was verified by probe to import CLEAN
+    before this guard existed, caught only by a CI test. A CI test protects a merge.
+    It does not protect an ad-hoc run, or a branch whose tests have not been run,
+    which is exactly how these jobs get launched while a phase is in flight.
+
+    `subdir` is the field that survives a CAREFUL rename, which is what makes it the
+    dangerous one: it is the only member of the copy-paste trio that does not contain
+    the table's own bronze name, so a find/replace over `bronze_cnpj_*` fixes every
+    other field and leaves this one pointing at the source table's landing dir.
+
+    Not a duplicate of the two subdir checks above. That pair compares each subdir
+    against the LAYOUT's own names and against the shape of a directory name, and
+    neither can see two tables colliding with EACH OTHER -- `estabelecimentos` twice
+    is unreserved, well-formed, and wrong. Three checks, three disjoint holes.
+
+    `prefix` needs no twin of this: `_assert_prefixes_match_their_file_groups`
+    already cross-checks it against FILE_GROUPS, which is strictly stronger than
+    uniqueness -- it catches `Estabelecimento` (singular), which is unique and
+    under-ingests silently."""
+    seen: dict[str, str] = {}
+    for spec in REGISTRY.values():
+        if spec.subdir in seen:
+            raise ValueError(
+                f"{spec.name} and {seen[spec.subdir]} both claim landing subdir "
+                f"{spec.subdir!r}. Each table's stream reads its own subdir and "
+                "cloudFiles walks it RECURSIVELY, so two tables sharing one means "
+                "each ingests the other's files and both runs report SUCCESS. Give "
+                "each table a landing subdir of its own."
+            )
+        seen[spec.subdir] = spec.name
+
+
+# The three spec fields that name a REAL Delta table, checked in ONE namespace.
+# `table_key` is deliberately not among them -- it is a Volume path component, not a
+# table; see `_assert_no_two_tables_share_a_checkpoint_namespace`.
+_DELTA_NAME_ROLES = ("staging", "bronze", "quarantine")
+
+
+def _assert_no_two_tables_share_a_delta_name() -> None:
+    """Fail at import if two specs name the same Delta table in any of the three
+    roles that name one.
+
+    ONE namespace across all three roles rather than three checks of one role each,
+    because the defect is the same whichever role collides and the roles are NOT
+    disjoint in principle: a table whose `quarantine` equals another's `staging`
+    passes every per-role check, and routes DQ REJECTS into a table a promote reads
+    as trusted input. `test_no_two_tables_share_a_staging_bronze_or_quarantine_name`
+    has compared them cross-role since F1.4a for exactly that reason; this is that
+    test's property moved to where the values are DECLARED, because the CI test does
+    not protect an ad-hoc run.
+
+    Two tables appending to one bronze table also breaks `_batch_id` idempotence,
+    since `rows_of_batch` would count the other table's rows for the same batch. And
+    a stale `quarantine` in particular is the documented F1.2/F1.3 incident: a
+    hardcoded quarantine name "sent estab triagers to a table full of unrelated F1.2
+    lookup rows".
+
+    Verified by probe to be reachable: before this existed, a paste of the
+    estabelecimentos entry with the staging/bronze/quarantine triple left unchanged
+    imported CLEAN.
+
+    A plain ValueError: nothing here is an unknown table."""
+    seen: dict[str, str] = {}
+    for spec in REGISTRY.values():
+        for role in _DELTA_NAME_ROLES:
+            name = getattr(spec, role)
+            owner = f"{spec.name}.{role}"
+            if name in seen:
+                raise ValueError(
+                    f"{owner} and {seen[name]} both declare Delta table {name!r}. "
+                    "Two tables on one Delta name cross-contaminate: appends from "
+                    "both land in one table, `_batch_id` idempotence counts the "
+                    "other table's rows as this batch's, and a quarantine that "
+                    "doubles as someone's staging feeds DQ rejects to a promote. "
+                    "Give each table its own staging/bronze/quarantine triple."
+                )
+            seen[name] = owner
+
+
+def _assert_no_two_tables_share_a_checkpoint_namespace() -> None:
+    """Fail at import if two specs claim the same `table_key`.
+
+    SEPARATE from the Delta-name check above, and this is the one counter-intuitive
+    thing in this file, so it is stated rather than left to be rediscovered:
+    `table_key` names NO Delta table. It is the namespace
+    `autoloader.checkpoint_location` and `schema_location` build
+    `_checkpoints/<table_key>` and `_schemas/<table_key>` from, so it lives in a
+    different namespace and is ALLOWED to spell itself like a Delta table --
+    `lookup.table_key` and `lookup.bronze` are both `bronze_cnpj_lookup` today, and
+    that is correct, not drift. The obvious implementation, one `seen` dict over all
+    four roles in one pass, therefore refuses the LIVE registry at import and breaks
+    every module that reads it. Pinned by
+    `test_a_table_key_may_equal_its_own_tables_bronze_name`, because the failure is
+    loud but its cause is not, and the natural fix on seeing it -- drop `table_key`
+    from the check -- silently reopens the hole below.
+
+    Which is why this is its own guard rather than a dropped field. The collision it
+    catches is the QUIETEST of the four. An Auto Loader checkpoint is a record of
+    which files have already been processed, so two tables sharing one means the
+    second stream starts up believing the first's files are its own and already
+    ingested: it writes nothing and reports SUCCESS. The shared `_schemas` entry
+    compounds it by merging two unrelated inferred schemas into one.
+
+    A plain ValueError: nothing here is an unknown table."""
+    seen: dict[str, str] = {}
+    for spec in REGISTRY.values():
+        if spec.table_key in seen:
+            raise ValueError(
+                f"{spec.name} and {seen[spec.table_key]} both claim checkpoint "
+                f"namespace {spec.table_key!r}. `table_key` is what autoloader "
+                "builds _checkpoints/<table_key> and _schemas/<table_key> from, and "
+                "a checkpoint records which files are already processed -- so two "
+                "tables sharing one means the second stream treats the first's "
+                "files as its own and already ingested, writes nothing, and reports "
+                "SUCCESS. Give each table a table_key of its own."
+            )
+        seen[spec.table_key] = spec.name
+
+
 _assert_contracts_exist()
 # Contract identity before anything derived FROM a contract: both checks below
 # resolve FILE_GROUPS entries by `spec.contract`, and neither is meaningful until
@@ -471,3 +597,14 @@ _assert_landing_modes_known()
 # total only over values already known to be a single directory name.
 _assert_subdirs_are_single_path_components()
 _assert_no_table_claims_a_reserved_subdir()
+# Individually-wrong before collectively-wrong, so the operator is never told the
+# wrong fix. Two tables both declaring subdir="zips" -- or both "" -- are a duplicate
+# AND two reserved/malformed values, and uniqueness would report it first as "give
+# each table a subdir of its own", which is advice to rename one of them to something
+# else reserved. Ordered last, the operator is told the real problem: neither value
+# may be used at all.
+_assert_no_two_tables_share_a_landing_subdir()
+# No ordering between these two or against anything above: they read fields nothing
+# else validates, in two namespaces that are independent of each other by design.
+_assert_no_two_tables_share_a_delta_name()
+_assert_no_two_tables_share_a_checkpoint_namespace()

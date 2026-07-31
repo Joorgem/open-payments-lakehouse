@@ -3,12 +3,52 @@ import pytest
 from pyspark.sql.types import StringType, StructField, StructType
 
 from opl.bronze.dq import REJECT_COLUMN, evaluate, split
+from opl.bronze.registry import REGISTRY
 from opl.bronze.rules import rules_for
 
 
 def test_unknown_table_raises():
     with pytest.raises(KeyError):
         rules_for("nope")
+
+
+def test_every_registered_table_has_a_rule_set():
+    """A registry entry with no rule set fails INSIDE the Spark job, at promote,
+    after ingest has already written staging -- and it arrives as a bare KeyError,
+    which is precisely what `registry.UnknownTable`'s docstring exists to avoid: a
+    KeyError re-`repr`s its message into a Databricks run log, and is silently
+    swallowable by an `except KeyError` several frames up that never named it.
+
+    Nothing else ties these two modules together. `REGISTRY` says a table exists and
+    `rules_for` says how its rows are judged, and the two are edited in different
+    files by different steps of the same phase -- so registering a table and
+    forgetting its rules is a one-commit gap that no other check in this repo can
+    see.
+
+    A test and not an import assertion, DELIBERATELY: `rules.py` imports pyspark and
+    `registry.py` does not, and importing one from the other would drag a Spark
+    dependency into the pure-Python registry tests. That is a real cost paid for a
+    real reason -- this file already imports pyspark, so the tie is asserted here
+    where it is free.
+
+    Passes with today's two tables. It is the guard for the phase that adds
+    `empresas` and `socios`, not a red test now; verified non-vacuous by adding a
+    third entry with no rule set and watching it fail.
+
+    The `except KeyError` is the point, not defensive noise. `rules_for` raises a
+    BARE KeyError for a table it does not know, so letting it propagate would fail
+    this test with `KeyError: 'empresas'` and none of the prose below -- reproducing
+    the unhelpful failure this guard exists to replace, in the very test meant to
+    replace it. Caught and turned into the assertion message instead."""
+    for spec in REGISTRY.values():
+        try:
+            rule_set = rules_for(spec.contract)
+        except KeyError:
+            rule_set = None
+        assert rule_set, (
+            f"{spec.name} is registered but rules_for({spec.contract!r}) yields no "
+            "rule set -- add it to opl.bronze.rules before registering the table"
+        )
 
 
 def test_lookup_rules_names_and_order():
