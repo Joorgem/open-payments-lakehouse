@@ -396,11 +396,14 @@ if __name__ == "__main__":
     # It got worse than a misleading status. INTERNAL_ERROR is a harness-level
     # error, not a clean task failure, so Databricks RETRIED the task -- past
     # `max_retries: 0`, which does not apply to it -- and the 71.9M-row overwrite
-    # ran a second time. It was harmless only by luck of design:
-    # `refuse_contradicting_month` permits a repeat with the SAME month and the
-    # write is idempotent. For a script whose failure message warns that a second
-    # run baselines its row count off whatever the first left behind, an exit
-    # convention that can silently trigger that second run is a defect.
+    # ran a second time. That was harmless BY DESIGN, not by luck:
+    # `refuse_contradicting_month` deliberately permits a repeat with the SAME
+    # month, and the write is idempotent, so the retry took the documented
+    # re-run path. What luck decided was only that the retry inherited the same
+    # month -- a retry is not a place to be depending on that. For a script whose
+    # failure message warns that a second run baselines its row count off whatever
+    # the first left behind, an exit convention that can silently trigger that
+    # second run is a defect regardless of how the second run turns out.
     #
     # Every task in `databricks/src/` already calls `main()` bare, which is why
     # none of them has ever shown this. `scripts/extract_cnpj.py` keeps
