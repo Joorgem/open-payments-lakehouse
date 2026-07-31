@@ -34,26 +34,45 @@ from opl.bronze.promote import (
     require_batch_id,
 )
 from opl.bronze.rules import rules_for
+from opl.contracts.cnpj_schemas import columns_for
 
 _ESTAB_RULES = rules_for("estabelecimentos")
 
-_STAGING_SCHEMA = StructType([
-    StructField("cnpj_basico", StringType()),
-    StructField("cnpj_ordem", StringType()),
-    StructField("cnpj_dv", StringType()),
-    StructField("nome_fantasia", StringType()),
-    StructField("logradouro", StringType()),
-    StructField("_batch_id", StringType()),
-])
+# THE FULL 30-COLUMN CONTRACT, not the five columns the old rules happened to
+# name. F1.4b folded the U+FFFD check over every column of the contract instead
+# of a hand-picked pair, so `_ESTAB_RULES` now resolves all thirty and a five-
+# column projection fails to analyse. That is the intended coupling and not an
+# accident: a staging table missing a contract column is a broken ingest, and a
+# rule set that silently skipped the columns it could not find would report a
+# clean gate over data it never looked at. Derived from `columns_for` rather
+# than restated, so the contract cannot drift away from the fixture.
+_ESTAB_COLUMNS = columns_for("estabelecimentos")
+
+_STAGING_SCHEMA = StructType(
+    [StructField(name, StringType()) for name in (*_ESTAB_COLUMNS, "_batch_id")]
+)
+
+
+def _estab_row(cnpj_basico: str, batch_id: str) -> tuple[str, ...]:
+    """One full-contract staging row. Every column non-blank so that the ONLY
+    thing distinguishing `_good` from `_rejected` is `cnpj_basico`'s length --
+    `municipio` in particular is now a required field, so leaving it empty would
+    reject every row here for a reason these tests are not about."""
+    values = {name: "X" for name in _ESTAB_COLUMNS}
+    values.update(
+        cnpj_basico=cnpj_basico, cnpj_ordem="0001", cnpj_dv="95",
+        nome_fantasia="PADARIA AÇAÍ", logradouro="RUA A", municipio="7107",
+    )
+    return (*(values[name] for name in _ESTAB_COLUMNS), batch_id)
 
 
 def _good(cnpj_basico: str, batch_id: str) -> tuple[str, ...]:
-    return (cnpj_basico, "0001", "95", "PADARIA AÇAÍ", "RUA A", batch_id)
+    return _estab_row(cnpj_basico, batch_id)
 
 
 def _rejected(batch_id: str) -> tuple[str, ...]:
     # 7 chars -> bad_cnpj_basico_length, the reason both real F1.3 rejects had.
-    return ("1234567", "0001", "95", "X", "Y", batch_id)
+    return _estab_row("1234567", batch_id)
 
 
 class _ExplodingSpark:
