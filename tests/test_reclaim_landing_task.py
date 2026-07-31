@@ -241,6 +241,45 @@ def test_a_month_that_is_not_a_month_is_refused_before_spark_and_before_any_dele
     assert spark.asked == [] and deleted == []
 
 
+def test_an_impossible_month_is_refused_before_a_session_is_even_REQUESTED(monkeypatch):
+    """`2026-13` is shape-valid, so nothing downstream of here can catch it.
+
+    THE FAILURE IT PREVENTS IS A GREEN RUN. `landing_table` interpolates the month
+    raw, so the containment root becomes `cnpj/2026-13/estabelecimentos` -- a
+    directory that cannot exist. Every file bronze proved is then OUTSIDE it, so
+    `delete_files` is handed nothing and `_report` prints
+    `REFUSED (left untouched)` for each one, whose text tells the operator to
+    "investigate how a row of this table came from there". That is the loudest
+    message this task has, spent on an incident that did not happen, while the actual
+    bug -- a month parameter naming no month -- is nowhere in the log. The proof set
+    below is the REAL landed part for exactly that reason: under the shape-only check
+    this call exited 0 having reclaimed nothing and having blamed the data.
+
+    Stubs `getOrCreate` to RAISE rather than asserting `spark.asked == []` like its
+    two neighbours: those prove no table was queried, this proves no serverless
+    session was requested at all, which is the ruling `require_month` claims in its
+    docstring ("Refuses BEFORE Spark") and the reason the range belongs in the shared
+    guard instead of in `ref_date_column`, which is reached only by the ingests."""
+    def _no_session():
+        raise AssertionError(
+            "SparkSession.builder.getOrCreate() was reached with an impossible month"
+        )
+
+    monkeypatch.setattr(
+        task, "SparkSession",
+        SimpleNamespace(builder=SimpleNamespace(getOrCreate=_no_session)),
+    )
+    _stub_proof(monkeypatch, [_PART])
+    deleted = _record_deletes(monkeypatch)
+
+    for impossible in ("2026-13", "2026-00"):
+        with pytest.raises(ValueError, match="01-12") as excinfo:
+            task.main(["estabelecimentos", "999", impossible])
+        assert "refusing to reclaim" in str(excinfo.value)
+
+    assert deleted == []
+
+
 def test_no_month_at_all_is_refused_rather_than_defaulted(monkeypatch):
     """The task must not answer a missing month with `opl.config`'s pinned one.
 

@@ -72,10 +72,36 @@ class OplConfig:
 
 DEFAULT = OplConfig()
 
-# A month is `YYYY-MM` and nothing else. Anchored, and digits rather than `[^/]`,
-# because this value is interpolated raw into the landing path every task above
-# builds.
-_MONTH = re.compile(r"^\d{4}-\d{2}$")
+# A month is `YYYY-MM` NAMING A REAL MONTH and nothing else. Anchored, and explicit
+# `[0-9]` rather than `[^/]` or `\d`, because this value is interpolated raw into the
+# landing path every task above builds: `[^/]` would admit a backslash, and `\d`
+# admits non-ASCII decimal digits, which name no directory the RFB ever wrote.
+#
+# THE RANGE (`01`-`12`) IS IN HERE, not in a caller, and that placement is the whole
+# point. It was in a caller: `opl.bronze.snapshot.ref_date_column` spelled it as
+# `1 <= int(month) <= 12`, so `2026-13` was refused for the two ingest tasks and
+# accepted for `unzip_table` and `reclaim_landing`, which call `require_month`
+# directly and never reach that function. Reclaim is where that costs something: the
+# month IS the delete boundary, so an impossible month scopes containment to a
+# directory that cannot exist, every proven file reads as outside it, and the task
+# prints REFUSED for all of them and exits green -- a log indistinguishable from the
+# containment guard catching a real F1.3 probe.txt incident. This branch already
+# fixed that exact failure shape once, for an ABSENT month; the out-of-range case
+# survived it because the check lived in a second place instead of in the guard all
+# four entry points route through. `ref_date_column` now asks `is_month` rather than
+# re-spelling the rule.
+_MONTH = re.compile(r"^[0-9]{4}-(0[1-9]|1[0-2])$")
+
+
+def is_month(value: str) -> bool:
+    """Is `value` a `YYYY-MM` naming a real month? THE one spelling of that rule.
+
+    Public so `opl.bronze.snapshot.ref_date_column` can ask it instead of carrying a
+    second implementation -- the two callers refuse for different REASONS (a wrong
+    landing path and delete boundary here, an all-NULL derived column there) and so
+    keep their own messages, but there is one predicate behind both. Two spellings of
+    one rule is how `2026-13` came to be refused at two of four entry points."""
+    return _MONTH.match(value) is not None
 
 
 def require_month(month: str | None, *, action: str) -> str:
@@ -119,6 +145,13 @@ def require_month(month: str | None, *, action: str) -> str:
     F1.3. Same framing as `registry._assert_subdirs_are_single_path_components`:
     a month names ONE directory under `cnpj/`; it is not a path.
 
+    MALFORMED INCLUDES OUT OF RANGE, which is the half that shape alone misses.
+    `2026-13` and `2026-00` are `YYYY-MM`-shaped and name no directory that can
+    exist, so they land on the WRONG-BUT-WELL-FORMED path above rather than being
+    caught by it: a reclaim scopes containment to a month directory nobody ever
+    wrote, reports every proven file REFUSED and exits green. See `_MONTH` for why
+    the range is in the regex here and not in a caller.
+
     Refuses BEFORE Spark, like `table_spec` and `require_batch_id`: nothing about
     an absent or malformed month needs a serverless session to diagnose."""
     candidate = month or ""
@@ -135,14 +168,17 @@ def require_month(month: str | None, *, action: str) -> str:
             "SAME month the rest of the flow was given -- in the job YAMLs that is "
             "{{job.parameters.month}}."
         )
-    if not _MONTH.match(candidate):
+    if not is_month(candidate):
         raise ValueError(
             f"refusing to {action}: month={month!r} is not a month. It has to be "
-            "YYYY-MM (e.g. 2026-06), because it names ONE directory under cnpj/ and "
-            "is interpolated raw into the landing path this task reads from or "
-            "deletes under -- it is not a path, and a value with a separator in it "
-            "moves that path onto another directory. '2026-06/zips' points it at the "
-            "raw ZIPs, which are the only way back to the source. Pass the same month "
-            "the rest of the flow was given."
+            "YYYY-MM with MM in 01-12 (e.g. 2026-06), because it names ONE directory "
+            "under cnpj/ and is interpolated raw into the landing path this task reads "
+            "from or deletes under -- it is not a path, and a value with a separator in "
+            "it moves that path onto another directory. '2026-06/zips' points it at the "
+            "raw ZIPs, which are the only way back to the source. '2026-13' has the "
+            "shape and names no directory that can exist, so a reclaim scopes its "
+            "delete boundary to a month nobody ever wrote, reports every proven file "
+            "REFUSED and exits green. Pass the same month the rest of the flow was "
+            "given."
         )
     return candidate

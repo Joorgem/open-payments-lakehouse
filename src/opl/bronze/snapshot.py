@@ -26,6 +26,8 @@ from __future__ import annotations
 from pyspark.sql import Column
 from pyspark.sql import functions as F
 
+from opl.config import is_month
+
 SNAPSHOT_MONTH_COLUMN = "_snapshot_month"
 SNAPSHOT_REF_DATE_COLUMN = "_snapshot_ref_date"
 
@@ -79,15 +81,28 @@ def ref_date_column(source_file: Column, snapshot_month: str) -> Column:
     other shape or an out-of-range month, before Spark builds anything -- a
     malformed month is a job-parameter bug, and the column it would produce (all
     NULL) hides it. `'2026-13'` passes a length-and-digits check and then fails
-    exactly that way, which is why the range is checked too."""
-    year, _, month = snapshot_month.partition("-")
-    shaped = len(year) == 4 and len(month) == 2 and (year + month).isdigit()
-    if not shaped or not 1 <= int(month) <= 12:
+    exactly that way, which is why the range is checked too.
+
+    THE RULE IS ASKED, NOT RESTATED: `opl.config.is_month` owns it, and this used
+    to spell it again as `len(year) == 4 ... and 1 <= int(month) <= 12`. That second
+    spelling is why `2026-13` was refused for the two ingest tasks (which reach here)
+    and accepted for `unzip_table` and `reclaim_landing` (which do not) until
+    `require_month` took the range on. The RAISE stays here rather than delegating to
+    `require_month`: the consequence is different -- there a wrong landing path or
+    delete boundary, here an all-NULL column that reads exactly like a source whose
+    filename format changed -- and a message naming the wrong consequence sends the
+    operator to the wrong place. Kept as a boundary check on a public function, not
+    as the primary gate: every in-repo caller has already been through
+    `require_month`, so in practice this now fires only for a direct caller."""
+    if not is_month(snapshot_month):
         raise ValueError(
             f"snapshot_month must be 'YYYY-MM' naming a real month, got "
             f"{snapshot_month!r} -- this is the job's month parameter; a malformed "
             "one would silently produce an all-NULL reference date column"
         )
+    # Split only after the guard, so `year[-1]` and the `token_month` comparison below
+    # are reading a value already proven to be four digits and a real month.
+    year, _, month = snapshot_month.partition("-")
 
     token_year = F.regexp_extract(source_file, _TOKEN, 1)
     token_month = F.regexp_extract(source_file, _TOKEN, 2)

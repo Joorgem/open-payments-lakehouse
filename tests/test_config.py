@@ -105,5 +105,66 @@ def test_a_month_that_is_not_a_month_is_refused(month):
         require_month(month, action="reclaim")
 
 
+@pytest.mark.parametrize("month", ["2026-13", "2026-00", "2026-99", "0000-13"])
+def test_a_shape_valid_month_naming_no_real_month_is_refused(month):
+    """The half a `\\d{4}-\\d{2}` shape check cannot see, and the reason it matters.
+
+    These are not path traversal -- they are WRONG BUT WELL FORMED, which is the
+    failure this branch keeps re-finding. `2026-13` clears the shape check and names
+    no directory that can exist, so `reclaim_landing` scopes its containment root to
+    `cnpj/2026-13/estabelecimentos`, every file bronze proved reads as OUTSIDE it, and
+    the task prints `REFUSED (left untouched)` for all of them and exits green. That
+    log is indistinguishable from the containment guard catching a real F1.3
+    probe.txt incident, so the operator's next move is to investigate a leak that
+    never happened while the month bug goes unnamed.
+
+    Refused HERE rather than only in `opl.bronze.snapshot.ref_date_column`, which had
+    the only copy of `1 <= int(month) <= 12`: that function is reached by the two
+    ingest tasks and by neither `unzip_table` nor `reclaim_landing`, so before this
+    the same value was refused at two of the four entry points and accepted at the
+    two that pick a delete boundary. Range and shape are now one rule in one place
+    (`is_month`), which is the property
+    `test_the_calendar_range_has_exactly_one_spelling` below pins."""
+    with pytest.raises(ValueError, match="month") as excinfo:
+        require_month(month, action="reclaim")
+    assert "01-12" in str(excinfo.value)
+
+
+def test_the_calendar_range_has_exactly_one_spelling():
+    """`opl.bronze.snapshot` must ASK the rule, not restate it.
+
+    A source-text assertion, like `test_ingest_tasks_batch_id`'s check that the job
+    tasks still route their month through `require_month`, and for the same reason:
+    what broke was not the logic in either place but the existence of two places. The
+    range check lived only in `ref_date_column`, which the two ingest tasks reach and
+    the unzip and reclaim tasks do not, so `2026-13` was refused for half the entry
+    points. Re-introducing a local `<= 12` there would restore exactly that split
+    while every test in `tests/bronze/test_snapshot.py` still passed."""
+    import ast
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "src" / "opl" / "bronze" / "snapshot.py"
+    ).read_text(encoding="utf-8")
+    fn = next(
+        node for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "ref_date_column"
+    )
+    # Docstring dropped, because it QUOTES the old check to explain why it moved --
+    # asserting over the prose would fail on the very comment that records the fix.
+    statements = fn.body[1:] if ast.get_docstring(fn) else fn.body
+    body = "\n".join(ast.unparse(s) for s in statements)
+
+    assert "is_month(snapshot_month)" in body, (
+        "ref_date_column no longer asks opl.config.is_month for the month rule"
+    )
+    assert "<= 12" not in body, (
+        "the calendar range has a second spelling inside ref_date_column -- that "
+        "split is what let 2026-13 through unzip_table and reclaim_landing"
+    )
+
+
 def test_a_real_month_is_accepted_unchanged():
     assert require_month("2026-06", action="ingest") == "2026-06"
+    assert require_month("2026-12", action="ingest") == "2026-12"
+    assert require_month("2026-01", action="ingest") == "2026-01"

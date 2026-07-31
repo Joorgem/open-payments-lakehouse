@@ -106,5 +106,25 @@ def test_an_unzip_without_a_month_is_refused_rather_than_defaulted(argv, monkeyp
     assert "{{job.parameters.month}}" in str(excinfo.value)
 
 
+@pytest.mark.parametrize("impossible", ["2026-13", "2026-00"])
+def test_an_unzip_of_a_month_that_cannot_exist_is_refused(impossible, monkeypatch):
+    """The other entry point `ref_date_column`'s range check never protected.
+
+    That check -- `1 <= int(month) <= 12` -- was the only one in the repo, and it runs
+    inside `add_audit_columns`, which this task does not call: no Spark, no audit
+    columns, just `zipfile` over three dirs. So a shape-valid impossible month reached
+    `unzip_dir` here, which created `cnpj/2026-13/estabelecimentos` and its `_tmp`
+    sibling, found no `*.zip` in a `zips` dir that had just been mkdir'd empty, and
+    printed "0 inner files present" as a green task. The ingest after it then read
+    that empty landing dir and also succeeded. `require_month` now owns shape AND
+    range, so all four entry points inherit it from one place."""
+    task = _load("unzip_table")
+    monkeypatch.setattr(task, "unzip_dir", _fail_if_called)
+
+    with pytest.raises(ValueError, match="01-12") as excinfo:
+        task.main(["estabelecimentos", impossible])
+    assert "refusing to unzip" in str(excinfo.value)
+
+
 def _fail_if_called(*_a, **_k):
     raise AssertionError("unzip_dir was reached with an unvalidated month")
