@@ -63,6 +63,40 @@ def test_the_two_live_tables_keep_the_exact_names_they_have_today():
     assert estab.landing == LANDING_ZIPS
 
 
+def test_the_four_live_tables_keep_the_exact_names_they_have_today():
+    """Extends the two-table pin above. These strings name live Delta tables and
+    live Volume directories; changing one is a migration, not an edit.
+
+    `table_key` and `landing` are pinned here for the same reason the two-table pin
+    carries them, and it is the sharper half for the two entries F1.4b PASTES. The
+    uniqueness guards cannot see a SWAP: give empresas socios' `table_key` and
+    socios empresas', and all four keys are still distinct, so every guard in
+    registry.py passes while each stream reads the other's Auto Loader checkpoint.
+    Same for a swapped `subdir` -- distinct, unrefused, and it lands Empresas files
+    in the socios directory. A per-table pin is the only thing that sees a swap,
+    because a swap is wrong about IDENTITY and every other check here is about
+    collision. `contract` is the one field a swap cannot survive unassisted:
+    `_assert_prefixes_match_their_file_groups` refuses it at import, because
+    empresas' declared prefix would then be checked against Socios' file group."""
+    empresas = table_spec("empresas")
+    assert empresas.staging == "bronze_cnpj_empresas_staging"
+    assert empresas.bronze == "bronze_cnpj_empresas"
+    assert empresas.quarantine == "bronze_cnpj_empresas_quarantine"
+    assert empresas.table_key == "bronze_cnpj_empresas"
+    assert empresas.subdir == "empresas"
+    assert empresas.prefix == "Empresas"
+    assert empresas.landing == LANDING_ZIPS
+
+    socios = table_spec("socios")
+    assert socios.staging == "bronze_cnpj_socios_staging"
+    assert socios.bronze == "bronze_cnpj_socios"
+    assert socios.quarantine == "bronze_cnpj_socios_quarantine"
+    assert socios.table_key == "bronze_cnpj_socios"
+    assert socios.subdir == "socios"
+    assert socios.prefix == "Socios"
+    assert socios.landing == LANDING_ZIPS
+
+
 def test_no_two_tables_share_a_staging_bronze_or_quarantine_name():
     """The defect class this registry exists to close, asserted directly.
 
@@ -136,6 +170,65 @@ def test_a_delta_name_reused_in_a_different_role_is_refused(monkeypatch):
 
     with pytest.raises(ValueError, match="both declare Delta table"):
         _assert_no_two_tables_share_a_delta_name()
+
+
+def test_a_delta_name_that_differs_only_in_case_is_refused(monkeypatch):
+    """Two spellings of one Unity Catalog table, which a byte comparison reads as two.
+
+    UC and Spark identifiers are CASE-INSENSITIVE: `BRONZE_CNPJ_ESTAB_STAGING` and
+    `bronze_cnpj_estab_staging` resolve to the same physical table, so an entry that
+    declares the shouted spelling has taken estabelecimentos' staging table -- and
+    before the guard casefolded, it imported clean. That is the sibling tests' defect
+    class exactly (appends from two tables in one table, `_batch_id` idempotence
+    counting the other's rows), reached past a guard that looks total.
+
+    Not a theoretical spelling. It is what a paste through an editor's
+    change-case-on-rename, or a value copied out of a SHOW TABLES listing, or a DDL
+    file written in the uppercase-keyword style, produces.
+
+    The message must carry BOTH spellings as written. An operator who reads a
+    normalised name in the refusal goes looking through source for a string that is
+    not there."""
+    pasted = replace(
+        REGISTRY["estabelecimentos"],
+        name="empresas",
+        contract="empresas",
+        subdir="empresas",
+        prefix="Empresas",
+        table_key="bronze_cnpj_empresas",
+        staging="BRONZE_CNPJ_ESTAB_STAGING",  # case-only difference: the same table
+        bronze="bronze_cnpj_empresas",
+        quarantine="bronze_cnpj_empresas_quarantine",
+    )
+    monkeypatch.setitem(REGISTRY, "empresas", pasted)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_no_two_tables_share_a_delta_name()
+    message = str(excinfo.value)
+    assert "both declare Delta table" in message
+    assert "'BRONZE_CNPJ_ESTAB_STAGING'" in message, (
+        "the operator must see the spelling they WROTE, not a normalised one"
+    )
+    assert "'bronze_cnpj_estab_staging'" in message, (
+        "and the spelling it collides with, or there is nothing to compare it to"
+    )
+
+
+def test_a_delta_name_collision_in_one_spelling_reads_as_one_name(monkeypatch):
+    """The case-insensitive message must not become noise in the ordinary case.
+
+    Guarding the guard's diagnosis: the fix above has to report two spellings when
+    there are two, and a plain duplicate when there is one. A message that always
+    printed `'x' (spelled 'x' there)` would be read as a case problem by an operator
+    who does not have one, and sent looking for a difference that is not there."""
+    pasted = replace(REGISTRY["lookup"], quarantine=REGISTRY["estabelecimentos"].staging)
+    monkeypatch.setitem(REGISTRY, "lookup", pasted)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_no_two_tables_share_a_delta_name()
+    message = str(excinfo.value)
+    assert "CASE-INSENSITIVE" not in message
+    assert message.count("'bronze_cnpj_estab_staging'") == 1
 
 
 def test_a_pasted_checkpoint_namespace_is_refused_at_import(monkeypatch):
@@ -708,4 +801,52 @@ def test_the_constraints_are_the_ones_the_live_tables_carry():
         "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
         "ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 "
         "CHECK (length(trim(cnpj_basico)) = 8)",
+    )
+
+
+def test_the_new_tables_carry_a_constraint_no_other_contract_could_have():
+    """The one paste `test_every_constraint_references_a_column_of_its_own_contract`
+    states, in its own docstring, that it cannot catch.
+
+    That test asks only that a statement mentions SOME column the contract has --
+    and estabelecimentos, empresas and socios are all keyed on `cnpj_basico`, so
+    estab's whole constraint tuple pasted onto empresas satisfies it. Constraint-to-
+    contract coherence structurally cannot tell three tables with one key column
+    apart.
+
+    So each new entry carries a statement on a column that is unique to ITS contract
+    -- `razao_social` for empresas, `identificador_socio` for socios -- and that is
+    the field the paste would be missing. This test is what makes "would be missing"
+    mean "is refused": without it, the unique constraint makes the paste visible only
+    to a human reading the diff, which is the standard this phase exists to stop
+    relying on.
+
+    Exact tuples rather than "mentions the unique column", because the DDL triple is
+    itself copy-pasted: a DROP naming one constraint and an ADD naming another leaves
+    the old check in place on every promote, and only equality sees that.
+
+    Unlike its sibling above, this pins constraints for tables that do NOT exist in
+    Delta yet -- they are created by this phase's first promote. It is a pin on what
+    will be APPLIED, which is the same string either way."""
+    unique_to_empresas = "razao_social"
+    unique_to_socios = "identificador_socio"
+    for contract, columns in TABLES.items():
+        if contract != "empresas":
+            assert unique_to_empresas not in columns, contract
+        if contract != "socios":
+            assert unique_to_socios not in columns, contract
+
+    assert table_spec("empresas").constraints == (
+        "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
+        "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
+        "ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 "
+        "CHECK (length(trim(cnpj_basico)) = 8)",
+        "ALTER TABLE {table} ALTER COLUMN razao_social SET NOT NULL",
+    )
+    assert table_spec("socios").constraints == (
+        "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
+        "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
+        "ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 "
+        "CHECK (length(trim(cnpj_basico)) = 8)",
+        "ALTER TABLE {table} ALTER COLUMN identificador_socio SET NOT NULL",
     )

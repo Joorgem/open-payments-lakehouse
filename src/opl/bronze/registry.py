@@ -191,6 +191,60 @@ REGISTRY: dict[str, BronzeTable] = {
             "CHECK (length(trim(cnpj_basico)) = 8)",
         ),
     ),
+    # The two F1.4b entries. Written as a PASTE of the one above, deliberately and
+    # under the guards built for exactly that in Tasks 1-3: `subdir`, `table_key`,
+    # the staging/bronze/quarantine triple, `contract` and `prefix` are each refused
+    # at import if one of them is left stale. What no guard can see is a SWAP between
+    # these two entries -- swapped subdirs are still unique, so uniqueness is blind to
+    # them -- which is why every field of both is pinned per table in
+    # `test_the_four_live_tables_keep_the_exact_names_they_have_today`.
+    "empresas": BronzeTable(
+        name="empresas",
+        contract="empresas",
+        table_key="bronze_cnpj_empresas",
+        staging="bronze_cnpj_empresas_staging",
+        bronze="bronze_cnpj_empresas",
+        quarantine="bronze_cnpj_empresas_quarantine",
+        subdir="empresas",
+        landing=LANDING_ZIPS,
+        prefix="Empresas",
+        constraints=(
+            "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
+            "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
+            "ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 "
+            "CHECK (length(trim(cnpj_basico)) = 8)",
+            # razao_social, not a second cnpj_basico rule: the constraint set is
+            # what a copy-paste from estabelecimentos would leave IDENTICAL, and
+            # all three CNPJ contracts key on cnpj_basico -- so a constraint that
+            # is unique to THIS contract is what makes the paste visible.
+            # `test_every_constraint_references_a_column_of_its_own_contract` says
+            # in its own docstring that it cannot see that paste (cnpj_basico is a
+            # column of all three); what turns "visible" into "refused" is
+            # `test_the_new_tables_carry_a_constraint_no_other_contract_could_have`.
+            "ALTER TABLE {table} ALTER COLUMN razao_social SET NOT NULL",
+        ),
+    ),
+    "socios": BronzeTable(
+        name="socios",
+        contract="socios",
+        table_key="bronze_cnpj_socios",
+        staging="bronze_cnpj_socios_staging",
+        bronze="bronze_cnpj_socios",
+        quarantine="bronze_cnpj_socios_quarantine",
+        subdir="socios",
+        landing=LANDING_ZIPS,
+        prefix="Socios",
+        constraints=(
+            "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
+            "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
+            "ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 "
+            "CHECK (length(trim(cnpj_basico)) = 8)",
+            # identificador_socio for empresas' razao_social reason: it is the one
+            # column above that no other registered contract has, so it is the
+            # statement a pasted constraint tuple would be missing.
+            "ALTER TABLE {table} ALTER COLUMN identificador_socio SET NOT NULL",
+        ),
+    ),
 }
 
 
@@ -499,6 +553,31 @@ def _assert_no_two_tables_share_a_landing_subdir() -> None:
         seen[spec.subdir] = spec.name
 
 
+def _delta_name_collision(owner: str, name: str, other: tuple[str, str]) -> str:
+    """The refusal text for two specs naming one Delta table, in the words they wrote.
+
+    The comparison is casefolded, so the two strings this reports may not be EQUAL --
+    and an operator handed only a normalised name would search source for a string
+    nobody wrote. Both spellings, and the reason they are the same table, but ONLY
+    when they differ: a plain duplicate annotated with a case explanation sends the
+    operator looking for a difference that is not there, and the ordinary duplicate is
+    the case that actually happens."""
+    other_owner, other_name = other
+    note = "" if name == other_name else (
+        f", which {other_owner} spells {other_name!r} -- Unity Catalog and Spark "
+        "identifiers are CASE-INSENSITIVE, so two spellings that differ only in case "
+        "name ONE physical table"
+    )
+    return (
+        f"{owner} and {other_owner} both declare Delta table {name!r}{note}. "
+        "Two tables on one Delta name cross-contaminate: appends from both land in "
+        "one table, `_batch_id` idempotence counts the other table's rows as this "
+        "batch's, and a quarantine that doubles as someone's staging feeds DQ "
+        "rejects to a promote. Give each table its own staging/bronze/quarantine "
+        "triple."
+    )
+
+
 def _assert_no_two_tables_share_a_delta_name() -> None:
     """Fail at import if two specs name the same Delta table in any of the three
     roles that name one.
@@ -531,10 +610,16 @@ def _assert_no_two_tables_share_a_delta_name() -> None:
     same property in the same shape.
 
     `table_key` is deliberately absent: it is a Volume path component, not a table.
-    See `_assert_no_two_tables_share_a_checkpoint_namespace`.
+    See `_assert_no_two_tables_share_a_checkpoint_namespace`, which also records why
+    it and `subdir` compare case-SENSITIVELY where this one does not.
+
+    CASEFOLDED: UC and Spark identifiers are case-insensitive, so
+    `staging="BRONZE_CNPJ_ESTAB_STAGING"` IS estabelecimentos' staging table -- and
+    under the byte comparison this used until F1.4b it imported CLEAN, with every
+    consequence above intact. `_delta_name_collision` reports both spellings.
 
     A plain ValueError: nothing here is an unknown table."""
-    seen: dict[str, str] = {}
+    seen: dict[str, tuple[str, str]] = {}
     for spec in REGISTRY.values():
         for role, name in (
             ("staging", spec.staging),
@@ -542,16 +627,10 @@ def _assert_no_two_tables_share_a_delta_name() -> None:
             ("quarantine", spec.quarantine),
         ):
             owner = f"{spec.name}.{role}"
-            if name in seen:
-                raise ValueError(
-                    f"{owner} and {seen[name]} both declare Delta table {name!r}. "
-                    "Two tables on one Delta name cross-contaminate: appends from "
-                    "both land in one table, `_batch_id` idempotence counts the "
-                    "other table's rows as this batch's, and a quarantine that "
-                    "doubles as someone's staging feeds DQ rejects to a promote. "
-                    "Give each table its own staging/bronze/quarantine triple."
-                )
-            seen[name] = owner
+            key = name.casefold()
+            if key in seen:
+                raise ValueError(_delta_name_collision(owner, name, seen[key]))
+            seen[key] = (owner, name)
 
 
 def _assert_no_two_tables_share_a_checkpoint_namespace() -> None:
@@ -577,6 +656,17 @@ def _assert_no_two_tables_share_a_checkpoint_namespace() -> None:
     second stream starts up believing the first's files are its own and already
     ingested: it writes nothing and reports SUCCESS. The shared `_schemas` entry
     compounds it by merging two unrelated inferred schemas into one.
+
+    CASE-SENSITIVE, where the Delta-name guard casefolds, and the asymmetry is a
+    decision rather than an oversight. `table_key` and `subdir` are components of
+    Volume PATHS, and a Volume is backed by object storage, where `bronze_cnpj_estab`
+    and `BRONZE_CNPJ_ESTAB` are two directories -- so two spellings that differ only
+    in case are not one checkpoint, and there is no collision here to refuse. The
+    Delta guard casefolds because UC and Spark resolve identifiers case-insensitively,
+    which is a property of the thing NAMED; extending that to a path would be a claim
+    about storage this project has not measured, and it would refuse a registry that
+    is merely oddly capitalised. Stated because the opposite reading -- that the
+    casefold was simply forgotten here -- is the obvious one.
 
     A plain ValueError: nothing here is an unknown table."""
     seen: dict[str, str] = {}
