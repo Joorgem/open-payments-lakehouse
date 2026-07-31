@@ -9,7 +9,8 @@ from pyspark.sql.types import StringType, StructField, StructType
 
 from opl.bronze.dq import REJECT_COLUMN, evaluate, split
 from opl.bronze.registry import REGISTRY
-from opl.bronze.rules import REQUIRED_FIELDS, rules_for
+from opl.bronze.rules import REQUIRED_FIELDS, REQUIRES_COLUMN, rules_for
+from opl.bronze.snapshot import SNAPSHOT_REF_DATE_COLUMN
 from opl.contracts.cnpj_schemas import TABLES
 
 _REPLACEMENT_CHAR = "�"
@@ -288,6 +289,7 @@ def test_the_estabelecimentos_rule_order_is_pinned():
         "null_or_empty_municipio",
         "bad_cnpj_basico_length",
         "encoding_replacement_char",
+        "unprovable_snapshot_ref_date",
     ]
 
 
@@ -302,6 +304,7 @@ def test_the_empresas_rule_order_is_pinned():
         "null_or_empty_natureza_juridica",
         "bad_cnpj_basico_length",
         "encoding_replacement_char",
+        "unprovable_snapshot_ref_date",
     ]
 
 
@@ -317,6 +320,7 @@ def test_the_socios_rule_order_is_pinned():
         "null_or_empty_qualificacao_socio",
         "bad_cnpj_basico_length",
         "encoding_replacement_char",
+        "unprovable_snapshot_ref_date",
     ]
 
 
@@ -511,3 +515,150 @@ def test_socios_rules_evaluate(spark):
     assert out["4444444"] == "bad_cnpj_basico_length"
     assert out["55555555"] == "encoding_replacement_char"
     assert out["66666666"] is None
+
+
+# --- F1.4b Task 3: the NULL snapshot.ref_date_column produces on purpose ------
+
+# A clean empresas row in contract order, spelled once. Every test below varies
+# only `_snapshot_ref_date`, so a literal per test would put six copies of the
+# same seven fields in the file and invite one of them to drift into tripping an
+# earlier rule -- which would make the test green for the wrong reason, since
+# first-match-wins means an earlier reason HIDES the one under test.
+_CLEAN_EMPRESAS_ROW = ("11111111", "ACME LTDA", "2062", "49", "1000,00", "05", "")
+
+
+def test_a_row_whose_ref_date_could_not_be_proven_is_rejected(spark):
+    """The NULL that snapshot.ref_date_column produces on purpose, finally read by
+    something. A month whose filenames change shape yields an all-NULL column, and
+    until now nothing looked."""
+    df = (spark.createDataFrame([_CLEAN_EMPRESAS_ROW], TABLES["empresas"])
+          .withColumn(SNAPSHOT_REF_DATE_COLUMN, F.lit(None).cast("date")))
+    reasons = [r[REJECT_COLUMN]
+               for r in evaluate(df, rules=rules_for("empresas")).collect()]
+    assert reasons == ["unprovable_snapshot_ref_date"]
+
+
+def test_the_ref_date_rule_is_skipped_when_the_column_is_absent(spark):
+    """rules_for is used on a plain contract DataFrame in unit tests and on the
+    ingested frame in the job. The rule must not explode on the former."""
+    df = spark.createDataFrame([_CLEAN_EMPRESAS_ROW], TABLES["empresas"])
+    assert [r[REJECT_COLUMN]
+            for r in evaluate(df, rules=rules_for("empresas")).collect()] == [None]
+
+
+def test_a_proven_ref_date_is_not_rejected(spark):
+    """The other half of the rule, and NOT redundant with the two above.
+
+    Between them those two are satisfied by a rule that rejects every row
+    carrying the column at all -- the reject test dirties the column to NULL and
+    the skip test removes it entirely, so neither ever presents a column that is
+    PRESENT and VALID. That is the shape production is in for every month whose
+    filenames parse, i.e. the shape a false positive would turn every run red on.
+
+    2026-06-13 is not an arbitrary date: it is what `D60613` decodes to, the token
+    the June files actually shipped (snapshot.py's docstring)."""
+    df = (spark.createDataFrame([_CLEAN_EMPRESAS_ROW], TABLES["empresas"])
+          .withColumn(SNAPSHOT_REF_DATE_COLUMN, F.lit("2026-06-13").cast("date")))
+    assert [r[REJECT_COLUMN]
+            for r in evaluate(df, rules=rules_for("empresas")).collect()] == [None]
+
+
+def test_an_earlier_defect_outranks_the_unprovable_ref_date(spark):
+    """Why the rule goes LAST, pinned rather than left to the order test alone.
+
+    `unprovable_snapshot_ref_date` is a property of the FILE the row arrived in,
+    not of the row: when the filename format changes, EVERY row of the batch
+    carries it. Placed anywhere but last it would become the reason printed for
+    the whole quarantine, burying the per-row defects (a truncated record, a lost
+    byte) that a triager can actually act on. The order test pins the list; this
+    pins what the list is FOR, on a row that trips both rules at once.
+
+    The reverse direction matters too and is asserted below it: a row with a
+    proven date and a real defect must still report the defect. A rule appended
+    last cannot shadow anything, but it CAN be miswired into the chain -- an
+    `.otherwise` in the wrong place would swallow the earlier reasons."""
+    df = (spark.createDataFrame(
+              [("1234567", "ACME LTDA", "2062", "49", "1000,00", "05", ""),
+               ("22222222", None, "2062", "49", "1000,00", "05", "")],
+              TABLES["empresas"])
+          .withColumn(SNAPSHOT_REF_DATE_COLUMN, F.lit(None).cast("date")))
+    out = {r["cnpj_basico"]: r[REJECT_COLUMN]
+           for r in evaluate(df, rules=rules_for("empresas")).collect()}
+    assert out["1234567"] == "bad_cnpj_basico_length"
+    assert out["22222222"] == "null_or_empty_razao_social"
+
+    proven = (spark.createDataFrame(
+                  [("1234567", "ACME LTDA", "2062", "49", "1000,00", "05", "")],
+                  TABLES["empresas"])
+              .withColumn(SNAPSHOT_REF_DATE_COLUMN, F.lit("2026-06-13").cast("date")))
+    assert [r[REJECT_COLUMN]
+            for r in evaluate(proven, rules=rules_for("empresas")).collect()] == [
+        "bad_cnpj_basico_length"
+    ]
+
+
+def test_a_rule_naming_a_column_no_frame_has_still_fails_loudly(spark):
+    """THE PROBE THAT CLOSES THE SKIP PATH. Without it, `_reject_reason`'s new
+    `continue` is a hole with a test suite that cannot see into it.
+
+    The skip is safe only because it is keyed on a DECLARED column name. The
+    tempting implementation -- wrapping `predicate()` in
+    `except AnalysisException: continue` -- passes every other test in this file
+    and is a different thing: it also skips a rule whose column name is a TYPO,
+    turning a broken rule into one that never fires, on a gate whose entire job
+    is to fire. Both halves below are green under the declared lookup and red
+    under the blanket except.
+
+    First half: an undeclared reason naming a column no frame has must raise.
+    Second half is the sharper one -- the reason IS in REQUIRES_COLUMN and the
+    declared column IS present, but the predicate reads a typo of it. The lookup
+    finds the declared column, does not skip, and Spark refuses. A blanket except
+    would have called that rule "not applicable" and returned a clean frame."""
+    df = (spark.createDataFrame([_CLEAN_EMPRESAS_ROW], TABLES["empresas"])
+          .withColumn(SNAPSHOT_REF_DATE_COLUMN, F.lit(None).cast("date")))
+
+    undeclared = [("typo_in_a_new_rule", lambda: F.col("_no_such_column").isNull())]
+    with pytest.raises(AnalysisException, match="_no_such_column"):
+        evaluate(df, rules=undeclared).collect()
+
+    assert "unprovable_snapshot_ref_date" in REQUIRES_COLUMN
+    typoed = [("unprovable_snapshot_ref_date",
+               lambda: F.col("_snapshot_ref_dat").isNull())]
+    with pytest.raises(AnalysisException, match="_snapshot_ref_dat"):
+        evaluate(df, rules=typoed).collect()
+
+
+def test_every_requires_column_entry_is_declared_against_a_real_rule():
+    """A typo on either side of REQUIRES_COLUMN, caught in pure Python.
+
+    A typo in the KEY silently un-declares the requirement: the reason is spelled
+    one way in the rule set and another here, `.get` returns None, and the rule
+    stops being skippable -- so `rules_for("empresas")` on a bare contract frame
+    goes back to raising UNRESOLVED_COLUMN, in the DQ gate task, after ingest has
+    written staging.
+
+    A typo in the VALUE is worse and is the one this file cares most about: if a
+    declared column were ever a CONTRACT column, a frame MISSING that contract
+    column would skip the rule instead of failing, which is precisely the lenient
+    behaviour `test_a_rule_set_refuses_a_frame_that_is_missing_a_contract_column`
+    exists to forbid. The skip is only defensible for METADATA columns, whose
+    absence means "this frame predates the derivation" rather than "this ingest
+    is broken" -- so that is asserted, not assumed."""
+    # REQUIRED_FIELDS over TABLES: every rule set is built from
+    # `_required_rules(contract)`, so its keys are exactly the contracts that HAVE
+    # a rule set. `TABLES` also holds `simples`, which has none yet -- sweeping it
+    # would fail this guard with a bare KeyError about an unrelated contract.
+    reasons = {name for contract in REQUIRED_FIELDS for name, _ in rules_for(contract)}
+    for reason, column in REQUIRES_COLUMN.items():
+        assert reason in reasons, (
+            f"REQUIRES_COLUMN declares {reason!r}, which no rule set produces -- "
+            "the declaration is inert and the rule it was meant to guard will "
+            "raise UNRESOLVED_COLUMN on any frame without its column"
+        )
+        holders = [c for c in TABLES if column in TABLES[c]]
+        assert not holders, (
+            f"REQUIRES_COLUMN[{reason!r}] names {column!r}, a column of contract(s) "
+            f"{holders}. Only metadata columns may be declared skippable: a frame "
+            "missing a CONTRACT column is a broken ingest and must fail loudly, "
+            "not be quietly narrowed around"
+        )

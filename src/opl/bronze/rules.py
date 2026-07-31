@@ -15,9 +15,35 @@ from collections.abc import Callable
 from pyspark.sql import Column
 from pyspark.sql import functions as F
 
+from opl.bronze.snapshot import SNAPSHOT_REF_DATE_COLUMN
 from opl.contracts.cnpj_schemas import TABLES
 
 _REPLACEMENT_CHAR = "�"
+
+# ONE spelling, because this string is the only thing tying the rule below to its
+# declaration in REQUIRES_COLUMN. Two literals would drift in the direction that
+# does not announce itself: the declaration would stop matching, the rule would
+# stop being skippable, and the symptom is an UNRESOLVED_COLUMN raised inside the
+# DQ gate task -- after ingest has already written staging -- rather than anything
+# visible here. Every other reason string in this module is a literal because it
+# is written in exactly one place; this one is not.
+_UNPROVABLE_REF_DATE = "unprovable_snapshot_ref_date"
+
+# A rule that reads a column the contract does not declare. The frame decides:
+# the snapshot columns exist on the INGESTED frame and not on a bare contract
+# frame, and both are legitimate inputs to `evaluate`. Declared per reason rather
+# than discovered by catching AnalysisException -- a blanket except would also
+# swallow a rule with a typo'd column name, which is the "silently produce a
+# wrong answer" shape this gate exists to refuse.
+#
+# ONLY METADATA COLUMNS BELONG HERE, and that is a hard line rather than a habit:
+# a CONTRACT column declared skippable would turn a broken ingest into a clean
+# run over data the gate never looked at, which is exactly the leniency
+# `test_a_rule_set_refuses_a_frame_that_is_missing_a_contract_column` was written
+# to forbid. Guarded by a test, not left to this comment.
+REQUIRES_COLUMN: dict[str, str] = {
+    _UNPROVABLE_REF_DATE: SNAPSHOT_REF_DATE_COLUMN,
+}
 
 # Columns that are never legitimately blank, per contract. DECLARED, not derived
 # from position: `empresas.ente_federativo_responsavel` is the LAST column and is
@@ -124,6 +150,40 @@ def _cnpj_basico_length() -> Column:
     return F.length(F.trim(F.col("cnpj_basico"))) != 8
 
 
+def _unprovable_ref_date() -> Column:
+    """The reference date the RFB declares in its own filename, absent.
+
+    `snapshot.ref_date_column` yields NULL whenever it cannot PROVE a date --
+    no `.D<y><mm><dd>.` token in the filename, two of them, or a token whose
+    month/year digit disagrees with the job's month parameter. That refusal was
+    only half a control: nothing read the NULLs, so a month shipping a different
+    filename shape produced an all-NULL column and a green run. This is the half
+    that speaks, and it is the debt `snapshot.py`'s docstring booked to F1.4b.
+
+    SAFE ON A LIVE TABLE BECAUSE IT IS MEASURED, the same precondition
+    `municipio` had to meet: over all 71,874,448 rows of
+    workspace.default.bronze_cnpj_estabelecimentos the NULL count for this column
+    is 0, verified by a SQL query independent of the backfill script's own log
+    (docs/f1.4a-migration-evidence.md). So this rejects nothing that exists today.
+    The gate is all-or-nothing -- any reject fails the run -- so that number is a
+    precondition and not a footnote.
+
+    A row-level rule for a FILE-level fact, deliberately. The gate has no other
+    vocabulary -- it tags rows -- and the shape that follows from that is the
+    right one anyway: when a filename format changes, every row of that file
+    carries the reason, the gate is all-or-nothing, and the run goes red with the
+    reason naming the actual cause. A batch mixing one unparseable file with
+    several good ones quarantines only the rows from the bad file, which is the
+    behaviour a per-file count could not express.
+
+    WHAT THIS DOES NOT CATCH, so it is not mistaken for more than it is: a token
+    that parses but is WRONG (the RFB restating June's date on a July file) is a
+    date this rule accepts. `_snapshot_month` sits beside it carrying the job's
+    month, so the disagreement is visible in the row -- see snapshot.py on why
+    both columns exist. Catching that would be a cross-column check, not this."""
+    return F.col(SNAPSHOT_REF_DATE_COLUMN).isNull()
+
+
 def rules_for(table: str) -> list[tuple[str, Callable[[], Column]]]:
     """The ordered rule set for `table`, first-match-wins. KeyError if unknown.
 
@@ -139,8 +199,26 @@ def rules_for(table: str) -> list[tuple[str, Callable[[], Column]]]:
     `null_or_empty_cnpj_basico` and `null_or_empty_cnpj_ordem`. A row that is both
     short in cnpj_basico and blank in a later required column now reports the
     blank column. Both reasons are true of that row and it is rejected either
-    way -- a reporting change, not a gate change."""
+    way -- a reporting change, not a gate change.
+
+    `unprovable_snapshot_ref_date` is LAST, below even the encoding check, and for
+    a reason the position alone does not carry: it is the only rule here that
+    describes the FILE rather than the row, so when it fires it fires for every
+    row of that file at once. Ranked any higher it would become the reason printed
+    across a whole quarantine, burying the per-row defects -- a truncated record, a
+    lost byte -- that a triager can act on. A row is judged by what is wrong with
+    IT, and only then by where it came from."""
     tables = {
+        # NOT on lookup, and this is a scope line rather than a claim that lookup
+        # cannot drift: its rows carry `_snapshot_ref_date` too, so a lookup
+        # filename changing shape still goes unremarked. KNOWN GAP, and the reason
+        # it is a gap rather than a decision is worth being exact about -- the
+        # measurement that would justify closing it already exists (7,408 rows of
+        # bronze_cnpj_lookup, null_ref_date=0, same evidence doc). What holds it
+        # open is only that the lookup set is pinned byte-for-byte to what F1.2
+        # shipped, and F1.4b's scope is the three tables it introduces. Adding a
+        # new way for the one table already in production to go red belongs in a
+        # change that says so, not as a rider on this one.
         "lookup": [
             *_required_rules("lookup"),
             ("encoding_replacement_char", _encoding_check("lookup")),
@@ -149,16 +227,19 @@ def rules_for(table: str) -> list[tuple[str, Callable[[], Column]]]:
             *_required_rules("estabelecimentos"),
             ("bad_cnpj_basico_length", _cnpj_basico_length),
             ("encoding_replacement_char", _encoding_check("estabelecimentos")),
+            (_UNPROVABLE_REF_DATE, _unprovable_ref_date),
         ],
         "empresas": [
             *_required_rules("empresas"),
             ("bad_cnpj_basico_length", _cnpj_basico_length),
             ("encoding_replacement_char", _encoding_check("empresas")),
+            (_UNPROVABLE_REF_DATE, _unprovable_ref_date),
         ],
         "socios": [
             *_required_rules("socios"),
             ("bad_cnpj_basico_length", _cnpj_basico_length),
             ("encoding_replacement_char", _encoding_check("socios")),
+            (_UNPROVABLE_REF_DATE, _unprovable_ref_date),
         ],
     }
     return list(tables[table])
