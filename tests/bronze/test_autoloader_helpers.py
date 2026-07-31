@@ -15,6 +15,7 @@ from opl.bronze.autoloader import (
     lookup_type_column,
     schema_location,
 )
+from opl.bronze.promote import BATCH_COLUMN
 from opl.bronze.registry import table_spec
 from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN
 from opl.config import DEFAULT
@@ -27,21 +28,50 @@ def test_audit_columns_added_with_constant_values(spark):
         [("01", "AÇÃO", _SOURCE_FILE)], ["codigo", "descricao", "_source_file"]
     )
     out = add_audit_columns(df, batch_id="run-123", snapshot_month="2026-06")
+    # BATCH_COLUMN, not the literal: this ingest WRITES the column that
+    # `promote.rows_of_batch` and `retention.files_of_batch` filter on, and it wrote
+    # it as a bare "_batch_id" until the F1.4a review. Asserted through the constant
+    # so a rename fails here instead of turning the promote into a silent no-op
+    # (0 rows of its own batch) and the reclaim into a delete of nothing.
     assert {
         "_ingested_at",
         "_record_source",
-        "_batch_id",
+        BATCH_COLUMN,
         SNAPSHOT_MONTH_COLUMN,
         SNAPSHOT_REF_DATE_COLUMN,
     } <= set(out.columns)
     row = out.collect()[0]
-    assert row["_batch_id"] == "run-123"
+    assert row[BATCH_COLUMN] == "run-123"
     assert row["_record_source"] == RECORD_SOURCE
     assert row["_ingested_at"] is not None
     # The operational identity is the parameter; the business fact is the
     # date the RFB declares, which is NOT month-end. Both, side by side.
     assert row[SNAPSHOT_MONTH_COLUMN] == "2026-06"
     assert row[SNAPSHOT_REF_DATE_COLUMN] == dt.date(2026, 6, 13)
+
+
+def test_the_batch_column_written_here_follows_the_constant_the_readers_filter_on(
+        spark, monkeypatch):
+    """That the WRITE goes through the constant, not merely that the name matches.
+
+    The test above cannot tell a constant from a literal that happens to spell the
+    same thing, and that is exactly what this function held until the F1.4a review:
+    `"_batch_id"` inline, two lines above `SOURCE_FILE_COLUMN` used as a constant
+    BECAUSE "two spellings would silently reclaim nothing". Rebinding the constant is
+    what separates them -- with a literal the produced frame keeps `_batch_id` and
+    never grows the rebound name.
+
+    Why it matters which one it is: `promote.rows_of_batch` and
+    `retention.files_of_batch` FILTER on this constant. Rename it and six imports
+    raise; rename the literal and the promote counts 0 rows of its own batch and
+    reports success having appended nothing."""
+    monkeypatch.setattr(al, "BATCH_COLUMN", "_batch_id_probe")
+    df = spark.createDataFrame(
+        [("01", "AÇÃO", _SOURCE_FILE)], ["codigo", "descricao", "_source_file"]
+    )
+    out = add_audit_columns(df, batch_id="run-123", snapshot_month="2026-06")
+    assert "_batch_id_probe" in out.columns
+    assert BATCH_COLUMN not in out.columns
 
 
 def test_the_snapshot_month_has_no_default():

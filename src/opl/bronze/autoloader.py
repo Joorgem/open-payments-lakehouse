@@ -8,6 +8,7 @@ from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from opl.bronze.lookup_routing import LOOKUP_SUFFIX
+from opl.bronze.promote import BATCH_COLUMN
 from opl.bronze.reader import csv_read_options
 from opl.bronze.registry import table_spec
 from opl.bronze.schema import struct_for
@@ -25,6 +26,12 @@ RECORD_SOURCE = "rfb_cnpj_webdav"
 # files may be deleted from the Volume: two spellings of it would be a rename in one
 # place that makes the retention query return nothing and silently reclaim nothing.
 SOURCE_FILE_COLUMN = "_source_file"
+# `_batch_id`'s one spelling is `promote.BATCH_COLUMN`, imported above rather than
+# restated here: it is created in `add_audit_columns` like the column above, but its
+# READERS -- `promote.rows_of_batch`, `promote.batch_rows`, `retention.files_of_batch`
+# and the three job tasks -- are all on the promote side, and that is where the
+# constant already lived when this module still wrote the name as a bare literal.
+
 # NO table-name constants here. BRONZE_STAGING / BRONZE_ESTAB_STAGING /
 # BRONZE_QUARANTINE / BRONZE_ESTAB_QUARANTINE lived here until F1.4 Task 8 and
 # were a SECOND spelling of names `opl.bronze.registry` already owns -- one import
@@ -63,7 +70,16 @@ def add_audit_columns(
     return (
         df.withColumn("_ingested_at", F.current_timestamp())
         .withColumn("_record_source", F.lit(record_source))
-        .withColumn("_batch_id", F.lit(batch_id))
+        # BATCH_COLUMN, not the literal it was until the F1.4a review. Every reader
+        # of this column FILTERS on that constant, so the two spellings fail in
+        # opposite directions: renaming the constant raises in six places, while
+        # renaming this literal leaves `rows_of_batch` counting 0 rows of its own
+        # batch -- a promote that reports success having appended nothing -- and
+        # `files_of_batch` proving nothing, so a reclaim silently deletes no bytes.
+        # That is the same argument SOURCE_FILE_COLUMN carries two lines below
+        # ("two spellings would silently reclaim nothing"), in the same function and
+        # for the same reason; this column was the one left out of it.
+        .withColumn(BATCH_COLUMN, F.lit(batch_id))
         .withColumn(SNAPSHOT_MONTH_COLUMN, F.lit(snapshot_month))
         .withColumn(
             SNAPSHOT_REF_DATE_COLUMN,
