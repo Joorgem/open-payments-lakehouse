@@ -18,14 +18,14 @@
 # the mask afterwards. ensure_masked_table creates it empty and masks it BEFORE
 # anything is unzipped, so "the control was applied when the data landed" is
 # true rather than nearly true. The task ordering IS the control; there is no
-# second mechanism behind it, which is why tests/test_task_wiring.py asserts
+# second mechanism behind it, which is why tests/test_job_yaml_wiring.py asserts
 # that no task of this job can start before it.
 #
 # WRITTEN AS A COPY of the Estabelecimentos job, which is the risk this phase
 # exists to test: `socios` appears in seven task parameter lists below and every
 # wrong value it could carry is the name of a table that EXISTS, so a leftover
 # string does not fail the run -- it ingests, gates, promotes or reclaims
-# Estabelecimentos and reports SUCCESS. tests/test_task_wiring.py refuses any
+# Estabelecimentos and reports SUCCESS. tests/test_job_yaml_wiring.py refuses any
 # registered table name in this file other than this job's own.
 #
 # WHY THE PROSE ABOVE CAPITALISES IT, here and everywhere below. Registry keys
