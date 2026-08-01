@@ -163,7 +163,16 @@ Two consequences were followed through rather than left implicit:
   same link, in the same run, nine objects each way. The whole run averaged
   **65.5 MB/min** against the **~67 MB/min** this ADR assumed when it re-derived
   `UPLOAD_RETRY_TIMEOUT_SECONDS` above, so the 30-minute per-part budget is
-  correctly sized by observation and not only by arithmetic.
+  **consistent with observed aggregate throughput** — the rate the derivation was
+  built on survives contact with this link.
+
+  That is weaker than "correctly sized by observation", which this bullet said
+  until CodeRabbit read it on PR #6, and the difference is worth keeping. What was
+  measured is twenty whole-object transfers and their aggregate rate. What the
+  budget is actually about — one 50 MiB part completing inside 30 minutes, and the
+  timeout releasing a stalled part so the SDK can retry it — was not exercised:
+  no part was timed individually and nothing stalled. The observation removes the
+  input assumption from the argument; it does not remove the argument.
 
   The byte counts, durations and per-object sizes behind those three rates are in
   [`docs/f1.4b-pr-a-run-evidence.md` §2](../f1.4b-pr-a-run-evidence.md#2-the-upload--and-the-nine-objects-that-were-not-multipart)
