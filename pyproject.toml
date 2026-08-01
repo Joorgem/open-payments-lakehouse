@@ -50,6 +50,12 @@ spark = [
 dev = [
     "pytest==8.3.4",
     "ruff==0.9.2",
+    # DECLARED, though it was already installed transitively (pre-commit depends
+    # on it). tests/test_task_wiring.py parses the job YAMLs -- which table each
+    # job hands its tasks is wiring no source-level test can see -- and a test
+    # importing a package nobody declared keeps working only for as long as the
+    # package that happens to pull it in stays in this list.
+    "pyyaml==6.0.3",
     "psycopg[binary]==3.2.3",
     "confluent-kafka==2.6.1",
     "pre-commit==4.0.1",

@@ -1,0 +1,121 @@
+# databricks/resources/bronze_empresas_job.yml
+# One job YAML PER TABLE, deliberately -- not one for_each_task over the
+# registry. Same two reasons as bronze_job.yml: for_each shares a single
+# {{job.run_id}} and therefore one _batch_id across tables, which contradicts
+# the one-batch-is-one-table's-ingest assumption the gate, promote_batch and the
+# repromote operator job all rest on; and this table's ten-part read (Empresas
+# is 10 zip parts in cnpj_schemas.FILE_GROUPS, like Estabelecimentos) has no
+# runtime profile in common with the six tiny lookups, so a failure here must
+# not block them. How long that read actually takes here is UNMEASURED -- no
+# empresas run has happened yet -- which is one more reason not to put it in
+# their job.
+#
+# WRITTEN AS A COPY of the Estabelecimentos job, which is the risk this phase
+# exists to test: `empresas` appears in six task parameter lists below and every
+# wrong value it could carry is the name of a table that EXISTS, so a leftover
+# string does not fail the run -- it ingests, gates, promotes or reclaims
+# Estabelecimentos and reports SUCCESS. tests/test_task_wiring.py refuses any
+# registered table name in this file other than this job's own.
+#
+# WHY THE PROSE ABOVE CAPITALISES IT, here and everywhere below. Registry keys
+# are lower-case, so a capitalised prose mention keeps the paste check total: a
+# case-sensitive grep of this file for the source table's key counts PARAMETERS
+# only, and any hit at all is wiring rather than a comment to sift. A 30-second
+# check that stands between a paste and a failed workspace run is worth having
+# no false positives.
+resources:
+  jobs:
+    bronze_cnpj_empresas:
+      name: opl-bronze-cnpj-empresas
+      parameters:
+        - name: month
+          default: "2026-06"
+      tasks:
+        - task_key: unzip
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/unzip_table.py
+            parameters: ["empresas", "{{job.parameters.month}}"]
+
+        - task_key: ingest
+          depends_on: [{ task_key: unzip }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/bronze_ingest.py
+            parameters: ["empresas", "{{job.run_id}}", "{{job.parameters.month}}"]
+
+        - task_key: dq_gate_batch
+          depends_on: [{ task_key: ingest }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/dq_gate_batch.py
+            parameters: ["empresas", "{{job.run_id}}"]
+
+        - task_key: check_bad_rows
+          depends_on: [{ task_key: dq_gate_batch }]
+          condition_task:
+            op: EQUAL_TO
+            left: "{{tasks.dq_gate_batch.values.bad_row_count}}"
+            right: "0"
+
+        - task_key: promote
+          depends_on: [{ task_key: check_bad_rows, outcome: "true" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/promote_batch.py
+            # --in-flow declares "this batch_id is the run executing this task",
+            # which is the ONLY caller that can say so truthfully. It is what
+            # lets a scheduled run whose batch is empty (no new file arrived)
+            # succeed as a no-op instead of being refused. The operator job
+            # deliberately omits it, so a mistyped batch_id there is still
+            # refused rather than exiting 0 having promoted nothing.
+            parameters: ["empresas", "{{job.run_id}}", "--in-flow"]
+
+        - task_key: fail_on_dq
+          depends_on: [{ task_key: check_bad_rows, outcome: "false" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/fail_on_dq.py
+            # The TABLE, not a quarantine name -- and no quarantine string is
+            # spelled in this file at all, which is the point rather than a
+            # style. fail_on_dq derives it from the registry, so the one value
+            # that could be stale here does not exist. When a quarantine name
+            # WAS hardcoded in a job YAML it went stale and sent estab triagers
+            # to a table full of unrelated F1.2 lookup rows; a copy of that file
+            # is exactly how the same name would have arrived here.
+            parameters: ["empresas"]
+
+        - task_key: reclaim_landing
+          depends_on: [{ task_key: promote }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/reclaim_landing.py
+            # Deletes only the inner files bronze proves it holds rows of, for
+            # THIS batch. Depends on promote and nothing else: a file may go only
+            # after the rows are persisted. The zips in the sibling zips/ dir are
+            # never touched -- they are the only way back to the source when a
+            # parse defect is found after ingestion, which happened twice in F1.3.
+            # This table lands as zips (registry: LANDING_ZIPS), so that way back
+            # exists; reclaim_landing refuses any table that does not.
+            #
+            # The month is NOT optional here and is not decoration. It is half of
+            # the delete boundary: `landing_table(subdir, month)` is the only dir
+            # the deletes are confined to, so omitting it would silently fall back
+            # to DEFAULT.month and scope the reclaim at a month this run never
+            # ingested. reclaim_landing refuses anything that is not YYYY-MM
+            # before Spark starts, so a run_id passed here raises instead.
+            parameters:
+              ["empresas", "{{job.run_id}}", "{{job.parameters.month}}"]
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl
