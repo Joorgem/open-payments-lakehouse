@@ -76,44 +76,80 @@ def _run(argv: list[str], monkeypatch) -> tuple[_SessionFactory, _RecordingSessi
     return factory, session
 
 
-def test_the_table_is_created_before_any_mask_and_the_function_before_the_first_one(
+def test_every_table_is_created_before_any_mask_and_the_function_before_the_first_one(
     monkeypatch,
 ):
     """THE ORDERING THIS TASK EXISTS FOR, asserted as positions in one list.
 
-    Three claims, and each one is a real failure if it moves. The CREATE TABLE must
-    come first, or the mask has nothing to attach to and the append creates the
-    table instead -- with the names in it. The function must exist before the first
-    `SET MASK`, or the ALTER fails on a missing routine. And every masked column
-    must be covered before the task returns, because the moment it returns the job
-    goes on to unzip and ingest."""
+    Three claims, and each one is a real failure if it moves. Every CREATE TABLE
+    must come before every mask, or the mask has nothing to attach to and the
+    writer creates the table instead -- with the names in it. The function must
+    exist before the first `SET MASK`, or the ALTER fails on a missing routine. And
+    every masked column of every covered table must be reached before the task
+    returns, because the moment it returns the job goes on to unzip and ingest."""
     _, session = _run(["socios"], monkeypatch)
 
     kinds = [statement.split(" ", 3)[:3] for statement in session.statements]
-    create = next(i for i, k in enumerate(kinds) if k == ["CREATE", "TABLE", "IF"])
+    creates = [i for i, k in enumerate(kinds) if k == ["CREATE", "TABLE", "IF"]]
     function = next(i for i, k in enumerate(kinds) if k == ["CREATE", "OR", "REPLACE"])
     masks = [i for i, s in enumerate(session.statements) if "SET MASK" in s]
 
-    assert create == 0, "something is issued before the table is created"
+    assert creates == [0, 1], "something is issued before the tables are created"
     assert function < min(masks), "a mask is set before its function exists"
-    assert len(masks) == len(MASKED_COLUMNS["socios"])
-    assert len(session.statements) == 2 + len(masks), (
+    assert len(masks) == len(_COVERED_ROLES) * len(MASKED_COLUMNS["socios"])
+    assert len(session.statements) == len(creates) + 1 + len(masks), (
         f"the task issues a statement this lock does not know about: {session.statements}"
     )
 
 
-def test_it_masks_every_column_the_contract_declares_and_no_other(monkeypatch):
-    """Both name columns. Masking one of the two is the defect this whole task's
-    'two columns, not one' argument is about, and it is one deleted line away."""
+# The tables the control covers, by BronzeTable field. Staging is deliberately not
+# one of them -- see `test_staging_is_never_named_by_this_task`.
+_COVERED_ROLES = ("bronze", "quarantine")
+
+
+def test_it_masks_every_column_of_every_covered_table_and_no_other(monkeypatch):
+    """Both name columns, on both covered tables. Masking one of the two columns is
+    the defect this task's 'two columns, not one' argument is about and is one
+    deleted line away; masking bronze alone is the gap two reviewers found in ADR
+    0008, and quarantine is the table a human is EXPECTED to open during triage."""
     _, session = _run(["socios"], monkeypatch)
-    table = DEFAULT.table(table_spec("socios").bronze)
+    spec = table_spec("socios")
     function = DEFAULT.table(MASK_FUNCTION)
 
     masked = [s for s in session.statements if "SET MASK" in s]
     assert masked == [
-        f"ALTER TABLE {table} ALTER COLUMN `{column}` SET MASK {function}"
+        f"ALTER TABLE {DEFAULT.table(getattr(spec, role))} "
+        f"ALTER COLUMN `{column}` SET MASK {function}"
+        for role in _COVERED_ROLES
         for column in MASKED_COLUMNS["socios"]
     ]
+
+
+def test_staging_is_never_named_by_this_task(monkeypatch):
+    """THE EXCLUSION, at the layer that issues the statements.
+
+    `promote_batch` READS staging and appends what it read into bronze, and a UC
+    column mask applies to that read for every principal the mask function does not
+    admit -- the live run saw `***` returned to the table owner's own query. So a
+    `SET MASK` on staging would put `***` into bronze permanently and would make the
+    DQ gate evaluate `null_or_empty_nome_socio_razao_social` against a value that is
+    neither null nor empty, silently ending the rejections. The 1,797 rows quarantined
+    in the F1.4b run are the measure of what that rule catches.
+
+    `opl.bronze.masking.masked_table_ddls` carries the argument and
+    `test_the_control_covers_bronze_and_quarantine_and_never_staging` pins the DDL
+    side; this pins the SQL that actually reaches the workspace, because the two
+    could come apart through a table name spelled here rather than resolved there."""
+    _, session = _run(["socios"], monkeypatch)
+    staging = DEFAULT.table(table_spec("socios").staging)
+
+    offenders = [s for s in session.statements if staging in s]
+    assert not offenders, (
+        f"this task named {staging}: {offenders}. Masking staging corrupts bronze on "
+        "the next promote and disables the missing-name rule -- see ADR 0008. It "
+        "becomes correct only once opl_pii_readers exists AND the job's run-as "
+        "principal is a member of it."
+    )
 
 
 def test_every_statement_names_the_catalog_and_schema_the_config_owns(monkeypatch):

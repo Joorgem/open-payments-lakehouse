@@ -21,6 +21,7 @@ below are of two kinds, and the split is deliberate:
 from __future__ import annotations
 
 import re
+from uuid import uuid4
 
 import pytest
 
@@ -29,8 +30,11 @@ from opl.bronze.masking import (
     MASKED_COLUMNS,
     METADATA_COLUMNS,
     PII_READER_GROUP,
+    QUARANTINE_COLUMNS,
+    create_quarantine_ddl,
     create_table_ddl,
     mask_function_ddl,
+    masked_table_ddls,
     set_mask_ddl,
 )
 from opl.bronze.registry import REGISTRY, table_spec
@@ -201,6 +205,58 @@ def test_the_rescued_column_is_the_one_the_stream_actually_configures():
     )
 
 
+def test_the_quarantine_ddl_is_the_bronze_shape_plus_the_gates_reject_reason():
+    """Quarantine is what `dq_gate_batch` writes: the staging frame with
+    `dq.evaluate`'s reject column appended. Same derivation as bronze plus one
+    column, LAST, because `withColumn` appends."""
+    declared = _declared_columns(create_quarantine_ddl("bronze_cnpj_socios_quarantine",
+                                                       "socios"))
+    assert declared == (
+        tuple((column, "STRING") for column in TABLES["socios"])
+        + METADATA_COLUMNS
+        + QUARANTINE_COLUMNS
+    )
+
+
+def test_the_quarantine_column_is_the_one_the_gate_actually_writes():
+    """SPELLED HERE, OWNED THERE. `opl.bronze.dq` imports pyspark and this module
+    must not -- `registry` imports `masking`, and the extraction scripts import
+    `registry` on machines where pyspark is an optional extra usually not installed.
+    So the reject column's name cannot be imported from its owner; it is restated,
+    and this test is what stops the two spellings from drifting into a hand-created
+    quarantine table whose column the gate's append cannot write."""
+    from opl.bronze.dq import REJECT_COLUMN
+
+    assert QUARANTINE_COLUMNS == ((REJECT_COLUMN, "STRING"),)
+
+
+def test_the_control_covers_bronze_and_quarantine_and_never_staging():
+    """THE EXCLUSION, pinned by name rather than left to a reader of the docstring.
+
+    Masking staging is not the unfinished third of this control -- it is a change
+    that would corrupt bronze. `promote_batch` reads staging (`spark.read.table`)
+    and appends what it read to bronze; a UC mask is applied as each row is fetched,
+    to every reader the function does not admit, which the live run observed for the
+    table owner's own query. With `opl_pii_readers` absent, a masked staging makes
+    the next promote write `***` into bronze permanently, and makes the DQ gate
+    evaluate `null_or_empty_nome_socio_razao_social` against `***` -- neither null
+    nor empty -- so the rule stops rejecting. See ADR 0008.
+
+    The natural future edit is exactly the one this refuses: making the three tables
+    uniform. If that edit is ever right, it is right only after `opl_pii_readers`
+    exists and the job's run-as principal is a member, and whoever makes it should
+    have to delete this test to do so."""
+    spec = table_spec("socios")
+    covered = masked_table_ddls(
+        bronze=spec.bronze, quarantine=spec.quarantine, contract=spec.contract
+    )
+
+    assert [table for table, _ in covered] == [spec.bronze, spec.quarantine]
+    for table, ddl in covered:
+        assert ddl.startswith(f"CREATE TABLE IF NOT EXISTS {table} (")
+        assert spec.staging not in ddl
+
+
 def test_the_set_mask_ddl_names_the_column_and_the_function():
     ddl = set_mask_ddl("workspace.default.bronze_cnpj_socios", "nome_do_representante",
                        "workspace.default.mask_personal_name")
@@ -243,7 +299,10 @@ def test_no_masked_table_declares_a_check_constraint():
     for spec in REGISTRY.values():
         if spec.contract not in MASKED_COLUMNS:
             continue
-        offenders = [s for s in spec.constraints if "CHECK" in s]
+        # `.upper()`: Spark SQL accepts `check (...)`, and the registry guard this
+        # restates was case-sensitive until CodeRabbit and Task 5's review both found
+        # that a lower-case paste walked through it.
+        offenders = [s for s in spec.constraints if "CHECK" in s.upper()]
         assert not offenders, (
             f"{spec.name} is masked and declares {offenders} -- UC refuses a CHECK on "
             "a masked table, and promote_batch issues it after the append has already "
@@ -261,7 +320,19 @@ def test_no_masked_table_declares_a_check_constraint():
 # Against a real Delta table -- the claim that is not about Unity Catalog
 # --------------------------------------------------------------------------
 
-_ROUNDTRIP_TABLE = "masking_create_table_ddl_roundtrip"
+@pytest.fixture
+def db(spark, tmp_path):
+    """A throwaway Delta database per test, so these `CREATE TABLE`s land under
+    tmp_path instead of in the repo's spark-warehouse -- the same fixture shape
+    `tests/bronze/test_promote.py` and `test_retention.py` use for the same reason.
+
+    It also removes a fixed table name that two concurrent runs would share, and it
+    survives an interrupt between the CREATE and a `finally`, which a warehouse-level
+    table did not."""
+    name = f"masking_{uuid4().hex[:8]}"
+    spark.sql(f"CREATE DATABASE {name} LOCATION '{tmp_path.as_uri()}'")
+    yield name
+    spark.sql(f"DROP DATABASE {name} CASCADE")
 
 
 def _ingest_shaped(spark, contract: str):
@@ -313,7 +384,26 @@ def test_the_declared_metadata_is_what_the_ingest_code_actually_produces(spark):
     assert produced[contract_width:] == METADATA_COLUMNS
 
 
-def test_the_hand_created_table_accepts_the_dataframe_the_ingest_writes(spark):
+def _rejected_shaped(spark, contract: str):
+    """The DataFrame `dq_gate_batch` hands `saveAsTable(quarantine)`, built from the
+    producing code: the ingest frame, run through the real rule set by `dq.split`.
+
+    The row is nulled on `nome_socio_razao_social` so that it comes back on the
+    REJECTED side rather than the promotable one -- which is also the reason 1,797
+    real rows are in that table today."""
+    from pyspark.sql import functions as F
+
+    from opl.bronze.dq import split
+    from opl.bronze.rules import rules_for
+
+    staged = _ingest_shaped(spark, contract).withColumn(
+        "nome_socio_razao_social", F.lit(None).cast("string")
+    )
+    _, bad = split(staged, rules_for(contract))
+    return bad
+
+
+def test_the_hand_created_table_accepts_the_dataframe_the_ingest_writes(spark, db):
     """THE RISK OF THIS TASK, exercised end to end against real Delta.
 
     Every other bronze table is created BY `promote_batch`'s append, so its schema
@@ -328,30 +418,56 @@ def test_the_hand_created_table_accepts_the_dataframe_the_ingest_writes(spark):
     TABLE have to survive a retry, because `max_retries: 0` does not prevent one on
     INTERNAL_ERROR: creating it twice must not fail, and must not truncate the rows
     an earlier attempt's ingest already appended."""
-    spark.sql(f"DROP TABLE IF EXISTS {_ROUNDTRIP_TABLE}")
-    try:
-        spark.sql(create_table_ddl(_ROUNDTRIP_TABLE, "socios"))
-        assert spark.table(_ROUNDTRIP_TABLE).count() == 0
-        assert _shape(spark.table(_ROUNDTRIP_TABLE).schema) == _declared_columns(
-            create_table_ddl(_ROUNDTRIP_TABLE, "socios")
-        )
+    table = f"{db}.bronze"
+    spark.sql(create_table_ddl(table, "socios"))
+    assert spark.table(table).count() == 0
+    assert _shape(spark.table(table).schema) == _declared_columns(
+        create_table_ddl(table, "socios")
+    )
 
-        df = _ingest_shaped(spark, "socios")
-        # Exactly how `opl.bronze.promote.promote_batch` writes.
-        df.write.format("delta").mode("append").saveAsTable(_ROUNDTRIP_TABLE)
-        landed = spark.table(_ROUNDTRIP_TABLE)
-        assert landed.count() == 1
-        assert _shape(landed.schema) == _shape(df.schema)
+    df = _ingest_shaped(spark, "socios")
+    # Exactly how `opl.bronze.promote.promote_batch` writes.
+    df.write.format("delta").mode("append").saveAsTable(table)
+    landed = spark.table(table)
+    assert landed.count() == 1
+    assert _shape(landed.schema) == _shape(df.schema)
 
-        # The retry: CREATE TABLE IF NOT EXISTS over a populated table.
-        spark.sql(create_table_ddl(_ROUNDTRIP_TABLE, "socios"))
-        assert spark.table(_ROUNDTRIP_TABLE).count() == 1
-    finally:
-        spark.sql(f"DROP TABLE IF EXISTS {_ROUNDTRIP_TABLE}")
+    # The retry: CREATE TABLE IF NOT EXISTS over a populated table.
+    spark.sql(create_table_ddl(table, "socios"))
+    assert spark.table(table).count() == 1
+
+
+def test_the_hand_created_quarantine_accepts_what_the_gate_writes(spark, db):
+    """THE SAME RISK, on the table this round of review added to the control.
+
+    Quarantine was created by `dq_gate_batch`'s `saveAsTable` until now, so like
+    bronze before it, its schema could not disagree with its writer. Creating it by
+    hand -- which is what makes the mask precede the rejected rows -- means owning
+    that schema, and the reject column is one the CONTRACT does not contain and no
+    other DDL in this module declares.
+
+    The frame is the gate's own `split(...)` output, not a description of it: a
+    reject reason added to `dq.evaluate`, or a change to its type, has to break this
+    rather than surface as a failed append inside the job."""
+    table = f"{db}.quarantine"
+    spark.sql(create_quarantine_ddl(table, "socios"))
+    assert spark.table(table).count() == 0
+
+    bad = _rejected_shaped(spark, "socios")
+    assert _shape(bad.schema) == _declared_columns(create_quarantine_ddl(table, "socios"))
+    # Exactly how `databricks/src/dq_gate_batch.py` writes.
+    bad.write.format("delta").mode("append").saveAsTable(table)
+    landed = spark.table(table)
+    assert landed.count() == 1
+    assert landed.collect()[0]["_dq_reject_reason"] == "null_or_empty_nome_socio_razao_social"
+
+    # The retry, same as bronze: a populated quarantine must survive the re-CREATE.
+    spark.sql(create_quarantine_ddl(table, "socios"))
+    assert spark.table(table).count() == 1
 
 
 @pytest.mark.parametrize("wrong", ["STRING", "BIGINT"])
-def test_the_roundtrip_test_above_is_not_vacuous(spark, wrong):
+def test_the_roundtrip_test_above_is_not_vacuous(spark, db, wrong):
     """THE MUTATION PROBE, committed rather than run once and described.
 
     The test above only means something if Delta actually refuses a mistyped
@@ -367,17 +483,13 @@ def test_the_roundtrip_test_above_is_not_vacuous(spark, wrong):
     table name or by Delta being absent."""
     from pyspark.errors import AnalysisException
 
-    table = f"{_ROUNDTRIP_TABLE}_mutant"
+    table = f"{db}.mutant"
     mutated = create_table_ddl(table, "socios").replace(
         "`_ingested_at` TIMESTAMP", f"`_ingested_at` {wrong}"
     )
     assert f"`_ingested_at` {wrong}" in mutated, "the mutation did not apply"
-    spark.sql(f"DROP TABLE IF EXISTS {table}")
-    try:
-        spark.sql(mutated)
-        with pytest.raises(AnalysisException, match="DELTA_FAILED_TO_MERGE_FIELDS"):
-            _ingest_shaped(spark, "socios").write.format("delta").mode(
-                "append"
-            ).saveAsTable(table)
-    finally:
-        spark.sql(f"DROP TABLE IF EXISTS {table}")
+    spark.sql(mutated)
+    with pytest.raises(AnalysisException, match="DELTA_FAILED_TO_MERGE_FIELDS"):
+        _ingest_shaped(spark, "socios").write.format("delta").mode(
+            "append"
+        ).saveAsTable(table)

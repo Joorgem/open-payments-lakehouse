@@ -1,13 +1,21 @@
 # ADR 0008 — mask the partner NAMES in `socios`, before the first row lands
 
 ## Status
-Accepted, and **live as of 2026-08-01** — the mask is applied to
+Accepted. **Live on bronze as of 2026-08-01** — the mask is applied to
 `workspace.default.bronze_cnpj_socios` and verified by reading through it, not
 only by the DDL having run
 ([What the live run proved](#what-the-live-run-proved-and-what-it-only-confirmed)).
 One incompatibility with Unity Catalog was found while implementing this
 (a masked table may not carry a `CHECK` constraint); it was probed against the live
 workspace and resolved by dropping socios' `CHECK`, with the trade recorded below.
+
+**Widened on review, not yet applied:** the control now covers the **quarantine**
+table as well as bronze, and explicitly does **not** cover staging — see
+[The boundary](#the-boundary-quarantine-is-masked-too-staging-cannot-be). The
+quarantine mask is committed code with local-Delta and statement-order tests behind
+it; it reaches `workspace.default.bronze_cnpj_socios_quarantine` on the next
+authorised run of `ensure_masked_table`, and this line is what says it has not done
+so yet.
 
 ## Context
 
@@ -52,21 +60,26 @@ No bronze table is created deliberately anywhere in this project. Each is create
 `databricks/src/promote_batch.py::_assert_constraints`. Under that ordering a mask
 added the ordinary way lands **after** the first append: the table would exist,
 holding names in the clear, and the control would follow the data — the second
-sentence, not the first. So `socios` is the one bronze table this repo builds by
-hand: `ensure_masked_table` issues `CREATE TABLE IF NOT EXISTS`, then the mask
-function, then `ALTER … SET MASK` for both columns, and only then does the job go
-on to unzip and ingest. The append finds a table that is already masked.
+sentence, not the first. So `socios` is the one contract whose tables this repo
+builds by hand: `ensure_masked_table` issues `CREATE TABLE IF NOT EXISTS` for the
+bronze and quarantine tables, then the mask function, then `ALTER … SET MASK` for
+both columns of both tables, and only then does the job go on to unzip and ingest.
+Each writer finds a table that is already masked.
 
-The cost of that choice is that the socios bronze schema is now *declared* rather
-than produced, so it can be wrong in a way no other bronze table can. It is
+The cost of that choice is that these two socios schemas are now *declared* rather
+than produced, so they can be wrong in a way no other bronze table can. Bronze is
 declared from the contract (`cnpj_schemas.TABLES`) plus a measured list of the
 seven metadata columns, and two of those are **not** strings — `_ingested_at` is
 `TIMESTAMP` and `_snapshot_ref_date` is `DATE`. An earlier draft declared all of
-them `STRING`, which builds a table the first append cannot write to. That is
-pinned two ways in `tests/bronze/test_masking.py`: as literals, and by appending
-the DataFrame the real ingest code produces to a real local Delta table created
-from this very DDL, with a committed mutation probe proving Delta refuses the
-mistyped column rather than casting it.
+them `STRING`, which builds a table the first append cannot write to. Quarantine is
+that same shape plus the gate's `_dq_reject_reason`, a column the contract does not
+contain and whose name lives in `opl.bronze.dq` — a module `masking` may not import,
+because `registry` imports `masking` and the extraction scripts import `registry`
+where pyspark is not installed. Both are pinned in `tests/bronze/test_masking.py`:
+as literals, by reading the reject column's name back out of its owner, and by
+appending the DataFrames the real ingest and the real gate produce to real local
+Delta tables created from these very DDLs — with a committed mutation probe proving
+Delta refuses a mistyped column rather than casting it.
 
 ## Decision
 
@@ -82,11 +95,17 @@ mistyped column rather than casting it.
    `ALTER TABLE … ALTER COLUMN … SET MASK`, from `MASKED_COLUMNS`, which is keyed
    by *contract* so the mask follows the data rather than a table name.
 
-3. **Applied before ingest**, by a job task (`ensure_masked_table`) that runs
+3. **On the contract's BRONZE and QUARANTINE tables, and deliberately not on
+   staging.** `masked_table_ddls` owns that list and carries the reason; the short
+   version is that `promote_batch` reads staging and writes what it read into
+   bronze, so a mask there would put `***` into the system of record. See
+   [The boundary](#the-boundary-quarantine-is-masked-too-staging-cannot-be).
+
+4. **Applied before ingest**, by a job task (`ensure_masked_table`) that runs
    ahead of `unzip`, and that is a no-op for any table declaring no masked column
    so the same task can sit in any job's YAML without a per-table branch.
 
-4. **socios carries no `CHECK` constraint**, and is the only registered table
+5. **socios carries no `CHECK` constraint**, and is the only registered table
    without one — see the next section. Refused at import for any masked contract by
    `registry._assert_no_masked_contract_declares_a_check_constraint`.
 
@@ -103,11 +122,13 @@ nothing denies it.
 
 ## Consequences
 
-- **Bronze rows are stored in the clear; the mask is a read-time control.** UC
+- **Rows are stored in the clear; the mask is a read-time control.** UC
   column masks rewrite the query, they do not transform the stored value. Anyone
   with direct access to the underlying storage path bypasses them. This is the
   right trade for bronze, whose whole job is to record what the source asserted
-  verbatim, but it means the mask is a governance control, not encryption.
+  verbatim, but it means the mask is a governance control, not encryption — and it
+  means applying a mask to a table that already holds rows protects every read from
+  then on without undoing the reads that already happened.
 - **Time travel is unavailable on a masked table**
   (`COLUMN_MASKS_FEATURE_NOT_SUPPORTED.TIME_TRAVEL`). Nothing in the pipeline
   reads bronze history today; a future one cannot.
@@ -127,8 +148,11 @@ nothing denies it.
   monthly re-run, and a control that is briefly absent every month is worse than
   one that is never absent at all.
 - **socios keeps no `CHECK` constraint** and loses one layer of defence in depth.
-  See below.
-- **The staging and quarantine tables are NOT masked.** See below.
+  See below. Only *bronze* is affected: `promote_batch._assert_constraints` issues
+  that DDL against the bronze table alone, which is why quarantine can be masked at
+  no cost.
+- **Quarantine is masked; staging is not, and cannot safely be.** See
+  [The boundary](#the-boundary-quarantine-is-masked-too-staging-cannot-be).
 
 ## What masking costs: socios gives up one declarative constraint
 
@@ -207,7 +231,7 @@ machines, where pyspark is an optional extra usually not installed.
 
 Everything above was, until 2026-08-01, an argument plus a throwaway-table probe.
 The F1.4b PR A run applied this to the real `bronze_cnpj_socios`. Full numbers in
-[`docs/f1.4b-pr-a-run-evidence.md` §7](../f1.4b-pr-a-run-evidence.md#7-the-mask-verified-by-behaviour-not-by-ddl);
+[`docs/f1.4b-pr-a-run-evidence.md` §7](../f1.4b-pr-a-run-evidence.md#7-the-mask-verified-by-behaviour--not-by-ddl);
 what belongs here is which of this ADR's claims stopped being claims.
 
 **The ordering — the whole reason `socios` is built by hand.** While the batch sat
@@ -242,37 +266,81 @@ What the run did **not** establish: nobody has ever seen this mask reveal a name
 because there is no `opl_pii_readers` group and no member of it to read through.
 The permissive half of the control is untested by construction.
 
-## The limit of this control: staging and quarantine are not masked
+## The boundary: quarantine is masked too, staging cannot be
 
-`bronze_cnpj_socios_staging` and `bronze_cnpj_socios_quarantine` hold the partner
-names **in the clear**. Both are created by their own writers — the ingest's
-`toTable` and the gate's `saveAsTable` — neither passes through
-`ensure_masked_table`, and no mask is applied to either. The quarantine is
+This section previously recorded "bronze is masked, and the two tables either side
+of it are not" as an accepted limit, and argued that extending
+`ensure_masked_table` to all three was "a small change" and "the same decision
+again". Two independent reviews — CodeRabbit on PR #6 and this branch's own
+whole-branch review — said the same thing about that: *"we wrote it down" is a
+weaker answer than "we masked all three"*, and a governance reviewer would read a
+stated limit as a solvable obstacle that was not solved. They were right about
+half of it, and measuring the other half is what produced the split below.
+
+**Quarantine is now covered.** `ensure_masked_table` creates
+`bronze_cnpj_socios_quarantine` empty and applies both masks to it, before the gate
+writes anything, exactly as it does for bronze. The CHECK incompatibility is not an
+obstacle here: only *bronze* receives constraint DDL — `promote_batch._assert_
+constraints` re-issues `spec.constraints` against the bronze table and nothing else
+— and no quarantine table in this repo has ever carried a constraint. The
+quarantine schema is the bronze shape plus `_dq_reject_reason`, declared in
+`opl.bronze.masking.create_quarantine_ddl` and pinned against the gate's own
+`split(...)` output on a real local Delta table, the same way bronze's is. This is
+also the table the argument most obviously applies to: the quarantine is
 specifically a table a human is *expected* to open and read during triage.
 
-This is stated as a property of the control, not buried as an exception. What is
-true today is: **bronze is masked, and the two tables either side of it are not.**
+**Staging is not covered, and this is a refusal with a mechanism behind it rather
+than the third of the job nobody got to.** A UC column mask is applied as each row
+is fetched from the data source, to every principal the mask function does not
+admit — which in this workspace is *everyone*, the table owner included, as the run
+observed directly. Staging is not a leaf table:
 
-It narrows the control without making it decorative. Bronze is what everything
-downstream reads and the table that will hold the full socios population for as
-long as this lakehouse exists; staging is transient (the promote drains it) and
-quarantine holds the handful of rows a rule rejected — 4 in 42,780,919 for
-estabelecimentos, per ADR 0006. But the gap is real and a reviewer would find it in
-a minute, so it is written here rather than discovered there. Extending
-`ensure_masked_table` to all three is a small change; note that the CHECK
-incompatibility above applies to staging too, so it is the same decision again.
+- **`promote_batch` reads staging and writes what it read into bronze.**
+  `opl.bronze.promote.promote_batch` builds its frame from
+  `spark.read.table(staging_table)` and appends it with
+  `saveAsTable(bronze_table)`. With `opl_pii_readers` absent, a masked staging makes
+  the next promote read `***` and append `***` — into the system of record,
+  permanently, for every row. Bronze's own mask would then be hiding a value that
+  is no longer there.
+- **It would silently disable the DQ rule that guards the same column.** The gate
+  evaluates `null_or_empty_nome_socio_razao_social` against staging. `***` is
+  neither null nor empty, so the rule would stop rejecting. The **1,797** rows it
+  caught in the live run would have passed into bronze — a privacy control that
+  turns off a data-quality control, and reports nothing while doing it.
+- **Databricks additionally documents that tables with column masks do not support
+  streaming workloads on dedicated compute**, and staging is written by
+  `bronze_ingest`'s `writeStream(...).toTable(...)`.
 
-**The live run put numbers on both halves of this.** Staging took all **27,838,448**
-ingested socios rows, names in the clear, and it is the frame the gate and the
-promote both read. Quarantine took **1,797** rows — three orders of magnitude above
-the 4-row estabelecimentos baseline this section reasoned from, so "the handful a
-rule rejected" is no longer the right picture of it. Those particular 1,797 have a
-null `nome_socio_razao_social`, since that is the reason they were rejected; what
-they carry in the clear is the rest of a personal record, and their
+So masking staging is not a smaller version of masking bronze. It is a change that
+corrupts the data it is meant to protect. `masked_table_ddls` carries the argument
+next to the DDL, and two tests refuse the "make the three uniform" edit by name —
+one over the DDL, one over the SQL the task actually issues.
+
+**What would make it correct**, stated so this is a precondition and not a
+permanent no: the mask on staging becomes both safe and effective the moment
+`opl_pii_readers` exists **and** the job's run-as principal is a member of it. Then
+the pipeline reads real names and everyone else reads `***`. Creating that group and
+its grants is F4's work, and it is the same prerequisite the fail-closed argument
+above is waiting on. Until then, staging's protection is the workspace's ordinary
+table ACLs and nothing else, which is worth saying plainly.
+
+**What the extension does and does not undo.** Masking quarantine protects every
+future read of those rows. It does not change the fact that the **1,797** rows
+landed unmasked on 2026-08-01 and were readable in the clear until the mask is
+applied, nor that **27,838,448** rows sit in staging in the clear now. A read-time
+control is not retroactive; it changes what happens next.
+
+**And one claim in the old text was simply false.** It said staging "is transient
+(the promote drains it)". Nothing drains staging — `promote_batch` appends to
+bronze and deletes nothing, `opl.bronze.retention` reclaims *landed files* and
+documents that it deliberately does not touch staging, and the 27,838,448 rows are
+still there after a successful promote. The old text also reasoned from a 4-row
+estabelecimentos quarantine baseline (ADR 0006); socios produced 1,797, three orders
+of magnitude more, so "the handful a rule rejected" was never the right picture
+either. Those 1,797 have a null `nome_socio_razao_social` — that is why they were
+rejected — but they carry the rest of a personal record, and their
 `nome_do_representante` was not examined either way. The triage that actually
-happened was performed without selecting either name column, which is a discipline
-and not a control. The decision to leave both tables unmasked stands; it is now
-taken with the sizes in view rather than with an estimate.
+happened selected neither name column, which is a discipline and not a control.
 
 ## What this does not settle
 
@@ -289,3 +357,16 @@ taken with the sizes in view rather than with an estimate.
   this function return a name, because there is no `opl_pii_readers` group and no
   member of it. What is verified is that it hides; that it correctly *shows* to an
   authorised reader is F4's to demonstrate, along with creating the group.
+- **The quarantine mask has not run against the workspace.** It is committed,
+  ordered ahead of the gate's write, and covered by the same kind of tests bronze's
+  DDL has — but `bronze_cnpj_socios_quarantine` already exists with 1,797 rows, so
+  what will actually happen on the next run is a no-op `CREATE TABLE IF NOT EXISTS`
+  followed by two `SET MASK`s against a populated table. Re-applying `SET MASK` to
+  an already-masked column was probed and succeeds; applying it *first* to a
+  populated table is the statement no probe has covered.
+- **Staging holds 27,838,448 socios rows with the names in the clear, and will
+  keep holding them.** Nothing drains it, masking it would corrupt bronze (see
+  [The boundary](#the-boundary-quarantine-is-masked-too-staging-cannot-be)), and
+  this ADR proposes no deletion policy — a retention rule for staging is a separate
+  decision with its own failure mode, since the documented rebuild procedure depends
+  on staging still holding a promoted batch.

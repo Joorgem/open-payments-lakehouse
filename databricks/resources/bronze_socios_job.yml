@@ -13,13 +13,16 @@
 # ADR 0008. socios is the only registered table whose contract declares masked
 # columns (opl.bronze.masking.MASKED_COLUMNS: nome_socio_razao_social and
 # nome_do_representante, both civil names, arriving complete). Every other
-# bronze table in this repo is CREATED by promote_batch's append -- which for
-# this one would mean creating it with the names already in it and attaching
-# the mask afterwards. ensure_masked_table creates it empty and masks it BEFORE
-# anything is unzipped, so "the control was applied when the data landed" is
-# true rather than nearly true. The task ordering IS the control; there is no
-# second mechanism behind it, which is why tests/test_job_yaml_wiring.py asserts
-# that no task of this job can start before it.
+# bronze table in this repo is CREATED by promote_batch's append, and every
+# quarantine table by the gate's write -- which for this one would mean creating
+# them with the names already in them and attaching the mask afterwards.
+# ensure_masked_table creates BOTH empty and masks them BEFORE anything is
+# unzipped, so "the control was applied when the data landed" is true rather than
+# nearly true. The task ordering IS the control; there is no second mechanism
+# behind it, which is why tests/test_job_yaml_wiring.py asserts that no task of
+# this job can start before it. Staging is deliberately NOT masked: promote_batch
+# reads it and writes what it read into bronze, so a mask there would put '***'
+# into the system of record (opl.bronze.masking.masked_table_ddls, ADR 0008).
 #
 # WRITTEN AS A COPY of the Estabelecimentos job, which is the risk this phase
 # exists to test: `socios` appears in seven task parameter lists below and every
@@ -48,13 +51,13 @@ resources:
           spark_python_task:
             python_file: ../src/ensure_masked_table.py
             # The TABLE, like every other task here: the columns to mask, the
-            # contract to build the empty table from and the bronze name to
-            # build it under are all resolved from the registry, so no column
-            # name and no table name is spelled in this file.
+            # contract to build the empty tables from and the bronze and
+            # quarantine names to build them under are all resolved from the
+            # registry, so no column name and no table name is spelled here.
             #
             # NO depends_on, and that is the control rather than an omission.
-            # Anything running before this creates the bronze table by appending
-            # to it, and then the mask arrives after the personal names did.
+            # Anything running before this creates one of those tables by
+            # writing to it, and then the mask arrives after the names did.
             parameters: ["socios"]
 
         - task_key: unzip
