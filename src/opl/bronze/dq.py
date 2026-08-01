@@ -10,22 +10,108 @@ per-table rule. evaluate()/split() default to the "lookup" rule set, keeping
 the F1.2 lookup behavior byte-for-byte."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 
-from opl.bronze.rules import rules_for
+from opl.bronze.rules import REQUIRES_COLUMN, rules_for
 
 REJECT_COLUMN = "_dq_reject_reason"
 
 Rules = list[tuple[str, Callable[[], Column]]]
 
 
+def skipped_rules(
+    columns: Iterable[str], rules: Rules
+) -> tuple[tuple[str, str], ...]:
+    """(reason, wanted column) for every rule `_reject_reason` will NOT run.
+
+    THE ONE PLACE THE SKIP CONDITION IS SPELLED. `_reject_reason` asks this rather
+    than re-deciding, so a run log claiming a rule was skipped and a gate that
+    actually ran it cannot come apart -- which is the only way a notice about a
+    missing control is worth reading.
+
+    Takes a column list rather than a DataFrame: a caller can ask before it has
+    built or scanned anything (`spark.read.table(t).columns` is a catalog lookup),
+    and the pure-Python tests need no session to pin the answer."""
+    present = frozenset(columns)
+    return tuple(
+        (reason, REQUIRES_COLUMN[reason])
+        for reason, _ in rules
+        if reason in REQUIRES_COLUMN and REQUIRES_COLUMN[reason] not in present
+    )
+
+
+def skip_notice(
+    columns: Iterable[str], rules: Rules, *, task: str, source: str
+) -> str | None:
+    """The run-log line for a skipped rule, or None when every rule ran.
+
+    WHY THIS EXISTS, and why it is a line rather than a raise. Skipping is
+    CORRECT: a frame written before a derivation existed is not a defective
+    frame, and the documented rebuild procedure produces exactly one -- it drops
+    bronze while LEAVING staging (see `promote.plan_promotion`), and the live
+    estab staging table is still the 35-column pre-F1.4a shape. What was wrong is
+    that the skip was INAUDIBLE. Repromoting such a batch skips
+    `unprovable_snapshot_ref_date`, every row reads clean, and the rows land in
+    37-column bronze where Delta fills the absent column with NULL -- the exact
+    value that rule exists to refuse. The control did not fail; it disappeared.
+
+    So: not an error (raising would make the rebuild procedure unrunnable), and
+    not silence. Returned rather than printed, because the emitter must be the
+    JOB TASK -- `evaluate` runs inside unit tests on bare frames constantly and
+    must not become noisy.
+
+    None, not an empty string, when nothing is skipped: a healthy run prints no
+    line at all. A warning on every run is one an operator learns to scroll past,
+    which would leave the real one as invisible as the silence it replaces."""
+    skipped = skipped_rules(columns, rules)
+    if not skipped:
+        return None
+    wanted = "; ".join(f"{reason} (wants column {column})" for reason, column in skipped)
+    return (
+        f"{task}: {len(skipped)} DQ rule(s) did NOT run against {source} -- "
+        f"{wanted}. Those rows are NOT CHECKED by it. This is expected for a table "
+        "written before the column existed and is not a failure -- but if the "
+        "table being appended to HAS that column, Delta fills it with NULL on "
+        "append, which is the value the rule exists to refuse. Re-ingest the batch "
+        f"instead of repromoting it if the {source} rows predate the column."
+    )
+
+
 def _reject_reason(df: DataFrame, rules: Rules) -> Column:
+    """The first matching rule's reason, or NULL. Order is the rule set's.
+
+    A rule may declare that it reads a column outside the contract
+    (`rules.REQUIRES_COLUMN`); when the frame does not carry that column the rule
+    is SKIPPED. Same shape the `_rescued_data` line above has used since F1.2 --
+    one mechanism for "this frame is a different shape", not two.
+
+    THE SKIP IS DECLARED, NEVER DISCOVERED. Wrapping `predicate()` in
+    `except AnalysisException` would read as the same thing and is not: it would
+    equally skip a rule whose column name is a TYPO, turning a broken rule into
+    one that never fires and reporting the batch clean. Looking the declared name
+    up means an undeclared missing column still raises, loudly, which is what a
+    frame missing a CONTRACT column must do (see the rule set's own test).
+
+    Safe only because a column's ABSENCE is a different fact from its being NULL:
+    absent means "this frame predates the derivation" -- a bare contract frame in
+    a unit test, or a staging table written before the column existed -- while
+    NULL means "the derivation ran and could not prove a value". Only the second
+    is a reject, and the rule that reads it never sees the first.
+
+    A skip is SILENT HERE and reported by the job task (`skip_notice`): this
+    function runs in unit tests on bare frames constantly, so a print here would
+    be noise everywhere and a warning nowhere."""
     rescued = F.col("_rescued_data") if "_rescued_data" in df.columns else F.lit(None)
     chain = F.when(rescued.isNotNull(), F.lit("rescued_data_present"))
+    # Asked, not re-decided, so the notice a task prints and the chain built here
+    # can never describe different gates.
+    skipped = {reason for reason, _ in skipped_rules(df.columns, rules)}
     for reason, predicate in rules:
+        if reason in skipped:
+            continue
         chain = chain.when(predicate(), F.lit(reason))
     return chain.otherwise(F.lit(None))
 

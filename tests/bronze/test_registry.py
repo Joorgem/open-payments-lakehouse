@@ -1,12 +1,23 @@
-"""The registry is the one place that answers "what is table X?".
+"""What the live registry SAYS: the values it declares today, and the properties
+they hold as a set.
 
-Its value is not less repetition -- the names are DECLARED, not derived, because
-deriving them would force renaming live Delta tables (bronze_cnpj_estab_staging
-abbreviated against bronze_cnpj_estabelecimentos spelled out) to satisfy a
-pattern. Its value is that each table's staging/bronze/quarantine triple lives in
-one literal, where it cannot drift. Drift is the documented defect: a hardcoded
-quarantine name "sent estab triagers to a table full of unrelated F1.2 lookup
-rows"."""
+The registry is the one place that answers "what is table X?". Its value is not less
+repetition -- the names are DECLARED, not derived, because deriving them would force
+renaming live Delta tables (bronze_cnpj_estab_staging abbreviated against
+bronze_cnpj_estabelecimentos spelled out) to satisfy a pattern. Its value is that
+each table's staging/bronze/quarantine triple lives in one literal, where it cannot
+drift. Drift is the documented defect: a hardcoded quarantine name "sent estab
+triagers to a table full of unrelated F1.2 lookup rows".
+
+THE GUARDS THEMSELVES ARE EXERCISED IN `test_registry_guards.py`, split out when
+F1.4b carried this file over the 800-line limit. The seam is which change breaks
+which file: everything here changes when a TABLE is added, and everything there
+changes when a GUARD is added. Read together they say "these values, and nothing
+else may be declared" -- neither half means much alone, which is why each file's
+docstring points at the other.
+
+Nothing in this file mutates `REGISTRY`. A test that needs a spec the registry must
+never contain belongs on the other side of the seam."""
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
@@ -18,13 +29,9 @@ from opl.bronze.registry import (
     LANDING_ZIPS,
     REGISTRY,
     RESERVED_SUBDIRS,
-    BronzeTable,
     UnknownTable,
-    _assert_contracts_exist,
-    _assert_no_table_claims_a_reserved_subdir,
-    _assert_no_two_tables_share_a_contract,
-    _assert_prefixes_match_their_file_groups,
-    _assert_subdirs_are_single_path_components,
+    _assert_no_two_tables_share_a_checkpoint_namespace,
+    _assert_no_two_tables_share_a_delta_name,
     _malformed_subdir_reason,
     spec_for_contract,
     table_spec,
@@ -57,6 +64,40 @@ def test_the_two_live_tables_keep_the_exact_names_they_have_today():
     assert estab.landing == LANDING_ZIPS
 
 
+def test_the_four_live_tables_keep_the_exact_names_they_have_today():
+    """Extends the two-table pin above. These strings name live Delta tables and
+    live Volume directories; changing one is a migration, not an edit.
+
+    `table_key` and `landing` are pinned here for the same reason the two-table pin
+    carries them, and it is the sharper half for the two entries F1.4b PASTES. The
+    uniqueness guards cannot see a SWAP: give empresas socios' `table_key` and
+    socios empresas', and all four keys are still distinct, so every guard in
+    registry.py passes while each stream reads the other's Auto Loader checkpoint.
+    Same for a swapped `subdir` -- distinct, unrefused, and it lands Empresas files
+    in the socios directory. A per-table pin is the only thing that sees a swap,
+    because a swap is wrong about IDENTITY and every other check here is about
+    collision. `contract` is the one field a swap cannot survive unassisted:
+    `_assert_prefixes_match_their_file_groups` refuses it at import, because
+    empresas' declared prefix would then be checked against Socios' file group."""
+    empresas = table_spec("empresas")
+    assert empresas.staging == "bronze_cnpj_empresas_staging"
+    assert empresas.bronze == "bronze_cnpj_empresas"
+    assert empresas.quarantine == "bronze_cnpj_empresas_quarantine"
+    assert empresas.table_key == "bronze_cnpj_empresas"
+    assert empresas.subdir == "empresas"
+    assert empresas.prefix == "Empresas"
+    assert empresas.landing == LANDING_ZIPS
+
+    socios = table_spec("socios")
+    assert socios.staging == "bronze_cnpj_socios_staging"
+    assert socios.bronze == "bronze_cnpj_socios"
+    assert socios.quarantine == "bronze_cnpj_socios_quarantine"
+    assert socios.table_key == "bronze_cnpj_socios"
+    assert socios.subdir == "socios"
+    assert socios.prefix == "Socios"
+    assert socios.landing == LANDING_ZIPS
+
+
 def test_no_two_tables_share_a_staging_bronze_or_quarantine_name():
     """The defect class this registry exists to close, asserted directly.
 
@@ -73,6 +114,30 @@ def test_no_two_tables_share_a_staging_bronze_or_quarantine_name():
                 f"{spec.name}.{role} == {value!r}, already used by {seen[value]}"
             )
             seen[value] = f"{spec.name}.{role}"
+
+
+def test_a_table_key_may_equal_its_own_tables_bronze_name():
+    """Why `_assert_no_two_tables_share_a_delta_name` and
+    `_assert_no_two_tables_share_a_checkpoint_namespace` are two guards and not one
+    loop over four roles.
+
+    The obvious implementation -- one `seen` dict, four roles, one pass -- refuses
+    the LIVE registry at import: `lookup.table_key` and `lookup.bronze` are both
+    `bronze_cnpj_lookup`, and that is correct, not drift. A checkpoint namespace and
+    a Delta table are different kinds of name in different namespaces, and one is
+    allowed to spell itself like the other. Folding them together would have made
+    the import of every module that reads the registry fail on the first run.
+
+    Pinned as a property rather than left to be rediscovered: the failure is loud but
+    the CAUSE is not obvious, and the natural fix on seeing it -- drop `table_key`
+    from the check -- silently reopens the checkpoint-collision hole. The refusals
+    themselves live in test_registry_guards.py; this is the legitimate case they must
+    not object to."""
+    lookup = table_spec("lookup")
+    assert lookup.table_key == lookup.bronze == "bronze_cnpj_lookup"
+    # Neither guard may object to that, today or after F1.4b adds two more tables.
+    _assert_no_two_tables_share_a_delta_name()
+    _assert_no_two_tables_share_a_checkpoint_namespace()
 
 
 def test_no_two_tables_share_a_landing_subdir():
@@ -120,80 +185,6 @@ def test_the_reserved_names_are_the_layout_s_own_and_not_a_stale_list():
     )
     assert DEFAULT.landing_tmp("t", "2026-06").startswith(f"{DEFAULT.volume_root}/_tmp/")
     assert RESERVED_SUBDIRS == frozenset({"zips", "_tmp", "_schemas", "_checkpoints"})
-
-
-def test_a_table_claiming_a_reserved_subdir_is_refused_by_name(monkeypatch):
-    """The refusal itself, exercised -- the test above only proves today's entries
-    are clean, which would stay green if the guard were deleted.
-
-    Synthesised rather than committed to REGISTRY for obvious reasons: the entry
-    this refuses cannot exist in source, because it would break the import of every
-    module that reads the registry."""
-    trap = BronzeTable(
-        name="socios",
-        contract="lookup",
-        table_key="bronze_cnpj_socios",
-        staging="bronze_cnpj_socios_staging",
-        bronze="bronze_cnpj_socios",
-        quarantine="bronze_cnpj_socios_quarantine",
-        subdir="zips",
-        landing=LANDING_ZIPS,
-        prefix="Socios",
-        constraints=(),
-    )
-    monkeypatch.setitem(REGISTRY, "socios", trap)
-
-    with pytest.raises(ValueError) as excinfo:
-        _assert_no_table_claims_a_reserved_subdir()
-    message = str(excinfo.value)
-    assert "socios" in message and "'zips'" in message
-    # The operator has to be told WHY, not just refused: the reason is recursion.
-    assert "RECURSIVELY" in message
-
-
-@pytest.mark.parametrize(
-    "subdir",
-    [
-        "zips/estabelecimentos",  # inside the layout-owned zips dir
-        "lookups/x",              # inside another table's source dir
-        "zips\\estabelecimentos",  # Windows os.path accepts this separator too
-        "",   # resolves landing_table(...) to the month root -- the F1.4b blocker
-        ".",  # likewise
-        "..",  # escapes to cnpj/, which contains every month
-    ],
-)
-def test_a_subdir_that_is_a_path_rather_than_a_name_is_refused(monkeypatch, subdir):
-    """The hole in BOTH checks above, which each look total and are not.
-
-    `zips/estabelecimentos` collides with no table, so uniqueness passes, and it
-    does not equal `"zips"`, so the reserved-name check passes -- yet its stream
-    reads INSIDE the layout-owned zips dir. `lookups/x` reads inside another
-    table's source dir, where that table's stream discovers it recursively. Same
-    defect class as the reserved names, reached past the guard built for them.
-
-    `""` and `"."` are the sharpest: both make `landing_table(...)` the month root,
-    which is precisely the state this whole branch removed."""
-    trap = BronzeTable(
-        name="socios",
-        contract="lookup",
-        table_key="bronze_cnpj_socios",
-        staging="bronze_cnpj_socios_staging",
-        bronze="bronze_cnpj_socios",
-        quarantine="bronze_cnpj_socios_quarantine",
-        subdir=subdir,
-        landing=LANDING_ZIPS,
-        prefix="Socios",
-        constraints=(),
-    )
-    monkeypatch.setitem(REGISTRY, "socios", trap)
-
-    with pytest.raises(ValueError) as excinfo:
-        _assert_subdirs_are_single_path_components()
-    message = str(excinfo.value)
-    assert "socios" in message and repr(subdir) in message
-    # Refused as MALFORMED, not as one more reserved name -- the distinction is the
-    # decision recorded in the guard, and the message has to carry it.
-    assert "ONE directory" in message
 
 
 def test_the_live_subdirs_are_single_directory_names():
@@ -251,58 +242,6 @@ def test_every_declared_prefix_agrees_with_the_file_group_that_downloads_it():
         )
 
 
-def test_a_prefix_that_disagrees_with_its_file_group_is_refused_at_import(monkeypatch):
-    """The refusal exercised, not just today's entries proved clean.
-
-    `Estabelecimento` (singular) is the probe on purpose: it is unique, it is a
-    single directory name, it names no reserved dir, and it passes every other check
-    in this file. What it does is go looking for files that are not there and
-    under-ingest without erroring -- the failure class this project rejected globs
-    for."""
-    trap = BronzeTable(
-        name="estabelecimentos",
-        contract="estabelecimentos",
-        table_key="bronze_cnpj_estab",
-        staging="bronze_cnpj_estab_staging",
-        bronze="bronze_cnpj_estabelecimentos",
-        quarantine="bronze_cnpj_estab_quarantine",
-        subdir="estabelecimentos",
-        landing=LANDING_ZIPS,
-        prefix="Estabelecimento",  # singular: a real typo, unique, silent
-        constraints=(),
-    )
-    monkeypatch.setitem(REGISTRY, "estabelecimentos", trap)
-
-    with pytest.raises(ValueError) as excinfo:
-        _assert_prefixes_match_their_file_groups()
-    message = str(excinfo.value)
-    assert "'Estabelecimento'" in message and "'Estabelecimentos'" in message
-
-
-def test_a_table_fed_by_several_groups_must_declare_no_prefix(monkeypatch):
-    """The lookup's `None` is a real property, so the assertion has to hold in that
-    direction too: six differently-named files routed into one table by filename
-    suffix have no single prefix, and inventing one would look declarative while
-    matching nothing."""
-    trap = BronzeTable(
-        name="lookup",
-        contract="lookup",
-        table_key="bronze_cnpj_lookup",
-        staging="bronze_cnpj_lookup_staging",
-        bronze="bronze_cnpj_lookup",
-        quarantine="bronze_cnpj_lookup_quarantine",
-        subdir="lookups",
-        landing=LANDING_LOCAL,
-        prefix="Cnaes",  # one of the six, which is worse than none
-        constraints=(),
-    )
-    monkeypatch.setitem(REGISTRY, "lookup", trap)
-
-    with pytest.raises(ValueError) as excinfo:
-        _assert_prefixes_match_their_file_groups()
-    assert "prefix=None" in str(excinfo.value)
-
-
 def test_a_file_group_resolves_to_the_table_that_owns_its_contract():
     """What the extraction scripts ask, and the only question they may ask.
 
@@ -327,69 +266,9 @@ def test_an_unregistered_contract_is_refused_and_says_what_to_do():
     assert "opl.bronze.registry" in message
 
 
-def test_a_contract_claimed_by_two_tables_is_refused_at_import(monkeypatch):
-    """What makes `spec_for_contract` single-valued, and therefore what makes the
-    producer's landing dir a fact rather than a dict-order accident.
-
-    The paste this refuses is F1.4b's: a `socios` entry copied from the lookup's and
-    renamed everywhere except `contract`. Resolution by contract would then answer
-    "lookup" with whichever entry came first, and socios' inner files would land in
-    the lookup's own landing dir -- the cross-table contamination this branch
-    removed."""
-    trap = BronzeTable(
-        name="socios",
-        contract="lookup",
-        table_key="bronze_cnpj_socios",
-        staging="bronze_cnpj_socios_staging",
-        bronze="bronze_cnpj_socios",
-        quarantine="bronze_cnpj_socios_quarantine",
-        subdir="socios",
-        landing=LANDING_ZIPS,
-        prefix=None,
-        constraints=(),
-    )
-    monkeypatch.setitem(REGISTRY, "socios", trap)
-
-    with pytest.raises(ValueError) as excinfo:
-        _assert_no_two_tables_share_a_contract()
-    message = str(excinfo.value)
-    assert "socios" in message and "lookup" in message
-
-
 def test_every_registered_table_has_a_contract():
     for spec in REGISTRY.values():
         assert spec.contract in TABLES, f"{spec.name} names contract {spec.contract!r}"
-
-
-def test_a_contract_typo_in_source_is_refused_as_a_value_error_not_an_unknown_table(
-        monkeypatch):
-    """UnknownTable is for an OPERATOR-SUPPLIED table name at a job boundary -- that
-    is its docstring, and why it is a ValueError rather than a KeyError (so the prose
-    reaches a run log unquoted). A contract typo committed to SOURCE is none of
-    those: nobody supplied it, it is not an unknown *table*, and it breaks the import
-    of every module that reads the registry rather than one run. This guard raised
-    UnknownTable while its sibling `_assert_landing_modes_known` explained, in the
-    same file, why that is the wrong exception."""
-    trap = BronzeTable(
-        name="lookup",
-        contract="lookups",  # a real typo: plural
-        table_key="bronze_cnpj_lookup",
-        staging="bronze_cnpj_lookup_staging",
-        bronze="bronze_cnpj_lookup",
-        quarantine="bronze_cnpj_lookup_quarantine",
-        subdir="lookups",
-        landing=LANDING_LOCAL,
-        prefix=None,
-        constraints=(),
-    )
-    monkeypatch.setitem(REGISTRY, "lookup", trap)
-
-    with pytest.raises(ValueError) as excinfo:
-        _assert_contracts_exist()
-    assert "lookups" in str(excinfo.value)
-    assert not isinstance(excinfo.value, UnknownTable), (
-        "a contract typo in source is not an operator's unknown table name"
-    )
 
 
 def test_every_constraint_references_a_column_of_its_own_contract():
@@ -466,4 +345,61 @@ def test_the_constraints_are_the_ones_the_live_tables_carry():
         "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
         "ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 "
         "CHECK (length(trim(cnpj_basico)) = 8)",
+    )
+
+
+def test_the_new_tables_carry_a_constraint_no_other_contract_could_have():
+    """The one paste `test_every_constraint_references_a_column_of_its_own_contract`
+    states, in its own docstring, that it cannot catch.
+
+    That test asks only that a statement mentions SOME column the contract has --
+    and estabelecimentos, empresas and socios are all keyed on `cnpj_basico`, so
+    estab's whole constraint tuple pasted onto empresas satisfies it. Constraint-to-
+    contract coherence structurally cannot tell three tables with one key column
+    apart.
+
+    So each new entry carries a statement on a column that is unique to ITS contract
+    -- `razao_social` for empresas, `identificador_socio` for socios -- and that is
+    the field the paste would be missing. This test is what makes "would be missing"
+    mean "is refused": without it, the unique constraint makes the paste visible only
+    to a human reading the diff, which is the standard this phase exists to stop
+    relying on.
+
+    Exact tuples rather than "mentions the unique column", because the DDL triple is
+    itself copy-pasted: a DROP naming one constraint and an ADD naming another leaves
+    the old check in place on every promote, and only equality sees that.
+
+    SOCIOS CARRIES NO CHECK, and it is the only registered table that does not.
+    Unity Catalog refuses a CHECK constraint on a table carrying a column mask, and
+    socios is the masked table -- probed on the live workspace, where
+    `ALTER COLUMN ... SET NOT NULL` SUCCEEDED against a masked table and
+    `ADD CONSTRAINT ... CHECK (...)` FAILED with
+    COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED. So the `cnpj_basico_len8` pair is
+    gone from socios alone and both NOT NULLs remain, which is what keeps the
+    anti-paste property above intact: `identificador_socio` is still the statement
+    a tuple pasted from another contract would be missing. What stops the pair being
+    pasted back is not this test but
+    `registry._assert_no_masked_contract_declares_a_check_constraint`, at import.
+
+    Unlike its sibling above, this pins constraints for tables that do NOT exist in
+    Delta yet -- they are created by this phase's first promote. It is a pin on what
+    will be APPLIED, which is the same string either way."""
+    unique_to_empresas = "razao_social"
+    unique_to_socios = "identificador_socio"
+    for contract, columns in TABLES.items():
+        if contract != "empresas":
+            assert unique_to_empresas not in columns, contract
+        if contract != "socios":
+            assert unique_to_socios not in columns, contract
+
+    assert table_spec("empresas").constraints == (
+        "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
+        "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
+        "ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 "
+        "CHECK (length(trim(cnpj_basico)) = 8)",
+        "ALTER TABLE {table} ALTER COLUMN razao_social SET NOT NULL",
+    )
+    assert table_spec("socios").constraints == (
+        "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
+        "ALTER TABLE {table} ALTER COLUMN identificador_socio SET NOT NULL",
     )

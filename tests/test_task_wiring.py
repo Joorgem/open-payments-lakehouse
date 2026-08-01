@@ -10,6 +10,24 @@ Job scripts under databricks/src are entry points, not part of the opl wheel, so
 they are loaded by path with the same importlib pattern the other task tests use.
 Nothing here starts Spark: every assertion is about wiring, not data.
 
+TWO HALVES, AND THE SECOND ONE ARRIVED IN F1.4b AND THEN MOVED OUT. This file is
+the first half: it reads the SCRIPTS, and a task must resolve every coordinate from
+the one spec it got from argv. That is only half a wiring claim, because a script
+that resolves its spec perfectly still ingests whatever table its job YAML hands it
+-- and the YAMLs are written by copying the previous table's file, which is the
+paste the second half exists to refuse. A job that reads the wrong table's landing
+dir, or promotes into the wrong table's bronze, does not error: it SUCCEEDS, having
+done the wrong thing.
+
+THAT SECOND HALF IS NOW `test_job_yaml_wiring.py`, split out when the two F1.4b
+jobs carried this file to 853 lines, over the 800-line limit. The seam is the one
+this paragraph already drew and not a line count: this file changes when an ENTRY
+POINT changes, that one changes when a JOB is added. Read together they say "this
+script, handed this table"; alone neither is a wiring claim, which is why each
+file's docstring points at the other. Nothing was shared across the seam and so
+nothing was copied: the AST helpers below read scripts and stayed, every YAML
+helper went whole.
+
 TO WHOEVER HITS THE RED HERE DURING THE REGISTRY REFACTOR: these describe a
 structure the refactor deliberately deletes, so some of them fail BY
 CONSTRUCTION once a script takes its table from a job parameter instead of a
@@ -39,7 +57,8 @@ from pathlib import Path
 
 import pytest
 
-_SRC = Path(__file__).resolve().parents[1] / "databricks" / "src"
+_REPO = Path(__file__).resolve().parents[1]
+_SRC = _REPO / "databricks" / "src"
 
 # Every job task under databricks/src that resolves a table. Enumerated rather
 # than globbed: a new entry point must be a deliberate addition to this list, and
@@ -53,6 +72,12 @@ _TABLE_TASKS = [
     "promote_batch",
     "fail_on_dq",
     "reclaim_landing",
+    # F1.4b. The deliberate addition this list's docstring asks for: it is the first
+    # entry point that CREATES a bronze table rather than writing to one the append
+    # made, so a literal table name in it would hand-build a table under a name the
+    # registry does not know -- and the promote would then create the real one,
+    # unmasked, on its first append.
+    "ensure_masked_table",
 ]
 
 

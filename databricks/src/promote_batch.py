@@ -20,6 +20,7 @@ import sys
 
 from pyspark.sql import SparkSession
 
+from opl.bronze.dq import skip_notice
 from opl.bronze.promote import (
     BATCH_COLUMN,
     PromoteOutcome,
@@ -52,12 +53,15 @@ def main(argv: list[str] | None = None) -> None:
     spec = table_spec(positional[0] if positional else "")
     spark = SparkSession.builder.getOrCreate()
     tbl = DEFAULT.table(spec.bronze)
+    staging = DEFAULT.table(spec.staging)
+    rules = rules_for(spec.contract)
+    _announce_skipped_rules(spark, staging, rules)
     result = promote_batch(
         spark,
         positional[1] if len(positional) > 1 else "",
-        staging_table=DEFAULT.table(spec.staging),
+        staging_table=staging,
         bronze_table=tbl,
-        rules=rules_for(spec.contract),
+        rules=rules,
         in_flow=IN_FLOW_FLAG in args,
     )
     if result.outcome is PromoteOutcome.NOTHING_INGESTED:
@@ -76,6 +80,32 @@ def main(argv: list[str] | None = None) -> None:
     # re-run must still reach it. A refused promote raises above and never gets
     # here -- it must not re-validate a CHECK over the whole table.
     _assert_constraints(spark, spec, tbl)
+
+
+def _announce_skipped_rules(spark: SparkSession, staging: str, rules) -> None:
+    """Say which rules will NOT run against this batch, BEFORE the append. Nothing
+    at all when they all run.
+
+    This is the task where that silence costs something. The documented rebuild
+    procedure drops bronze and LEAVES staging (`promote.plan_promotion` says so),
+    and the live estab staging table is still the 35-column pre-F1.4a shape -- it
+    carries neither snapshot column, because no estabelecimentos ingest has run
+    since. Repromoting such a batch therefore skips `unprovable_snapshot_ref_date`
+    correctly, every row reads clean, and the rows are appended into 37-column
+    bronze where Delta fills the absent column with NULL. That NULL is the value
+    the rule exists to refuse, arriving precisely because the rule was not there
+    to refuse it. Nothing fails; the control is simply absent.
+
+    Not an error: raising would make the documented rebuild unrunnable, and the
+    skip is right. The fix is that the run log says it happened.
+
+    `.columns` is a catalog lookup on the schema, not a scan, and it asks the SAME
+    staging table the promote reads its rows from -- a notice about some other
+    coordinate would be worse than no notice."""
+    notice = skip_notice(spark.read.table(staging).columns, rules,
+                         task="promote_batch", source=staging)
+    if notice is not None:
+        print(notice)
 
 
 def _report(result: PromoteResult, tbl: str, quarantine: str) -> None:

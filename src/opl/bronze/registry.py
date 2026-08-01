@@ -12,8 +12,10 @@ and drift is the documented defect: a quarantine name hardcoded in a job YAML
 "sent estab triagers to a table full of unrelated F1.2 lookup rows"."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
+from opl.bronze.masking import MASKED_COLUMNS
 from opl.config import OplConfig
 from opl.contracts.cnpj_schemas import FILE_GROUPS, TABLES
 
@@ -191,6 +193,66 @@ REGISTRY: dict[str, BronzeTable] = {
             "CHECK (length(trim(cnpj_basico)) = 8)",
         ),
     ),
+    # The two F1.4b entries. Written as a PASTE of the one above, deliberately and
+    # under the guards built for exactly that in Tasks 1-3: `subdir`, `table_key`,
+    # the staging/bronze/quarantine triple, `contract` and `prefix` are each refused
+    # at import if one of them is left stale. What no guard can see is a SWAP between
+    # these two entries -- swapped subdirs are still unique, so uniqueness is blind to
+    # them -- which is why every field of both is pinned per table in
+    # `test_the_four_live_tables_keep_the_exact_names_they_have_today`.
+    "empresas": BronzeTable(
+        name="empresas",
+        contract="empresas",
+        table_key="bronze_cnpj_empresas",
+        staging="bronze_cnpj_empresas_staging",
+        bronze="bronze_cnpj_empresas",
+        quarantine="bronze_cnpj_empresas_quarantine",
+        subdir="empresas",
+        landing=LANDING_ZIPS,
+        prefix="Empresas",
+        constraints=(
+            "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
+            "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
+            "ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 "
+            "CHECK (length(trim(cnpj_basico)) = 8)",
+            # razao_social, not a second cnpj_basico rule: the constraint set is
+            # what a copy-paste from estabelecimentos would leave IDENTICAL, and
+            # all three CNPJ contracts key on cnpj_basico -- so a constraint that
+            # is unique to THIS contract is what makes the paste visible.
+            # `test_every_constraint_references_a_column_of_its_own_contract` says
+            # in its own docstring that it cannot see that paste (cnpj_basico is a
+            # column of all three); what turns "visible" into "refused" is
+            # `test_the_new_tables_carry_a_constraint_no_other_contract_could_have`.
+            "ALTER TABLE {table} ALTER COLUMN razao_social SET NOT NULL",
+        ),
+    ),
+    "socios": BronzeTable(
+        name="socios",
+        contract="socios",
+        table_key="bronze_cnpj_socios",
+        staging="bronze_cnpj_socios_staging",
+        bronze="bronze_cnpj_socios",
+        quarantine="bronze_cnpj_socios_quarantine",
+        subdir="socios",
+        landing=LANDING_ZIPS,
+        prefix="Socios",
+        # THE ONE REGISTERED TABLE WITH NO CHECK CONSTRAINT, because it is the masked
+        # one: UC refuses a CHECK on a table carrying a mask, TABLE-scoped, so the
+        # masks being on the name columns does not spare a CHECK on `cnpj_basico`.
+        # Probed -- `SET NOT NULL` SUCCEEDED against a masked table and `ADD
+        # CONSTRAINT ... CHECK (...)` FAILED -- so the loss is exactly the
+        # `cnpj_basico_len8` pair and both NOT NULLs stay. WHAT IT COSTS, rather than
+        # glossed: bronze stops re-asserting the 8-character key declaratively. That
+        # was defence in depth, not the control -- `bad_cnpj_basico_length` rejects
+        # those rows in the DQ gate, BEFORE the promote. ADR 0008 has both in full.
+        constraints=(
+            "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
+            # identificador_socio for empresas' razao_social reason: it is the one
+            # column above that no other registered contract has, so it is the
+            # statement a pasted constraint tuple would be missing.
+            "ALTER TABLE {table} ALTER COLUMN identificador_socio SET NOT NULL",
+        ),
+    ),
 }
 
 
@@ -294,6 +356,84 @@ def _assert_no_two_tables_share_a_contract() -> None:
                 "cnpj_schemas.TABLES."
             )
         seen[spec.contract] = spec.name
+
+
+# A statement that CREATES a CHECK: the keyword and its predicate's opening paren,
+# CASE-INSENSITIVELY -- Spark SQL accepts `check (...)`, and the upper-case-only
+# version of this let a lower-case paste import clean and fail after the append had
+# committed. Still unmatched: `DROP CONSTRAINT IF EXISTS` (legal on a masked table,
+# and the first step of masking one that carries a CHECK) and a column named `check`.
+_CREATES_A_CHECK = re.compile(r"\bCHECK\s*\(", re.IGNORECASE)
+
+
+def _masked_check_collision(
+    spec: BronzeTable, masked: tuple[str, ...], statement: str
+) -> str:
+    """The refusal text for a masked table declaring a CHECK.
+
+    Extracted like `_delta_name_collision`, for its reason: the message is most of
+    the guard by volume and inlining it puts that function past 50 lines. It names
+    the UC error conditions so they can be searched for, and says explicitly that
+    NOT NULL is not what is refused -- the obvious over-correction on meeting this
+    message is to empty the constraint tuple."""
+    return (
+        f"{spec.name} declares a CHECK constraint and its contract "
+        f"{spec.contract!r} is masked ({', '.join(masked)}). Unity Catalog refuses "
+        "the two on ONE TABLE -- COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED adding "
+        "the CHECK to a masked table, COLUMN_MASKS_FEATURE_NOT_SUPPORTED."
+        "CHECK_CONSTRAINT masking a CHECKed one -- and the refusal is table-scoped, "
+        "so it does not help that the mask and the CHECK are on different columns. "
+        f"The statement: {statement!r}. This is refused at IMPORT because "
+        "promote_batch issues it AFTER the append commits: the run would write its "
+        "rows into bronze and then fail, and the repair run, which correctly skips "
+        "the committed append, would fail again on the same statement. Remove it, "
+        "together with the DROP CONSTRAINT IF EXISTS that only existed to make it "
+        "re-runnable -- the DQ rule that rejects those rows runs in the GATE, before "
+        "the promote, so nothing violating the CHECK can reach bronze. ALTER COLUMN "
+        "... SET NOT NULL is unaffected and may stay. See ADR 0008."
+    )
+
+
+def _assert_no_masked_contract_declares_a_check_constraint() -> None:
+    """Fail at import if a table whose contract is MASKED also declares a CHECK.
+
+    UC refuses the two on one table, in both directions
+    (`COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED` adding the CHECK to a masked table,
+    `COLUMN_MASKS_FEATURE_NOT_SUPPORTED.CHECK_CONSTRAINT` masking a CHECKed one),
+    and the refusal is TABLE-scoped. Probed: `SET NOT NULL` against a masked table
+    SUCCEEDED, so this refuses a CHECK and says nothing about nullability. ADR 0008
+    carries the probe.
+
+    AT IMPORT, HERE, AND NOT IN A TEST OR IN `opl.bronze.masking`. The statement is
+    issued by `promote_batch._assert_constraints`, which runs AFTER the append has
+    committed -- so getting this wrong produces a run that writes its rows into
+    bronze and THEN fails, whose repair run correctly skips the committed append and
+    fails again on the same statement: an unrepairable task, on the one table
+    holding personal names. A CI test protects a merge, not the ad-hoc run of a
+    branch whose tests have not been run; and `promote_batch` -- which issues the
+    statement -- imports the registry and NOT `masking`, so a guard living there
+    would never run inside it. That import direction is the load-bearing fact, not
+    the importer count: this module imports `masking` too. Every job task imports
+    the registry.
+
+    THE IMPORT DIRECTION IS LOAD-BEARING, and it is what lets this be a guard rather
+    than a test: `opl.bronze.masking` imports `opl.contracts.cnpj_schemas` and
+    NOTHING else -- no pyspark, no registry. This module is imported by the
+    EXTRACTION scripts, which run off Databricks where pyspark is an optional extra
+    usually not installed, so a pyspark import arriving here through `masking` would
+    break `extract_cnpj` with an ImportError for a package it has no reason to need.
+    `masking` must never import `registry`, and
+    `test_the_registry_still_imports_where_pyspark_is_not_installed` keeps both
+    halves true.
+
+    A plain ValueError: nothing here is an unknown table."""
+    for spec in REGISTRY.values():
+        masked = MASKED_COLUMNS.get(spec.contract)
+        if not masked:
+            continue
+        for statement in spec.constraints:
+            if _CREATES_A_CHECK.search(statement):
+                raise ValueError(_masked_check_collision(spec, masked, statement))
 
 
 def _file_group_prefixes(contract: str) -> list[str]:
@@ -460,14 +600,199 @@ def _assert_no_table_claims_a_reserved_subdir() -> None:
             )
 
 
+def _assert_no_two_tables_share_a_landing_subdir() -> None:
+    """Fail at import if two specs land in the same directory.
+
+    AT IMPORT and not only in a test, because the consumer does not fail: two tables
+    on one subdir means each one's stream reads the other's files, and cloudFiles
+    walks a source dir RECURSIVELY -- so both ingest both, and both runs report
+    SUCCESS. This is the exact paste F1.4b makes (copy the estabelecimentos entry,
+    rename everything but `subdir`), and it was verified by probe to import CLEAN
+    before this guard existed, caught only by a CI test. A CI test protects a merge.
+    It does not protect an ad-hoc run, or a branch whose tests have not been run,
+    which is exactly how these jobs get launched while a phase is in flight.
+
+    `subdir` is the field that survives a CAREFUL rename, which is what makes it the
+    dangerous one: it is the only member of the copy-paste trio that does not contain
+    the table's own bronze name, so a find/replace over `bronze_cnpj_*` fixes every
+    other field and leaves this one pointing at the source table's landing dir.
+
+    Not a duplicate of the two subdir checks above. That pair compares each subdir
+    against the LAYOUT's own names and against the shape of a directory name, and
+    neither can see two tables colliding with EACH OTHER -- `estabelecimentos` twice
+    is unreserved, well-formed, and wrong. Three checks, three disjoint holes.
+
+    `prefix` needs no twin of this: `_assert_prefixes_match_their_file_groups`
+    already cross-checks it against FILE_GROUPS, which is strictly stronger than
+    uniqueness -- it catches `Estabelecimento` (singular), which is unique and
+    under-ingests silently."""
+    seen: dict[str, str] = {}
+    for spec in REGISTRY.values():
+        if spec.subdir in seen:
+            raise ValueError(
+                f"{spec.name} and {seen[spec.subdir]} both claim landing subdir "
+                f"{spec.subdir!r}. Each table's stream reads its own subdir and "
+                "cloudFiles walks it RECURSIVELY, so two tables sharing one means "
+                "each ingests the other's files and both runs report SUCCESS. Give "
+                "each table a landing subdir of its own."
+            )
+        seen[spec.subdir] = spec.name
+
+
+def _delta_name_collision(owner: str, name: str, other: tuple[str, str]) -> str:
+    """The refusal text for two specs naming one Delta table, in the words they wrote.
+
+    The comparison is casefolded, so the two strings this reports may not be EQUAL --
+    and an operator handed only a normalised name would search source for a string
+    nobody wrote. Both spellings, and the reason they are the same table, but ONLY
+    when they differ: a plain duplicate annotated with a case explanation sends the
+    operator looking for a difference that is not there, and the ordinary duplicate is
+    the case that actually happens."""
+    other_owner, other_name = other
+    note = "" if name == other_name else (
+        f", which {other_owner} spells {other_name!r} -- Unity Catalog and Spark "
+        "identifiers are CASE-INSENSITIVE, so two spellings that differ only in case "
+        "name ONE physical table"
+    )
+    return (
+        f"{owner} and {other_owner} both declare Delta table {name!r}{note}. "
+        "Two tables on one Delta name cross-contaminate: appends from both land in "
+        "one table, `_batch_id` idempotence counts the other table's rows as this "
+        "batch's, and a quarantine that doubles as someone's staging feeds DQ "
+        "rejects to a promote. Give each table its own staging/bronze/quarantine "
+        "triple."
+    )
+
+
+def _assert_no_two_tables_share_a_delta_name() -> None:
+    """Fail at import if two specs name the same Delta table in any of the three
+    roles that name one.
+
+    ONE namespace across all three roles rather than three checks of one role each,
+    because the defect is the same whichever role collides and the roles are NOT
+    disjoint in principle: a table whose `quarantine` equals another's `staging`
+    passes every per-role check, and routes DQ REJECTS into a table a promote reads
+    as trusted input. `test_no_two_tables_share_a_staging_bronze_or_quarantine_name`
+    has compared them cross-role since F1.4a for exactly that reason; this is that
+    test's property moved to where the values are DECLARED, because the CI test does
+    not protect an ad-hoc run.
+
+    Two tables appending to one bronze table also breaks `_batch_id` idempotence,
+    since `rows_of_batch` would count the other table's rows for the same batch. And
+    a stale `quarantine` in particular is the documented F1.2/F1.3 incident: a
+    hardcoded quarantine name "sent estab triagers to a table full of unrelated F1.2
+    lookup rows".
+
+    Verified by probe to be reachable: before this existed, a paste of the
+    estabelecimentos entry with the staging/bronze/quarantine triple left unchanged
+    imported CLEAN.
+
+    The three fields are spelled out rather than looped over by name with `getattr`.
+    `getattr(spec, role)` would be shorter and would type as `Any`, so renaming a
+    field of `BronzeTable` would break this guard silently as far as any static check
+    is concerned -- and a guard that reads its subject reflectively is the one place
+    that cost is not worth paying. It also matches
+    `test_no_two_tables_share_a_staging_bronze_or_quarantine_name`, which asserts this
+    same property in the same shape.
+
+    `table_key` is deliberately absent: it is a Volume path component, not a table.
+    See `_assert_no_two_tables_share_a_checkpoint_namespace`, which also records why
+    it and `subdir` compare case-SENSITIVELY where this one does not.
+
+    CASEFOLDED: UC and Spark identifiers are case-insensitive, so
+    `staging="BRONZE_CNPJ_ESTAB_STAGING"` IS estabelecimentos' staging table -- and
+    under the byte comparison this used until F1.4b it imported CLEAN, with every
+    consequence above intact. `_delta_name_collision` reports both spellings.
+
+    A plain ValueError: nothing here is an unknown table."""
+    seen: dict[str, tuple[str, str]] = {}
+    for spec in REGISTRY.values():
+        for role, name in (
+            ("staging", spec.staging),
+            ("bronze", spec.bronze),
+            ("quarantine", spec.quarantine),
+        ):
+            owner = f"{spec.name}.{role}"
+            key = name.casefold()
+            if key in seen:
+                raise ValueError(_delta_name_collision(owner, name, seen[key]))
+            seen[key] = (owner, name)
+
+
+def _assert_no_two_tables_share_a_checkpoint_namespace() -> None:
+    """Fail at import if two specs claim the same `table_key`.
+
+    SEPARATE from the Delta-name check above, and this is the one counter-intuitive
+    thing in this file, so it is stated rather than left to be rediscovered:
+    `table_key` names NO Delta table. It is the namespace
+    `autoloader.checkpoint_location` and `schema_location` build
+    `_checkpoints/<table_key>` and `_schemas/<table_key>` from, so it lives in a
+    different namespace and is ALLOWED to spell itself like a Delta table --
+    `lookup.table_key` and `lookup.bronze` are both `bronze_cnpj_lookup` today, and
+    that is correct, not drift. The obvious implementation, one `seen` dict over all
+    four roles in one pass, therefore refuses the LIVE registry at import and breaks
+    every module that reads it. Pinned by
+    `test_a_table_key_may_equal_its_own_tables_bronze_name`, because the failure is
+    loud but its cause is not, and the natural fix on seeing it -- drop `table_key`
+    from the check -- silently reopens the hole below.
+
+    Which is why this is its own guard rather than a dropped field. The collision it
+    catches is the QUIETEST of the four. An Auto Loader checkpoint is a record of
+    which files have already been processed, so two tables sharing one means the
+    second stream starts up believing the first's files are its own and already
+    ingested: it writes nothing and reports SUCCESS. The shared `_schemas` entry
+    compounds it by merging two unrelated inferred schemas into one.
+
+    CASE-SENSITIVE, where the Delta-name guard casefolds, and the asymmetry is a
+    decision rather than an oversight. `table_key` and `subdir` are components of
+    Volume PATHS, and a Volume is backed by object storage, where `bronze_cnpj_estab`
+    and `BRONZE_CNPJ_ESTAB` are two directories -- so two spellings that differ only
+    in case are not one checkpoint, and there is no collision here to refuse. The
+    Delta guard casefolds because UC and Spark resolve identifiers case-insensitively,
+    which is a property of the thing NAMED; extending that to a path would be a claim
+    about storage this project has not measured, and it would refuse a registry that
+    is merely oddly capitalised. Stated because the opposite reading -- that the
+    casefold was simply forgotten here -- is the obvious one.
+
+    A plain ValueError: nothing here is an unknown table."""
+    seen: dict[str, str] = {}
+    for spec in REGISTRY.values():
+        if spec.table_key in seen:
+            raise ValueError(
+                f"{spec.name} and {seen[spec.table_key]} both claim checkpoint "
+                f"namespace {spec.table_key!r}. `table_key` is what autoloader "
+                "builds _checkpoints/<table_key> and _schemas/<table_key> from, and "
+                "a checkpoint records which files are already processed -- so two "
+                "tables sharing one means the second stream treats the first's "
+                "files as its own and already ingested, writes nothing, and reports "
+                "SUCCESS. Give each table a table_key of its own."
+            )
+        seen[spec.table_key] = spec.name
+
+
 _assert_contracts_exist()
 # Contract identity before anything derived FROM a contract: both checks below
 # resolve FILE_GROUPS entries by `spec.contract`, and neither is meaningful until
 # that contract is known to exist and to name one table only.
 _assert_no_two_tables_share_a_contract()
 _assert_prefixes_match_their_file_groups()
+# Also keyed on the contract, so it belongs in this group: `MASKED_COLUMNS` is
+# keyed by contract, not by table name, and asking whether THIS table is masked is
+# meaningless until its contract is known to exist and to name one table only.
+_assert_no_masked_contract_declares_a_check_constraint()
 _assert_landing_modes_known()
 # Shape before content: the reserved-name check compares exact strings, so it is
 # total only over values already known to be a single directory name.
 _assert_subdirs_are_single_path_components()
 _assert_no_table_claims_a_reserved_subdir()
+# Individually-wrong before collectively-wrong, so the operator is never told the
+# wrong fix. Two tables both declaring subdir="zips" -- or both "" -- are a duplicate
+# AND two reserved/malformed values, and uniqueness would report it first as "give
+# each table a subdir of its own", which is advice to rename one of them to something
+# else reserved. Ordered last, the operator is told the real problem: neither value
+# may be used at all.
+_assert_no_two_tables_share_a_landing_subdir()
+# No ordering between these two or against anything above: they read fields nothing
+# else validates, in two namespaces that are independent of each other by design.
+_assert_no_two_tables_share_a_delta_name()
+_assert_no_two_tables_share_a_checkpoint_namespace()

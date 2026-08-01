@@ -71,10 +71,10 @@ def run(
     # ingest that reports SUCCESS over an empty source dir.
     #
     # Resolved before the first download and ONLY when uploading, so a download-only
-    # capture of a table with no registry entry yet (Empresas and Socios until
-    # F1.4b) still works, while landing its zips is refused: 20 GB of zips in a Free
-    # Edition Volume that no unzip task and no ingest can name is the waste this
-    # branch just reclaimed 16.7 GB of.
+    # capture of a table with no registry entry yet still works, while landing its
+    # zips is refused: 20 GB of zips in a Free Edition Volume that no unzip task and
+    # no ingest can name is the waste this branch reclaimed 16.7 GB of. Empresas and
+    # Socios were that case until F1.4b registered them; Simples is it now.
     subdir = spec_for_contract(FILE_GROUPS[group]["table"]).subdir if upload else None
     local_dir = Path(dest) / month / "giants"
     print(f"giants {month} {group} parts={parts} upload={upload}")

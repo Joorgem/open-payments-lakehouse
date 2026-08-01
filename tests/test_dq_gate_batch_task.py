@@ -21,6 +21,7 @@ import pytest
 
 from opl.bronze.promote import PromoteRefused
 from opl.bronze.registry import UnknownTable
+from opl.contracts.cnpj_schemas import TABLES
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "databricks" / "src" / "dq_gate_batch.py"
 _spec = importlib.util.spec_from_file_location("dq_gate_batch_task", _SCRIPT)
@@ -37,10 +38,14 @@ class FakeFrame:
     frame the task already tallied is another scan of a batch of up to ~29M rows,
     which is the cost this task used to pay three times over."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, columns: list[str] | None = None) -> None:
         self.name = name
         self.saved: list[str] = []
         self.write_options: list[tuple[str, str]] = []
+        # The task asks the batch frame which columns it has, to report the rules
+        # that will not run against it. Schema only -- no scan, hence no conflict
+        # with this double's refusal to be counted.
+        self.columns = [] if columns is None else columns
 
     @property
     def write(self):
@@ -61,9 +66,10 @@ class FakeFrame:
         raise AssertionError(f"{self.name}.count() is a second scan of the batch")
 
 
-def _wire(monkeypatch, *, already: int, good_count: int = 6, bad_count: int = 4):
+def _wire(monkeypatch, *, already: int, good_count: int = 6, bad_count: int = 4,
+          batch_columns: list[str] | None = None):
     """Stub everything between the task and Spark, recording what it asked for."""
-    batch = FakeFrame("batch")
+    batch = FakeFrame("batch", batch_columns)
     bad = FakeFrame("bad")
     seen = SimpleNamespace(
         batch=batch, bad=bad, read_tables=[], presence_tables=[],
@@ -230,3 +236,58 @@ def test_it_counts_both_sides_of_the_batch_in_one_pass(monkeypatch):
     task.main(["estabelecimentos", "999"])
 
     assert seen.tally_calls == 1
+
+
+# --- the skipped rule must be audible in the run log -------------------------
+
+# The live `bronze_cnpj_estab_staging` shape, and it is 35 columns for a reason
+# worth writing down: the 30 contract columns plus the 5 audit columns
+# `add_audit_columns` wrote BEFORE F1.4a added the two snapshot ones. Bronze is
+# 37. No estabelecimentos ingest has run since, so this is not a hypothetical
+# frame -- it is what a repromote of a pre-F1.4a batch evaluates today.
+_PRE_F14A_STAGING_COLUMNS = [
+    *TABLES["estabelecimentos"],
+    "_ingested_at", "_record_source", "_batch_id", "_source_file", "_rescued_data",
+]
+
+
+def test_a_rule_skipped_for_a_missing_column_is_named_in_the_run_log(monkeypatch, capsys):
+    """The gate's half of the fix for the rebuild+repromote silent path.
+
+    `REQUIRES_COLUMN` makes the skip CORRECT -- a frame written before the
+    derivation existed is not a defective frame -- but until now it was also
+    inaudible, and the two together are how a control disappears instead of
+    failing. A gate that quietly stops applying one of its rules and reports the
+    batch clean is indistinguishable, in the run log, from a gate that applied it
+    and found nothing.
+
+    Deliberately NOT an error: the pre-F1.4a staging table is a legitimate input
+    and raising here would make the documented rebuild procedure unrunnable. The
+    line is the fix; the skip is not the bug."""
+    assert len(_PRE_F14A_STAGING_COLUMNS) == 35, "the shape measured on the live table"
+    seen = _wire(monkeypatch, already=0, batch_columns=_PRE_F14A_STAGING_COLUMNS)
+
+    task.main(["estabelecimentos", "999"])
+
+    out = capsys.readouterr().out
+    assert "unprovable_snapshot_ref_date" in out
+    assert "_snapshot_ref_date" in out
+    assert _STAGING in out
+    assert "dq_gate_batch:" in out
+    # The verdict lines still happen -- the notice is additional, not a diversion.
+    assert "dq_gate_batch: batch=999 good=6 bad=4" in out
+    assert seen.published == [("bad_row_count", 4)]
+
+
+def test_a_frame_carrying_every_column_prints_no_notice(monkeypatch, capsys):
+    """Silence on the healthy path. A warning on every run is one nobody reads,
+    which would leave the rebuild+repromote case exactly as invisible as before."""
+    _wire(monkeypatch, already=0,
+          batch_columns=[*_PRE_F14A_STAGING_COLUMNS,
+                         "_snapshot_month", "_snapshot_ref_date"])
+
+    task.main(["estabelecimentos", "999"])
+
+    out = capsys.readouterr().out
+    assert "unprovable_snapshot_ref_date" not in out
+    assert "NOT CHECKED" not in out
