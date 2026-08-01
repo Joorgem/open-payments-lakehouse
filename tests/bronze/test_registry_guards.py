@@ -559,6 +559,51 @@ def test_a_masked_contract_declaring_a_check_constraint_is_refused_at_import(
     assert "SET NOT NULL is unaffected" in message
 
 
+@pytest.mark.parametrize(
+    "spelling",
+    ["check (length(trim(cnpj_basico)) = 8)",
+     "Check(length(trim(cnpj_basico)) = 8)"],
+)
+def test_a_lower_case_check_does_not_evade_the_guard(monkeypatch, spelling):
+    """THE EVASION THIS GUARD SHIPPED WITH, closed and pinned.
+
+    The pattern was `\\bCHECK\\b`, upper-case only, so a pasted entry spelling the
+    keyword `check (...)` -- which Spark SQL accepts, and which is how the statement
+    reads in plenty of documentation -- imported clean and hit
+    `COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED` at run time, after the append had
+    committed. That is precisely the unrepairable failure the guard exists to move
+    to import, so the guard's own case-sensitivity was a hole in it. Found
+    independently by this branch's Task 5 review and by CodeRabbit on PR #6.
+
+    Whitespace between the keyword and the parenthesis is optional here for the same
+    reason: `CHECK(...)` parses, and a guard that required the space would be the
+    same hole one character narrower."""
+    pasted = replace(
+        REGISTRY["socios"],
+        constraints=REGISTRY["socios"].constraints
+        + (f"ALTER TABLE {{table}} ADD CONSTRAINT cnpj_basico_len8 {spelling}",),
+    )
+    monkeypatch.setitem(REGISTRY, "socios", pasted)
+
+    with pytest.raises(ValueError, match="COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED"):
+        _assert_no_masked_contract_declares_a_check_constraint()
+
+
+def test_a_column_named_check_is_not_mistaken_for_a_constraint(monkeypatch):
+    """The other half of the case change. Dropping the upper-case restriction gives
+    up the protection it bought -- a future contract column called `check` -- so the
+    pattern anchors on the predicate's opening parenthesis instead, which no
+    `ALTER COLUMN` carries. Asserted rather than argued, because if this ever goes
+    red the guard refuses a legitimate registry and nothing masked can be added."""
+    named = replace(
+        REGISTRY["socios"],
+        constraints=("ALTER TABLE {table} ALTER COLUMN check SET NOT NULL",),
+    )
+    monkeypatch.setitem(REGISTRY, "socios", named)
+
+    _assert_no_masked_contract_declares_a_check_constraint()
+
+
 def test_dropping_a_check_is_still_allowed_on_a_masked_table(monkeypatch):
     """The guard refuses statements that CREATE a check, not every mention of one.
 

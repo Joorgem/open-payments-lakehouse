@@ -358,12 +358,12 @@ def _assert_no_two_tables_share_a_contract() -> None:
         seen[spec.contract] = spec.name
 
 
-# A statement that CREATES a CHECK constraint. `DROP CONSTRAINT IF EXISTS` is
-# deliberately NOT matched: dropping a CHECK is legal on a masked table, and is in
-# fact the first step of masking a table that already carries one -- so refusing it
-# would refuse the migration out of this very incompatibility. Word-bounded and
-# upper-case so it cannot fire on a future column whose name contains "check".
-_CREATES_A_CHECK = re.compile(r"\bCHECK\b")
+# A statement that CREATES a CHECK: the keyword and its predicate's opening paren,
+# CASE-INSENSITIVELY -- Spark SQL accepts `check (...)`, and the upper-case-only
+# version of this let a lower-case paste import clean and fail after the append had
+# committed. Still unmatched: `DROP CONSTRAINT IF EXISTS` (legal on a masked table,
+# and the first step of masking one that carries a CHECK) and a column named `check`.
+_CREATES_A_CHECK = re.compile(r"\bCHECK\s*\(", re.IGNORECASE)
 
 
 def _masked_check_collision(
