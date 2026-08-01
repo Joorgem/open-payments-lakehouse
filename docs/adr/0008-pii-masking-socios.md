@@ -1,7 +1,11 @@
 # ADR 0008 — mask the partner NAMES in `socios`, before the first row lands
 
 ## Status
-Accepted. One incompatibility with Unity Catalog was found while implementing this
+Accepted, and **live as of 2026-08-01** — the mask is applied to
+`workspace.default.bronze_cnpj_socios` and verified by reading through it, not
+only by the DDL having run
+([What the live run proved](#what-the-live-run-proved-and-what-it-only-confirmed)).
+One incompatibility with Unity Catalog was found while implementing this
 (a masked table may not carry a `CHECK` constraint); it was probed against the live
 workspace and resolved by dropping socios' `CHECK`, with the trade recorded below.
 
@@ -114,7 +118,10 @@ nothing denies it.
   deliberately not `CREATE OR REPLACE TABLE`, which would drop its rows — verified
   against local Delta); `CREATE OR REPLACE FUNCTION` is the documented way to
   modify a function a live mask references; and re-applying `SET MASK` to an
-  already-masked column **succeeds**, measured in the probe above. A `DROP MASK`
+  already-masked column **succeeds**, measured in the probe under
+  [What masking costs](#what-masking-costs-socios-gives-up-one-declarative-constraint)
+  — which is **below** this bullet, not above it, as this sentence said until the
+  F1.4b run went looking for it. A `DROP MASK`
   before the `SET` would also be idempotent and is deliberately *not* used: it
   takes the mask off a populated table for the width of two statements on every
   monthly re-run, and a control that is briefly absent every month is worse than
@@ -180,11 +187,66 @@ making the registry entries uniform again and pasting the pair back.
 import**, so it breaks every module that reads the registry rather than one job run
 — which is the right severity, because a CI test protects a merge and not the
 ad-hoc run of a branch. The guard lives in the registry and not in
-`opl.bronze.masking` deliberately: `masking` is imported only by
-`ensure_masked_table`, whereas `promote_batch` — the task that actually issues the
-statement — imports the registry. It matches on statements that *create* a check
+`opl.bronze.masking` deliberately: **`promote_batch` — the task that actually
+issues the statement — imports the registry and does not import `masking`**, so a
+guard living in `masking` would never run in the task whose failure it exists to
+prevent.
+
+> **This sentence used to say "`masking` is imported only by
+> `ensure_masked_table`", and landing the guard is what made that false.**
+> `registry.py` has imported `masking` for `MASKED_COLUMNS` since `f02ff97` — the
+> very commit that added the guard being justified here — so the clause was
+> already untrue in the commit that wrote it. The *argument* is unaffected and is
+> restated above without it: what matters is the import direction at
+> `promote_batch`, not the number of importers `masking` has. The direction that
+> **is** load-bearing is the other one, and it still holds: `masking` imports
+> `opl.contracts.cnpj_schemas` and nothing else — no pyspark, no registry — which
+> is what lets the registry stay importable where pyspark is not installed.
+> `src/opl/bronze/registry.py`'s guard docstring carries the same stale clause and
+> is left for the next commit that touches that file.
+
+It matches on statements that *create* a check
 and not on `DROP CONSTRAINT`, because dropping a CHECK is legal on a masked table
 and is the first step of masking a table that already carries one.
+
+## What the live run proved, and what it only confirmed
+
+Everything above was, until 2026-08-01, an argument plus a throwaway-table probe.
+The F1.4b PR A run applied this to the real `bronze_cnpj_socios`. Full numbers in
+[`docs/f1.4b-pr-a-run-evidence.md` §7](../f1.4b-pr-a-run-evidence.md#7-the-mask-verified-by-behaviour-not-by-ddl);
+what belongs here is which of this ADR's claims stopped being claims.
+
+**The ordering — the whole reason `socios` is built by hand.** While the batch sat
+gated between the ingest and the human decision to repromote,
+`workspace.default.bronze_cnpj_socios` existed **with 0 rows**, with both masks
+already attached. The table was created and the control applied before a single
+personal name was written to it. That is the observation that makes "the control
+was applied when the data landed" a description rather than an intention, and it
+is only available because the workspace had no socios table beforehand — the
+pre-run state was checked, for exactly this reason, before anything was uploaded.
+
+**Behaviour, not attachment.** `system.information_schema.column_masks` confirms
+both columns bound to `workspace.default.mask_personal_name`, which is what the
+DDL having run would predict. The check that does not follow from the DDL is
+reading the table: `GROUP BY nome_socio_razao_social` over the **whole** table
+returns exactly one distinct value, `***`, at the full promoted row count. Not a
+`LIMIT 5` — every row. Unmasked columns on the same rows return real data, so the
+query is not simply broken. Both name columns are masked, which is this ADR's
+deliberate widening of the spec, now applied in the live catalog.
+
+**Fail-closed, in practice.** `opl_pii_readers` does not exist in this workspace,
+and the value returned to the table owner's own query is the masked one. The
+direction argued above is the direction observed.
+
+**And the cost, paid without incident.** `promote_batch._assert_constraints` ran
+after the real append **without failing** — socios' two `SET NOT NULL` statements
+against a masked, populated table. The probe in the previous section established
+that on a throwaway table; this is the same result at 27.8M rows on the table
+that matters.
+
+What the run did **not** establish: nobody has ever seen this mask reveal a name,
+because there is no `opl_pii_readers` group and no member of it to read through.
+The permissive half of the control is untested by construction.
 
 ## The limit of this control: staging and quarantine are not masked
 
@@ -206,13 +268,30 @@ a minute, so it is written here rather than discovered there. Extending
 `ensure_masked_table` to all three is a small change; note that the CHECK
 incompatibility above applies to staging too, so it is the same decision again.
 
+**The live run put numbers on both halves of this.** Staging took all **27,838,448**
+ingested socios rows, names in the clear, and it is the frame the gate and the
+promote both read. Quarantine took **1,797** rows — three orders of magnitude above
+the 4-row estabelecimentos baseline this section reasoned from, so "the handful a
+rule rejected" is no longer the right picture of it. Those particular 1,797 have a
+null `nome_socio_razao_social`, since that is the reason they were rejected; what
+they carry in the clear is the rest of a personal record, and their
+`nome_do_representante` was not examined either way. The triage that actually
+happened was performed without selecting either name column, which is a discipline
+and not a control. The decision to leave both tables unmasked stands; it is now
+taken with the sizes in view rather than with an estimate.
+
 ## What this does not settle
 
 - **The `opl_pii_readers` group does not exist in this workspace.** Nothing in
   this change creates it. That is why the fail-closed direction matters, and
   creating the group plus the grants that go with it is F4's work.
-- **The mask has not been exercised against real socios data.** The probe above
-  established the UC semantics on a throwaway table; the mask on
-  `bronze_cnpj_socios` itself is applied by the live run, which is a later task in
-  this phase and is the validation. Everything else in this ADR is pinned as a
+- ~~**The mask has not been exercised against real socios data.**~~ **Discharged
+  by the F1.4b PR A run** — see [What the live run proved](#what-the-live-run-proved-and-what-it-only-confirmed).
+  The mask is attached to both columns of the live `bronze_cnpj_socios`, it was
+  attached while the table held 0 rows, and reading through it over all 27,836,651
+  rows returns one distinct value. Everything else in this ADR remains pinned as a
   string by unit tests, by one local Delta round-trip, and by an import-time guard.
+- **The revealing half of the mask is untested, by construction.** Nobody has seen
+  this function return a name, because there is no `opl_pii_readers` group and no
+  member of it. What is verified is that it hides; that it correctly *shows* to an
+  authorised reader is F4's to demonstrate, along with creating the group.

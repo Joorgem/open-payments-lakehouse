@@ -37,6 +37,22 @@ Estabelecimentos zips at 320 MB–2.13 GB, above every threshold any version has
 used, so on any SDK from 0.45.0 onward every upload this repo performs is
 multipart whether or not we intend it.
 
+> **That last sentence is FALSE beyond the one table group it was written from,
+> and F1.4b's live run is what showed it.** Estabelecimentos was the only group in
+> the Volume when this ADR was accepted, and "our objects are ≥320 MB" was
+> generalised from it. Nine of the twenty objects F1.4b PR A uploaded fall
+> **below** the 52,428,800 B floor of the installed 0.123.0 and went out as single
+> PUTs. Sizes and the path each object took are in
+> [`docs/f1.4b-pr-a-run-evidence.md` §2](../f1.4b-pr-a-run-evidence.md#2-the-upload--and-the-nine-objects-that-were-not-multipart),
+> stated once and not repeated here.
+>
+> The **decision** is untouched: multipart is still what the pin adopts and still
+> what every object above the floor gets. What is retired is the claim that the
+> floor is unreachable in this repository — it is reachable, by the smaller RFB
+> tables, and a reader sizing a timeout or a memory budget from "everything here
+> is multipart" would be sizing it from a fact that stopped being true the moment
+> a second table arrived.
+
 That leaves exactly two coherent positions — pin below 0.45.0 and keep single-PUT
 semantics, or adopt multipart deliberately. There is no middle: a "recent but not
 too recent" pin picks up multipart silently, which is how this decision nearly
@@ -91,9 +107,24 @@ Two consequences were followed through rather than left implicit:
   file, which is independent of how the bytes arrived.
 
 ## Consequences
-- **Every upload this repo performs is now multipart**, including the ~15 GB of
-  zips F1.4b lands. Nothing in `upload_to_volume`'s interface changes; the
-  difference is entirely inside `w.files.upload()`.
+- **Every upload of an object above the floor is now multipart.** Nothing in
+  `upload_to_volume`'s interface changes; the difference is entirely inside
+  `w.files.upload()`, and which path an object takes is decided there by its size
+  and not by us.
+
+  **Two numbers in the first version of this bullet were wrong.** It said "every
+  upload this repo performs is now multipart, including the ~15 GB of zips F1.4b
+  lands". Neither half survived the run.
+
+  *The path:* nine of PR A's twenty objects went single PUT — see the correction
+  in the Context above.
+
+  *The volume:* F1.4b lands **9.376 GB**, not ~15 GB — 2.033 GB in PR A and
+  7.343 GB in PR B. The ~15 GB counted the ten 2026-06 Estabelecimentos zips,
+  which were **already in the Volume** before F1.4b started: F1.4a's evidence doc
+  §4 lists all ten with the mtimes of their F1.3 upload and a total of
+  5,259,919,847 B, and F1.4a's reclaim deliberately kept them. F1.4b re-uploads
+  nothing.
 - **Memory cost is real and previously unbudgeted.** Ten concurrent parts are
   buffered, so `Estabelecimentos0.zip` holds ~500 MiB (10 × 50 MiB) during
   upload; smaller zips hold ~100 MiB. `files_ext_multipart_upload_default_parallelism`
@@ -127,9 +158,28 @@ Two consequences were followed through rather than left implicit:
   ~88 MB/min, which contradicts the ~32 min sitting six lines up). Same failure mode
   as a duplicated guard: the second copy is not wrong on its own, it is wrong by
   drifting.
-- **What this does not settle.** Multipart has not yet been exercised against
-  this workspace at scale — F1.4b's ~15 GB is the first real run, and it is the
-  validation, not a repeat of something already measured. Per-part retry is
-  argued from the SDK's code, not from an observed recovery. `protobuf` returns
+- **Multipart HAS now been exercised against this workspace**, and it moved bytes
+  **94.7 MB/min** against single PUT's **24.8 MB/min** — a 3.8× difference over the
+  same link, in the same run, nine objects each way. The whole run averaged
+  **65.5 MB/min** against the **~67 MB/min** this ADR assumed when it re-derived
+  `UPLOAD_RETRY_TIMEOUT_SECONDS` above, so the 30-minute per-part budget is
+  correctly sized by observation and not only by arithmetic.
+
+  The byte counts, durations and per-object sizes behind those three rates are in
+  [`docs/f1.4b-pr-a-run-evidence.md` §2](../f1.4b-pr-a-run-evidence.md#2-the-upload--and-the-nine-objects-that-were-not-multipart)
+  and are **cited rather than restated**, for the reason the previous bullet gives
+  at length: this ADR has already produced two independent derivations of the same
+  quantity that disagreed, and a second copy of a number is not wrong on its own,
+  it is wrong by drifting.
+
+  Note what the comparison is worth and what it is not. It is a genuine A/B — same
+  client, same link, minutes apart — and it was **unplanned**, which is why it
+  exists at all: the ADR expected no single-PUT path to survive. It is also one
+  sample of each, over different files. The throughput advantage was never part of
+  this decision's argument, which rested on the unit of retry; it is a finding, not
+  a vindication.
+- **What this still does not settle.** Per-part retry is argued from the SDK's
+  code, not from an observed recovery — nothing failed during PR A's 31 minutes,
+  so nothing retried. PR B's 7.343 GB is the next opportunity. `protobuf` returns
   as a transitive dependency of the 0.7x+ line; it is not a core dependency of
   this project and does not affect the serverless wheel install of ADR 0004.
