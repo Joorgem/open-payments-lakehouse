@@ -1,21 +1,27 @@
 # ADR 0008 — mask the partner NAMES in `socios`, before the first row lands
 
 ## Status
-Accepted. **Live on bronze as of 2026-08-01** — the mask is applied to
-`workspace.default.bronze_cnpj_socios` and verified by reading through it, not
-only by the DDL having run
+Accepted. **Live on bronze and on quarantine as of 2026-08-01** — the mask is
+applied to `workspace.default.bronze_cnpj_socios` and to
+`workspace.default.bronze_cnpj_socios_quarantine`, and verified by reading through
+both, not only by the DDL having run
 ([What the live run proved](#what-the-live-run-proved-and-what-it-only-confirmed)).
-One incompatibility with Unity Catalog was found while implementing this
-(a masked table may not carry a `CHECK` constraint); it was probed against the live
-workspace and resolved by dropping socios' `CHECK`, with the trade recorded below.
+`system.information_schema.column_masks` returns **four rows**: two tables, both
+name columns each. One incompatibility with Unity Catalog was found while
+implementing this (a masked table may not carry a `CHECK` constraint); it was
+probed against the live workspace and resolved by dropping socios' `CHECK`, with
+the trade recorded below.
 
-**Widened on review, not yet applied:** the control now covers the **quarantine**
-table as well as bronze, and explicitly does **not** cover staging — see
-[The boundary](#the-boundary-quarantine-is-masked-too-staging-cannot-be). The
-quarantine mask is committed code with local-Delta and statement-order tests behind
-it; it reaches `workspace.default.bronze_cnpj_socios_quarantine` on the next
-authorised run of `ensure_masked_table`, and this line is what says it has not done
-so yet.
+**The quarantine mask was applied to a table that already held rows** — the one
+statement no probe had covered. It succeeded: quarantine kept its **1,797** rows
+and both name columns now return exactly one distinct value, `***`. It also hid
+the null that put those rows there, which is recorded as a cost in
+[The boundary](#the-boundary-quarantine-is-masked-too-staging-cannot-be) rather
+than passed over.
+
+**Staging is deliberately not masked**, for a mechanism rather than for want of
+effort (same section), and it keeps its rows by decision — see
+[Staging retention](#staging-retention-the-rows-stay-and-what-guards-them).
 
 ## Context
 
@@ -142,7 +148,10 @@ nothing denies it.
   already-masked column **succeeds**, measured in the probe under
   [What masking costs](#what-masking-costs-socios-gives-up-one-declarative-constraint)
   — which is **below** this bullet, not above it, as this sentence said until the
-  F1.4b run went looking for it. A `DROP MASK`
+  F1.4b run went looking for it. Applying `SET MASK` for the *first* time to a
+  table that already holds rows is a different statement, and it has now been
+  measured too: it ran against the 1,797-row quarantine table on 2026-08-01,
+  succeeded, and did not truncate it. A `DROP MASK`
   before the `SET` would also be idempotent and is deliberately *not* used: it
   takes the mask off a populated table for the width of two statements on every
   monthly re-run, and a control that is briefly absent every month is worse than
@@ -262,6 +271,18 @@ against a masked, populated table. The probe in the previous section established
 that on a throwaway table; this is the same result at 27.8M rows on the table
 that matters.
 
+**And one place where that ordering was *not* achieved.** Bronze got its mask
+before its first row; quarantine did not. `bronze_cnpj_socios_quarantine` was
+created by the gate's own write and held **1,797** rows for the width of a review
+cycle before `ensure_masked_table` was extended to cover it. For quarantine, "I
+went back and masked it afterwards" is the true sentence — which is worth stating
+in the ADR whose entire argument is that the two sentences differ. What the late
+application did establish is the statement no probe had covered: first-time
+`SET MASK` against a populated table succeeds and does not truncate it. Every
+future masked contract gets the bronze ordering, because `ensure_masked_table`
+issues the quarantine DDL ahead of the gate; socios' quarantine is the one that
+missed it.
+
 What the run did **not** establish: nobody has ever seen this mask reveal a name,
 because there is no `opl_pii_readers` group and no member of it to read through.
 The permissive half of the control is untested by construction.
@@ -277,17 +298,41 @@ weaker answer than "we masked all three"*, and a governance reviewer would read 
 stated limit as a solvable obstacle that was not solved. They were right about
 half of it, and measuring the other half is what produced the split below.
 
-**Quarantine is now covered.** `ensure_masked_table` creates
-`bronze_cnpj_socios_quarantine` empty and applies both masks to it, before the gate
-writes anything, exactly as it does for bronze. The CHECK incompatibility is not an
-obstacle here: only *bronze* receives constraint DDL — `promote_batch._assert_
-constraints` re-issues `spec.constraints` against the bronze table and nothing else
-— and no quarantine table in this repo has ever carried a constraint. The
-quarantine schema is the bronze shape plus `_dq_reject_reason`, declared in
-`opl.bronze.masking.create_quarantine_ddl` and pinned against the gate's own
-`split(...)` output on a real local Delta table, the same way bronze's is. This is
-also the table the argument most obviously applies to: the quarantine is
-specifically a table a human is *expected* to open and read during triage.
+**Quarantine is covered, and the mask is on it in the workspace.**
+`ensure_masked_table` issues `CREATE TABLE IF NOT EXISTS` and both `SET MASK`s for
+the quarantine table on every run, ahead of the gate's write, exactly as it does
+for bronze — so any future masked contract gets a quarantine table that is masked
+before it holds anything. This one did not: `bronze_cnpj_socios_quarantine` already
+held **1,797** rows when the mask first reached it, on 2026-08-01. It applied
+cleanly. `system.information_schema.column_masks` now returns four rows — two
+tables, both name columns each — the 1,797 rows are still there, and
+`count(DISTINCT)` over each name column returns exactly one value, `***`.
+
+The CHECK incompatibility is not an obstacle here: only *bronze* receives
+constraint DDL — `promote_batch._assert_constraints` re-issues `spec.constraints`
+against the bronze table and nothing else — and no quarantine table in this repo
+has ever carried a constraint. The quarantine schema is the bronze shape plus
+`_dq_reject_reason`, declared in `opl.bronze.masking.create_quarantine_ddl` and
+pinned against the gate's own `split(...)` output on a real local Delta table, the
+same way bronze's is. This is also the table the argument most obviously applies
+to: the quarantine is specifically a table a human is *expected* to open and read
+during triage.
+
+**Which is exactly where masking it costs something.** `mask_personal_name` returns
+`'***'` unconditionally to any reader the function does not admit; it does not pass
+NULL through. All 1,797 of these rows are in quarantine *because*
+`nome_socio_razao_social` is null, and that null now reads as `'***'` —
+indistinguishable from a name that was present and hidden. The verification itself
+is the proof: `count(DISTINCT)` skips nulls, so a null that stayed null would have
+returned **0** distinct values, and it returned **1**. The masked value is non-null.
+**So the mask hides the very emptiness that caused the rejection.** Triage still
+works, because `_dq_reject_reason` is not masked and names the rule — that is how
+the 1,797 were counted — but a triager can no longer *see* the blank in the column
+and must take the reason string's word for it. That is a real cost of masking a
+triage table. It is worth paying, because the other columns of those rows are a
+personal record and the alternative is leaving them in the clear on the one table a
+human is told to open. It is still a cost, and this ADR would be overselling the
+extension if it recorded only the benefit.
 
 **Staging is not covered, and this is a refusal with a mechanism behind it rather
 than the third of the job nobody got to.** A UC column mask is applied as each row
@@ -321,14 +366,17 @@ permanent no: the mask on staging becomes both safe and effective the moment
 `opl_pii_readers` exists **and** the job's run-as principal is a member of it. Then
 the pipeline reads real names and everyone else reads `***`. Creating that group and
 its grants is F4's work, and it is the same prerequisite the fail-closed argument
-above is waiting on. Until then, staging's protection is the workspace's ordinary
-table ACLs and nothing else, which is worth saying plainly.
+above is waiting on. Until then, what protects staging is that nobody but its owner
+can read it — which this ADR asserted for a round without checking, and which is
+now measured in
+[Staging retention](#staging-retention-the-rows-stay-and-what-guards-them).
 
 **What the extension does and does not undo.** Masking quarantine protects every
 future read of those rows. It does not change the fact that the **1,797** rows
-landed unmasked on 2026-08-01 and were readable in the clear until the mask is
-applied, nor that **27,838,448** rows sit in staging in the clear now. A read-time
-control is not retroactive; it changes what happens next.
+landed unmasked on 2026-08-01 and were readable in the clear for the hours between
+the gate's write and the `SET MASK`, nor that **27,838,448** rows sit in staging in
+the clear now. A read-time control is not retroactive; it changes what happens
+next.
 
 **And one claim in the old text was simply false.** It said staging "is transient
 (the promote drains it)". Nothing drains staging — `promote_batch` appends to
@@ -341,6 +389,71 @@ either. Those 1,797 have a null `nome_socio_razao_social` — that is why they w
 rejected — but they carry the rest of a personal record, and their
 `nome_do_representante` was not examined either way. The triage that actually
 happened selected neither name column, which is a discipline and not a control.
+
+## Staging retention: the rows stay, and what guards them
+
+`bronze_cnpj_socios_staging` holds **27,838,448** rows with the partner names in
+the clear, and it will keep holding them. That is a decision, recorded here rather
+than left as a silence for a reader to discover.
+
+**The decision.** Staging is not drained after a successful promote, and this ADR
+introduces no policy that drains it. `promote_batch` appends to bronze and deletes
+nothing; `opl.bronze.retention` reclaims *landed files* and documents that it
+deliberately does not touch staging. The 27,838,448 rows were still there after the
+promote succeeded, which is how the number above was obtained.
+
+**The reason is the rebuild path.** The documented repair procedure — rebuild a
+batch and repromote it — reads the staging table. A rule that emptied staging on a
+successful promote would delete that procedure's input at exactly the moment the
+batch looks finished, which is the moment before anyone discovers it was not. So a
+retention rule for staging is a decision with its own failure mode rather than a
+hygiene chore, and taking it was not in this phase's scope.
+
+**What guards the rows, measured rather than asserted.** An earlier version of this
+section said staging's protection is "the workspace's ordinary table ACLs", which
+was a claim nobody had run a query against. The queries, so this one is re-runnable:
+
+```sql
+SHOW GRANTS ON CATALOG workspace;
+SHOW GRANTS ON SCHEMA  workspace.default;
+
+SELECT * FROM workspace.information_schema.table_privileges
+WHERE table_name LIKE 'bronze_cnpj_socios%';
+```
+
+| query | result |
+|---|---|
+| grants on the catalog | `USE CATALOG` to `_workspace_users_*` |
+| grants on the schema | `USE SCHEMA` and `CREATE *` to `_workspace_users_*` |
+| `table_privileges` for `bronze_cnpj_socios%` | **no rows** |
+
+`USE CATALOG` and `USE SCHEMA` are **traversal, not read**: they let a principal
+name an object, not select from it. No `SELECT` is granted on staging, on bronze or
+on quarantine, to any principal. Only the owner can read staging. The old claim
+turns out to have been true — and true by accident, since it was written without
+this evidence, which is precisely the species of claim this ADR was caught making.
+
+**Where this reasoning is weak, said plainly rather than dressed up.**
+
+- **The guard is an absence, not a control.** What protects staging is that no
+  `GRANT SELECT` was ever issued. One `GRANT` reverses it, nothing in this
+  repository would notice, and no test asserts the empty result above. It is a
+  measurement of a moment, not an invariant.
+- **One workspace, one user.** A Free Edition workspace with a single account is
+  the easiest possible case for this argument. The same queries against a shared
+  workspace would very likely return rows, and the conclusion would have to be
+  re-derived rather than cited.
+- **The rebuild reason justifies keeping *a* batch, not every batch.** It covers
+  retaining the most recent promoted batch. Staging accumulates monthly and nothing
+  bounds it, so the reason given is narrower than the policy adopted. Bounded
+  retention — keep the last batch, drop the rest — would serve the rebuild path at
+  a fraction of the exposure. It is not designed here because the phase's scope was
+  one mask; that is a reason it is absent, not an argument that it would be wrong.
+- **The exposure is present and not retroactively fixable.** Those 27,838,448 rows
+  are in the clear now. Masking staging is refused for the mechanism in
+  [The boundary](#the-boundary-quarantine-is-masked-too-staging-cannot-be), so the
+  only two real remedies are the `opl_pii_readers` precondition and a bounded
+  retention rule. Both belong to F4 and neither is scheduled.
 
 ## What this does not settle
 
@@ -357,16 +470,16 @@ happened selected neither name column, which is a discipline and not a control.
   this function return a name, because there is no `opl_pii_readers` group and no
   member of it. What is verified is that it hides; that it correctly *shows* to an
   authorised reader is F4's to demonstrate, along with creating the group.
-- **The quarantine mask has not run against the workspace.** It is committed,
-  ordered ahead of the gate's write, and covered by the same kind of tests bronze's
-  DDL has — but `bronze_cnpj_socios_quarantine` already exists with 1,797 rows, so
-  what will actually happen on the next run is a no-op `CREATE TABLE IF NOT EXISTS`
-  followed by two `SET MASK`s against a populated table. Re-applying `SET MASK` to
-  an already-masked column was probed and succeeds; applying it *first* to a
-  populated table is the statement no probe has covered.
-- **Staging holds 27,838,448 socios rows with the names in the clear, and will
-  keep holding them.** Nothing drains it, masking it would corrupt bronze (see
-  [The boundary](#the-boundary-quarantine-is-masked-too-staging-cannot-be)), and
-  this ADR proposes no deletion policy — a retention rule for staging is a separate
-  decision with its own failure mode, since the documented rebuild procedure depends
-  on staging still holding a promoted batch.
+- ~~**The quarantine mask has not run against the workspace.**~~ **Applied on
+  2026-08-01.** It ran against `bronze_cnpj_socios_quarantine` while the table
+  already held its 1,797 rows — first-time `SET MASK` on a populated table, the
+  statement no probe had covered. It succeeded, the rows are intact, and both name
+  columns return one distinct value. The gap is discharged; what the application
+  introduced instead is a triage cost, recorded in
+  [The boundary](#the-boundary-quarantine-is-masked-too-staging-cannot-be).
+- **Staging holds 27,838,448 socios rows with the names in the clear, and by
+  decision will keep holding them.** The decision, the rebuild path it turns on,
+  the owner-only read that guards it and four places that reasoning is weak are in
+  [Staging retention](#staging-retention-the-rows-stay-and-what-guards-them).
+  Masking staging remains refused for the mechanism in
+  [The boundary](#the-boundary-quarantine-is-masked-too-staging-cannot-be).
