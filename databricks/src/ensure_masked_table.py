@@ -8,13 +8,20 @@ table holding personal names creates it with the names already in it and lets th
 mask arrive afterwards. This task is the ordering that makes "the control was
 applied when the data landed" true.
 
-IDEMPOTENT BY CONSTRUCTION, which matters because `max_retries: 0` does not
+IDEMPOTENT, all three statements, which matters because `max_retries: 0` does not
 prevent a retry on INTERNAL_ERROR. `CREATE TABLE IF NOT EXISTS` is a no-op over a
-populated table (and is deliberately not `CREATE OR REPLACE TABLE`, which would
-drop its rows), and `CREATE OR REPLACE FUNCTION` is the documented way to modify a
-function a live mask references. `SET MASK` is the one statement whose second run
-is unverified -- `opl.bronze.masking.set_mask_ddl` records why it is still
-preferred to a `DROP MASK` that would unmask a populated table on every re-run.
+populated table and is deliberately not `CREATE OR REPLACE TABLE`, which would drop
+its rows; `CREATE OR REPLACE FUNCTION` is the documented way to modify a function a
+live mask references; and re-applying `SET MASK` to an already-masked column was
+PROBED against the live workspace and succeeds. `opl.bronze.masking.set_mask_ddl`
+records why that is still preferred to a `DROP MASK` first, which would unmask a
+populated table on every monthly re-run.
+
+WHY THIS TABLE CARRIES NO CHECK CONSTRAINT. UC refuses a CHECK on a masked table,
+so the socios registry entry declares NOT NULLs only. That is enforced at import by
+`registry._assert_no_masked_contract_declares_a_check_constraint`, not here --
+`promote_batch` is the task that issues constraint DDL, and it would do so after
+its append had already committed.
 
 A no-op for a table with no masked columns, so the same task can sit in any job's
 YAML without a per-table branch -- and, more to the point, so that adding it to

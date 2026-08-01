@@ -369,6 +369,18 @@ def test_the_new_tables_carry_a_constraint_no_other_contract_could_have():
     itself copy-pasted: a DROP naming one constraint and an ADD naming another leaves
     the old check in place on every promote, and only equality sees that.
 
+    SOCIOS CARRIES NO CHECK, and it is the only registered table that does not.
+    Unity Catalog refuses a CHECK constraint on a table carrying a column mask, and
+    socios is the masked table -- probed on the live workspace, where
+    `ALTER COLUMN ... SET NOT NULL` SUCCEEDED against a masked table and
+    `ADD CONSTRAINT ... CHECK (...)` FAILED with
+    COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED. So the `cnpj_basico_len8` pair is
+    gone from socios alone and both NOT NULLs remain, which is what keeps the
+    anti-paste property above intact: `identificador_socio` is still the statement
+    a tuple pasted from another contract would be missing. What stops the pair being
+    pasted back is not this test but
+    `registry._assert_no_masked_contract_declares_a_check_constraint`, at import.
+
     Unlike its sibling above, this pins constraints for tables that do NOT exist in
     Delta yet -- they are created by this phase's first promote. It is a pin on what
     will be APPLIED, which is the same string either way."""
@@ -389,8 +401,5 @@ def test_the_new_tables_carry_a_constraint_no_other_contract_could_have():
     )
     assert table_spec("socios").constraints == (
         "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
-        "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
-        "ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 "
-        "CHECK (length(trim(cnpj_basico)) = 8)",
         "ALTER TABLE {table} ALTER COLUMN identificador_socio SET NOT NULL",
     )

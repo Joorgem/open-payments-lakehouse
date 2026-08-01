@@ -219,33 +219,42 @@ def test_the_mask_function_is_named_once_and_unqualified():
     assert MASK_FUNCTION == "mask_personal_name"
 
 
-def test_the_socios_check_constraint_still_collides_with_its_mask():
-    """RECORDED, NOT RESOLVED -- and green today BECAUSE the collision is live.
+def test_no_masked_table_declares_a_check_constraint():
+    """THE INVARIANT, stated from the masking side.
 
-    Unity Catalog refuses the two together, in both orders:
-    `COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED` ("Creating CHECK constraint on table
-    <t> with column mask policies is not supported") and
-    `COLUMN_MASKS_FEATURE_NOT_SUPPORTED.CHECK_CONSTRAINT` ("Setting column mask
-    policies for tables with CHECK constraints"). Both are table-scoped, so it does
-    not matter that the mask is on a name column and the CHECK is on `cnpj_basico`.
+    Unity Catalog refuses a column mask and a CHECK constraint on one TABLE, in both
+    directions -- `COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED` adding the CHECK to a
+    masked table, `COLUMN_MASKS_FEATURE_NOT_SUPPORTED.CHECK_CONSTRAINT` masking a
+    CHECKed one. Probed on the live workspace: against a masked probe table,
+    `ADD CONSTRAINT ... CHECK (...)` FAILED with SQLSTATE 0A000, while
+    `ALTER COLUMN ... SET NOT NULL` SUCCEEDED. Table-scoped, so the mask being on
+    the name columns and the CHECK on `cnpj_basico` does not help.
 
-    socios declares both: this module masks two of its columns, and
-    `promote_batch._assert_constraints` re-issues `spec.constraints` after EVERY
-    append, which for socios includes `ADD CONSTRAINT cnpj_basico_len8 CHECK (...)`.
-    So the live socios run appends its rows and then fails on the DDL, and the
-    repair run -- which skips the already-committed append -- fails on it again.
+    The ENFORCEMENT is `registry._assert_no_masked_contract_declares_a_check_
+    constraint`, at import, because `promote_batch` issues the statement AFTER the
+    append commits -- a CI test would report the defect only once the rows were
+    already in bronze. This is the property restated where a reader of THIS module
+    will look for it: adding a contract to `MASKED_COLUMNS` is the other way to
+    create the collision, and it is an edit made in this file, not in the registry.
 
-    This test asserts the collision EXISTS so that whoever resolves it (by dropping
-    the CHECK for masked contracts, or by moving the mask) is sent here and to ADR
-    0008 rather than discovering both halves separately. See the ADR for why it is
-    not resolved inside this task."""
-    checks = [s for s in table_spec("socios").constraints if "CHECK" in s]
-    assert checks, (
-        "socios no longer declares a CHECK constraint -- if that was the deliberate "
-        "resolution of the mask/CHECK collision, delete this test and the "
-        "'Unresolved' section of ADR 0008 with it"
+    NOT NULL is deliberately not asserted against: it is a nullability property, not
+    a constraint object, and it is measured to survive masking. Both of socios'
+    surviving statements are NOT NULLs."""
+    for spec in REGISTRY.values():
+        if spec.contract not in MASKED_COLUMNS:
+            continue
+        offenders = [s for s in spec.constraints if "CHECK" in s]
+        assert not offenders, (
+            f"{spec.name} is masked and declares {offenders} -- UC refuses a CHECK on "
+            "a masked table, and promote_batch issues it after the append has already "
+            "committed. See ADR 0008."
+        )
+    # Guard the guard: with no masked table registered, the loop above is vacuous.
+    assert any(spec.contract in MASKED_COLUMNS for spec in REGISTRY.values())
+    assert table_spec("socios").constraints == (
+        "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
+        "ALTER TABLE {table} ALTER COLUMN identificador_socio SET NOT NULL",
     )
-    assert MASKED_COLUMNS.get("socios")
 
 
 # --------------------------------------------------------------------------

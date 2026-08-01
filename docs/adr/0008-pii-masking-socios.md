@@ -1,8 +1,9 @@
 # ADR 0008 — mask the partner NAMES in `socios`, before the first row lands
 
 ## Status
-Accepted, with one unresolved incompatibility recorded below (the CHECK
-constraint) that must be settled before the socios job runs.
+Accepted. One incompatibility with Unity Catalog was found while implementing this
+(a masked table may not carry a `CHECK` constraint); it was probed against the live
+workspace and resolved by dropping socios' `CHECK`, with the trade recorded below.
 
 ## Context
 
@@ -81,6 +82,10 @@ mistyped column rather than casting it.
    ahead of `unzip`, and that is a no-op for any table declaring no masked column
    so the same task can sit in any job's YAML without a per-table branch.
 
+4. **socios carries no `CHECK` constraint**, and is the only registered table
+   without one — see the next section. Refused at import for any masked contract by
+   `registry._assert_no_masked_contract_declares_a_check_constraint`.
+
 ### Fail-closed, and why that is the right direction
 
 `is_account_group_member` returns **false** for a group that does not exist. So in
@@ -103,75 +108,111 @@ nothing denies it.
   (`COLUMN_MASKS_FEATURE_NOT_SUPPORTED.TIME_TRAVEL`). Nothing in the pipeline
   reads bronze history today; a future one cannot.
 - **`_batch_id` idempotence is unaffected** — no metadata column is masked.
+- **Every statement `ensure_masked_table` issues is idempotent**, which matters
+  because `max_retries: 0` does not prevent a retry on `INTERNAL_ERROR`.
+  `CREATE TABLE IF NOT EXISTS` is a no-op over a populated table (and is
+  deliberately not `CREATE OR REPLACE TABLE`, which would drop its rows — verified
+  against local Delta); `CREATE OR REPLACE FUNCTION` is the documented way to
+  modify a function a live mask references; and re-applying `SET MASK` to an
+  already-masked column **succeeds**, measured in the probe above. A `DROP MASK`
+  before the `SET` would also be idempotent and is deliberately *not* used: it
+  takes the mask off a populated table for the width of two statements on every
+  monthly re-run, and a control that is briefly absent every month is worse than
+  one that is never absent at all.
+- **socios keeps no `CHECK` constraint** and loses one layer of defence in depth.
+  See below.
 - **The staging and quarantine tables are NOT masked.** See below.
 
-## Unresolved: the mask and the CHECK constraint cannot coexist
+## What masking costs: socios gives up one declarative constraint
 
-Unity Catalog refuses a column mask and a `CHECK` constraint **on the same
-table**, in both orders:
+Unity Catalog refuses a column mask and a `CHECK` constraint **on the same table**,
+in both directions:
 
 - `COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED` — "Creating `CHECK` constraint on
   table `<tableName>` with column mask policies is not supported."
 - `COLUMN_MASKS_FEATURE_NOT_SUPPORTED.CHECK_CONSTRAINT` — "Setting column mask
   policies for tables with `CHECK` constraints".
 
-Both are **table**-scoped, so it does not help that the mask is on the name
-columns and the CHECK is on `cnpj_basico`. The socios registry entry declares
+Both are **table**-scoped, so it does not help that the masks are on the name
+columns and the CHECK would be on `cnpj_basico`.
 
-```
-ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 CHECK (length(trim(cnpj_basico)) = 8)
-```
+**Probed against the live workspace rather than settled on the reference**, with a
+throwaway table and function, both dropped afterwards:
 
-and `promote_batch._assert_constraints` re-issues every one of `spec.constraints`
-after **every** append. So as things stand the first socios promote appends its
-rows and then fails on that DDL — and the repair run, which correctly skips the
-already-committed append, fails on it again, which makes it unrepairable.
+| statement | result |
+|---|---|
+| `CREATE TABLE _probe_mask_check (a STRING, nome STRING)` | SUCCEEDED |
+| `CREATE FUNCTION _probe_mask(…)` | SUCCEEDED |
+| `ALTER TABLE … ALTER COLUMN nome SET MASK _probe_mask` | SUCCEEDED |
+| `ALTER TABLE … ALTER COLUMN a SET NOT NULL` | **SUCCEEDED — not blocked** |
+| `ALTER TABLE … ADD CONSTRAINT a_len8 CHECK (…)` | **FAILED**, `COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED`, SQLSTATE 0A000 |
+| `ALTER TABLE … ALTER COLUMN nome SET MASK _probe_mask` (again) | SUCCEEDED — re-apply is fine |
 
-This is recorded rather than resolved because the resolution is a trade-off that
-belongs to the phase owner, not to the task that found it. The options:
+That measurement is what makes the cost precise instead of a guess. **Only the
+`CHECK` is refused; `SET NOT NULL` is not.** So socios loses exactly the
+`cnpj_basico_len8` pair — the `ADD CONSTRAINT`, and the `DROP CONSTRAINT IF EXISTS`
+that existed only to make the `ADD` re-runnable — and keeps both of its `NOT NULL`
+statements. `empresas`, `estabelecimentos` and `lookup` are unmasked and keep
+theirs.
 
-1. **Drop the CHECK for masked contracts.** The rule it re-asserts,
-   `bad_cnpj_basico_length`, already runs in the DQ gate *before* the promote, so
-   no row reaching bronze can violate it — the Delta constraint is a second line
-   of defence, not the only one. `SET NOT NULL` is a nullability property, not a
-   CHECK, and stays either way. Cheapest, and loses the least.
-2. **Move the mask to a view** over an unmasked bronze table. Keeps both controls,
-   but the base table then holds names in the clear with nothing on it — which is
-   the ordering this ADR exists to avoid.
-3. **Drop the mask.** Not considered further.
+**Something was given up, and it is worth saying so plainly.** Bronze no longer
+re-asserts, declaratively and in Delta, that every socios `cnpj_basico` is eight
+characters. What makes that an acceptable trade rather than a hole is *where the
+same rule already runs*: `bad_cnpj_basico_length` (`opl.bronze.rules`) is evaluated
+by the DQ gate **before** the promote, and `promote_batch` appends only rows that
+passed it. No row that would violate the CHECK can reach bronze to be checked by
+it. The Delta constraint was defence in depth — a second assertion of a rule the
+gate already enforces — and defence in depth is exactly the kind of thing it is
+legitimate to spend, once, for a control that protects personal data. It is not
+free: the CHECK would also have caught a row inserted by some future path that
+bypassed the gate entirely, and after this change nothing would.
 
-Option 1 is the recommendation. The collision is asserted as currently-live by
-`test_the_socios_check_constraint_still_collides_with_its_mask`, so whoever
-resolves it is sent back to this section.
+**Why the DDL had to move, not just be tolerated.** `promote_batch._assert_
+constraints` re-issues every one of `spec.constraints` after **every** append. Left
+in place, the first socios promote would have appended its rows and then failed on
+that statement — and the repair run, which correctly skips the already-committed
+append, would have failed again on the same one. An unrepairable task, on the one
+table holding personal names.
+
+**Made unreachable rather than merely fixed.** The obvious future edit is someone
+making the registry entries uniform again and pasting the pair back.
+`registry._assert_no_masked_contract_declares_a_check_constraint` refuses that **at
+import**, so it breaks every module that reads the registry rather than one job run
+— which is the right severity, because a CI test protects a merge and not the
+ad-hoc run of a branch. The guard lives in the registry and not in
+`opl.bronze.masking` deliberately: `masking` is imported only by
+`ensure_masked_table`, whereas `promote_batch` — the task that actually issues the
+statement — imports the registry. It matches on statements that *create* a check
+and not on `DROP CONSTRAINT`, because dropping a CHECK is legal on a masked table
+and is the first step of masking a table that already carries one.
+
+## The limit of this control: staging and quarantine are not masked
+
+`bronze_cnpj_socios_staging` and `bronze_cnpj_socios_quarantine` hold the partner
+names **in the clear**. Both are created by their own writers — the ingest's
+`toTable` and the gate's `saveAsTable` — neither passes through
+`ensure_masked_table`, and no mask is applied to either. The quarantine is
+specifically a table a human is *expected* to open and read during triage.
+
+This is stated as a property of the control, not buried as an exception. What is
+true today is: **bronze is masked, and the two tables either side of it are not.**
+
+It narrows the control without making it decorative. Bronze is what everything
+downstream reads and the table that will hold the full socios population for as
+long as this lakehouse exists; staging is transient (the promote drains it) and
+quarantine holds the handful of rows a rule rejected — 4 in 42,780,919 for
+estabelecimentos, per ADR 0006. But the gap is real and a reviewer would find it in
+a minute, so it is written here rather than discovered there. Extending
+`ensure_masked_table` to all three is a small change; note that the CHECK
+incompatibility above applies to staging too, so it is the same decision again.
 
 ## What this does not settle
 
-- **`bronze_cnpj_socios_staging` and `bronze_cnpj_socios_quarantine` hold the
-  names unmasked.** Both are created by their own writers (the ingest's `toTable`
-  and the gate's `saveAsTable`), neither goes through `ensure_masked_table`, and
-  the quarantine in particular is a table a human is *expected* to open and read
-  during triage. Staging holds every ingested row until the promote; quarantine
-  holds the rejects indefinitely. So the honest statement of the control's reach
-  is: **bronze is masked, and the two tables either side of it are not.** That
-  weakens the control but does not make it decorative — bronze is the table
-  anything downstream reads, and it is the one that will hold ~26 M rows for as
-  long as the lakehouse exists, while staging is transient and quarantine holds
-  the handful of rows a rule rejected. Extending `ensure_masked_table` to all
-  three is a small change and belongs in the same phase as resolving the CHECK
-  collision above, since the same incompatibility applies to staging.
-- **`SET MASK` on an already-masked column is the one statement whose second run
-  is unverified.** The Databricks reference documents neither that it replaces the
-  existing mask nor that it errors. The safe alternative — `DROP MASK` then
-  `SET MASK`, which the "if any" in `DROP MASK`'s definition makes provably
-  idempotent — was rejected deliberately: it takes the mask **off** a populated
-  table for the width of two statements on every monthly re-run, and a privacy
-  control that is briefly absent every month is worse than one whose
-  re-application may fail loudly with the mask already correctly in place. If the
-  live run shows `SET MASK` erroring on re-application, the fix is a pre-check
-  against `information_schema.column_masks`, not a `DROP`.
 - **The `opl_pii_readers` group does not exist in this workspace.** Nothing in
   this change creates it. That is why the fail-closed direction matters, and
   creating the group plus the grants that go with it is F4's work.
-- **Nothing here has been executed against Databricks.** Every statement in this
-  ADR is pinned as a string by unit tests and by one local Delta round-trip; the
-  live application is a later task in this phase, and it is the validation.
+- **The mask has not been exercised against real socios data.** The probe above
+  established the UC semantics on a throwaway table; the mask on
+  `bronze_cnpj_socios` itself is applied by the live run, which is a later task in
+  this phase and is the validation. Everything else in this ADR is pinned as a
+  string by unit tests, by one local Delta round-trip, and by an import-time guard.

@@ -12,8 +12,10 @@ and drift is the documented defect: a quarantine name hardcoded in a job YAML
 "sent estab triagers to a table full of unrelated F1.2 lookup rows"."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
+from opl.bronze.masking import MASKED_COLUMNS
 from opl.config import OplConfig
 from opl.contracts.cnpj_schemas import FILE_GROUPS, TABLES
 
@@ -234,11 +236,17 @@ REGISTRY: dict[str, BronzeTable] = {
         subdir="socios",
         landing=LANDING_ZIPS,
         prefix="Socios",
+        # THE ONE REGISTERED TABLE WITH NO CHECK CONSTRAINT, because it is the masked
+        # one: UC refuses a CHECK on a table carrying a mask, TABLE-scoped, so the
+        # masks being on the name columns does not spare a CHECK on `cnpj_basico`.
+        # Probed -- `SET NOT NULL` SUCCEEDED against a masked table and `ADD
+        # CONSTRAINT ... CHECK (...)` FAILED -- so the loss is exactly the
+        # `cnpj_basico_len8` pair and both NOT NULLs stay. WHAT IT COSTS, rather than
+        # glossed: bronze stops re-asserting the 8-character key declaratively. That
+        # was defence in depth, not the control -- `bad_cnpj_basico_length` rejects
+        # those rows in the DQ gate, BEFORE the promote. ADR 0008 has both in full.
         constraints=(
             "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
-            "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
-            "ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 "
-            "CHECK (length(trim(cnpj_basico)) = 8)",
             # identificador_socio for empresas' razao_social reason: it is the one
             # column above that no other registered contract has, so it is the
             # statement a pasted constraint tuple would be missing.
@@ -348,6 +356,82 @@ def _assert_no_two_tables_share_a_contract() -> None:
                 "cnpj_schemas.TABLES."
             )
         seen[spec.contract] = spec.name
+
+
+# A statement that CREATES a CHECK constraint. `DROP CONSTRAINT IF EXISTS` is
+# deliberately NOT matched: dropping a CHECK is legal on a masked table, and is in
+# fact the first step of masking a table that already carries one -- so refusing it
+# would refuse the migration out of this very incompatibility. Word-bounded and
+# upper-case so it cannot fire on a future column whose name contains "check".
+_CREATES_A_CHECK = re.compile(r"\bCHECK\b")
+
+
+def _masked_check_collision(
+    spec: BronzeTable, masked: tuple[str, ...], statement: str
+) -> str:
+    """The refusal text for a masked table declaring a CHECK.
+
+    Extracted like `_delta_name_collision`, for its reason: the message is most of
+    the guard by volume and inlining it puts that function past 50 lines. It names
+    the UC error conditions so they can be searched for, and says explicitly that
+    NOT NULL is not what is refused -- the obvious over-correction on meeting this
+    message is to empty the constraint tuple."""
+    return (
+        f"{spec.name} declares a CHECK constraint and its contract "
+        f"{spec.contract!r} is masked ({', '.join(masked)}). Unity Catalog refuses "
+        "the two on ONE TABLE -- COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED adding "
+        "the CHECK to a masked table, COLUMN_MASKS_FEATURE_NOT_SUPPORTED."
+        "CHECK_CONSTRAINT masking a CHECKed one -- and the refusal is table-scoped, "
+        "so it does not help that the mask and the CHECK are on different columns. "
+        f"The statement: {statement!r}. This is refused at IMPORT because "
+        "promote_batch issues it AFTER the append commits: the run would write its "
+        "rows into bronze and then fail, and the repair run, which correctly skips "
+        "the committed append, would fail again on the same statement. Remove it, "
+        "together with the DROP CONSTRAINT IF EXISTS that only existed to make it "
+        "re-runnable -- the DQ rule that rejects those rows runs in the GATE, before "
+        "the promote, so nothing violating the CHECK can reach bronze. ALTER COLUMN "
+        "... SET NOT NULL is unaffected and may stay. See ADR 0008."
+    )
+
+
+def _assert_no_masked_contract_declares_a_check_constraint() -> None:
+    """Fail at import if a table whose contract is MASKED also declares a CHECK.
+
+    UC refuses the two on one table, in both directions
+    (`COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED` adding the CHECK to a masked table,
+    `COLUMN_MASKS_FEATURE_NOT_SUPPORTED.CHECK_CONSTRAINT` masking a CHECKed one),
+    and the refusal is TABLE-scoped. Probed: `SET NOT NULL` against a masked table
+    SUCCEEDED, so this refuses a CHECK and says nothing about nullability. ADR 0008
+    carries the probe.
+
+    AT IMPORT, HERE, AND NOT IN A TEST OR IN `opl.bronze.masking`. The statement is
+    issued by `promote_batch._assert_constraints`, which runs AFTER the append has
+    committed -- so getting this wrong produces a run that writes its rows into
+    bronze and THEN fails, whose repair run correctly skips the committed append and
+    fails again on the same statement: an unrepairable task, on the one table
+    holding personal names. A CI test protects a merge, not the ad-hoc run of a
+    branch whose tests have not been run; and `masking` is imported only by
+    `ensure_masked_table`, so a guard living there would never run inside
+    `promote_batch`. Every job task imports the registry.
+
+    THE IMPORT DIRECTION IS LOAD-BEARING, and it is what lets this be a guard rather
+    than a test: `opl.bronze.masking` imports `opl.contracts.cnpj_schemas` and
+    NOTHING else -- no pyspark, no registry. This module is imported by the
+    EXTRACTION scripts, which run off Databricks where pyspark is an optional extra
+    usually not installed, so a pyspark import arriving here through `masking` would
+    break `extract_cnpj` with an ImportError for a package it has no reason to need.
+    `masking` must never import `registry`, and
+    `test_the_registry_still_imports_where_pyspark_is_not_installed` keeps both
+    halves true.
+
+    A plain ValueError: nothing here is an unknown table."""
+    for spec in REGISTRY.values():
+        masked = MASKED_COLUMNS.get(spec.contract)
+        if not masked:
+            continue
+        for statement in spec.constraints:
+            if _CREATES_A_CHECK.search(statement):
+                raise ValueError(_masked_check_collision(spec, masked, statement))
 
 
 def _file_group_prefixes(contract: str) -> list[str]:
@@ -690,6 +774,10 @@ _assert_contracts_exist()
 # that contract is known to exist and to name one table only.
 _assert_no_two_tables_share_a_contract()
 _assert_prefixes_match_their_file_groups()
+# Also keyed on the contract, so it belongs in this group: `MASKED_COLUMNS` is
+# keyed by contract, not by table name, and asking whether THIS table is masked is
+# meaningless until its contract is known to exist and to name one table only.
+_assert_no_masked_contract_declares_a_check_constraint()
 _assert_landing_modes_known()
 # Shape before content: the reserved-name check compares exact strings, so it is
 # total only over values already known to be a single directory name.

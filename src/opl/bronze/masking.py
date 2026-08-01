@@ -109,14 +109,19 @@ def create_table_ddl(table: str, contract: str) -> str:
 def set_mask_ddl(table: str, column: str, qualified_function: str) -> str:
     """Attach the mask to one column.
 
-    NO `DROP MASK` FIRST, and that is a decision rather than an omission. `ALTER
-    COLUMN ... DROP MASK` removes the mask "if any", so `DROP` + `SET` would be
-    provably idempotent -- and it would take the mask OFF a populated table for the
-    width of two statements on every monthly re-run. A privacy control that is
-    briefly absent every month is worse than one whose re-application may fail: the
-    failure is loud, it happens with the mask already correctly in place, and the
-    operator reads it in the run log. This is the ONE statement this task issues
-    whose second run is not verified; see ADR 0008."""
+    RE-APPLYING IT IS SAFE, and this is measured rather than argued. The SQL
+    reference documents neither replacement nor an error for a column that already
+    carries a mask; probed against the live workspace, a second
+    `ALTER COLUMN ... SET MASK` on an already-masked column SUCCEEDED. So this
+    statement is idempotent, which is what `max_retries: 0` not preventing a retry
+    on INTERNAL_ERROR requires of it.
+
+    NO `DROP MASK` FIRST, and that stays a decision rather than an omission now that
+    the above is known. `DROP MASK` removes the mask "if any", so `DROP` + `SET`
+    would ALSO be idempotent -- and it would take the mask OFF a populated table for
+    the width of two statements on every monthly re-run. A privacy control that is
+    briefly absent every month is worse than one that is never absent at all, and
+    the re-apply path costs nothing. See ADR 0008."""
     return (
         f"ALTER TABLE {table} ALTER COLUMN `{column}` "
         f"SET MASK {qualified_function}"

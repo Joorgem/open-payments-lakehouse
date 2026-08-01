@@ -20,6 +20,9 @@ the import of every module that reads the registry."""
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
+import textwrap
 from dataclasses import replace
 from pathlib import Path
 
@@ -33,6 +36,7 @@ from opl.bronze.registry import (
     BronzeTable,
     UnknownTable,
     _assert_contracts_exist,
+    _assert_no_masked_contract_declares_a_check_constraint,
     _assert_no_table_claims_a_reserved_subdir,
     _assert_no_two_tables_share_a_checkpoint_namespace,
     _assert_no_two_tables_share_a_contract,
@@ -508,3 +512,141 @@ def test_a_contract_typo_in_source_is_refused_as_a_value_error_not_an_unknown_ta
     assert not isinstance(excinfo.value, UnknownTable), (
         "a contract typo in source is not an operator's unknown table name"
     )
+
+
+def test_a_masked_contract_declaring_a_check_constraint_is_refused_at_import(
+        monkeypatch):
+    """The paste F1.4b's own uniformity invites, refused where the value is DECLARED.
+
+    socios is the one registered table with no CHECK, because Unity Catalog refuses
+    a CHECK on a table carrying a column mask -- table-scoped, so the mask being on
+    the name columns and the CHECK on `cnpj_basico` does not help. Every OTHER entry
+    has the `cnpj_basico_len8` pair, so the natural edit that reintroduces this is
+    making socios look like its neighbours again.
+
+    WHY A GUARD AND NOT ONLY A TEST, which is the whole reason this is here and not
+    an assertion over the live registry: the statement is issued by
+    `promote_batch._assert_constraints`, AFTER the append has committed. So the
+    failure is not a refused run -- it is a run that writes its rows into bronze and
+    then fails, whose repair run correctly skips the committed append and fails
+    again on the same statement. Unrepairable, on the one table holding personal
+    names. `test_the_new_tables_carry_a_constraint_no_other_contract_could_have`
+    (test_registry.py) pins today's tuple, and a CI test protects a merge, not the
+    ad-hoc run of a branch whose tests have not been run.
+
+    The trap is the exact pair that was removed, verbatim."""
+    pasted = replace(
+        REGISTRY["socios"],
+        constraints=REGISTRY["socios"].constraints
+        + (
+            "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
+            "ALTER TABLE {table} ADD CONSTRAINT cnpj_basico_len8 "
+            "CHECK (length(trim(cnpj_basico)) = 8)",
+        ),
+    )
+    monkeypatch.setitem(REGISTRY, "socios", pasted)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_no_masked_contract_declares_a_check_constraint()
+    message = str(excinfo.value)
+    # Which table, which columns made it masked, and the UC error an operator would
+    # otherwise have met at run time.
+    assert "socios" in message
+    assert "nome_do_representante" in message
+    assert "COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED" in message
+    # And the fix, including that NOT NULL is NOT what is being refused -- the
+    # obvious over-correction on reading this message is to strip the whole tuple.
+    assert "SET NOT NULL is unaffected" in message
+
+
+def test_dropping_a_check_is_still_allowed_on_a_masked_table(monkeypatch):
+    """The guard refuses statements that CREATE a check, not every mention of one.
+
+    `ALTER TABLE ... DROP CONSTRAINT IF EXISTS` succeeds against a masked table, and
+    it is the FIRST STEP of masking a table that already carries a CHECK -- so a
+    guard that matched `CONSTRAINT` rather than `CHECK` would refuse the migration
+    out of the very incompatibility it exists to prevent.
+
+    Not hypothetical for this repo: estabelecimentos carries `cnpj_basico_len8`
+    today and holds 71.9M rows, so if it were ever masked the DROP is exactly the
+    statement that would have to run first."""
+    dropping = replace(
+        REGISTRY["socios"],
+        constraints=(
+            "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS cnpj_basico_len8",
+            "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
+        ),
+    )
+    monkeypatch.setitem(REGISTRY, "socios", dropping)
+
+    _assert_no_masked_contract_declares_a_check_constraint()
+
+
+def test_an_unmasked_contract_keeps_its_check_constraint():
+    """GUARDS THE GUARD. Everything above would also pass if this refused EVERY
+    CHECK, which would empty the constraint tuples of the three tables that are
+    entitled to one -- including the lookup's `codigo_not_blank` and
+    estabelecimentos' `cnpj_basico_len8`, live on 71.9M rows today. The live
+    registry is the proof: it declares three CHECKs and imports."""
+    _assert_no_masked_contract_declares_a_check_constraint()
+    checked = [
+        spec.name
+        for spec in REGISTRY.values()
+        if any("CHECK" in statement for statement in spec.constraints)
+    ]
+    assert sorted(checked) == ["empresas", "estabelecimentos", "lookup"], (
+        f"expected the three unmasked tables to keep their CHECK, got {checked}"
+    )
+
+
+def test_the_registry_still_imports_where_pyspark_is_not_installed():
+    """THE COST OF PUTTING THAT GUARD AT IMPORT, held down.
+
+    The guard reads `opl.bronze.masking.MASKED_COLUMNS`, so this module now imports
+    `masking`. That is only safe because `masking` imports
+    `opl.contracts.cnpj_schemas` and nothing else -- and the day someone adds
+    `from pyspark.sql import ...` to it, this module drags pyspark in behind it.
+
+    Which breaks something specific and off-Databricks. pyspark is deliberately NOT
+    a core dependency (pyproject: installing it into serverless breaks the wheel
+    install); it is the `spark` extra. The EXTRACTION scripts -- `extract_cnpj`,
+    which downloads ~15 GB from the RFB -- import this registry through
+    `spec_for_contract` and run in environments that have no Spark at all. They
+    would fail at import with an ImportError naming a package they have no reason
+    to need, and the download would not start.
+
+    A subprocess with a meta-path blocker rather than an inspection of the import
+    lines: this asserts the PROPERTY (the registry imports without pyspark) instead
+    of one spelling of its cause, so it also catches pyspark arriving through some
+    third module rather than through `masking`. In-process would prove nothing --
+    pyspark is installed here and already in `sys.modules` by the time this runs."""
+    blocked = textwrap.dedent(
+        """
+        import sys
+
+        class _NoPyspark:
+            def find_spec(self, name, path=None, target=None):
+                if name == "pyspark" or name.startswith("pyspark."):
+                    raise ImportError(
+                        "pyspark is not installed in the extraction environment"
+                    )
+                return None
+
+        sys.meta_path.insert(0, _NoPyspark())
+        from opl.bronze.registry import REGISTRY, spec_for_contract
+        assert spec_for_contract("socios").bronze == "bronze_cnpj_socios"
+        assert "pyspark" not in sys.modules
+        print(len(REGISTRY))
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", blocked],
+        capture_output=True,
+        text=True,
+        cwd=Path(registry.__file__).resolve().parents[3],
+    )
+    assert result.returncode == 0, (
+        "opl.bronze.registry no longer imports without pyspark, which breaks every "
+        "extraction script that runs off Databricks:\n" + result.stderr[-2000:]
+    )
+    assert result.stdout.strip() == str(len(REGISTRY))
