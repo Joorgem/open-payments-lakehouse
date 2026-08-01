@@ -410,9 +410,11 @@ def _assert_no_masked_contract_declares_a_check_constraint() -> None:
     bronze and THEN fails, whose repair run correctly skips the committed append and
     fails again on the same statement: an unrepairable task, on the one table
     holding personal names. A CI test protects a merge, not the ad-hoc run of a
-    branch whose tests have not been run; and `masking` is imported only by
-    `ensure_masked_table`, so a guard living there would never run inside
-    `promote_batch`. Every job task imports the registry.
+    branch whose tests have not been run; and `promote_batch` -- which issues the
+    statement -- imports the registry and NOT `masking`, so a guard living there
+    would never run inside it. That import direction is the load-bearing fact, not
+    the importer count: this module imports `masking` too. Every job task imports
+    the registry.
 
     THE IMPORT DIRECTION IS LOAD-BEARING, and it is what lets this be a guard rather
     than a test: `opl.bronze.masking` imports `opl.contracts.cnpj_schemas` and

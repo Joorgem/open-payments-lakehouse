@@ -190,24 +190,18 @@ ad-hoc run of a branch. The guard lives in the registry and not in
 `opl.bronze.masking` deliberately: **`promote_batch` — the task that actually
 issues the statement — imports the registry and does not import `masking`**, so a
 guard living in `masking` would never run in the task whose failure it exists to
-prevent.
+prevent. The guard matches on statements that *create* a check and not on
+`DROP CONSTRAINT`, because dropping a CHECK is legal on a masked table and is the
+first step of masking a table that already carries one.
 
-> **This sentence used to say "`masking` is imported only by
-> `ensure_masked_table`", and landing the guard is what made that false.**
-> `registry.py` has imported `masking` for `MASKED_COLUMNS` since `f02ff97` — the
-> very commit that added the guard being justified here — so the clause was
-> already untrue in the commit that wrote it. The *argument* is unaffected and is
-> restated above without it: what matters is the import direction at
-> `promote_batch`, not the number of importers `masking` has. The direction that
-> **is** load-bearing is the other one, and it still holds: `masking` imports
-> `opl.contracts.cnpj_schemas` and nothing else — no pyspark, no registry — which
-> is what lets the registry stay importable where pyspark is not installed.
-> `src/opl/bronze/registry.py`'s guard docstring carries the same stale clause and
-> is left for the next commit that touches that file.
-
-It matches on statements that *create* a check
-and not on `DROP CONSTRAINT`, because dropping a CHECK is legal on a masked table
-and is the first step of masking a table that already carries one.
+**The import direction is the claim, not the importer count.** `registry.py` itself
+imports `masking`, for `MASKED_COLUMNS`, and has since `f02ff97` — the same commit
+that added the guard. That is not in tension with the paragraph above, which turns
+on `promote_batch` importing the registry and *not* `masking`. The reverse
+direction is load-bearing too, and also holds: `masking` imports
+`opl.contracts.cnpj_schemas` and nothing else — no pyspark, no registry — which is
+what lets `registry.py` import it while staying importable on the extraction
+machines, where pyspark is an optional extra usually not installed.
 
 ## What the live run proved, and what it only confirmed
 
