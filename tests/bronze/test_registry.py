@@ -117,7 +117,9 @@ def test_no_two_tables_share_a_staging_bronze_or_quarantine_name():
 
 
 def test_a_table_key_may_equal_its_own_tables_bronze_name():
-    """Why the two guards above are two and not one loop over four roles.
+    """Why `_assert_no_two_tables_share_a_delta_name` and
+    `_assert_no_two_tables_share_a_checkpoint_namespace` are two guards and not one
+    loop over four roles.
 
     The obvious implementation -- one `seen` dict, four roles, one pass -- refuses
     the LIVE registry at import: `lookup.table_key` and `lookup.bronze` are both
@@ -128,7 +130,9 @@ def test_a_table_key_may_equal_its_own_tables_bronze_name():
 
     Pinned as a property rather than left to be rediscovered: the failure is loud but
     the CAUSE is not obvious, and the natural fix on seeing it -- drop `table_key`
-    from the check -- silently reopens the checkpoint-collision hole above."""
+    from the check -- silently reopens the checkpoint-collision hole. The refusals
+    themselves live in test_registry_guards.py; this is the legitimate case they must
+    not object to."""
     lookup = table_spec("lookup")
     assert lookup.table_key == lookup.bronze == "bronze_cnpj_lookup"
     # Neither guard may object to that, today or after F1.4b adds two more tables.

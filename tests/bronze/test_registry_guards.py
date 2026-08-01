@@ -44,12 +44,13 @@ from opl.bronze.registry import (
 
 
 def test_a_pasted_delta_name_is_refused_at_import(monkeypatch):
-    """The refusal exercised -- the test above only proves today's two entries are
-    clean, and would stay green with no guard behind it at all.
+    """The refusal exercised -- `test_no_two_tables_share_a_staging_bronze_or_
+    quarantine_name` (test_registry.py) only proves today's entries are clean, and
+    would stay green with no guard behind it at all.
 
     Verified by probe against the live registry before this guard existed: a paste
     of the estabelecimentos entry renamed everywhere EXCEPT the staging/bronze/
-    quarantine triple IMPORTED CLEAN. Only the CI test above caught it, and a CI
+    quarantine triple IMPORTED CLEAN. Only that CI test caught it, and a CI
     test protects a merge -- it does not protect an ad-hoc job run against a branch
     whose tests have not been run, which is exactly how these jobs get launched
     while a phase is in flight.
@@ -170,9 +171,9 @@ def test_a_pasted_checkpoint_namespace_is_refused_at_import(monkeypatch):
     were its own and already ingested, and report SUCCESS having written nothing.
     The shared `_schemas` entry compounds it by merging two unrelated schemas.
 
-    `test_every_registered_table_has_a_checkpoint_namespace_of_its_own` asserts the
-    same property, and for the reason given in the sibling tests above that is not
-    enough on its own."""
+    `test_every_registered_table_has_a_checkpoint_namespace_of_its_own`
+    (test_registry.py) asserts the same property, and for the reason given in the
+    sibling tests above that is not enough on its own."""
     pasted = replace(
         REGISTRY["estabelecimentos"],
         name="empresas",
@@ -249,7 +250,8 @@ def test_every_guard_this_module_defines_is_actually_called_at_import():
     """The test that makes every other refusal test in this file mean something.
 
     Found by mutation probe while writing the two paste guards: commenting out ALL
-    THREE of their calls at the bottom of registry.py left this file 33/33 GREEN. The
+    THREE of their calls at the bottom of registry.py left the registry suite --
+    then one file of 33 tests, since split in two -- 33/33 GREEN. The
     refusal tests invoke the guard functions DIRECTLY, so they prove a function
     refuses -- they say nothing about whether anything ever runs it. A guard that is
     defined and unwired is worth exactly as much as no guard, and the entire point of
@@ -289,9 +291,10 @@ def test_every_guard_this_module_defines_is_actually_called_at_import():
 def test_a_pasted_subdir_is_refused_at_import(monkeypatch):
     """The paste F1.4b literally makes, refused where the value is DECLARED.
 
-    The test above names the property; until this guard existed nothing enforced it
-    outside CI. Verified by probe against the live registry: the estabelecimentos
-    entry pasted and renamed everywhere EXCEPT `subdir` IMPORTED CLEAN. `subdir` is
+    `test_no_two_tables_share_a_landing_subdir` (test_registry.py) names the
+    property; until this guard existed nothing enforced it outside CI. Verified by
+    probe against the live registry: the estabelecimentos entry pasted and renamed
+    everywhere EXCEPT `subdir` IMPORTED CLEAN. `subdir` is
     the field that does not contain the table's own bronze name, so a careful
     find/replace over `bronze_cnpj_*` sails straight past it -- and a CI test does
     not protect an ad-hoc run, or a branch whose tests have not been run.
@@ -319,8 +322,9 @@ def test_a_pasted_subdir_is_refused_at_import(monkeypatch):
 
 
 def test_a_table_claiming_a_reserved_subdir_is_refused_by_name(monkeypatch):
-    """The refusal itself, exercised -- the test above only proves today's entries
-    are clean, which would stay green if the guard were deleted.
+    """The refusal itself, exercised -- `test_no_table_claims_a_directory_the_volume_
+    layout_owns` (test_registry.py) only proves today's entries are clean, which
+    would stay green if the guard were deleted.
 
     Synthesised rather than committed to REGISTRY for obvious reasons: the entry
     this refuses cannot exist in source, because it would break the import of every
@@ -359,7 +363,8 @@ def test_a_table_claiming_a_reserved_subdir_is_refused_by_name(monkeypatch):
     ],
 )
 def test_a_subdir_that_is_a_path_rather_than_a_name_is_refused(monkeypatch, subdir):
-    """The hole in BOTH checks above, which each look total and are not.
+    """The hole in BOTH subdir checks in test_registry.py -- uniqueness and the
+    reserved-name list -- which each look total and are not.
 
     `zips/estabelecimentos` collides with no table, so uniqueness passes, and it
     does not equal `"zips"`, so the reserved-name check passes -- yet its stream
@@ -397,7 +402,8 @@ def test_a_prefix_that_disagrees_with_its_file_group_is_refused_at_import(monkey
 
     `Estabelecimento` (singular) is the probe on purpose: it is unique, it is a
     single directory name, it names no reserved dir, and it passes every other check
-    in this file. What it does is go looking for files that are not there and
+    in either registry test file. What it does is go looking for files that are not
+    there and
     under-ingest without erroring -- the failure class this project rejected globs
     for."""
     trap = BronzeTable(
