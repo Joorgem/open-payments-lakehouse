@@ -330,8 +330,9 @@ def test_a_row_missing_a_required_tail_column_is_rejected(spark):
     it. Not a generic trailing-NULL check -- empresas' real last column
     (ente_federativo_responsavel) is empty for every private company."""
     df = spark.createDataFrame(
-        [("11111111", "ACME LTDA", "2062", "49", "1000,00", "05", ""),
-         ("22222222", None, "2062", "49", "1000,00", "05", "")],
+        [_row("empresas", cnpj_basico="11111111", ente_federativo_responsavel=""),
+         _row("empresas", cnpj_basico="22222222", razao_social=None,
+              ente_federativo_responsavel="")],
         TABLES["empresas"],
     )
     reasons = {r["cnpj_basico"]: r[REJECT_COLUMN]
@@ -524,7 +525,15 @@ def test_socios_rules_evaluate(spark):
 # same seven fields in the file and invite one of them to drift into tripping an
 # earlier rule -- which would make the test green for the wrong reason, since
 # first-match-wins means an earlier reason HIDES the one under test.
-_CLEAN_EMPRESAS_ROW = ("11111111", "ACME LTDA", "2062", "49", "1000,00", "05", "")
+#
+# Built by `_row` rather than as a positional tuple, like every other fixture in
+# this file: a contract that gained a column would break a 7-tuple with an arity
+# error naming neither the contract nor the column, where `_row` re-derives the
+# width and refuses a misspelled override by name.
+_CLEAN_EMPRESAS_ROW = _row("empresas", cnpj_basico="11111111",
+                           ente_federativo_responsavel="")
+_SHORT_EMPRESAS_ROW = _row("empresas", cnpj_basico="1234567",
+                           ente_federativo_responsavel="")
 
 
 def test_a_row_whose_ref_date_could_not_be_proven_is_rejected(spark):
@@ -578,8 +587,9 @@ def test_an_earlier_defect_outranks_the_unprovable_ref_date(spark):
     last cannot shadow anything, but it CAN be miswired into the chain -- an
     `.otherwise` in the wrong place would swallow the earlier reasons."""
     df = (spark.createDataFrame(
-              [("1234567", "ACME LTDA", "2062", "49", "1000,00", "05", ""),
-               ("22222222", None, "2062", "49", "1000,00", "05", "")],
+              [_SHORT_EMPRESAS_ROW,
+               _row("empresas", cnpj_basico="22222222", razao_social=None,
+                    ente_federativo_responsavel="")],
               TABLES["empresas"])
           .withColumn(SNAPSHOT_REF_DATE_COLUMN, F.lit(None).cast("date")))
     out = {r["cnpj_basico"]: r[REJECT_COLUMN]
@@ -587,9 +597,7 @@ def test_an_earlier_defect_outranks_the_unprovable_ref_date(spark):
     assert out["1234567"] == "bad_cnpj_basico_length"
     assert out["22222222"] == "null_or_empty_razao_social"
 
-    proven = (spark.createDataFrame(
-                  [("1234567", "ACME LTDA", "2062", "49", "1000,00", "05", "")],
-                  TABLES["empresas"])
+    proven = (spark.createDataFrame([_SHORT_EMPRESAS_ROW], TABLES["empresas"])
               .withColumn(SNAPSHOT_REF_DATE_COLUMN, F.lit("2026-06-13").cast("date")))
     assert [r[REJECT_COLUMN]
             for r in evaluate(proven, rules=rules_for("empresas")).collect()] == [

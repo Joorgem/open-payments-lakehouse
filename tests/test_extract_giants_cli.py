@@ -145,7 +145,12 @@ def test_landing_zips_for_an_unregistered_table_is_refused_before_any_download(
     registered, this test needs the next such group -- and if there is none, the
     property has no witness left and the test should be retired deliberately rather
     than repointed at something that does not demonstrate it."""
-    monkeypatch.setattr(cli, "upload_client", lambda **_auth: object())
+    # `pytest.fail`, not a stub object: "before the first byte" also means before a
+    # workspace client is built. `run` resolves the subdir on its first statement and
+    # constructs `upload_client()` four lines later, so a change that swapped those
+    # two would leave a stub-returning version of this test green while the refusal
+    # had moved to AFTER an authenticated connection was opened.
+    monkeypatch.setattr(cli, "upload_client", lambda **_auth: pytest.fail("built"))
     monkeypatch.setattr(cli, "upload_zips", lambda *_a, **_kw: pytest.fail("uploaded"))
     client = FakeClient(present_names={"Simples0.zip"})
 
