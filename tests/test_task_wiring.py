@@ -53,6 +53,12 @@ _TABLE_TASKS = [
     "promote_batch",
     "fail_on_dq",
     "reclaim_landing",
+    # F1.4b. The deliberate addition this list's docstring asks for: it is the first
+    # entry point that CREATES a bronze table rather than writing to one the append
+    # made, so a literal table name in it would hand-build a table under a name the
+    # registry does not know -- and the promote would then create the real one,
+    # unmasked, on its first append.
+    "ensure_masked_table",
 ]
 
 
