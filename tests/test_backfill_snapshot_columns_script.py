@@ -231,6 +231,9 @@ def test_constraints_are_re_asserted_on_bronze_with_the_table_filled_in():
     """The reason this function exists: ``mode('overwrite')`` may be planned as a
     table REPLACE, which drops CHECK constraints and NOT NULL with it."""
     spec = table_spec("estabelecimentos")
+    # Or the two assertions below are `0 == 0` and `all([])`, which is the one shape
+    # that would let a "never assert on bronze" regression through green.
+    assert spec.constraints
     spark = _RecordingSpark()
     tbl = "workspace.default.bronze_cnpj_estabelecimentos"
     cli._assert_constraints(spark, spec, tbl)
@@ -266,6 +269,72 @@ def test_no_constraint_ddl_is_issued_against_staging_or_quarantine(tbl, capsys):
     # Silence would leave an operator comparing this run against F1.4a's output
     # unable to see that the missing line was a decision.
     assert "NOT issued" in out and tbl in out
+
+
+# --- no write where there is nothing to write ---------------------------------
+
+
+class _RecordingFrame:
+    """A ``DataFrame`` stand-in that records the ``_fill``-then-write chain.
+
+    The local Delta session CANNOT execute ``mode("overwrite").saveAsTable`` at all
+    -- it raises ``AnalysisException: Table X does not support truncate in batch
+    mode`` -- so a real table cannot pin either side of this decision. What has to
+    be pinned is that the 0-row case issues NO write, and a recorder states that
+    directly. It still takes the ``spark`` fixture, because ``_fill`` builds real
+    Column expressions and ``F.lit`` needs the JVM."""
+
+    def __init__(self) -> None:
+        self.stamped: list[str] = []
+        self.saved: list[str] = []
+        self.formats: list[str] = []
+        self.modes: list[str] = []
+
+    def withColumn(self, name: str, _column) -> _RecordingFrame:  # noqa: N802
+        self.stamped.append(name)
+        return self
+
+    @property
+    def write(self) -> _RecordingFrame:
+        return self
+
+    def format(self, value: str) -> _RecordingFrame:
+        self.formats.append(value)
+        return self
+
+    def mode(self, value: str) -> _RecordingFrame:
+        self.modes.append(value)
+        return self
+
+    def saveAsTable(self, name: str) -> None:  # noqa: N802
+        self.saved.append(name)
+
+
+def test_no_write_is_issued_when_there_are_no_rows_to_fill(spark, capsys):
+    """At 0 rows the ALTER is the whole migration, and issuing the overwrite anyway
+    risks the table's METADATA for no gain: this file's own ``_assert_constraints``
+    records that ``mode('overwrite')`` may be planned as ``AtomicReplaceTableAsSelect``,
+    which drops CHECK constraints, NOT NULL -- and a UC column mask on the masked
+    contracts. ``_assert_constraints`` now returns early for a non-bronze target, so
+    the script's only metadata re-assertion does not cover the one target where a
+    0-row write is the normal case."""
+    frame = _RecordingFrame()
+    assert (
+        cli.fill_and_overwrite(frame, month="2026-06", tbl="wh.d.q", rows=0) is False
+    )
+    assert frame.saved == [] and frame.stamped == []
+    out = capsys.readouterr().out
+    assert "no write was issued" in out and "wh.d.q" in out
+
+
+def test_the_overwrite_runs_when_there_are_rows_to_fill(spark):
+    """The other direction, or the skip above is a script that never writes."""
+    frame = _RecordingFrame()
+    assert cli.fill_and_overwrite(frame, month="2026-06", tbl="wh.d.b", rows=71_874_448) is True
+    assert frame.saved == ["wh.d.b"]
+    # Both columns stamped, and the write shape unchanged from what F1.4a ran.
+    assert frame.stamped == [SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN]
+    assert frame.formats == ["delta"] and frame.modes == ["overwrite"]
 
 
 # --- the ALTER is idempotent per column ---------------------------------------
@@ -338,9 +407,12 @@ def test_an_unknown_role_is_refused_before_spark():
 
 def test_a_role_flag_where_the_month_should_be_is_refused_as_a_month():
     """``estabelecimentos --staging`` is two arguments, so arity cannot catch it.
-    It must not be read as a month, and the message has to name the month."""
-    with pytest.raises(ValueError, match="refusing to backfill the snapshot columns"):
+    It must not be read as a month, and the message has to name the value it
+    rejected -- an operator who typed the flag one position early has to be able to
+    see WHICH argument was read as a month."""
+    with pytest.raises(ValueError, match="refusing to backfill the snapshot columns") as exc:
         cli.resolve_target(["estabelecimentos", "--staging"])
+    assert "'--staging'" in str(exc.value)
 
 
 @pytest.mark.parametrize("argv", [[], ["estabelecimentos"], ["a", "b", "c", "d"]])

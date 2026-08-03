@@ -301,6 +301,14 @@ def refuse_non_empty_quarantine(rows: int, *, month: str, tbl: str, spec: Bronze
     NEEDS THE COUNT, so it cannot live in `resolve_target` beside the other
     argument refusals. It is fed the count `pre_write_scan` already took in one pass
     for the verification, so it costs no extra scan and cannot disagree with it.
+
+    THIS GUARD IS ABOUT BACK-STAMPING REJECTS AND NOTHING ELSE. It is NOT what keeps
+    the overwrite away from a masked quarantine table -- `fill_and_overwrite` is, by
+    not issuing a write when there is nothing to fill. Read that before relaxing this
+    one: permitting a quarantine backfill whose rows already carry this month (the
+    idempotent repeat `refuse_contradicting_month` allows) is a change to THIS
+    predicate that must not be made on the assumption that the write is otherwise
+    harmless.
     """
     if tbl != DEFAULT.table(spec.quarantine) or not rows:
         return
@@ -492,6 +500,60 @@ def _fill(source: DataFrame, month: str) -> DataFrame:
     )
 
 
+def fill_and_overwrite(source: DataFrame, *, month: str, tbl: str, rows: int) -> bool:
+    """Overwrite `tbl` with both columns stamped -- or issue NO WRITE at all when
+    there is nothing to stamp. True when the overwrite ran.
+
+    A WRITE THAT CHANGES NOTHING IS NOT ISSUED, and that is the whole of this
+    function. At `rows == 0` the `ALTER TABLE ... ADD COLUMNS` above IS the entire
+    migration: the columns exist, with the types `_NEW_COLUMNS` declares, and the
+    fill has zero rows to stamp. Everything downstream is unaffected -- `_check`
+    reports `rows=0 null_month=0 months=[]` either way, which is exactly what
+    `verify_or_raise` accepts against `rows_before=0`.
+
+    WHAT ISSUING IT ANYWAY COSTS is table METADATA, for no gain. See
+    `_assert_constraints`: `mode("overwrite").saveAsTable` is planned either as an
+    overwrite of the DATA (`OverwriteByExpression`, metadata kept) or as a replace of
+    the TABLE (`AtomicReplaceTableAsSelect`, which drops CHECK constraints and NOT
+    NULL with it) -- both plans were OBSERVED for this exact write, and which one
+    Unity Catalog picks is not knowable from here. A replace also drops a UC COLUMN
+    MASK, and `socios` is masked on its bronze AND quarantine tables
+    (`opl.bronze.masking.MASKED_COLUMNS`, applied by
+    `databricks/src/ensure_masked_table.py`). `_assert_constraints` is this script's
+    only metadata re-assertion and it now returns early for a non-bronze target --
+    correctly, those statements are bronze DDL -- so the one target where a 0-row
+    write is the NORMAL case is the one target nothing would put back.
+
+    That exposure is bounded rather than a leak: `ensure_masked_table` runs first in
+    `databricks/resources/bronze_socios_job.yml` with everything downstream depending
+    on it, and ADR 0008 records its statements as idempotent, so a dropped mask is
+    re-applied before the next append. A window over an empty table, not disclosure.
+
+    THE POINT IS STRUCTURE, NOT THE WINDOW. Before this, the only thing keeping the
+    script away from a masked quarantine was `refuse_non_empty_quarantine` happening
+    to refuse every case that has data -- a predicate whose reasoning is about
+    back-stamping rejects and never mentions masks. The natural future relaxation
+    (permit a quarantine backfill when every row already carries this month, the
+    repeat `refuse_contradicting_month` deliberately allows) would have reopened it
+    silently. Skipping the write removes the class instead of narrowing the window.
+
+    Not a branch in `main`, so that the decision has one home and a test can state
+    both directions of it. `main` still evaluates `spark.read.table(tbl)` to call
+    this -- a lazy plan, not a scan -- which keeps that side effect-free.
+    """
+    if not rows:
+        print(
+            f"backfill: {tbl} has 0 rows, so no write was issued -- the ALTER above is "
+            "the entire migration and there is nothing to stamp. Deliberate: an "
+            "overwrite may be planned as a table REPLACE, which drops constraints, "
+            "NOT NULL and any UC column mask, and none of that would be put back for "
+            "a target that is not bronze."
+        )
+        return False
+    _fill(source, month).write.format("delta").mode("overwrite").saveAsTable(tbl)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     # Every argument refused BEFORE Spark, the order every job task in this repo
@@ -545,7 +607,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"backfill: added {', '.join(name for name, _ in to_add)} (metadata-only)")
 
     # Re-read: the DataFrame above was resolved against the pre-ALTER schema.
-    _fill(spark.read.table(tbl), month).write.format("delta").mode("overwrite").saveAsTable(tbl)
+    # No branch here on purpose -- whether the write happens at all is
+    # `fill_and_overwrite`'s decision, stated once and tested both ways.
+    wrote = fill_and_overwrite(spark.read.table(tbl), month=month, tbl=tbl, rows=rows_before)
 
     after = spark.read.table(tbl)
     check = _check(after, columns_before)
@@ -560,7 +624,20 @@ def main(argv: list[str] | None = None) -> int:
     verify_or_raise(check, rows_before=rows_before, tbl=tbl, version=version)
     _assert_constraints(spark, spec, tbl)
     _warn_on_null_ref_dates(check, tbl=tbl, version=version)
-    print(f"backfill: DONE. {tbl} is at a new version; version {version} is the way back")
+    # The last line has to be true of the run that just happened, and skipping the
+    # write made one case where it was not: a REPEAT of a 0-row target commits
+    # nothing at all -- `missing_columns` is empty so there is no ALTER either -- and
+    # claiming "a new version" would name a version that does not exist and offer
+    # `version` as the way back from nothing. Both halves would be wrong at once, on
+    # the path a Databricks INTERNAL_ERROR retry takes (see the `__main__` block).
+    # A conditional expression rather than a branch, and the `wrote or to_add` wording
+    # is byte-identical to F1.4a's, which `docs/f1.4a-migration-evidence.md` quotes.
+    print(
+        f"backfill: DONE. {tbl} is at a new version; version {version} is the way back"
+        if wrote or to_add
+        else f"backfill: DONE. {tbl} was already migrated and holds 0 rows, so NOTHING "
+        f"was committed -- it is still at version {version}"
+    )
     return 0
 
 
