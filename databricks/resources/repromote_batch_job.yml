@@ -23,11 +23,12 @@
 # and appends only the rows that pass, so rejected rows stay out of bronze and
 # remain in quarantine.
 #
-# HOW AN OPERATOR RUNS IT, now that promote_batch takes the table first:
+# HOW AN OPERATOR RUNS IT, now that promote_batch takes the table first and the
+# run must name the revision it expects to be running (ADR 0009):
 #     databricks bundle run repromote_triaged_batch -t free \
-#       --params table=estabelecimentos,batch_id=315230730740144
-# Both parameters, always. A batch id belongs to exactly one table's ingest, and
-# the `table` default below is a REAL table rather than a sentinel -- see why
+#       --params table=estabelecimentos,batch_id=315230730740144,revision=$(git rev-parse HEAD)
+# All three parameters, always. A batch id belongs to exactly one table's ingest,
+# and the `table` default below is a REAL table rather than a sentinel -- see why
 # there.
 #
 # Two safety properties, deliberately in two different places:
@@ -66,8 +67,33 @@ resources:
           # Sentinel refused by promote_batch (opl.bronze.promote.SENTINEL_BATCH_ID),
           # because a job parameter has to have SOME default and no id is valid.
           default: "REQUIRED-PASS-A-BATCH-ID"
+        - name: revision
+          # The third parameter, and the same kind of sentinel for the same reason
+          # (opl.bronze.provenance.SENTINEL_REVISION).
+          #
+          #     databricks bundle run repromote_triaged_batch -t free \
+          #       --params table=estabelecimentos,batch_id=315230730740144,revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
       tasks:
+        # THE OPERATOR JOB IS GUARDED TOO, and that is a decision rather than
+        # completeness (ADR 0009). This job APPENDS TO BRONZE -- the system of record --
+        # re-applying whatever DQ rules the deployed wheel happens to carry, so a
+        # repromote run against a stale wheel appends rows the current rules reject and
+        # exits 0. The isolation argument above is about what STARTS this job; it says
+        # nothing about which code the job then runs.
+        #
+        # It is also the job most likely to hit this: a repromote happens during triage,
+        # hours or days after the ingestion run, by which time the local repo has moved
+        # and the workspace has not.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
         - task_key: promote
+          depends_on: [{ task_key: assert_deployed_revision }]
           max_retries: 0
           environment_key: opl_env
           spark_python_task:

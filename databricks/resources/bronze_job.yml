@@ -15,8 +15,30 @@ resources:
       parameters:
         - name: month
           default: "2026-06"
+        - name: revision
+          # The revision this run is launched for; the default is a value the guard
+          # below refuses. Estabelecimentos' job carries the full argument.
+          #
+          #     databricks bundle run bronze_cnpj_lookup -t free \
+          #       --params month=2026-07,revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
       tasks:
+        # FIRST, AND AHEAD OF THE INGEST rather than of an unzip: this is the one
+        # ingestion job with no unzip task, because the lookup lands LOCAL (the
+        # extraction host unzips and PUTs the inner files). So "before any work" here
+        # means before the Auto Loader stream reads a byte and before the checkpoint
+        # advances -- a checkpoint moved by a wheel nobody deployed marks those files
+        # seen for every later run (ADR 0009).
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
         - task_key: ingest
+          depends_on:
+            - task_key: assert_deployed_revision
           environment_key: opl_env
           max_retries: 0
           spark_python_task:

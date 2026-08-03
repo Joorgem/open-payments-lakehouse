@@ -30,8 +30,28 @@ resources:
       parameters:
         - name: month
           default: "2026-06"
+        - name: revision
+          # The revision this run is launched for; the default is a value the guard
+          # below refuses, so a run launched without --params stops instead of
+          # checking nothing. Estabelecimentos' job carries the full argument.
+          #
+          #     databricks bundle run bronze_cnpj_empresas -t free \
+          #       --params month=2026-07,revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
       tasks:
+        # FIRST, AND NOTHING BEFORE IT (ADR 0009). Compares the revision above --
+        # the operator's HEAD when the run was submitted -- against the revision the
+        # deployed wheel was built from, and refuses a mismatch before this job moves
+        # any of this table's ten zip parts.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
         - task_key: unzip
+          depends_on: [{ task_key: assert_deployed_revision }]
           max_retries: 0
           environment_key: opl_env
           spark_python_task:

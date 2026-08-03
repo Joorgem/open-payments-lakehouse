@@ -13,8 +13,44 @@ resources:
       parameters:
         - name: month
           default: "2026-06"
+        - name: revision
+          # THE REVISION THIS RUN IS LAUNCHED FOR, and this default is a value the
+          # task refuses (opl.bronze.provenance.SENTINEL_REVISION). A job parameter
+          # has to have SOME default and no revision is a valid one, so the default's
+          # whole job is to fail -- same shape and same reason as the repromote job's
+          # sentinel batch_id. A default that happened to be a real object name would
+          # make every run launched without --params pass the check against a commit
+          # nobody chose, which is why tests/test_job_yaml_wiring.py asserts that this
+          # value is one the guard rejects.
+          #
+          # HOW A RUN IS LAUNCHED, now that this exists:
+          #     databricks bundle run bronze_cnpj_estabelecimentos -t free \
+          #       --params month=2026-07,revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
       tasks:
+        # FIRST, AND NOTHING BEFORE IT (ADR 0009). CI validates the repository and
+        # never what is deployed: a green run is evidence about the wheel sitting in
+        # the workspace, and that is HEAD only if somebody deployed HEAD -- a separate
+        # act, by hand, with nothing checking it. On 2026-08-01 a socios re-run
+        # terminated SUCCESS having masked only bronze, because the workspace was still
+        # running a bundle deployed four commits earlier, and nothing went red.
+        #
+        # This task compares the revision above -- the operator's HEAD at the moment
+        # the run was submitted -- against the revision the DEPLOYED wheel says it was
+        # built from. Two sources, or the check compares an artefact against itself and
+        # passes always. It starts no Spark session and touches nothing, so its whole
+        # cost is a task start; the position is the value, because a check after the
+        # unzip below reports the problem once several GB have moved.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            # No table and no month: this task is about the ARTEFACT, not the data.
+            parameters: ["{{job.parameters.revision}}"]
+
         - task_key: unzip
+          depends_on: [{ task_key: assert_deployed_revision }]
           max_retries: 0
           environment_key: opl_env
           spark_python_task:

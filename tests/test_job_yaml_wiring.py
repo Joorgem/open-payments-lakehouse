@@ -36,6 +36,7 @@ import pytest
 import yaml
 
 from opl.bronze.masking import MASKED_COLUMNS
+from opl.bronze.provenance import SENTINEL_REVISION, is_object_name
 from opl.bronze.registry import REGISTRY, table_spec
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -50,6 +51,37 @@ _JOB_OF = {
     "estabelecimentos": "bronze_estabelecimentos_job.yml",
     "empresas": "bronze_empresas_job.yml",
     "socios": "bronze_socios_job.yml",
+}
+
+# WHICH JOBS REFUSE A RUN BUILT FROM AN UNEXPECTED REVISION, and which one deliberately
+# does not. Every YAML under `databricks/resources` must appear in one of these two, and
+# `test_every_job_yaml_is_either_guarded_or_deliberately_not` asserts it -- `_JOB_OF`
+# above covers the four ingestion jobs only, so a lock driven off it alone would say
+# nothing about the two jobs that ingest nothing, and "a job missing the guard fails"
+# would quietly not hold for exactly the files nobody thinks about.
+_REVISION_GUARD = "assert_deployed_revision"
+
+_GUARDED_JOBS = (
+    "bronze_job.yml",
+    "bronze_empresas_job.yml",
+    "bronze_estabelecimentos_job.yml",
+    "bronze_socios_job.yml",
+    # The operator job, and its inclusion is a decision rather than completeness: a
+    # repromote APPENDS TO BRONZE, the system of record, re-applying whatever DQ rules
+    # the deployed wheel happens to carry. Run against a stale wheel it appends rows
+    # the current rules reject. Its header's isolation argument is about what STARTS
+    # the job, not about which code the job then runs (ADR 0009).
+    "repromote_batch_job.yml",
+)
+
+_UNGUARDED_JOBS = {
+    # The one exclusion, and the reason is that a guard here would remove a diagnostic
+    # in the exact case it exists for: smoke's entire purpose is to answer "does the
+    # deployed wheel import and can it read config", i.e. it is what you run WHEN YOU
+    # SUSPECT THE DEPLOYMENT. It writes nothing, so a wrong revision costs a re-run.
+    # It reports the deployed revision instead of refusing on it, which
+    # tests/test_assert_deployed_revision_task.py pins from the script side.
+    "smoke_job.yml": "the probe you run when the deployment itself is in doubt",
 }
 
 _PYTHON_FILE_PREFIX = "../src/"
@@ -264,13 +296,22 @@ def test_the_socios_job_is_that_same_shape_plus_the_masking_task():
     Stated as a difference rather than asserted separately because that is the
     review question this file has to answer: what makes socios' job different from
     the table it was copied from? One task ahead of the unzip, one dependency
-    pointing at it, and nothing else."""
+    pointing at it, and nothing else.
+
+    The revision guard is FIRST in both jobs and is therefore part of the shape both
+    share; what socios inserts is still one task, now between the guard and the unzip.
+    The re-pointed `depends_on` below is the edge the masking task interposes on:
+    everywhere else the unzip waits for the guard, here it waits for the masks, which
+    wait for the guard."""
     shape = _shape_of("socios")
-    assert shape[0]["task_key"] == "ensure_masked_table"
-    rest = [dict(task) for task in shape[1:]]
+    assert shape[0]["task_key"] == _REVISION_GUARD
+    assert shape[1]["task_key"] == "ensure_masked_table"
+    assert shape[1]["depends_on"] == [{"task_key": _REVISION_GUARD}]
+    rest = [dict(task) for task in shape[2:]]
     assert rest[0]["task_key"] == "unzip"
     assert rest[0].pop("depends_on") == [{"task_key": "ensure_masked_table"}]
-    assert rest == _shape_of("estabelecimentos"), (
+    rest[0]["depends_on"] = [{"task_key": _REVISION_GUARD}]
+    assert [shape[0]] + rest == _shape_of("estabelecimentos"), (
         "the socios job differs from the estabelecimentos job by more than the "
         "masking task and the edge into the unzip"
     )
@@ -285,12 +326,20 @@ def test_the_socios_job_masks_before_it_ingests():
 
 def _assert_the_masks_precede_every_other_task(table: str, root: Path = _RESOURCES) -> None:
     tasks = _tasks_of(_JOB_OF[table], root)
-    assert not tasks["ensure_masked_table"].get("depends_on"), (
-        f"{_JOB_OF[table]}: ensure_masked_table waits on something, so it is no longer "
-        "the first thing the run does"
+    # The revision guard is the ONE thing allowed to run before the masks, and it is
+    # allowed because it touches nothing: it compares two strings and returns. ADR
+    # 0008's claim is that the control was applied before any byte landed, and the
+    # masking task is still the first task that reaches a table at all. The guard being
+    # ahead of it is what stops a wrong wheel from creating those tables with a
+    # masking module that does not match the source anyone reviewed.
+    assert tasks["ensure_masked_table"].get("depends_on", []) in (
+        [], [{"task_key": _REVISION_GUARD}]
+    ), (
+        f"{_JOB_OF[table]}: ensure_masked_table waits on something other than the "
+        "revision guard, so it is no longer the first thing the run does to a table"
     )
     for key in tasks:
-        if key == "ensure_masked_table":
+        if key in ("ensure_masked_table", _REVISION_GUARD):
             continue
         assert "ensure_masked_table" in _ancestors(tasks, key), (
             f"{_JOB_OF[table]}:{key} can start before ensure_masked_table has finished. "
@@ -395,3 +444,178 @@ def test_every_task_runs_unretried_in_the_declared_serverless_environment(table)
         spec = environments[task["environment_key"]]
         assert spec["environment_version"] == "3"
         assert spec["dependencies"] == ["../../dist/*.whl"]
+
+
+# --- THE DEPLOYED-REVISION GUARD (ADR 0009) ---------------------------------------
+#
+# Why this section is in a YAML lock and not only in the task's own unit test: the
+# guard is a task like any other, so every way a job YAML can be wrong about a task
+# applies to it -- absent, present but waiting on the unzip, handed the wrong
+# parameter, or sitting in a second environment that installs a different wheel than
+# the work does. None of those fail a run; the first three make the run green with the
+# guard doing nothing useful, and the fourth makes it green having verified a wheel no
+# task uses. CI validates the repository and never what is deployed, which is the whole
+# reason the guard exists -- so the guard's own wiring is the one thing that had better
+# not depend on somebody having looked.
+
+
+def test_every_job_yaml_is_either_guarded_or_deliberately_not():
+    """The classification is TOTAL over `databricks/resources/*.yml`.
+
+    A new job YAML must be added to one of the two lists, and the choice is the point:
+    "does a run of this job against a wheel built from another revision matter?" has an
+    answer for every job, and the answer for the four ingestion jobs and the repromote
+    is yes. Left to a glob, a job added later would inherit whichever behaviour the
+    glob happened to give it."""
+    declared = set(_GUARDED_JOBS) | set(_UNGUARDED_JOBS)
+    present = {path.name for path in _RESOURCES.glob("*.yml")}
+    assert declared == present, (
+        f"unclassified job YAML(s): {sorted(present - declared)}; classified but absent: "
+        f"{sorted(declared - present)}"
+    )
+    assert set(_JOB_OF.values()) <= set(_GUARDED_JOBS), (
+        "an ingestion job is not guarded -- these are the jobs that move GB and append "
+        f"to bronze: {sorted(set(_JOB_OF.values()) - set(_GUARDED_JOBS))}"
+    )
+
+
+def _assert_the_revision_guard_precedes_every_other_task(
+    job_yml: str, root: Path = _RESOURCES
+) -> None:
+    tasks = _tasks_of(job_yml, root)
+    assert _REVISION_GUARD in tasks, (
+        f"{job_yml} has no {_REVISION_GUARD} task, so a run of it against a wheel built "
+        "from another revision succeeds -- which is what happened on 2026-08-01, when a "
+        "socios re-run reported SUCCESS having masked only bronze because the workspace "
+        "was still running a bundle deployed four commits earlier"
+    )
+    guard = tasks[_REVISION_GUARD]
+    assert not guard.get("depends_on"), (
+        f"{job_yml}: the guard waits on something, so the run has already done that "
+        "something by the time it learns it is running the wrong code. TRAP 2 -- a check "
+        "after the unzip reports the problem once several GB have moved"
+    )
+    assert _script_of(guard, f"{job_yml}:{_REVISION_GUARD}") == _REVISION_GUARD
+    assert guard.get("max_retries") == 0, f"{job_yml}: the guard does not declare max_retries: 0"
+    for key in tasks:
+        if key == _REVISION_GUARD:
+            continue
+        assert _REVISION_GUARD in _ancestors(tasks, key), (
+            f"{job_yml}:{key} can start before {_REVISION_GUARD} has finished, so the "
+            "guard no longer stands between a wrong deployment and the work"
+        )
+
+
+@pytest.mark.parametrize("job_yml", _GUARDED_JOBS)
+def test_the_revision_guard_runs_first_and_everything_else_waits_for_it(job_yml):
+    _assert_the_revision_guard_precedes_every_other_task(job_yml)
+
+
+def _assert_the_revision_default_cannot_pass(job_yml: str, root: Path = _RESOURCES) -> None:
+    parameters = {
+        parameter["name"]: parameter.get("default")
+        for parameter in _job_of(job_yml, root).get("parameters", [])
+    }
+    assert "revision" in parameters, (
+        f"{job_yml} declares no `revision` job parameter, so there is nothing for "
+        "--params revision=... to reach and the guard has no expected value"
+    )
+    default = parameters["revision"]
+    assert not is_object_name(default), (
+        f"{job_yml}'s revision default is {default!r}, which the guard ACCEPTS as a whole "
+        "object name -- so a run launched without --params revision=... would pass the "
+        "check against a revision nobody chose. A job-parameter default cannot validate "
+        "anything; it can only be a value that refuses"
+    )
+    assert default == SENTINEL_REVISION, (
+        f"{job_yml}'s revision default is {default!r} rather than the sentinel the code "
+        f"names ({SENTINEL_REVISION!r}). Two spellings of one sentinel is a default that "
+        "drifts into a value nobody checked"
+    )
+
+
+@pytest.mark.parametrize("job_yml", _GUARDED_JOBS)
+def test_the_guard_is_handed_the_runs_revision_and_the_default_refuses(job_yml):
+    """The parameter, its default, and the one thing the guard is handed.
+
+    `{{job.parameters.revision}}` is the whole carrier: it is what makes the expected
+    value arrive from the LAUNCH -- from the operator's own repository at the moment the
+    run is submitted -- rather than from anything the deploy stamped. A deploy-time
+    value would make expected and actual two names for the same act, and the incident
+    this guard exists for is a deploy that never happened (ADR 0009)."""
+    _assert_the_revision_default_cannot_pass(job_yml)
+    guard = _tasks_of(job_yml)[_REVISION_GUARD]
+    assert guard["spark_python_task"]["parameters"] == ["{{job.parameters.revision}}"], (
+        f"{job_yml}: the guard is handed {guard['spark_python_task']['parameters']}, not "
+        "the run's revision parameter"
+    )
+
+
+@pytest.mark.parametrize("job_yml", _GUARDED_JOBS)
+def test_the_guard_verifies_the_same_wheel_the_work_installs(job_yml):
+    """A guard in a second environment verifies a second wheel and proves nothing.
+
+    Each of these jobs declares ONE environment, and every `spark_python_task` runs in
+    it -- including the guard. That is what makes "the deployed wheel is the one you
+    expect" a statement about the tasks that follow, rather than about an install only
+    the guard ever performed."""
+    tasks = _tasks_of(job_yml)
+    keys = {
+        task["environment_key"] for task in tasks.values() if "spark_python_task" in task
+    }
+    assert keys == {tasks[_REVISION_GUARD]["environment_key"]}, (
+        f"{job_yml} runs its tasks in {sorted(keys)}: the guard shares an environment "
+        "with only some of the work, so the rest installs a wheel it never checked"
+    )
+
+
+def test_the_unguarded_job_carries_neither_the_guard_nor_a_revision_parameter():
+    """The exclusion, ASSERTED. An exclusion left to be inferred from absence is
+    indistinguishable from the guard having been forgotten -- and this file's whole
+    subject is what a copied YAML forgets. `smoke_job.yml` is excluded because it is the
+    probe you run when the deployment itself is in doubt; it reports the deployed
+    revision instead (ADR 0009)."""
+    for job_yml, why in _UNGUARDED_JOBS.items():
+        job = _job_of(job_yml)
+        assert _REVISION_GUARD not in _tasks_of(job_yml), (
+            f"{job_yml} now carries the guard, but it is listed as unguarded because "
+            f"it is {why}. Move it to _GUARDED_JOBS or take the task out"
+        )
+        names = {parameter["name"] for parameter in job.get("parameters", [])}
+        assert "revision" not in names, (
+            f"{job_yml} takes a revision parameter that nothing in it checks, which "
+            "reads as a guard that is not there"
+        )
+
+
+def test_the_guard_ordering_lock_catches_a_task_that_no_longer_waits_for_it(tmp_path):
+    """Proves the lock above can fail. One `depends_on` line, and the unzip runs
+    alongside the guard rather than after it -- both tasks still present, run still
+    green, several GB moved before anything was verified."""
+    root = _mutated(
+        "bronze_estabelecimentos_job.yml",
+        tmp_path,
+        f"          depends_on: [{{ task_key: {_REVISION_GUARD} }}]\n",
+        "",
+    )
+    with pytest.raises(AssertionError, match="can start before"):
+        _assert_the_revision_guard_precedes_every_other_task(
+            "bronze_estabelecimentos_job.yml", root=root
+        )
+
+
+def test_the_revision_default_lock_catches_a_default_that_would_pass_a_run(tmp_path):
+    """Proves the OTHER lock can fail, in the shape that would be silent.
+
+    A `revision:` default that happens to be a real object name turns every run
+    launched without `--params revision=...` into a check that passes -- against
+    whatever commit was pasted into the YAML, forever. That is the guard reporting
+    green while verifying nothing, which is worse than no guard at all."""
+    root = _mutated(
+        "bronze_socios_job.yml",
+        tmp_path,
+        f'default: "{SENTINEL_REVISION}"',
+        'default: "62ce88003113dc1ca198b19cfd00f5f5e20b9bd3"',
+    )
+    with pytest.raises(AssertionError, match="would pass"):
+        _assert_the_revision_default_cannot_pass("bronze_socios_job.yml", root=root)
