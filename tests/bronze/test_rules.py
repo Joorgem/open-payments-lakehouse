@@ -670,3 +670,75 @@ def test_every_requires_column_entry_is_declared_against_a_real_rule():
             "missing a CONTRACT column is a broken ingest and must fail loudly, "
             "not be quietly narrowed around"
         )
+
+
+# --- ADR 0006, Decision 3 resolved: what first-match-wins costs a per-reason
+# --- policy, pinned so removing it is a deliberate act ------------------------
+
+
+@pytest.mark.parametrize(
+    "contract,blank_column,dirty_column",
+    [
+        ("empresas", "razao_social", "qualificacao_responsavel"),
+        ("socios", "nome_socio_razao_social", "pais"),
+        ("estabelecimentos", "municipio", "correio_eletronico"),
+    ],
+)
+def test_a_blank_required_column_hides_the_lost_byte_behind_it(
+    spark, contract, blank_column, dirty_column
+):
+    """THE REASON ADR 0006 REFUSED A PER-REASON THRESHOLD, asserted rather than
+    argued.
+
+    The rejected option was: tolerate `null_or_empty_*` by rate (source dirt --
+    the RFB shipped a blank and nothing was lost), never tolerate
+    `encoding_replacement_char` (data loss -- cp1252 leaves five bytes undefined,
+    Java substitutes U+FFFD silently, and a source byte is GONE). The two really
+    do differ in kind. What defeats the policy is that `_dq_reject_reason` cannot
+    express "both": `dq._reject_reason` is a first-match-wins `when` chain and
+    `rules_for` ranks every required-field rule ABOVE the encoding check in all
+    four contracts, so a row carrying both defects reports the TOLERATED one.
+
+    A "never tolerated" reason that a co-occurring tolerated reason can hide is
+    not a never. Under the rejected policy this row would have been counted
+    toward a rate, found to be under it, and promoted -- with a lost byte and no
+    run turning red to say so.
+
+    Measured against live data, and this is why the pin exists rather than a
+    fix: across all six (table, month) cells of F1.4b the overlap is ZERO -- no
+    row is both required-blank and U+FFFD-carrying. The hazard is LATENT, and
+    adopting the policy is precisely what would stop anyone measuring it, since
+    a reason that no longer fires the gate is a number nobody has cause to run.
+
+    So this test asserts the shadowing EXISTS. It is not a bug report against
+    the ordering -- the ordering is deliberate (see the comment block above
+    `rules_for`: a row is judged by what is wrong with IT). It is a tripwire: the
+    day someone makes the gate count all matching rules instead of the first,
+    this test goes red and sends them to ADR 0006's condition 1, which is the
+    only thing that makes a per-reason threshold implementable."""
+    both = _row(contract, **{blank_column: "", dirty_column: _REPLACEMENT_CHAR})
+    df = spark.createDataFrame([both], TABLES[contract])
+
+    reported = [r[REJECT_COLUMN]
+                for r in evaluate(df, rules=rules_for(contract)).collect()]
+
+    assert reported == [f"null_or_empty_{blank_column}"], (
+        "the shadowing this pins has changed. If the gate now reports every "
+        "matching rule, ADR 0006's structural blocker on per-reason gating is "
+        "lifted and that ADR must be revisited -- do not simply update this "
+        "assertion"
+    )
+    # The row IS rejected either way, which is the whole reason the shadowing is
+    # survivable under ABSOLUTE gating and fatal under a per-reason one: today
+    # the reason is only a label on a row that is stopping the batch regardless.
+    assert reported[0] is not None
+
+    # And the never-tolerated reason is reachable on its own -- so the assertion
+    # above pins the ORDERING, not a broken encoding check.
+    alone = spark.createDataFrame(
+        [_row(contract, **{dirty_column: _REPLACEMENT_CHAR})], TABLES[contract]
+    )
+    assert [r[REJECT_COLUMN]
+            for r in evaluate(alone, rules=rules_for(contract)).collect()] == [
+        "encoding_replacement_char"
+    ]
