@@ -56,6 +56,15 @@ dev = [
     # importing a package nobody declared keeps working only for as long as the
     # package that happens to pull it in stays in this list.
     "pyyaml==6.0.3",
+    # DECLARED for the same reason as pyyaml above, and it was likewise already
+    # present -- but only inside the ISOLATED build environment PEP 517 creates from
+    # `[build-system] requires`, which the test suite cannot see.
+    # tests/test_revision_stamp.py loads `hatch_build.py`, whose base class comes from
+    # here, and the hook is what puts the revision into the deployed wheel. Pinned at
+    # the version the current wheel's own metadata names as its generator
+    # (`Generator: hatchling 1.31.0`), so what the tests read is what builds the
+    # artefact.
+    "hatchling==1.31.0",
     "psycopg[binary]==3.2.3",
     "confluent-kafka==2.6.1",
     "pre-commit==4.0.1",
@@ -63,6 +72,16 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opl"]
+
+# STAMPS THE GIT REVISION INTO THE WHEEL. `hatch_build.py` generates
+# `opl/_revision.py` on every non-editable build -- i.e. on the `uv build --wheel`
+# that `databricks bundle deploy` runs -- so the deployed artefact can state what it
+# was built from and `opl.bronze.provenance` can refuse a run whose code is not the
+# code that was launched (ADR 0009). The `version` is deliberately left static:
+# putting the revision there would put it in the wheel FILENAME, and the jobs install
+# through a glob over a `dist/` that nothing cleans.
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
 
 [tool.ruff]
 line-length = 100
