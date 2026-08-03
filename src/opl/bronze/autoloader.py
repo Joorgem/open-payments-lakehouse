@@ -42,12 +42,100 @@ SOURCE_FILE_COLUMN = "_source_file"
 # (the RFB WebDAV), which is a property of this ingest, not of a table.
 
 
-def schema_location(cfg: OplConfig, table_key: str = "bronze_cnpj_lookup") -> str:
-    return f"{cfg.volume_root}/_schemas/{table_key}"
+# BOTH STATE LOCATIONS ARE MONTH-SCOPED, and until F1.4b PR B neither was. They
+# were keyed on `table_key` alone while `load()`'s source path is
+# `landing_table(subdir, month)`, so the first run for a second month would have
+# restarted a live query against a DIFFERENT SOURCE DIRECTORY. Spark's "Recovery
+# Semantics after Changes in a Streaming Query" lists a change to the subscribed
+# files as "generally not allowed as the results are unpredictable" and defines
+# that as "likely to fail with unpredictable errors"; Databricks states the
+# positive rule for Auto Loader directly -- more than one source location loaded
+# into one target table "requires a separate streaming checkpoint". Every ingest
+# through 2026-06 ran under the unscoped layout, so this was never exercised: the
+# empresas and socios streams were first runs.
+#
+# WHAT THE RISK IS NOT: an under-ingest reported as SUCCESS. Auto Loader's
+# exactly-once tracking is keyed on the full file path, and a second month's paths
+# are all new, so a query that DOES start ingests them correctly. The failure mode
+# is at startup. `Trigger.AvailableNow` changes none of this.
+# `spark.databricks.cloudFiles.checkSourceChanged` is an active guard whose trip is
+# a loud [STREAM_FAILED] StreamingQueryException, but the documented case is a
+# cross-BUCKET mismatch under file-notification mode; whether it fires for a
+# same-Volume, different-subdirectory change under the directory-listing default
+# this job uses is NOT stated by the docs and has not been measured here. Which is
+# why the layout is fixed rather than the guard relied on.
+#
+# `<month>/<table_key>` AND NOT `<table_key>/<month>`. The month goes above the
+# table so each month's state is a SIBLING of the pre-Step-0
+# `_checkpoints/<table_key>` directory; nesting it underneath would put a new
+# RocksDB store and offset log INSIDE a checkpoint directory 2026-06's query still
+# owns. It also mirrors the landing layout (`cnpj/<month>/<table>`), the same
+# reason `landing_tmp` mirrors it: an operator listing this Volume maps each state
+# dir 1:1 onto the landing dir it drained.
+#
+# `month` IS REQUIRED AND KEYWORD-ONLY. Required for `add_audit_columns`'s reason,
+# with a sharper edge: `opl.config`'s pinned month is how F1.2 silently tied every
+# row to 2026-06, and supplied here it resolves 2026-06's checkpoint while the read
+# is of the 2026-07 landing dir -- reinstating the exact hazard above, invisibly,
+# with the one value that must be refused. Keyword-only because `table_key` and
+# `month` are adjacent and both `str`: a positional swap type-checks and produces
+# `_checkpoints/<table_key>/<month>`, which is the nesting the paragraph above
+# forbids. That is the argument `BronzeTable` is declared `kw_only=True` for.
 
 
-def checkpoint_location(cfg: OplConfig, table_key: str = "bronze_cnpj_lookup") -> str:
-    return f"{cfg.volume_root}/_checkpoints/{table_key}"
+def schema_location(
+    cfg: OplConfig, table_key: str = "bronze_cnpj_lookup", *, month: str
+) -> str:
+    return f"{cfg.volume_root}/_schemas/{month}/{table_key}"
+
+
+def checkpoint_location(
+    cfg: OplConfig, table_key: str = "bronze_cnpj_lookup", *, month: str
+) -> str:
+    """Where this table's ingest of THIS MONTH records which files it has read.
+
+    THE 2026-06 STATE AT THE OLD PATHS IS ORPHANED, deliberately and permanently.
+    Streaming state is never migrated: `_checkpoints/<table_key>` and
+    `_schemas/<table_key>` are left exactly where they are, and nothing reads them.
+
+    WHICH MAKES RE-RUNNING AN ALREADY-INGESTED MONTH A DUPLICATE-APPEND, and that
+    is the one consequence an operator has to know. A 2026-06 ingest launched
+    through the job flow now finds an EMPTY month-scoped checkpoint, treats every
+    2026-06 file as new, and appends that month's rows into staging a second time
+    under a fresh `_batch_id` -- and the promote's idempotence is keyed on
+    `_batch_id`, so it cannot see the duplication and will carry it into bronze.
+    Nothing fails; the row counts double. Recorded for operators in
+    `docs/f1.4b-pr-b-run-evidence.md`, and it is why re-running a month that has
+    already been promoted is a manual, deliberate act rather than a retry."""
+    return f"{cfg.volume_root}/_checkpoints/{month}/{table_key}"
+
+
+def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: str) -> None:
+    """Refuse a `source_dir` that is not one table's landing subdir for `month`.
+
+    THE MONTH ARRIVES TWICE -- inside `source_dir`, and as `month` -- and the two
+    are the same fact: which files are read, and which checkpoint records them as
+    read. A disagreement drains one month's directory under another month's
+    checkpoint, which is the hazard the state layout above exists to remove,
+    reached from the source side instead. `bronze_ingest.py` threads ONE local into
+    both for that reason; this refuses the caller that does not.
+
+    REBUILT THROUGH `cfg.landing_table` rather than compared by prefix, so the
+    layout is asked rather than re-spelled here -- and equality refuses two things a
+    prefix test would admit: the month ROOT (the F1.4b blocker, since it holds every
+    other table's files and cloudFiles walks a source dir recursively) and any `..`
+    that climbs back out of the month."""
+    subdir = source_dir.rsplit("/", 1)[-1]
+    if source_dir != cfg.landing_table(subdir, month):
+        raise ValueError(
+            f"refusing to read: source_dir={source_dir!r} is not a landing subdir of "
+            f"month={month!r} -- expected {cfg.landing_cnpj_month(month)}/<subdir>. The "
+            "month is half of BOTH the files read and the checkpoint that records them "
+            "as read, so a disagreement here restarts a stream against a source it did "
+            "not checkpoint, which Spark's recovery semantics call not allowed and "
+            "likely to fail unpredictably. Pass the same month local that built "
+            "source_dir."
+        )
 
 
 def add_audit_columns(
@@ -102,11 +190,19 @@ def bronze_stream(
     table: str,
     source_dir: str,
     table_key: str,
+    *,
+    month: str,
 ) -> DataFrame:
     """Generalized cloudFiles bronze read for any contract table. Reads
     ``source_dir`` with the ``struct_for(table)`` schema and the shared CSV
     options, adds ``_source_file``. Lookup-specific columns are added by the
     caller (see ``bronze_lookup_stream``).
+
+    ``month`` is REQUIRED and keyword-only, and it must be the month
+    ``source_dir`` is under -- see ``_assert_source_dir_is_this_months``, which
+    refuses the pair rather than trusting it. It scopes the inferred-schema half of
+    this stream's Auto Loader state; the checkpoint half is the caller's
+    ``writeStream``, so the two are set from the same local in one place.
 
     NO GLOB, and no parameter for one. cloudFiles walks ``source_dir``
     RECURSIVELY -- an F1.3 probe.txt planted in the ``zips/estabelecimentos/``
@@ -117,10 +213,11 @@ def bronze_stream(
     need. That is deliberately structural: a glob is a discovery RULE, so a source
     filename drifting out of its pattern would silently under-ingest, with nothing
     downstream able to tell an empty batch from a missed one."""
+    _assert_source_dir_is_this_months(cfg, source_dir, month)
     reader = (
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "csv")
-        .option("cloudFiles.schemaLocation", schema_location(cfg, table_key))
+        .option("cloudFiles.schemaLocation", schema_location(cfg, table_key, month=month))
         .option("cloudFiles.inferColumnTypes", "false")
         .option("rescuedDataColumn", "_rescued_data")
         .schema(struct_for(table))
@@ -131,9 +228,12 @@ def bronze_stream(
     return df.withColumn(SOURCE_FILE_COLUMN, F.col("_metadata.file_path"))
 
 
-def bronze_lookup_stream(
-    spark: SparkSession, cfg: OplConfig, month: str | None = None
-) -> DataFrame:
+def bronze_lookup_stream(spark: SparkSession, cfg: OplConfig, month: str) -> DataFrame:
+    # `month` HAS NO DEFAULT, and `= None` was one: `landing_cnpj_month` falls back
+    # to `cfg.month` for None, so the stream read the pinned 2026-06 with nobody
+    # having passed it -- `DEFAULT.month` substituted one call further down, which is
+    # the shape `require_month` exists to refuse. It now also selects the Auto Loader
+    # state, so None would resolve 2026-06's checkpoint too.
     spec = table_spec("lookup")
     df = bronze_stream(
         spark,
@@ -145,6 +245,9 @@ def bronze_lookup_stream(
         # from the table key.
         cfg.landing_table(spec.subdir, month),
         spec.table_key,
+        # The SAME argument that built the source dir above, not a second lookup of
+        # it: it decides which checkpoint records those files as read.
+        month=month,
     )
     return df.withColumn(
         "lookup_type", lookup_type_column(F.col("_metadata.file_path"))

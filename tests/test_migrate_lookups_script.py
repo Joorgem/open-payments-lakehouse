@@ -31,6 +31,12 @@ _spec.loader.exec_module(cli)
 _MONTH = "2026-06"
 _MONTH_DIR = f"/Volumes/workspace/default/landing/cnpj/{_MONTH}"
 _DEST_DIR = f"{_MONTH_DIR}/lookups"
+# MONTH-SCOPED since F1.4b PR B Task 5 Step 0. This script clears the state THIS
+# codebase would use for the month it is given; the pre-Step-0 path it actually
+# cleared when it ran for 2026-06 (`_checkpoints/bronze_cnpj_lookup`) is orphaned
+# and deliberately not touched, because clearing one unscoped directory while
+# migrating one month would delete every other month's state too.
+_CHECKPOINT = f"/Volumes/workspace/default/landing/_checkpoints/{_MONTH}/bronze_cnpj_lookup"
 
 
 def _landed_name(suffix: str) -> str:
@@ -186,7 +192,7 @@ def test_delete_directory_still_takes_no_recursive_argument():
 
 
 def test_purge_state_dir_removes_contents_before_the_directory():
-    state = "/Volumes/workspace/default/landing/_checkpoints/bronze_cnpj_lookup"
+    state = f"/Volumes/workspace/default/landing/_checkpoints/{_MONTH}/bronze_cnpj_lookup"
     w = _client(
         {
             f"{state}/metadata": b"m",
@@ -293,7 +299,7 @@ def test_main_clears_the_state_before_moving_any_file(monkeypatch):
     moved files and a stale checkpoint, and the re-run refuses because the month
     root no longer holds the set."""
     objects = _month_root_objects()
-    checkpoint = "/Volumes/workspace/default/landing/_checkpoints/bronze_cnpj_lookup"
+    checkpoint = _CHECKPOINT
     objects[f"{checkpoint}/offsets/0"] = b"consumed-the-old-paths"
     w = _client(objects)
     order: list[str] = []
@@ -327,7 +333,7 @@ def test_main_clears_the_state_again_after_the_moves(monkeypatch):
     location, silently restoring the state the first call removed. Simulated here
     by re-creating the checkpoint mid-move.
     """
-    checkpoint = "/Volumes/workspace/default/landing/_checkpoints/bronze_cnpj_lookup"
+    checkpoint = _CHECKPOINT
     w = _client(_month_root_objects())
     real_move = cli.move_verified
 
@@ -352,9 +358,27 @@ def test_clear_state_is_idempotent_when_nothing_is_there(capsys):
     from opl.bronze.registry import table_spec
 
     w = _client({"/unrelated/x": b"x"})
-    cli.clear_state(w, table_spec("lookup"))
-    cli.clear_state(w, table_spec("lookup"))
+    cli.clear_state(w, table_spec("lookup"), _MONTH)
+    cli.clear_state(w, table_spec("lookup"), _MONTH)
     assert capsys.readouterr().out.count("was already absent") == 4
+
+
+def test_clear_state_clears_the_state_of_the_month_it_was_given(capsys):
+    """The month is not decoration here either: it selects WHICH month's Auto
+    Loader state is cleared, and this script's own `month` local already selects
+    the directory read from and the one written to. A second lookup of it -- or the
+    config's pinned default -- would clear one month's checkpoint while moving
+    another month's files, leaving the reload anything but a clean first ingest."""
+    from opl.bronze.registry import table_spec
+
+    other = "2026-07"
+    w = _client({f"{_CHECKPOINT}/offsets/0": b"june", "/unrelated/x": b"z"})
+    cli.clear_state(w, table_spec("lookup"), other)
+    assert f"{_CHECKPOINT}/offsets/0" in w.files.objects, (
+        "clearing 2026-07's state removed 2026-06's"
+    )
+    printed = capsys.readouterr().out
+    assert other in printed and f"/{_MONTH}/" not in printed
 
 
 def test_main_moves_every_lookup_and_prints_the_remaining_steps(monkeypatch, capsys):

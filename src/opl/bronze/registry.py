@@ -724,10 +724,10 @@ def _assert_no_two_tables_share_a_checkpoint_namespace() -> None:
 
     SEPARATE from the Delta-name check above, and this is the one counter-intuitive
     thing in this file, so it is stated rather than left to be rediscovered:
-    `table_key` names NO Delta table. It is the namespace
+    `table_key` names NO Delta table. It is the last component
     `autoloader.checkpoint_location` and `schema_location` build
-    `_checkpoints/<table_key>` and `_schemas/<table_key>` from, so it lives in a
-    different namespace and is ALLOWED to spell itself like a Delta table --
+    `_checkpoints/<month>/<table_key>` and `_schemas/<month>/<table_key>` from, so it
+    lives in a different namespace and is ALLOWED to spell itself like a Delta table --
     `lookup.table_key` and `lookup.bronze` are both `bronze_cnpj_lookup` today, and
     that is correct, not drift. The obvious implementation, one `seen` dict over all
     four roles in one pass, therefore refuses the LIVE registry at import and breaks
@@ -761,11 +761,11 @@ def _assert_no_two_tables_share_a_checkpoint_namespace() -> None:
             raise ValueError(
                 f"{spec.name} and {seen[spec.table_key]} both claim checkpoint "
                 f"namespace {spec.table_key!r}. `table_key` is what autoloader "
-                "builds _checkpoints/<table_key> and _schemas/<table_key> from, and "
-                "a checkpoint records which files are already processed -- so two "
-                "tables sharing one means the second stream treats the first's "
-                "files as its own and already ingested, writes nothing, and reports "
-                "SUCCESS. Give each table a table_key of its own."
+                "builds _checkpoints/<month>/<table_key> and _schemas/<month>/"
+                "<table_key> from, and a checkpoint records which files are already "
+                "processed -- so two tables sharing one means the second stream "
+                "treats the first's files as its own and already ingested, writes "
+                "nothing, and reports SUCCESS. Give each table a table_key of its own."
             )
         seen[spec.table_key] = spec.name
 

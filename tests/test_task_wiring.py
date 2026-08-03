@@ -278,6 +278,88 @@ def test_the_lookup_ingest_writes_the_lookup_tables_and_only_those():
     assert bound == {"checkpoint": "table_key", "written": "staging"}
 
 
+def _kwarg(call: ast.Call, name: str, where: str) -> ast.expr:
+    """The value of a `name=` keyword on `call`, or a failure saying it is absent.
+
+    An absent keyword must be a red test rather than a skipped assertion: the whole
+    point below is that the month is passed EVERYWHERE it is consumed, so "not
+    passed" is the defect, not a case to tolerate."""
+    for keyword in call.keywords:
+        if keyword.arg == name:
+            return keyword.value
+    raise AssertionError(f"{where}: this call has no {name}= keyword")
+
+
+# Every place an ingest entry point hands the month to something, as
+# (callee, positional index, keyword) -- exactly one of the last two is used.
+# ENUMERATED, not discovered: a fifth consumer added without an entry here would
+# be a fifth chance for the month to diverge, and a lock that globbed for `month`
+# would pass on whatever it happened to find.
+_MONTH_CONSUMERS: dict[str, list[tuple[str, int | None, str | None]]] = {
+    "bronze_ingest": [
+        # the directory the files are READ from
+        ("landing_table", 1, None),
+        # the state that records which of those files have been read
+        ("bronze_stream", None, "month"),
+        ("checkpoint_location", None, "month"),
+        # the value stamped into every row
+        ("add_audit_columns", None, "snapshot_month"),
+    ],
+    "bronze_lookup_ingest": [
+        ("bronze_lookup_stream", 2, None),
+        ("checkpoint_location", None, "month"),
+        ("add_audit_columns", None, "snapshot_month"),
+    ],
+}
+
+
+@pytest.mark.parametrize("script", sorted(_MONTH_CONSUMERS))
+def test_every_consumer_of_the_month_reads_the_one_required_local(script):
+    """ONE month local, bound by `require_month`, feeding every consumer.
+
+    `bronze_ingest.py` already said why for two of them -- "the SAME `month` the
+    stream read from -- one local, fed to both, so the snapshot the rows are
+    stamped with cannot drift from the folder they came out of". F1.4b PR B Task 5
+    Step 0 added a third and fourth consumer, and the third is the one that makes
+    this a lock rather than a tidiness check: the Auto Loader checkpoint. Keyed on a
+    month that is not the source directory's, a run drains 2026-07's files under
+    2026-06's checkpoint -- Spark's recovery semantics call a changed source
+    "generally not allowed ... likely to fail with unpredictable errors".
+
+    The second half is that the local is `require_month`'s result. A local bound to
+    `DEFAULT.month`, or to `args[2] if len(args) > 2 else DEFAULT.month`, would
+    satisfy every consistency check above while being the ONE value four entry
+    points have already substituted by accident (`require_month`'s own docstring
+    names them). Consistent and wrong is what this repo keeps paying for.
+
+    Reads the AST, so it sees the wiring rather than a run: nothing imports Spark."""
+    main = _main_of(script)
+    scope = _locals_of(main, script)
+    names: set[str] = set()
+    for callee, position, keyword in _MONTH_CONSUMERS[script]:
+        where = f"{script}: {callee}"
+        call = _sole_call(main, callee, script)
+        passed = call.args[position] if keyword is None else _kwarg(call, keyword, where)
+        assert isinstance(passed, ast.Name), (
+            f"{where} is handed {ast.dump(passed)[:80]}, not a local name -- a second "
+            "lookup of the month here can name a month the rest of this run did not use"
+        )
+        names.add(passed.id)
+    assert len(names) == 1, (
+        f"{script}.py feeds the month to its consumers from {sorted(names)} -- more than "
+        "one local, so the checkpoint, the source dir and the stamped column can diverge"
+    )
+    bound = scope.get(names.pop())
+    assert (
+        isinstance(bound, ast.Call)
+        and isinstance(bound.func, ast.Name)
+        and bound.func.id == "require_month"
+    ), (
+        f"{script}.py's month local is not `require_month(...)`'s result; a defaulted "
+        "month is consistent across every consumer above and still wrong in all of them"
+    )
+
+
 def _resolved_spec(main: ast.FunctionDef, scope: dict[str, ast.expr], script: str) -> ast.Call:
     """The one `table_spec(...)` call, checked to be argv-driven and bound to `spec`.
 

@@ -101,6 +101,11 @@ def test_a_file_under_the_zips_dir_is_refused_rather_than_deleted():
     "path",
     [
         "/Volumes/workspace/default/landing/cnpj/2026-06/lookups/F.K03200$Z.D60613.QUALSCSV",
+        # BOTH state layouts, because both exist in the Volume: the month-scoped one
+        # every ingest writes since F1.4b PR B Task 5 Step 0, and the pre-Step-0
+        # unscoped one that still holds 2026-06's state and is deliberately orphaned
+        # rather than migrated. A reclaim must stay out of either.
+        "/Volumes/workspace/default/landing/_checkpoints/2026-06/bronze_cnpj_estab/offsets/0",
         "/Volumes/workspace/default/landing/_checkpoints/bronze_cnpj_estab/offsets/0",
         "/Volumes/workspace/default/landing/cnpj/2026-05/estabelecimentos/K3241.ESTABELE",
         f"{_LANDING}/../../2026-06/zips/estabelecimentos/Estabelecimentos1.zip",

@@ -81,14 +81,22 @@ def main(argv: list[str] | None = None) -> None:
         spec.contract,
         DEFAULT.landing_table(spec.subdir, month),
         spec.table_key,
+        month=month,
     )
-    # The SAME `month` the stream read from -- one local, fed to both, so the
-    # snapshot the rows are stamped with cannot drift from the folder they came
-    # out of.
+    # The SAME `month` the stream read from -- ONE local, fed to all four consumers,
+    # so the snapshot the rows are stamped with cannot drift from the folder they
+    # came out of, and neither can the Auto Loader state that decides which of that
+    # folder's files are new. The checkpoint became the fourth consumer in F1.4b PR B
+    # Task 5 Step 0, and it is the one where a divergence is not merely wrong data:
+    # a checkpoint keyed on another month is a stream restarted against a source
+    # directory it never checkpointed, which Spark's recovery semantics call "not
+    # allowed" and "likely to fail with unpredictable errors".
     audited = add_audit_columns(df, batch_id=batch_id, snapshot_month=month)
     query = (
         audited.writeStream.format("delta")
-        .option("checkpointLocation", checkpoint_location(DEFAULT, spec.table_key))
+        .option(
+            "checkpointLocation", checkpoint_location(DEFAULT, spec.table_key, month=month)
+        )
         .trigger(availableNow=True)
         .toTable(DEFAULT.table(spec.staging))
     )

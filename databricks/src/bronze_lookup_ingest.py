@@ -37,14 +37,20 @@ def main(argv: list[str] | None = None) -> None:
     month = require_month(args[1] if len(args) > 1 else None, action="ingest")
     spec = table_spec("lookup")
     spark = SparkSession.builder.getOrCreate()
-    # The month goes to the stream AND to the audit columns, from one local: this
-    # closes the F1.2 seam where the stream fell back to the config's pinned month
-    # while the rows were stamped with it separately, so the two could drift.
+    # The month goes to the stream, to the CHECKPOINT and to the audit columns, from
+    # one local: this closes the F1.2 seam where the stream fell back to the config's
+    # pinned month while the rows were stamped with it separately, so the two could
+    # drift. The checkpoint joined them in F1.4b PR B Task 5 Step 0 -- keyed on
+    # `table_key` alone it recorded 2026-06's file paths as read while `load()` would
+    # be pointed at another month's directory, which is a stream restarted against a
+    # source it never checkpointed.
     df = bronze_lookup_stream(spark, DEFAULT, month)
     audited = add_audit_columns(df, batch_id=batch_id, snapshot_month=month)
     query = (
         audited.writeStream.format("delta")
-        .option("checkpointLocation", checkpoint_location(DEFAULT, spec.table_key))
+        .option(
+            "checkpointLocation", checkpoint_location(DEFAULT, spec.table_key, month=month)
+        )
         .trigger(availableNow=True)
         .toTable(DEFAULT.table(spec.staging))
     )
