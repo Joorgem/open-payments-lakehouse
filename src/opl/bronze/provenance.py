@@ -209,6 +209,15 @@ def _refuse_the_mismatch(expected: str, actual: str) -> NoReturn:
         # false, since the build writes exactly this, and misdirecting mid-incident is
         # the failure class this whole file exists for.
         built_from = actual[: -len(DIRTY_SUFFIX)]
+        # CONDITIONAL, because in the same-commit case the two values the message has
+        # already printed are equal, and telling a reader they might not be is noise in
+        # the one message that most needs reading carefully mid-incident. When they do
+        # differ there are genuinely two faults stacked, and the deploy fixes only one.
+        second_fault = "" if built_from == expected else (
+            f"\nAnd {built_from} is not the revision this run was launched for, so there "
+            f"is a second problem behind the first: nobody has deployed {expected} at all "
+            "yet. Committing the dirty tree does not reach it."
+        )
         raise WrongRevision(
             f"refusing to run: the deployed wheel was built from a MODIFIED TREE at "
             f"{built_from}, and this run was launched for {expected}. `git rev-parse "
@@ -219,9 +228,7 @@ def _refuse_the_mismatch(expected: str, actual: str) -> NoReturn:
             "pyproject.toml or hatch_build.py -- held uncommitted changes when that wheel "
             "was built.\n"
             "The fix is `git commit` (or `git stash`) and then deploy: re-deploying the "
-            "same tree reproduces this refusal. If "
-            f"{built_from} is not the commit you expected either, that is a second "
-            f"problem -- nobody has deployed {expected} yet."
+            f"same tree reproduces this refusal.{second_fault}"
         )
     raise WrongRevision(
         f"refusing to run: the deployed artefact reports {actual!r} as the revision it "

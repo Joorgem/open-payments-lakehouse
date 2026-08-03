@@ -100,6 +100,10 @@ def test_a_wheel_built_from_a_modified_tree_is_refused_though_it_names_this_comm
     message = str(excinfo.value)
     assert _A in message
     assert "uncommitted" in message
+    assert "second problem" not in message, (
+        "the dirty wheel names THIS run's commit, so there is one fault, not two -- and "
+        "the two values the message already printed are equal, which the reader can see"
+    )
 
 
 def test_a_dirty_wheel_from_ANOTHER_commit_is_still_diagnosed_as_a_dirty_wheel():
@@ -117,7 +121,7 @@ def test_a_dirty_wheel_from_ANOTHER_commit_is_still_diagnosed_as_a_dirty_wheel()
     message = str(excinfo.value)
     assert "MODIFIED" in message and "uncommitted" in message
     assert _A in message and _B in message
-    assert "not the commit you expected" in message, (
+    assert "second problem" in message, (
         "the two commits differ as well, and a message that only mentioned the dirt "
         "would leave the operator committing and re-deploying into the same refusal"
     )
