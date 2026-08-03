@@ -6,6 +6,11 @@ has to get right is REFUSING, and every refusal is a decision made from counts.
 Two tests take the shared Spark session because they pin assumptions about Delta
 that no amount of pure Python can check -- that ``DESCRIBE HISTORY`` yields a
 ``version`` column, and that the one-pass aggregate reports what it claims to.
+
+``_assert_constraints`` gets a recording stand-in rather than either, because its
+load-bearing assertion is a NEGATIVE one -- that no constraint DDL reaches a
+staging or quarantine table -- and a session cannot state that: the statements are
+``ALTER TABLE workspace.default.*``, which exists only in the workspace.
 """
 from __future__ import annotations
 
@@ -15,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from opl.bronze.registry import table_spec
 from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "backfill_snapshot_columns.py"
@@ -140,6 +146,128 @@ def test_no_warning_when_every_row_has_a_reference_date(capsys):
     assert capsys.readouterr().out == ""
 
 
+# --- refusing to back-stamp rejects that are already in quarantine -------------
+
+_ESTAB = "workspace.default.bronze_cnpj_estab_quarantine"
+
+
+def test_a_quarantine_holding_rows_is_refused():
+    """Adding the columns to an EMPTY quarantine is a schema migration. Filling them
+    on rows that are already there asserts a month those rejects were never proven
+    to belong to. Empresas (1 row) and socios (1,797) are the live cases."""
+    with pytest.raises(RuntimeError) as exc:
+        cli.refuse_non_empty_quarantine(
+            1797, month="2026-06", tbl=_ESTAB, spec=table_spec("estabelecimentos")
+        )
+    message = str(exc.value)
+    # The count it found, or the operator cannot tell a stray row from a full month.
+    assert "1797 row(s)" in message
+    # And the month it would have stamped, which is the fact being asserted.
+    assert "'2026-06'" in message
+    assert "NOTHING WAS WRITTEN" in message
+    # What to do instead: the columns without the fill. A refusal that names no
+    # alternative is a wall.
+    assert f"ALTER TABLE {_ESTAB} ADD COLUMNS" in message
+    assert SNAPSHOT_MONTH_COLUMN in message and SNAPSHOT_REF_DATE_COLUMN in message
+
+
+def test_an_empty_quarantine_is_the_migration_this_target_exists_for():
+    """0 rows is estab's live case: the DQ gate's reject append fails against a
+    quarantine narrower than staging even at 0 rows, and on 0 rows the fill this
+    guard is protecting has nothing to stamp."""
+    cli.refuse_non_empty_quarantine(
+        0, month="2026-06", tbl=_ESTAB, spec=table_spec("estabelecimentos")
+    )
+
+
+@pytest.mark.parametrize(
+    "tbl",
+    [
+        "workspace.default.bronze_cnpj_estabelecimentos",
+        "workspace.default.bronze_cnpj_estab_staging",
+    ],
+)
+def test_a_populated_bronze_or_staging_is_not_refused(tbl):
+    """71.9M rows in the table this script was written for is the normal case, not
+    the refused one -- the guard must be about the quarantine and nothing else."""
+    cli.refuse_non_empty_quarantine(
+        71_874_448, month="2026-06", tbl=tbl, spec=table_spec("estabelecimentos")
+    )
+
+
+def test_the_guard_is_about_the_quarantine_of_the_table_it_was_given():
+    """Keyed on the resolved name against THIS spec's quarantine, so estab's
+    quarantine is not refused while socios' is being backfilled, and vice versa."""
+    socios = table_spec("socios")
+    # estab's quarantine, socios' spec: not this run's quarantine, so not refused.
+    cli.refuse_non_empty_quarantine(1797, month="2026-06", tbl=_ESTAB, spec=socios)
+    with pytest.raises(RuntimeError, match="1797 row\\(s\\)"):
+        cli.refuse_non_empty_quarantine(
+            1797,
+            month="2026-06",
+            tbl="workspace.default.bronze_cnpj_socios_quarantine",
+            spec=socios,
+        )
+
+
+# --- constraint DDL is bronze DDL, and only bronze gets it ---------------------
+
+
+class _RecordingSpark:
+    """A ``SparkSession`` stand-in that records the SQL it is asked to run.
+
+    Recording and not a no-op: the assertion that matters is that the list is
+    EMPTY for a staging or quarantine target, and a no-op double cannot tell an
+    unissued statement from an issued one."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def sql(self, statement: str) -> None:
+        self.statements.append(statement)
+
+
+def test_constraints_are_re_asserted_on_bronze_with_the_table_filled_in():
+    """The reason this function exists: ``mode('overwrite')`` may be planned as a
+    table REPLACE, which drops CHECK constraints and NOT NULL with it."""
+    spec = table_spec("estabelecimentos")
+    spark = _RecordingSpark()
+    tbl = "workspace.default.bronze_cnpj_estabelecimentos"
+    cli._assert_constraints(spark, spec, tbl)
+    assert len(spark.statements) == len(spec.constraints)
+    # Formatted, and against the table that was passed -- an unformatted `{table}`
+    # would be a syntax error and a table name from anywhere else would be a
+    # constraint asserted on something nobody named.
+    assert all(tbl in statement and "{table}" not in statement for statement in spark.statements)
+
+
+@pytest.mark.parametrize(
+    "tbl",
+    [
+        "workspace.default.bronze_cnpj_estab_staging",
+        "workspace.default.bronze_cnpj_estab_quarantine",
+    ],
+)
+def test_no_constraint_ddl_is_issued_against_staging_or_quarantine(tbl, capsys):
+    """``spec.constraints`` is BRONZE DDL and asserting it here would plant a
+    landmine that this run's own output would report as success.
+
+    estab's set is ``cnpj_basico SET NOT NULL`` plus
+    ``CHECK (length(trim(cnpj_basico)) = 8)``, and ``opl.bronze.rules`` has a
+    ``null_or_empty_cnpj_basico`` and a ``bad_cnpj_basico_length`` rule *because
+    rows like that arrive* -- into staging. On staging the constraint fails the
+    ingest write for a row the gate exists to reject; on quarantine it fails the
+    gate's append of that very reject. Neither table has ever carried a constraint,
+    so the overwrite dropped nothing there to re-assert."""
+    spark = _RecordingSpark()
+    cli._assert_constraints(spark, table_spec("estabelecimentos"), tbl)
+    assert spark.statements == []
+    out = capsys.readouterr().out
+    # Silence would leave an operator comparing this run against F1.4a's output
+    # unable to see that the missing line was a decision.
+    assert "NOT issued" in out and tbl in out
+
+
 # --- the ALTER is idempotent per column ---------------------------------------
 
 
@@ -162,10 +290,71 @@ def test_missing_columns_lists_only_the_absent_one():
     assert cli.missing_columns(existing) == ((SNAPSHOT_REF_DATE_COLUMN, "DATE"),)
 
 
+# --- which of the table's three roles this run writes -------------------------
+
+
+def test_the_target_defaults_to_bronze_so_existing_invocations_are_unchanged():
+    """The two-argument form is what F1.4a ran against a 71.9M-row table and what
+    the migration doc tells an operator to re-run. It must not change meaning."""
+    assert cli.resolve_target(["estabelecimentos", "2026-06"]) == (
+        "workspace.default.bronze_cnpj_estabelecimentos", "2026-06")
+
+
+def test_bronze_can_be_named_explicitly():
+    """The refusal message offers ``--bronze`` as one of the three, so it has to be
+    accepted -- a message naming a flag that is then refused sends the operator
+    reading it somewhere wrong."""
+    assert cli.resolve_target(["estabelecimentos", "2026-06", "--bronze"]) == (
+        "workspace.default.bronze_cnpj_estabelecimentos", "2026-06")
+
+
+def test_staging_can_be_named_explicitly():
+    assert cli.resolve_target(["estabelecimentos", "2026-06", "--staging"]) == (
+        "workspace.default.bronze_cnpj_estab_staging", "2026-06")
+
+
+def test_quarantine_can_be_named_explicitly():
+    """A valid target: estab's quarantine is 36 columns with neither snapshot column
+    and 0 rows, and the DQ gate's reject append (38 cols into 36) fails on it --
+    proven to raise ``_LEGACY_ERROR_TEMP_DELTA_0007`` even against a 0-row table."""
+    assert cli.resolve_target(["estabelecimentos", "2026-06", "--quarantine"]) == (
+        "workspace.default.bronze_cnpj_estab_quarantine", "2026-06")
+
+
+def test_the_role_is_resolved_against_the_table_that_was_named():
+    """Not against estabelecimentos, and not against a fixed month: a resolver that
+    ignored either argument would satisfy every test above."""
+    assert cli.resolve_target(["socios", "2026-07", "--quarantine"]) == (
+        "workspace.default.bronze_cnpj_socios_quarantine", "2026-07")
+
+
+def test_an_unknown_role_is_refused_before_spark():
+    """A role that is not one of the three is refused rather than ignored: ignoring
+    it would overwrite bronze while the operator watched for the table they asked
+    for, and this write is an overwrite, so the wrong target is not a no-op."""
+    with pytest.raises(ValueError, match="not a backfill target"):
+        cli.resolve_target(["estabelecimentos", "2026-06", "--bronze-ish"])
+
+
+def test_a_role_flag_where_the_month_should_be_is_refused_as_a_month():
+    """``estabelecimentos --staging`` is two arguments, so arity cannot catch it.
+    It must not be read as a month, and the message has to name the month."""
+    with pytest.raises(ValueError, match="refusing to backfill the snapshot columns"):
+        cli.resolve_target(["estabelecimentos", "--staging"])
+
+
+@pytest.mark.parametrize("argv", [[], ["estabelecimentos"], ["a", "b", "c", "d"]])
+def test_resolve_target_refuses_the_wrong_number_of_arguments(argv):
+    with pytest.raises(ValueError, match="usage:"):
+        cli.resolve_target(argv)
+
+
 # --- arguments are refused before Spark --------------------------------------
 
 
-@pytest.mark.parametrize("argv", [[], ["estabelecimentos"], ["a", "b", "c"]])
+# Three arguments is no longer wrong -- the third names the target role -- so the
+# too-many case has to be four.
+@pytest.mark.parametrize("argv", [[], ["estabelecimentos"], ["a", "b", "c", "d"]])
 def test_main_refuses_the_wrong_number_of_arguments(argv):
     with pytest.raises(ValueError, match="usage:"):
         cli.main(argv)

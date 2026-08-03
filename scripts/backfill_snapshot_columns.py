@@ -1,10 +1,29 @@
 # scripts/backfill_snapshot_columns.py
-"""One-off: add the two snapshot columns to an existing bronze table and fill them.
+"""One-off: add the two snapshot columns to an existing table and fill them.
 
-Run ON Databricks (it needs the Delta table), once per bronze table that predates
-the columns. Only `bronze_cnpj_estabelecimentos` actually needs it -- the lookup
-tables acquire the columns through their controlled reload, which is what
-`scripts/migrate_lookups_to_subdir.py` sets up.
+Run ON Databricks (it needs the Delta table), once per table that predates the
+columns. A third argument names WHICH of a contract's three tables to write --
+`--bronze` (the default), `--staging` or `--quarantine`; the two-argument form is
+what F1.4a ran against `bronze_cnpj_estabelecimentos` and still means `--bronze`.
+The lookup tables acquire the columns through their controlled reload, which is
+what `scripts/migrate_lookups_to_subdir.py` sets up.
+
+THREE TABLES AND NOT ONE, because the gap is per TABLE and not per contract. F1.4a
+added the columns to `bronze_cnpj_estabelecimentos` alone, and F1.4b measured what
+that left behind: `bronze_cnpj_estab_staging` (35 columns) and
+`bronze_cnpj_estab_quarantine` (36) carry neither. Nothing in this repo writes with
+`mergeSchema` -- deliberately; a schema is a contract, and a write that widens it
+without being asked is a drift you find out about later -- so the next estab ingest
+sends a 37-column stream into the 35-column staging table and fails at the Delta
+write, and the DQ gate then appends a 38-column reject frame into the 36-column
+quarantine and fails there too. The second failure is the worse one: it needs a
+dirty row to appear, so it can stay latent for months after the expensive ingest
+that unblocked it.
+
+A QUARANTINE THAT HOLDS ROWS IS REFUSED -- see `refuse_non_empty_quarantine`.
+Adding the columns to an empty one is a schema migration; filling them on rows
+already there stamps a month onto somebody else's rejects that nothing here proves
+they belong to.
 
 REVERSIBILITY: the Delta version before the write is printed BEFORE anything is
 written, so `RESTORE TABLE <t> TO VERSION AS OF <n>` is available if the
@@ -32,7 +51,7 @@ an exception "carries the reason into the run" output, where a SystemExit's
 message can be reduced to an exit code by the task wrapper. This script's whole
 value is the numbers in its failure message.
 
-usage: backfill_snapshot_columns.py <table> <month>
+usage: backfill_snapshot_columns.py <table> <month> [--bronze|--staging|--quarantine]
 """
 from __future__ import annotations
 
@@ -51,7 +70,28 @@ from opl.bronze.snapshot import (
 )
 from opl.config import DEFAULT, require_month
 
-USAGE = "usage: backfill_snapshot_columns.py <table> <month>   (e.g. estabelecimentos 2026-06)"
+USAGE = (
+    "usage: backfill_snapshot_columns.py <table> <month> [--bronze|--staging|--quarantine]"
+    "   (e.g. estabelecimentos 2026-06 --staging; the role defaults to --bronze)"
+)
+
+# The optional third argument, and the `BronzeTable` field each flag selects. The
+# VALUES are field names, resolved by `getattr` in `resolve_target`, so the flag and
+# the field are ONE spelling instead of two. Written this way rather than as an
+# if/elif chain because such a chain needs a final branch for the value that matched
+# nothing, and a fall-through in a target resolver is how a run overwrites a table
+# nobody asked for -- membership is checked here, and an unmatched flag never reaches
+# the lookup.
+_ROLE_FLAGS: dict[str, str] = {
+    "--bronze": "bronze",
+    "--staging": "staging",
+    "--quarantine": "quarantine",
+}
+
+# Omitting the flag means bronze. NOT a stylistic default: the two-argument form is
+# what F1.4a ran against a 71.9M-row table and what `docs/f1.4a-migration-evidence.md`
+# tells an operator to re-run, so it has to keep meaning exactly what it meant.
+_DEFAULT_ROLE_FLAG = "--bronze"
 
 # The two columns and their Delta types, in the order `ALTER TABLE ADD COLUMNS`
 # takes them. The NAMES come from `opl.bronze.snapshot`, which is where the
@@ -80,6 +120,49 @@ class BackfillCheck:
     # Columns that were present before the write and are not present after it.
     # Empty is the only acceptable value; see `_verify_or_raise`.
     lost_columns: tuple[str, ...]
+
+
+def resolve_target(args: list[str]) -> tuple[str, str]:
+    """(qualified table, month) for `args`, or refuse. NO SESSION, on purpose.
+
+    OWNS ARITY, because nothing else does any more: `main` checked `len(args) != 2`
+    and this file parsed no flags at all. Pulled out of `main` so that every way the
+    third argument can resolve to the WRONG TABLE is checkable without a session --
+    and the wrong table here is not a diagnostic inconvenience, it is an overwrite of
+    something nobody named. Arity, table, month and role are all refused before Spark
+    for the same reason the rest of this repo does it: nothing about a mistyped
+    argument needs a serverless start to be told about.
+
+    TABLE AND MONTH TOGETHER, and nothing else in the return. The two-argument form's
+    meaning is what this change most endangers -- it is already deployed, already run
+    against 71.9M rows, and already written into `docs/f1.4a-migration-evidence.md` as
+    the thing to re-run -- so the pair it produces is pinned literally by test, with no
+    third element a later reader could add to and quietly redefine. `main` asks the
+    registry for the spec itself.
+    """
+    if not 2 <= len(args) <= 3:
+        raise ValueError(USAGE)
+    spec = table_spec(args[0])
+    # `require_month` also refuses ABSENCE, which matters more here than anywhere:
+    # this month is written into every row of a 71.9M-row table, so a guessed one is
+    # a wrong answer in the data rather than a missing one, and the config's pinned
+    # month equals the job YAMLs' own default so the substitution would never look
+    # wrong. It is also what catches `<table> --staging` -- two arguments, so arity
+    # cannot see it -- rather than letting a flag be read as a month.
+    month = require_month(args[1], action=f"backfill the snapshot columns of {args[0]}")
+    flag = args[2] if len(args) == 3 else _DEFAULT_ROLE_FLAG
+    if flag not in _ROLE_FLAGS:
+        raise ValueError(
+            f"{flag!r} is not a backfill target. The third argument names WHICH of "
+            f"{args[0]}'s three tables this run writes -- one of "
+            f"{', '.join(sorted(_ROLE_FLAGS))} -- and omitting it means "
+            f"{_DEFAULT_ROLE_FLAG}, the two-argument form F1.4a ran. NOTHING WAS "
+            "WRITTEN and no session was started. It is refused rather than ignored "
+            "because ignoring it would silently write the BRONZE table while the "
+            "operator watched for the one they asked for, and this script's write is "
+            "an overwrite -- the wrong target is not a no-op. " + USAGE
+        )
+    return DEFAULT.table(getattr(spec, _ROLE_FLAGS[flag])), month
 
 
 def latest_version(spark: SparkSession, tbl: str) -> int:
@@ -182,6 +265,66 @@ def refuse_contradicting_month(existing: tuple[str, ...], *, month: str, tbl: st
     )
 
 
+def refuse_non_empty_quarantine(rows: int, *, month: str, tbl: str, spec: BronzeTable) -> None:
+    """Refuse to fill the snapshot columns on a quarantine table that HOLDS ROWS.
+
+    ADDING the columns to an EMPTY quarantine is the reason `--quarantine` exists.
+    `databricks/src/dq_gate_batch.py:85` appends its reject frame with
+    `mode("append").saveAsTable(...)` and no `mergeSchema`, so the moment staging
+    carries the two snapshot columns the gate's frame is two columns wider than the
+    quarantine it appends into and the append fails -- probed, and it fails against a
+    0-row target too (`_LEGACY_ERROR_TEMP_DELTA_0007`). On zero rows the overwrite
+    below fills nothing, so such a run is `ALTER TABLE ... ADD COLUMNS` and no more.
+
+    FILLING them on rows already there is a different act, and it is the one refused.
+    A quarantine row is a REJECT: it is in that table because the gate could not prove
+    it good. `_fill` stamps `_snapshot_month = <month>` on every row it rewrites, and
+    nothing here establishes that a reject belongs to the month this run was given --
+    `_source_file` is the only thing that could say, and the fill consults it for the
+    DATE, never for the month. So the write would assert a fact about somebody else's
+    rejects that nobody measured, into the table ADR 0006 makes the measured reject
+    history a later DQ threshold is set against.
+
+    THIS IS WHERE THE PRINCIPLE IS LOAD-BEARING, and it is strictly stronger than
+    refusing the flag outright. A blanket refusal would protect `estab_quarantine`,
+    which holds 0 rows and needs the migration, while protecting
+    `empresas_quarantine` (1 row) and `socios_quarantine` (1,797) only by accident of
+    nobody having passed the flag. A row count refuses on the fact that makes it
+    wrong.
+
+    KEYED ON THE RESOLVED TABLE NAME, not on the flag the operator typed: were
+    `resolve_target` ever to map a flag to the wrong field, a flag-keyed guard would
+    stay silent on the very table it was protecting. This asks the only question that
+    matters -- is the table I am about to overwrite THIS contract's quarantine? -- and
+    takes `spec` rather than a name so the caller cannot hand it somebody else's.
+
+    NEEDS THE COUNT, so it cannot live in `resolve_target` beside the other
+    argument refusals. It is fed the count `pre_write_scan` already took in one pass
+    for the verification, so it costs no extra scan and cannot disagree with it.
+    """
+    if tbl != DEFAULT.table(spec.quarantine) or not rows:
+        return
+    columns = ", ".join(f"{name} {sql_type}" for name, sql_type in _NEW_COLUMNS)
+    raise RuntimeError(
+        f"refusing to backfill {tbl}: it holds {rows} row(s), and every one of them "
+        f"is a REJECT. NOTHING WAS WRITTEN. This script fills {SNAPSHOT_MONTH_COLUMN} "
+        f"on every row it rewrites, so proceeding would stamp those rejects with "
+        f"{SNAPSHOT_MONTH_COLUMN}={month!r}, a month nothing here proves they "
+        "belong to -- and this is the table ADR 0006 makes the measured reject "
+        "history, so a month invented in it is a month a later DQ threshold gets set "
+        "against. WHAT THIS TABLE ACTUALLY NEEDS IS THE COLUMNS, NOT THE VALUES: the "
+        "DQ gate appends its reject frame with no mergeSchema, so it fails while the "
+        "quarantine is narrower than staging. Add them and leave the rows that are "
+        "already there NULL -- the truthful value for a row whose month was never "
+        "measured:\n"
+        f"  ALTER TABLE {tbl} ADD COLUMNS ({columns});\n"
+        "That is the entire migration this run would have performed on an empty "
+        "table; only the fill is being refused. If one of the two columns is already "
+        "there, add just the other -- ADD COLUMNS errors on a column that exists. An "
+        "EMPTY quarantine is accepted, which is the case this target was added for."
+    )
+
+
 def _check(after: DataFrame, columns_before: frozenset[str]) -> BackfillCheck:
     """Every post-write fact, in ONE aggregate pass over the table.
 
@@ -269,9 +412,29 @@ def _warn_on_null_ref_dates(check: BackfillCheck, *, tbl: str, version: int) -> 
 
 
 def _assert_constraints(spark: SparkSession, spec: BronzeTable, tbl: str) -> None:
-    """Re-assert the registry's constraint DDL for this table after the write.
+    """Re-assert the registry's constraint DDL after the write -- ONLY on bronze.
 
-    WHY AT ALL: `mode("overwrite").saveAsTable` on an existing table is planned by
+    NOT ON STAGING OR QUARANTINE, and that is a decision with a mechanism, not the
+    part nobody got to. `spec.constraints` is BRONZE DDL: the only other thing that
+    issues it is `databricks/src/promote_batch.py:_assert_constraints`, against
+    `DEFAULT.table(spec.bronze)`, and `databricks/src/ensure_masked_table.py` records
+    that a quarantine table "has never carried a constraint". So on either of the
+    other two tables these statements would not RE-assert anything the overwrite
+    dropped; they would ADD a constraint the table never had.
+
+    What that would cost, concretely, on estabelecimentos -- whose set is
+    `cnpj_basico SET NOT NULL` plus `CHECK (length(trim(cnpj_basico)) = 8)`.
+    `opl.bronze.rules` declares `null_or_empty_cnpj_basico` and
+    `bad_cnpj_basico_length` for that contract BECAUSE ROWS LIKE THAT ARRIVE, and they
+    arrive into STAGING. On staging the constraint fails the ingest's Delta write for
+    a row the DQ gate exists to route into quarantine; on quarantine it fails the
+    gate's append of that very reject. Either turns a designed, recoverable outcome
+    into a broken pipeline -- and it would be planted by a run whose own last line
+    said DONE, on a table where today's data happens to satisfy the constraint, to be
+    discovered by whichever month first has a dirty row.
+
+    WHY AT ALL, on the table this does run against.
+    `mode("overwrite").saveAsTable` on an existing table is planned by
     Spark either as an overwrite of the table's DATA (`OverwriteByExpression`,
     which keeps the table's metadata) or as a replace of the TABLE
     (`AtomicReplaceTableAsSelect`, which does not, and drops CHECK constraints and
@@ -291,8 +454,24 @@ def _assert_constraints(spark: SparkSession, spec: BronzeTable, tbl: str) -> Non
 
     Constraints are the only declarative metadata this repo sets on a bronze
     table today (`delta.dataSkippingStatsColumns` is deferred to F1.4b). If that
-    changes, this function has to grow with it.
+    changes -- or if the registry ever grows metadata scoped to staging or
+    quarantine -- this function has to grow with it, and the skip below is the line
+    that would then be wrong.
     """
+    bronze = DEFAULT.table(spec.bronze)
+    if tbl != bronze:
+        # Said out loud rather than silently skipped: an operator comparing this run's
+        # output against F1.4a's -- which ends with a "re-asserted 3 constraint
+        # statement(s)" line -- has to be able to see that its absence was a decision.
+        print(
+            f"backfill: {tbl} is not {bronze}, so the registry's "
+            f"{len(spec.constraints)} constraint statement(s) were NOT issued. They "
+            "are bronze DDL (see promote_batch), and a staging or quarantine table "
+            "has never carried one, so the overwrite dropped nothing here to "
+            "re-assert. Asserting them would reject AT THE WRITE the rows the DQ "
+            "gate exists to route into quarantine."
+        )
+        return
     for statement in spec.constraints:
         spark.sql(statement.format(table=tbl))
     print(f"backfill: re-asserted {len(spec.constraints)} constraint statement(s) on {tbl}")
@@ -315,20 +494,20 @@ def _fill(source: DataFrame, month: str) -> DataFrame:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 2:
-        raise ValueError(USAGE)
-    # Both arguments refused BEFORE Spark, the order every job task in this repo
-    # uses: nothing about a mistyped table or a malformed month needs a serverless
-    # session to diagnose. `require_month` also refuses ABSENCE, which matters
-    # more here than anywhere -- this month is written into every row of a
-    # 71.9M-row table, so a guessed one is a wrong answer in the data rather than
-    # a missing one, and the config's pinned month equals the job YAMLs' own
-    # default so the substitution would never look wrong.
+    # Every argument refused BEFORE Spark, the order every job task in this repo
+    # uses: nothing about a mistyped table, a malformed month or a misspelled target
+    # needs a serverless session to diagnose. `resolve_target` owns all of it,
+    # including the arity this line used to check itself.
+    tbl, month = resolve_target(args)
+    # The spec, separately, and safe to index for it: `resolve_target` has already
+    # refused a bad arity and an unregistered name, so this is the same registered
+    # table it just resolved. Asked for again rather than returned alongside `tbl`
+    # because `resolve_target` answers WHICH TABLE and nothing else, while the two
+    # role-dependent decisions below need the registry entry itself -- and it is a
+    # lookup in a frozen dict, so there is no work to save by widening that return.
     spec = table_spec(args[0])
-    month = require_month(args[1], action=f"backfill the snapshot columns of {args[0]}")
 
     spark = SparkSession.builder.getOrCreate()
-    tbl = DEFAULT.table(spec.bronze)
     before = spark.read.table(tbl)
     columns_before = frozenset(before.columns)
     if SOURCE_FILE_COLUMN not in columns_before:
@@ -347,9 +526,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"backfill: to undo -> RESTORE TABLE {tbl} TO VERSION AS OF {version}")
     rows_before, months_before = pre_write_scan(before)
     print(f"backfill: {rows_before} rows, month={month}, already carries {list(months_before)}")
-    # Refused HERE, before the ALTER and before the write, because the write
-    # destroys the evidence it is refused on -- see `refuse_contradicting_month`.
+    # Both refused HERE, before the ALTER and before the write, because the write
+    # destroys the evidence they are refused on -- see `refuse_contradicting_month`.
+    # Neither is scoped to a target: a staging table stamped with the wrong month is
+    # the same defect as a bronze one, and the quarantine guard decides from the name
+    # it was handed rather than from the flag that produced it.
     refuse_contradicting_month(months_before, month=month, tbl=tbl)
+    refuse_non_empty_quarantine(rows_before, month=month, tbl=tbl, spec=spec)
     if months_before:
         print(f"backfill: {tbl} is already stamped {month} -- re-running is idempotent")
 
