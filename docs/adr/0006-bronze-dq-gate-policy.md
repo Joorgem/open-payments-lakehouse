@@ -119,3 +119,16 @@ Three parts, deliberately separated by risk:
     explicitly rejected: `0x8f` is undefined in windows-1252, so the source has
     non-cp1252 contamination and guessing a codepage per record would be
     inventing data.
+
+    **Answered 2026-08-03.** `correio_eletronico`. Four estabelecimentos rows
+    in the 2026-07 ingest were rejected for `encoding_replacement_char`, all
+    four in that column, and in each the field's entire content is the
+    undecodable byte(s) — no truncated address, no real email lost. All four
+    also have `_rescued_data` NULL, which is the doctrine consequence this
+    observation adds: `_rescued_data` NULL tests CSV field-splitting, not
+    character decoding, so for this reject reason it cannot tell source dirt
+    from a lossy parse on its own — the reject *reason* has to be read before
+    `_rescued_data` is trusted to classify a row. Full mechanism, the per-row
+    detail and the cross-month consequence are in
+    `docs/f1.4b-pr-b-run-evidence.md` §20.2 and §20.3. This does not resolve
+    the rate-gating question in Decision 3, which stays open.
