@@ -1,14 +1,22 @@
 # ADR 0009 — a run must name the revision it expects, and the wheel must say what it was built from
 
 ## Status
-Accepted, and **the refusal has not yet been seen against the live workspace**.
-The mechanism is argued below and locked by unit tests; the deliberate
-wrong-revision deploy that proves it refuses before doing work is Step 6 of the
-task that introduced it and is dispatched separately, against the live Free
-Edition workspace. Until that entry appears in the phase's run-evidence doc, this
-ADR describes a control proven locally and not yet observed biting in production.
-A provenance check nobody has seen refuse is a provenance check nobody should
-trust, and this paragraph is the honest form of that.
+Accepted, and **the refusal has now been observed against the live
+workspace**: deployed at one commit, `HEAD` moved by a real commit, nobody
+redeployed, and a run launched for the new `HEAD` refused before any
+downstream task started, naming both revisions. That is the exact incident
+this ADR exists for, reproduced deliberately and recorded — run ids, the
+per-task result table, the refusal message — in
+`docs/f1.4b-pr-b-run-evidence.md`, §12. The mechanism is argued below and
+locked by unit tests; §12 is the live proof, cross-checked against a clean
+pass and against `opl_smoke` as the filename-caching discriminator. Narrower
+now, not gone: the `+dirty` refusal — a deploy built from an uncommitted tree
+— is proven locally, against real wheel builds, and has deliberately not been
+reproduced in the workspace, since doing so would mean deploying an artefact
+known to be built from a dirty tree and then cleaning up behind it. A
+provenance check nobody has seen refuse is a provenance check nobody should
+trust; the mismatch shape has now cleared that bar — the dirty-tree shape has
+not, and this paragraph says so plainly.
 
 ## Context
 
