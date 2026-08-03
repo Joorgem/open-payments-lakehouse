@@ -18,7 +18,7 @@ from opl.bronze.autoloader import (
 from opl.bronze.promote import BATCH_COLUMN
 from opl.bronze.registry import REGISTRY, table_spec
 from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN
-from opl.config import DEFAULT
+from opl.config import DEFAULT, is_month
 
 _SOURCE_FILE = "/Volumes/workspace/default/landing/cnpj/2026-06/lookups/F.K03200$Z.D60613.CNAECSV"
 
@@ -86,9 +86,12 @@ def test_the_snapshot_month_has_no_default():
         add_audit_columns(object(), batch_id="run-123")
 
 
+_LOOKUP_KEY = table_spec("lookup").table_key
+
+
 def test_state_locations_are_separate_and_not_under_table_dir():
-    sl = schema_location(DEFAULT, month="2026-06")
-    cl = checkpoint_location(DEFAULT, month="2026-06")
+    sl = schema_location(DEFAULT, _LOOKUP_KEY, month="2026-06")
+    cl = checkpoint_location(DEFAULT, _LOOKUP_KEY, month="2026-06")
     assert sl != cl
     assert sl.startswith(DEFAULT.volume_root)
     assert cl.startswith(DEFAULT.volume_root)
@@ -103,11 +106,16 @@ def test_state_locations_are_month_scoped_between_the_kind_and_the_table():
     THE COMPONENT ORDER IS THE ASSERTION, not the presence of the month.
     `<month>/<table_key>` makes every month's state a SIBLING of the pre-Step-0
     `_checkpoints/<table_key>` directory; `<table_key>/<month>` would have put new
-    Auto Loader state INSIDE a checkpoint directory a 2026-06 query still owns."""
-    assert schema_location(DEFAULT, month="2026-07") == (
+    Auto Loader state INSIDE a checkpoint directory a 2026-06 query still owns.
+
+    The table key is SPELLED at the call site, not defaulted into the expectation.
+    These two assertions used to read `schema_location(DEFAULT, month=...)` against
+    an expected string ending `bronze_cnpj_lookup` -- a golden whose subject the
+    test never named."""
+    assert schema_location(DEFAULT, "bronze_cnpj_lookup", month="2026-07") == (
         "/Volumes/workspace/default/landing/_schemas/2026-07/bronze_cnpj_lookup"
     )
-    assert checkpoint_location(DEFAULT, month="2026-07") == (
+    assert checkpoint_location(DEFAULT, "bronze_cnpj_lookup", month="2026-07") == (
         "/Volumes/workspace/default/landing/_checkpoints/2026-07/bronze_cnpj_lookup"
     )
 
@@ -132,9 +140,31 @@ def test_neither_state_location_defaults_the_month():
 
     Spark-free: the TypeError comes from the signature, before the body runs."""
     with pytest.raises(TypeError, match="month"):
-        schema_location(DEFAULT)
+        schema_location(DEFAULT, _LOOKUP_KEY)
     with pytest.raises(TypeError, match="month"):
-        checkpoint_location(DEFAULT)
+        checkpoint_location(DEFAULT, _LOOKUP_KEY)
+
+
+def test_neither_state_location_defaults_the_table_key():
+    """`table_key` had a `= "bronze_cnpj_lookup"` default until this round, and it
+    was the SAME collision `registry._assert_no_two_tables_share_a_checkpoint_
+    namespace` refuses, reached from the one direction that guard cannot see: it
+    compares the keys tables DECLARE and cannot see a call site that omits the
+    argument. `checkpoint_location(cfg, month=m)` type-checked and returned the
+    lookup's namespace, so an estab stream wired that way would start up believing
+    the lookup's files were its own and already ingested, write nothing, and report
+    SUCCESS -- that guard's own raise message, verbatim, with the guard green.
+
+    Making `month` keyword-only had made that call SHORTER than the correct one,
+    which is the shape this same change removed from `bronze_lookup_stream`.
+
+    Spark-free, and it is `table_key` that is named in the error rather than the
+    month: Python reports the missing positional first, which is what makes this a
+    different assertion from the one above rather than a duplicate of it."""
+    with pytest.raises(TypeError, match="table_key"):
+        schema_location(DEFAULT, month="2026-07")
+    with pytest.raises(TypeError, match="table_key"):
+        checkpoint_location(DEFAULT, month="2026-07")
 
 
 def test_no_table_shares_or_nests_state_across_months_or_with_the_orphans():
@@ -151,7 +181,27 @@ def test_no_table_shares_or_nests_state_across_months_or_with_the_orphans():
     not migrated. Orphaned state is safe; state nested underneath it is not.
 
     Derived from REGISTRY rather than listing today's four tables, so a table added
-    later cannot slip past this."""
+    later cannot slip past this.
+
+    WHY THE MONTHS BELOW ARE A SAMPLE AND THE FIRST ASSERTION IS NOT. Nesting needs
+    a `<month>` component that equals a `<table_key>` component. The month side is
+    total already -- `opl.config._MONTH` admits only `YYYY-MM` -- so what the
+    property actually rests on is that no `table_key` is month-shaped, and THAT is
+    asserted over the whole registry rather than sampled. Without it the three
+    literal months below would be checking a naming convention.
+
+    It is a LOCK, not a guard: nothing refuses a month-shaped `table_key` at import.
+    The structural version belongs in
+    `registry._assert_no_two_tables_share_a_checkpoint_namespace`, and does not fit
+    -- `registry.py` is at 798 lines of an 800 cap and this repo requires the *why*
+    beside a guard. See the Task 5 Step 0 fix report for the extraction that would
+    make room."""
+    for spec in REGISTRY.values():
+        assert not is_month(spec.table_key), (
+            f"{spec.name}.table_key={spec.table_key!r} is month-shaped, so "
+            f"_checkpoints/{spec.table_key}/... is reachable as BOTH a month dir and a "
+            "table dir and the sampled comparison below no longer covers the property"
+        )
     for spec in REGISTRY.values():
         for locate, kind in ((schema_location, "_schemas"), (checkpoint_location, "_checkpoints")):
             orphan = f"{DEFAULT.volume_root}/{kind}/{spec.table_key}"
@@ -171,8 +221,8 @@ def test_state_locations_estab_are_siblings():
     cl = checkpoint_location(DEFAULT, "bronze_cnpj_estab", month="2026-06")
     assert sl.endswith("/_schemas/2026-06/bronze_cnpj_estab")
     assert cl.endswith("/_checkpoints/2026-06/bronze_cnpj_estab")
-    assert sl != schema_location(DEFAULT, month="2026-06")
-    assert cl != checkpoint_location(DEFAULT, month="2026-06")
+    assert sl != schema_location(DEFAULT, _LOOKUP_KEY, month="2026-06")
+    assert cl != checkpoint_location(DEFAULT, _LOOKUP_KEY, month="2026-06")
 
 
 def test_bronze_stream_no_longer_accepts_a_path_glob_filter():

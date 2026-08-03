@@ -73,25 +73,37 @@ SOURCE_FILE_COLUMN = "_source_file"
 # reason `landing_tmp` mirrors it: an operator listing this Volume maps each state
 # dir 1:1 onto the landing dir it drained.
 #
-# `month` IS REQUIRED AND KEYWORD-ONLY. Required for `add_audit_columns`'s reason,
-# with a sharper edge: `opl.config`'s pinned month is how F1.2 silently tied every
-# row to 2026-06, and supplied here it resolves 2026-06's checkpoint while the read
-# is of the 2026-07 landing dir -- reinstating the exact hazard above, invisibly,
-# with the one value that must be refused. Keyword-only because `table_key` and
-# `month` are adjacent and both `str`: a positional swap type-checks and produces
-# `_checkpoints/<table_key>/<month>`, which is the nesting the paragraph above
-# forbids. That is the argument `BronzeTable` is declared `kw_only=True` for.
+# NEITHER COMPONENT HAS A DEFAULT, and both used to be defaultable in their own way.
+#
+# `month` is REQUIRED for `add_audit_columns`'s reason, with a sharper edge:
+# `opl.config`'s pinned month is how F1.2 silently tied every row to 2026-06, and
+# supplied here it resolves 2026-06's checkpoint while the read is of the 2026-07
+# landing dir -- reinstating the exact hazard above, invisibly, with the one value
+# that must be refused. It is KEYWORD-ONLY because `table_key` and `month` are
+# adjacent and both `str`: a positional swap type-checks and produces
+# `_checkpoints/<table_key>/<month>`, which is the nesting forbidden above. That is
+# the argument `BronzeTable` is declared `kw_only=True` for.
+#
+# `table_key` LOST ITS `= "bronze_cnpj_lookup"` DEFAULT, and the reason is the same
+# collision `registry._assert_no_two_tables_share_a_checkpoint_namespace` refuses --
+# reached from the one direction that guard cannot see. It compares the `table_key`s
+# tables DECLARE; it cannot see a CALL SITE that omits the argument.
+# `checkpoint_location(cfg, month=m)` type-checked and silently returned the LOOKUP's
+# namespace, so an estab stream wired that way would start up believing the lookup's
+# files were its own and already ingested, write nothing, and report SUCCESS -- the
+# quietest of the four collisions, verbatim from that guard's own raise message.
+# Making `month` keyword-only made that call SHORTER to write than the correct one,
+# which is precisely the shape this same change removed from `bronze_lookup_stream`
+# (its `month=None` was a `DEFAULT.month` substitution one call further down). All
+# three production call sites already passed `spec.table_key`, so nothing at runtime
+# changes; what changes is that the dangerous call no longer exists.
 
 
-def schema_location(
-    cfg: OplConfig, table_key: str = "bronze_cnpj_lookup", *, month: str
-) -> str:
+def schema_location(cfg: OplConfig, table_key: str, *, month: str) -> str:
     return f"{cfg.volume_root}/_schemas/{month}/{table_key}"
 
 
-def checkpoint_location(
-    cfg: OplConfig, table_key: str = "bronze_cnpj_lookup", *, month: str
-) -> str:
+def checkpoint_location(cfg: OplConfig, table_key: str, *, month: str) -> str:
     """Where this table's ingest of THIS MONTH records which files it has read.
 
     THE 2026-06 STATE AT THE OLD PATHS IS ORPHANED, deliberately and permanently.
@@ -124,7 +136,14 @@ def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: st
     layout is asked rather than re-spelled here -- and equality refuses two things a
     prefix test would admit: the month ROOT (the F1.4b blocker, since it holds every
     other table's files and cloudFiles walks a source dir recursively) and any `..`
-    that climbs back out of the month."""
+    that climbs back out of the month.
+
+    IT DEPENDS ON `registry._assert_subdirs_are_single_path_components`, and says so
+    rather than being safe by luck: taking the last component and rebuilding is total
+    only because a registered `subdir` is ONE directory name. Were that check
+    relaxed to allow `a/b`, this comparison would refuse every legitimate call from
+    such a table -- loudly, at the top of the ingest, which is the right direction to
+    fail in, but it would be THIS function's assumption that broke, not that one's."""
     subdir = source_dir.rsplit("/", 1)[-1]
     if source_dir != cfg.landing_table(subdir, month):
         raise ValueError(

@@ -358,6 +358,28 @@ def test_every_consumer_of_the_month_reads_the_one_required_local(script):
         f"{script}.py's month local is not `require_month(...)`'s result; a defaulted "
         "month is consistent across every consumer above and still wrong in all of them"
     )
+    # AND THE SAME PROPERTY FROM THE OTHER SIDE, because the enumeration above cannot
+    # see a consumer it does not name: a fifth one added tomorrow as
+    # `something(..., month=DEFAULT.month)` satisfies every assertion so far by being
+    # invisible to them. This needs no list -- the substitution has exactly one
+    # spelling, an attribute access for `month` on the config -- so it catches the
+    # consumer this file has not been taught about yet. `require_month`'s docstring
+    # names four entry points that each wrote it; two of them are these.
+    substitutions = [
+        node
+        for node in ast.walk(main)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "month"
+        and isinstance(node.value, ast.Name)
+        and node.value.id in {"DEFAULT", "cfg"}
+    ]
+    assert not substitutions, (
+        f"{script}.py main() reads the config's pinned month directly ("
+        f"{len(substitutions)} occurrence(s)). That value equals the job YAMLs' own "
+        "default, so substituting it changes nothing observable until the first run "
+        "for another month -- and then it is wrong in the data, the checkpoint or a "
+        "delete boundary, with nothing in the log naming the month that was used"
+    )
 
 
 def _resolved_spec(main: ast.FunctionDef, scope: dict[str, ast.expr], script: str) -> ast.Call:

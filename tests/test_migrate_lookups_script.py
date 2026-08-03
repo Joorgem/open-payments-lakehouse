@@ -324,14 +324,27 @@ def test_main_clears_the_state_before_moving_any_file(monkeypatch):
 
 
 def test_main_clears_the_state_again_after_the_moves(monkeypatch):
-    """The second purge closes a window the first cannot.
+    """The second purge is an idempotent re-clear against a concurrent run of a
+    wheel carrying TODAY's layout, and that is all it now is.
 
-    Until step 1's deploy the workspace still runs the OLD wheel, whose lookup
-    stream reads the month root RECURSIVELY -- and the new subdir is under that
-    root. An old-wheel run landing between the clear and the moves would ingest
-    the six files from their new paths and RECREATE the checkpoint at the same
-    location, silently restoring the state the first call removed. Simulated here
-    by re-creating the checkpoint mid-move.
+    IT USED TO CLAIM MORE, AND THAT CLAIM IS RETRACTED HERE. The window it was
+    written for was the OLD wheel's: until step 1's deploy the workspace ran a
+    lookup stream that read the month root RECURSIVELY, the new subdir sits under
+    that root, so a run landing between the clear and the moves would ingest the six
+    files from their new paths and recreate the checkpoint at the same location the
+    first call had just emptied. Since F1.4b PR B Task 5 Step 0 month-scoped the
+    state locations, a PRE-Step-0 wheel writes the unscoped
+    `_checkpoints/<table_key>` instead -- which `clear_state` deliberately does not
+    touch, and could not without deleting every other month's state. That window
+    therefore MOVED, and this test does not close it. Accepted, not overlooked: the
+    script is spent, its one 2026-06 run is history
+    (`docs/f1.4a-migration-evidence.md`), and no pre-Step-0 wheel is deployed. Said
+    out loud because a docstring that claims to cover a now-unguarded window reads
+    as coverage nobody has -- which is the defect Step 0's own consequence-2 work
+    was about.
+
+    What is simulated below is the case that IS reachable: something recreates the
+    state at the path this codebase writes, mid-move, and the second call removes it.
     """
     checkpoint = _CHECKPOINT
     w = _client(_month_root_objects())
