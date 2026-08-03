@@ -50,17 +50,34 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 # same category of question (what is this artefact?) about the same artefact.
 STAMPED_MODULE = "opl/_revision.py"
 
-# WHAT COUNTS AS THE WHEEL'S OWN INPUTS, and the narrowness is the decision.
-# `[tool.hatch.build.targets.wheel] packages = ["src/opl"]` plus the metadata in
-# `pyproject.toml` is what ends up in the artefact, so those are the paths whose
-# uncommitted state makes a bare SHA a false claim. Docs, evidence files and phase
-# notes cannot change the wheel and must not refuse a run -- this phase writes them
-# WHILE multi-hour runs are going on, and a guard that fires on an unrelated new file
-# in `docs/` is one operators learn to route around.
-# `tests/test_revision_stamp.py` checks this list against the wheel's own declaration:
-# a second package added to the wheel and forgotten here would be stamped clean while
-# holding uncommitted code.
-WHEEL_INPUTS = ("src", "pyproject.toml")
+# WHAT COUNTS AS AN INPUT TO THE DEPLOYMENT -- not to the wheel, and the difference is
+# a defect this list already had. It was `("src", "pyproject.toml")`, reasoned entirely
+# from `[tool.hatch.build.targets.wheel] packages`, and that framing left out the other
+# half of what `bundle deploy` puts in the workspace: everything under `databricks/` is
+# SYNCED there, which is where every job's `python_file` comes from. So an uncommitted
+# edit to `databricks/src/bronze_ingest.py` or to a job YAML shipped under a bare, clean
+# stamp equal to HEAD, the guard passed, and the run executed code that was never
+# committed -- the exact false-provenance case `+dirty` exists to prevent, applied to
+# the half of the deployment that is not the wheel. Hence the name: whoever edits this
+# tuple next is deciding what the RUN is built from, not what the wheel contains.
+#
+# `hatch_build.py` is in here for the same class of reason. `pyproject.toml`, which
+# REGISTERS this hook, was watched; the file that decides what the stamp says --
+# including whether the dirty check runs at all -- was not, so an uncommitted edit to it
+# produced a clean stamp for a commit that does not contain that edit.
+#
+# STILL NARROW, and that is still the decision. Docs, evidence files and phase notes
+# cannot reach the workspace and must not refuse a run: this phase writes them WHILE
+# multi-hour runs are going on, and a guard that fires on a new file in `docs/` is one
+# operators learn to route around. Ignored paths (`dist/`, `.venv/`, `.databricks/`,
+# `__pycache__/`) are excluded by `--porcelain`'s own defaults, so a local build does
+# not read as dirty.
+#
+# `tests/test_revision_stamp.py` derives what this must cover from FOUR sources rather
+# than one -- the wheel's packages, the bundle's sync root, the wheel metadata and this
+# hook's own registered path -- because the single-source version of that test was what
+# certified the omission above as correct.
+DEPLOYMENT_INPUTS = ("src", "databricks", "pyproject.toml", "hatch_build.py")
 
 # Appended when those inputs are dirty. It makes the stamp something no expected value
 # can equal, which is the point: `git rev-parse HEAD` answers identically in a modified
@@ -92,11 +109,16 @@ def wheel_revision(root: str | Path) -> str:
 
     Clean inputs give a bare object name; dirty ones give one no run can expect. An
     unanswerable `git status` is treated as dirty-or-worse and returns `""`: not being
-    able to tell whether the tree was modified is not evidence that it was not."""
+    able to tell whether the tree was modified is not evidence that it was not.
+
+    The name is the wheel's because the wheel is where the value LANDS. What it is
+    measured over is the whole deployment -- see `DEPLOYMENT_INPUTS`, and note that a
+    `+dirty` stamp here is the only way an uncommitted `databricks/src` entry point can
+    be refused, since nothing re-reads those files at run time."""
     head = _git(root, "rev-parse", "HEAD")
     if head is None:
         return ""
-    modified = _git(root, "status", "--porcelain", "--", *WHEEL_INPUTS)
+    modified = _git(root, "status", "--porcelain", "--", *DEPLOYMENT_INPUTS)
     if modified is None:
         return ""
     return head if not modified else f"{head}{_DIRTY_SUFFIX}"

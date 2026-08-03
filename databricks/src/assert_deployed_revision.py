@@ -49,10 +49,18 @@ def main(argv: list[str] | None = None) -> None:
     # The success line matters as much as the refusal. PR A's stale-bundle incident was
     # found by a human reading a task log against the source, and what made that
     # necessary is that no log line named the code that was running.
+    #
+    # SCOPED TO WHAT IS ACTUALLY VERIFIED. This line used to end "Every task after this
+    # one runs that code", which claims more than the stamp shows: the stamp is evidence
+    # about the WHEEL, and each task's `python_file` is a separate file that `bundle
+    # deploy` SYNCED rather than packaged. Those files are covered at build time instead
+    # -- an uncommitted one makes the wheel stamp `+dirty`, which refuses -- but nothing
+    # here re-reads them, so the log should not say it did.
     print(
-        f"assert_deployed_revision: OK -- the deployed wheel was built from {verified}, "
-        "which is the revision this run was launched for. Every task after this one runs "
-        "that code."
+        f"assert_deployed_revision: OK -- the installed wheel was built from {verified}, "
+        "which is the revision this run was launched for. That is a claim about the "
+        "WHEEL; the entry-point files under databricks/src were synced by the same "
+        "deploy, and a deploy made from a modified tree would have stamped +dirty."
     )
 
 

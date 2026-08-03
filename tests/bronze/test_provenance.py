@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from opl.bronze.provenance import (
+    DIRTY_SUFFIX,
     SENTINEL_REVISION,
     WrongRevision,
     assert_revision_matches,
@@ -99,6 +100,39 @@ def test_a_wheel_built_from_a_modified_tree_is_refused_though_it_names_this_comm
     message = str(excinfo.value)
     assert _A in message
     assert "uncommitted" in message
+
+
+def test_a_dirty_wheel_from_ANOTHER_commit_is_still_diagnosed_as_a_dirty_wheel():
+    """The branch used to be chosen by `actual.startswith(expected)`, so it only fired
+    when the dirty wheel happened to name THIS run's commit. Deploy dirty at X, commit,
+    launch at Y, and the refusal fell through to "nothing in the documented build writes
+    that value" -- which is false, because the build writes exactly that.
+
+    A refusal that misdirects mid-incident is this repo's founding defect wearing a new
+    hat: the hardcoded quarantine name that sent triagers to a table full of unrelated
+    rows. So the message must name the commit the wheel WAS built from, say it was
+    modified, and say that nobody has deployed the launched revision either."""
+    with pytest.raises(WrongRevision) as excinfo:
+        assert_revision_matches(expected=_B, actual=f"{_A}+dirty")
+    message = str(excinfo.value)
+    assert "MODIFIED" in message and "uncommitted" in message
+    assert _A in message and _B in message
+    assert "not the commit you expected" in message, (
+        "the two commits differ as well, and a message that only mentioned the dirt "
+        "would leave the operator committing and re-deploying into the same refusal"
+    )
+    assert "what did" not in message, (
+        "this fell through to the unknown-stamp message, which tells the operator to go "
+        "and find out what wrote a value hatch_build.py wrote"
+    )
+
+
+def test_the_dirty_suffix_is_the_one_the_build_actually_writes():
+    """The contract with `hatch_build.py`, which cannot import this module -- it runs in
+    an isolated build env where `opl` is not installed. `tests/test_revision_stamp.py`
+    joins the two behaviourally, by building a dirty stamp with the real hook and
+    requiring the dirty message; this asserts the shape that join depends on."""
+    assert DIRTY_SUFFIX and not is_object_name(f"{_A}{DIRTY_SUFFIX}")
 
 
 def test_a_stamp_that_is_not_an_object_name_at_all_refuses_quoting_it():

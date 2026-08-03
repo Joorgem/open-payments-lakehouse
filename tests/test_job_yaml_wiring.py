@@ -332,11 +332,16 @@ def _assert_the_masks_precede_every_other_task(table: str, root: Path = _RESOURC
     # masking task is still the first task that reaches a table at all. The guard being
     # ahead of it is what stops a wrong wheel from creating those tables with a
     # masking module that does not match the source anyone reviewed.
-    assert tasks["ensure_masked_table"].get("depends_on", []) in (
-        [], [{"task_key": _REVISION_GUARD}]
-    ), (
-        f"{_JOB_OF[table]}: ensure_masked_table waits on something other than the "
-        "revision guard, so it is no longer the first thing the run does to a table"
+    # EXACTLY the guard, not "the guard or nothing". Accepting `[]` here would let this
+    # lock pass a job in which the guard no longer precedes the masks, and would leave
+    # that hole closed only by the guard's own test three screens down -- so each lock
+    # would be sound only in company. The masking task's position is ADR 0008's whole
+    # control; the guard's is ADR 0009's; neither should depend on the other's test.
+    assert tasks["ensure_masked_table"].get("depends_on") == [{"task_key": _REVISION_GUARD}], (
+        f"{_JOB_OF[table]}: ensure_masked_table waits on "
+        f"{tasks['ensure_masked_table'].get('depends_on')} rather than exactly the "
+        "revision guard -- either something that touches a table now runs before the "
+        "masks, or the guard no longer runs before the DDL that creates them"
     )
     for key in tasks:
         if key in ("ensure_masked_table", _REVISION_GUARD):

@@ -65,6 +65,18 @@ _STAMP_ATTRIBUTE = "REVISION"
 # that ever moves to SHA-256 object names; this one is SHA-1 today.
 _OBJECT_NAME = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
+# What the build appends when the tree it built from had uncommitted changes to anything
+# the deploy carries. PUBLIC and named here, like `STAMP_MODULE`, because it is the
+# second half of the same contract: `hatch_build.py` writes it and this module has to
+# recognise it in order to say `git commit` rather than `bundle deploy`.
+#
+# The hook cannot import this -- it runs in an isolated build environment where `opl` is
+# not installed -- so it spells the suffix itself, and the join is BEHAVIOURAL rather
+# than a literal comparison: `test_a_modified_deployment_input_stamps_something_no_run_
+# can_expect` builds a dirty stamp with the real hook and requires this module to select
+# the dirty message for it. Diverge the two spellings and that test goes red.
+DIRTY_SUFFIX = "+dirty"
+
 _LAUNCH_HINT = "--params revision=$(git rev-parse HEAD)"
 _DEPLOY_HINT = "databricks bundle deploy -t free"
 
@@ -189,17 +201,27 @@ def _refuse_the_mismatch(expected: str, actual: str) -> NoReturn:
             '`dependencies: ["../../dist/*.whl"]` over a dist/ that nothing cleans.\n'
             "Deploy, then launch again with the same revision."
         )
-    if actual.startswith(expected):
+    if actual.endswith(DIRTY_SUFFIX):
+        # ON THE SUFFIX, NOT ON `actual.startswith(expected)`, which is what this branch
+        # used to test and which only fired when the dirty wheel named THIS run's commit.
+        # Deploy dirty at X, commit, launch at Y and the same wheel fell through to the
+        # "nothing in the documented build writes that value" message below -- which is
+        # false, since the build writes exactly this, and misdirecting mid-incident is
+        # the failure class this whole file exists for.
+        built_from = actual[: -len(DIRTY_SUFFIX)]
         raise WrongRevision(
-            f"refusing to run: the deployed wheel names this run's commit {expected} but "
-            f"was built from a MODIFIED tree -- its stamp is {actual!r}. `git rev-parse "
-            "HEAD` answers identically in a dirty tree, so without this the wheel would "
-            "claim a commit that does not describe its own contents, and the provenance "
-            "line in the log would be false in the one direction nobody thinks to check. "
-            "Something under src/ or pyproject.toml held uncommitted changes when the "
-            "wheel was built.\n"
-            "The fix is `git commit` (or `git stash`), then deploy and launch again -- "
-            "re-deploying the same tree reproduces this refusal."
+            f"refusing to run: the deployed wheel was built from a MODIFIED TREE at "
+            f"{built_from}, and this run was launched for {expected}. `git rev-parse "
+            "HEAD` answers identically in a dirty tree, so without this suffix the wheel "
+            "would claim a commit that does not describe its own contents, and the "
+            "provenance line in the log would be false in the one direction nobody thinks "
+            "to check. Something the deploy carries -- under src/, databricks/, "
+            "pyproject.toml or hatch_build.py -- held uncommitted changes when that wheel "
+            "was built.\n"
+            "The fix is `git commit` (or `git stash`) and then deploy: re-deploying the "
+            "same tree reproduces this refusal. If "
+            f"{built_from} is not the commit you expected either, that is a second "
+            f"problem -- nobody has deployed {expected} yet."
         )
     raise WrongRevision(
         f"refusing to run: the deployed artefact reports {actual!r} as the revision it "

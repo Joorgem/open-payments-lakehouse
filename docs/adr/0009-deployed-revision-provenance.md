@@ -156,23 +156,48 @@ a local install with no stamp at all, which is exactly what we want it to have.
 `git rev-parse HEAD` answers in a tree with uncommitted changes exactly as it
 does in a clean one, so a naive stamp would let a wheel built from modified
 sources claim a commit that does not describe it. The hook therefore measures
-dirtiness — `git status --porcelain -- src pyproject.toml` — and stamps
-`<sha>+dirty` when it is non-empty, which no expected value can equal, so the run
-refuses and the message says why.
+dirtiness — `git status --porcelain -- src databricks pyproject.toml hatch_build.py`
+— and stamps `<sha>+dirty` when it is non-empty, which no expected value can
+equal, so the run refuses and the message says why.
 
-The set of paths is narrow **on purpose, and it is the wheel's own inputs**:
-`[tool.hatch.build.targets.wheel] packages = ["src/opl"]` plus the metadata in
-`pyproject.toml` are what end up in the artefact. Untracked docs, evidence files
-and plans cannot change the wheel and must not refuse a run — a guard that fires
+**The watched set is the DEPLOYMENT's inputs, not the wheel's**, and the
+distinction is a defect this ADR shipped with. The first version watched
+`("src", "pyproject.toml")`, reasoned entirely from
+`[tool.hatch.build.targets.wheel] packages`. But `bundle deploy` puts two things
+in the workspace: the wheel, and everything under `databricks/`, which it
+**syncs** — that is where every job's `python_file` is read from. So an
+uncommitted edit to `databricks/src/bronze_ingest.py` or to a job YAML shipped
+under a bare stamp equal to `HEAD`, the guard passed, and the run executed code
+that was never committed. `hatch_build.py` was outside the set for the same
+reason and is now inside it: `pyproject.toml`, which *registers* the hook, was
+watched, while the file that decides what the stamp says — including whether the
+dirty check runs at all — was not.
+
+Still narrow, and that is still the decision. Untracked docs, evidence files and
+plans cannot reach the workspace and must not refuse a run — a guard that fires
 on an unrelated new file in `docs/` is a guard operators learn to route around,
 and this phase writes evidence documents while it runs. Ignored paths
-(`__pycache__/`, `dist/`, `.venv/`) are excluded by `--porcelain`'s own defaults,
-which is why a local build does not read as dirty.
+(`__pycache__/`, `dist/`, `.venv/`, `.databricks/`) are excluded by
+`--porcelain`'s own defaults, which is why a local build does not read as dirty.
 
-The consequence is deliberate and worth stating plainly: **you cannot launch a
-job from a tree with uncommitted changes under `src/`.** Commit or stash first.
-That is one command, and the alternative is a green run whose provenance claim is
-false.
+**What this does and does not buy, precisely.** Dirtiness is measured at BUILD
+time, so the consequence is: **you cannot deploy from a tree with uncommitted
+changes to anything the deploy carries and then launch a run** — that wheel is
+stamped `+dirty` and every guarded job refuses it. Commit or stash first, then
+deploy. That is one command, and the alternative is a green run whose provenance
+claim is false.
+
+**The residual gap, stated rather than left to be discovered: this guard proves
+commit identity, not tree identity.** Deploy from a clean tree at commit X, then
+edit `src/` locally, then launch with `--params revision=$(git rev-parse HEAD)` —
+`HEAD` is still X, the stamp is still X, and the run **passes**. That verdict is
+not wrong: the workspace really is executing X, which is what the guard claims.
+What it does not claim is that X matches the tree in front of you. Nothing
+reachable from a job could claim that, because the workspace never sees your
+working tree; the check that would is `git status` before you launch, run by the
+operator. The failure this control exists for — *nobody deployed*, and *what was
+deployed was never committed* — is caught. "The code on my screen is running" is
+not, and an earlier draft of this ADR said it was.
 
 ### Which jobs carry the guard, and which does not
 

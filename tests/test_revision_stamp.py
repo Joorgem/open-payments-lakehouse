@@ -57,7 +57,7 @@ def _load_hook_module():
 _HOOK = _load_hook_module()
 CustomBuildHook = _HOOK.CustomBuildHook
 STAMPED_MODULE = _HOOK.STAMPED_MODULE
-WHEEL_INPUTS = _HOOK.WHEEL_INPUTS
+DEPLOYMENT_INPUTS = _HOOK.DEPLOYMENT_INPUTS
 revision_module_source = _HOOK.revision_module_source
 wheel_revision = _HOOK.wheel_revision
 
@@ -88,14 +88,21 @@ def _commit(root: Path, message: str) -> str:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A minimal tree shaped like this one: a wheel input under `src/`, a
-    `pyproject.toml`, and something outside both that a build cannot see."""
+    """A minimal tree shaped like this one: a wheel input under `src/`, a job entry
+    point under `databricks/src/` that a deploy SYNCS rather than packages, a
+    `pyproject.toml`, the hook itself, and something outside all of them that no
+    deployment can reach."""
     root = tmp_path / "throwaway"
     (root / "src" / "pkg").mkdir(parents=True)
     (root / "src" / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "databricks" / "src").mkdir(parents=True)
+    (root / "databricks" / "src" / "task.py").write_text(
+        "def main():\n    pass\n", encoding="utf-8"
+    )
     (root / "docs").mkdir()
     (root / "docs" / "notes.md").write_text("committed\n", encoding="utf-8")
     (root / "pyproject.toml").write_text("[project]\nname = 'pkg'\n", encoding="utf-8")
+    (root / "hatch_build.py").write_text("# stand-in for the real hook\n", encoding="utf-8")
     _git(root, "init", "-q")
     _commit(root, "one")
     return root
@@ -110,7 +117,7 @@ def test_a_clean_tree_stamps_the_commit_the_wheel_was_built_from(repo):
     assert assert_revision_matches(expected=head, actual=wheel_revision(repo)) == head
 
 
-def test_a_modified_wheel_input_stamps_something_no_run_can_expect(repo):
+def test_a_modified_deployment_input_stamps_something_no_run_can_expect(repo):
     """THE DECISION ABOUT DIRTY TREES, asserted rather than described.
 
     `git rev-parse HEAD` answers identically in a modified tree, so a bare SHA would
@@ -155,24 +162,81 @@ def test_a_new_file_that_cannot_reach_the_wheel_does_not_refuse_a_run(repo):
     assert wheel_revision(repo) == head
 
 
-def test_the_watched_paths_are_the_paths_the_wheel_is_actually_built_from():
-    """A silent hole, closed: add a second package to the wheel and forget this list,
-    and the stamp stops noticing changes to it -- a dirty build would then be stamped
-    clean and would pass the guard. So the list is checked against the wheel's own
-    declaration rather than trusted."""
+def _covers(watched: set[Path], path: str) -> bool:
+    """Is `path` inside something the stamp watches?"""
+    candidate = Path(path)
+    return bool(watched & (set(candidate.parents) | {candidate}))
+
+
+def test_the_watched_paths_cover_everything_a_deploy_puts_in_the_workspace():
+    """A silent hole this test ITSELF used to certify as closed.
+
+    Its first version derived the expected set from `[tool.hatch...packages]` alone --
+    it validated the watched paths against the WHEEL and never against the
+    DEPLOYMENT. So `databricks/`, which `bundle deploy` syncs into the workspace and
+    which every job's `python_file` is read from, was unwatched and green: an
+    uncommitted edit to a job entry point shipped under a bare stamp equal to HEAD,
+    the guard passed, and the run executed code that was never committed.
+
+    So the requirement is derived from FOUR sources of truth, each owned elsewhere:
+    the wheel's packages, the bundle's sync root (the directory holding
+    `databricks.yml`), the wheel's metadata file, and the hook's own registered path.
+    Add a fifth thing to the deployment and this test is what should go red."""
     config = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
-    packages = config["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]
-    watched = {Path(p) for p in WHEEL_INPUTS}
-    for package in packages:
-        parents = set(Path(package).parents) | {Path(package)}
-        assert watched & parents, (
-            f"the wheel contains {package!r}, which no watched path covers: "
-            f"{sorted(WHEEL_INPUTS)}. A change there would be stamped as clean"
-        )
-    assert Path("pyproject.toml") in watched, (
-        "the wheel's metadata comes from pyproject.toml, so a change to it changes the "
-        "artefact"
+    wheel = config["tool"]["hatch"]["build"]["targets"]["wheel"]
+    watched = {Path(p) for p in DEPLOYMENT_INPUTS}
+
+    bundles = [path for path in _REPO.rglob("databricks.yml") if ".venv" not in path.parts]
+    assert len(bundles) == 1, f"expected one bundle definition, found {bundles}"
+    required = {
+        "the wheel's package": wheel["packages"],
+        "the bundle's sync root": [str(bundles[0].parent.relative_to(_REPO).as_posix())],
+        "the wheel's metadata": ["pyproject.toml"],
+        # The stamp's own logic: this file decides what the revision SAYS, including
+        # whether the dirty check runs at all, so an uncommitted edit to it would
+        # otherwise produce a clean stamp for a commit that does not contain it.
+        "the build hook": [wheel["hooks"]["custom"].get("path", "hatch_build.py")],
+    }
+    for what, paths in required.items():
+        for path in paths:
+            assert _covers(watched, path), (
+                f"{path!r} reaches the workspace as {what}, and no watched path covers "
+                f"it: {sorted(DEPLOYMENT_INPUTS)}. An uncommitted change there would be "
+                "stamped as clean, and the guard would pass a run built from it"
+            )
+
+
+@pytest.mark.parametrize(
+    ("path", "why"),
+    [
+        (
+            "databricks/src/task.py",
+            "a job entry point: not packaged, SYNCED into the workspace by the same "
+            "deploy, and read from there by every task's python_file",
+        ),
+        (
+            "hatch_build.py",
+            "the stamp's own logic, which decides what the revision says and whether "
+            "the dirty check runs at all",
+        ),
+    ],
+)
+def test_an_uncommitted_deployment_input_stamps_dirty_even_outside_the_wheel(repo, path, why):
+    """IMPORTANT 1 AND 2, and the reason they were one defect: the watched set was
+    reasoned from what the WHEEL contains, so both of these were outside it.
+
+    Neither file is packaged, and nothing re-reads either at run time -- so the
+    `+dirty` stamp at BUILD time is the only thing that can refuse a run whose entry
+    points or whose stamping logic were never committed. Before the fix, editing either
+    produced a bare stamp equal to HEAD and the guard passed."""
+    head = _git(repo, "rev-parse", "HEAD")
+    (repo / path).write_text("# an uncommitted edit\n", encoding="utf-8")
+    stamped = wheel_revision(repo)
+    assert stamped != head, (
+        f"{path} was stamped as a clean HEAD, and it is {why}"
     )
+    with pytest.raises(WrongRevision):
+        assert_revision_matches(expected=head, actual=stamped)
 
 
 def test_a_tree_that_is_not_a_repository_stamps_nothing_the_guard_will_accept(tmp_path):

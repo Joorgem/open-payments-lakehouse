@@ -1,5 +1,13 @@
 [build-system]
-requires = ["hatchling"]
+# PINNED, and to the SAME version the dev group pins. `hatch_build.py` subclasses
+# hatchling's build-hook interface and the tests read that file, so the two resolving
+# independently means the suite can validate a hook against one version while
+# `bundle deploy` builds the deployed wheel with another -- exactly the divergence the
+# single-minor `databricks-sdk` bound exists to prevent, and here it decides whether the
+# artefact gets a revision stamp at all. Raising this is a deliberate act: re-read
+# `initialize`/`finalize` and `build_data["force_include"]` against the new release,
+# and raise the dev-group pin in the same commit.
+requires = ["hatchling==1.31.0"]
 build-backend = "hatchling.build"
 
 [project]
