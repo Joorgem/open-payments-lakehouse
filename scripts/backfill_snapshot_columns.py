@@ -554,6 +554,39 @@ def fill_and_overwrite(source: DataFrame, *, month: str, tbl: str, rows: int) ->
     return True
 
 
+def _done_line(
+    *, wrote: bool, to_add: tuple[tuple[str, str], ...], tbl: str, version: int
+) -> str:
+    """The run's LAST line, which has to be true of the run that just happened.
+
+    Two commits are possible and either one is enough for `version` to be a real
+    RESTORE target: the `ALTER TABLE ADD COLUMNS` (`to_add` non-empty -- the column
+    addition is itself a Delta commit) and the overwrite (`wrote`). Three of the four
+    reachable combinations commit something.
+
+    THE FOURTH IS WHY THIS IS A FUNCTION. A repeat over an already-migrated 0-row
+    target skips the ALTER, because `missing_columns` finds nothing to add, and skips
+    the write, because `fill_and_overwrite` has nothing to fill. Nothing is committed,
+    and the other wording would then claim a new version that does not exist AND
+    offer `version` as the way back from nothing -- both halves wrong at once, on
+    exactly the path a Databricks INTERNAL_ERROR retry takes (see the `__main__`
+    block, where that retry is recorded happening).
+
+    Extracted rather than left as a conditional inside the `print`: this is the one
+    decision in this file that a test could not reach, and every other decision here
+    is a named function with both directions pinned. The chosen string is also
+    BYTE-IDENTICAL to what F1.4a printed and what
+    `docs/f1.4a-migration-evidence.md` quotes twice, so an operator diffing this run
+    against that record sees data change and not wording.
+    """
+    if wrote or to_add:
+        return f"backfill: DONE. {tbl} is at a new version; version {version} is the way back"
+    return (
+        f"backfill: DONE. {tbl} was already migrated and holds 0 rows, so NOTHING was "
+        f"committed -- it is still at version {version}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     # Every argument refused BEFORE Spark, the order every job task in this repo
@@ -624,20 +657,9 @@ def main(argv: list[str] | None = None) -> int:
     verify_or_raise(check, rows_before=rows_before, tbl=tbl, version=version)
     _assert_constraints(spark, spec, tbl)
     _warn_on_null_ref_dates(check, tbl=tbl, version=version)
-    # The last line has to be true of the run that just happened, and skipping the
-    # write made one case where it was not: a REPEAT of a 0-row target commits
-    # nothing at all -- `missing_columns` is empty so there is no ALTER either -- and
-    # claiming "a new version" would name a version that does not exist and offer
-    # `version` as the way back from nothing. Both halves would be wrong at once, on
-    # the path a Databricks INTERNAL_ERROR retry takes (see the `__main__` block).
-    # A conditional expression rather than a branch, and the `wrote or to_add` wording
-    # is byte-identical to F1.4a's, which `docs/f1.4a-migration-evidence.md` quotes.
-    print(
-        f"backfill: DONE. {tbl} is at a new version; version {version} is the way back"
-        if wrote or to_add
-        else f"backfill: DONE. {tbl} was already migrated and holds 0 rows, so NOTHING "
-        f"was committed -- it is still at version {version}"
-    )
+    # Which of the two lines is true of THIS run is `_done_line`'s decision, so that
+    # it has both directions pinned by test like every other decision in this file.
+    print(_done_line(wrote=wrote, to_add=to_add, tbl=tbl, version=version))
     return 0
 
 

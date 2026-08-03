@@ -337,6 +337,45 @@ def test_the_overwrite_runs_when_there_are_rows_to_fill(spark):
     assert frame.formats == ["delta"] and frame.modes == ["overwrite"]
 
 
+# --- the last line has to be true of the run that just happened ---------------
+
+
+@pytest.mark.parametrize(
+    ("wrote", "to_add"),
+    [
+        (True, ()),
+        (True, ((SNAPSHOT_MONTH_COLUMN, "STRING"),)),
+        (False, ((SNAPSHOT_MONTH_COLUMN, "STRING"),)),
+    ],
+)
+def test_the_done_line_offers_the_restore_target_whenever_something_was_committed(
+    wrote, to_add
+):
+    """Three of the four reachable ``(wrote, to_add)`` combinations committed
+    something -- the overwrite, the ALTER, or both -- so a new version exists and
+    ``version`` is genuinely the way back from it.
+
+    Byte-identical to what F1.4a printed and what
+    ``docs/f1.4a-migration-evidence.md`` quotes twice; an operator diffing this run
+    against that record must not see a wording change."""
+    assert cli._done_line(wrote=wrote, to_add=to_add, tbl="wh.d.b", version=2) == (
+        "backfill: DONE. wh.d.b is at a new version; version 2 is the way back"
+    )
+
+
+def test_the_done_line_refuses_to_claim_a_version_that_was_never_committed():
+    """The fourth combination: a REPEAT over an already-migrated 0-row target. No
+    ALTER (``missing_columns`` is empty) and no write (nothing to fill), so nothing
+    was committed at all -- and the other wording would name a version that does not
+    exist AND offer ``version`` as the way back from nothing, both wrong at once, on
+    the path a Databricks INTERNAL_ERROR retry takes."""
+    line = cli._done_line(wrote=False, to_add=(), tbl="wh.d.q", version=9)
+    assert "is at a new version" not in line
+    assert "NOTHING was committed" in line
+    # It still has to say where the table IS, or the operator is left guessing.
+    assert "still at version 9" in line
+
+
 # --- the ALTER is idempotent per column ---------------------------------------
 
 
