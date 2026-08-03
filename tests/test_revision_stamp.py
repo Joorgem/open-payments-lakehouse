@@ -20,15 +20,22 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import shutil
 import subprocess
+import sys
 import tomllib
 import zipfile
 from pathlib import Path
 
 import pytest
 
-from opl.bronze.provenance import WrongRevision, assert_revision_matches, is_object_name
+from opl.bronze.provenance import (
+    STAMP_MODULE,
+    WrongRevision,
+    assert_revision_matches,
+    is_object_name,
+)
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -245,14 +252,36 @@ def test_the_hook_is_registered_for_the_wheel_target():
     assert (_REPO / declared).exists()
 
 
-def test_the_wheel_this_repo_builds_really_carries_the_stamp(tmp_path):
-    """THE END-TO-END CLAIM, through the real `uv build --wheel` the bundle runs.
+def test_the_stamp_lands_at_the_path_the_runtime_imports_it_from():
+    """The contract between the two halves, and a probe is why it is a test.
+
+    Pointing `STAMPED_MODULE` at the wheel ROOT instead of inside the package leaves
+    `opl._revision` unimportable -- i.e. every guarded job refuses every run -- and
+    every test in this file stayed GREEN through that mutation, because each of them
+    named the same constant the hook did. Self-consistent is not correct. So the
+    destination is pinned against the import it exists to satisfy, which
+    `opl.bronze.provenance` owns."""
+    assert STAMPED_MODULE == f"{STAMP_MODULE.replace('.', '/')}.py", (
+        f"the hook force-includes {STAMPED_MODULE!r}, but the runtime imports "
+        f"{STAMP_MODULE!r}. A stamp at any other path is a wheel that cannot be asked "
+        "what it was built from"
+    )
+
+
+def test_the_wheel_this_repo_builds_can_be_asked_what_it_was_built_from(tmp_path):
+    """THE END-TO-END CLAIM, through the real `uv build --wheel` that the bundle runs
+    and then through the IMPORT the deployed job actually performs.
 
     Every other test here reads the hook directly, which cannot see whether hatchling
-    is configured to call it, whether `force_include`'s destination lands inside the
-    package, or whether the file survives into the archive. This one opens the wheel.
+    is configured to call it, whether the destination lands inside the package, or
+    whether the file survives into the archive. And opening the archive is not enough
+    either, per the probe above -- so the wheel is unpacked and a SEPARATE interpreter
+    is asked the same question `assert_deployed_revision` asks, with the unpacked tree
+    ahead of this editable checkout on its path. Nothing but the standard library is
+    needed for that import, which is why no install and no network is.
 
-    Deliberately NOT into `dist/`: that is what the next `bundle deploy` uploads."""
+    Deliberately NOT built into `dist/`: that is what the next `bundle deploy`
+    uploads, and a test that wrote there would change what gets deployed."""
     uv = shutil.which("uv")
     assert uv is not None, (
         "uv is not on PATH, so this test cannot build the artefact it exists to open. "
@@ -267,14 +296,31 @@ def test_the_wheel_this_repo_builds_really_carries_the_stamp(tmp_path):
     wheels = list(tmp_path.glob("*.whl"))
     assert len(wheels) == 1, f"expected one wheel, got {[w.name for w in wheels]}"
 
+    unpacked = tmp_path / "unpacked"
     with zipfile.ZipFile(wheels[0]) as archive:
-        assert STAMPED_MODULE in archive.namelist(), (
-            f"the built wheel has no {STAMPED_MODULE}; every guarded job would refuse "
-            f"every run. Archive holds: {archive.namelist()}"
-        )
-        namespace: dict = {}
-        exec(compile(archive.read(STAMPED_MODULE), STAMPED_MODULE, "exec"), namespace)
-    assert namespace["REVISION"] == wheel_revision(_REPO)
+        archive.extractall(unpacked)
+    asked = subprocess.run(
+        [
+            sys.executable, "-c",
+            "import opl;from opl.bronze.provenance import built_revision;"
+            "print(built_revision());print(opl.__file__)",
+        ],
+        cwd=tmp_path,  # never the repo: `src/` must not be reachable as a sibling
+        env={**os.environ, "PYTHONPATH": str(unpacked)},
+        capture_output=True, text=True,
+    )
+    assert asked.returncode == 0, (
+        f"the built wheel could not be asked for its revision: {asked.stderr}"
+    )
+    revision, loaded_from = asked.stdout.splitlines()[:2]
+    assert unpacked.name in loaded_from, (
+        f"the probe imported opl from {loaded_from}, not from the unpacked wheel, so it "
+        "measured this checkout instead of the artefact"
+    )
+    assert revision == wheel_revision(_REPO), (
+        f"the built wheel reports {revision!r} as its revision; this tree's is "
+        f"{wheel_revision(_REPO)!r}"
+    )
 
 
 _RUNTIME_SOURCES = sorted(

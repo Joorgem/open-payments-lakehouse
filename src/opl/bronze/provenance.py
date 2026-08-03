@@ -48,7 +48,14 @@ SENTINEL_REVISION = "REQUIRED-PASS-A-REVISION"
 # the build hook and deliberately absent from the source tree, so that an editable
 # install -- which points at a tree that changes under it -- carries no revision at
 # all and cannot satisfy this check.
-_STAMP_MODULE = "opl._revision"
+#
+# PUBLIC because it is a CONTRACT WITH THE BUILD, not an internal detail: the hook
+# force-includes a file at a path, and this is the import that path has to satisfy.
+# A mutation probe made the case for exposing it -- pointing the hook's destination at
+# the wheel root instead of inside the package left every test green while
+# `opl._revision` became unimportable, i.e. while every guarded job refused every run,
+# because each test named the same constant the hook did.
+STAMP_MODULE = "opl._revision"
 _STAMP_ATTRIBUTE = "REVISION"
 
 # A WHOLE object name and nothing else. One rule refuses the sentinel, an empty
@@ -106,9 +113,9 @@ def built_revision() -> str:
     that is a corrupt artefact, and reporting it as "unstamped" would send the
     operator to deploy again over a wheel whose problem a deploy does not fix."""
     try:
-        stamp = importlib.import_module(_STAMP_MODULE)
+        stamp = importlib.import_module(STAMP_MODULE)
     except ModuleNotFoundError as absent:
-        if absent.name != _STAMP_MODULE:
+        if absent.name != STAMP_MODULE:
             raise
         return ""
     return _normalised(getattr(stamp, _STAMP_ATTRIBUTE, ""))
