@@ -465,18 +465,46 @@ this evidence, which is precisely the species of claim this ADR was caught makin
 > principal `6dfb9574-f409-433e-9e93-5acc4a190ffe`, read and rewrote
 > `bronze_cnpj_estab_staging` with **no grant of any kind**: on 2026-07-30 it ran
 > `DATA_SKIPPING_COLUMN_SELECTION` against that table (0.187 estimated DBU) and
-> set `delta.workloadBasedColumns.deltaFileStatistics`, and it **compacted that
-> staging table from 42 files into 21**
-> (`docs/f1.4b-pr-b-run-evidence.md` §24).
+> set `delta.workloadBasedColumns.deltaFileStatistics`, and it **rewrote that
+> table's files twice**: `COMPACTION` on 2026-07-27T23:10:07Z (18 files → 8,
+> 0.2749 DBU) and again on 2026-07-28T03:39:42Z (**42 files → 21**, 0.2057 DBU).
+> Both rows are quoted in full at
+> `docs/f1.4b-pr-b-run-evidence.md` §24.1.
+>
+> *Corrected 2026-08-03 (final review), in two ways.* This bullet previously said
+> "compacted **that staging table** from 42 files into 21", naming one rewrite and
+> citing §24 — which at the time recorded no `COMPACTION` row at all, so the claim
+> had no evidence anywhere in this repository. It now does, and it turns out there
+> were **two** rewrites rather than one. Both are on
+> **`bronze_cnpj_estab_staging`**; the metastore's history holds exactly two
+> `COMPACTION` operations in total, so **no rewrite of socios staging has been
+> observed** and this ADR does not claim one.
+>
 > The `table_privileges` measurement above is still **correct** — it returned no
 > rows, and still would. What fails is the inference: **a platform service's
 > access does not flow through `table_privileges`, so measuring grants does not
 > bound who reads a table.**
-> Scope it honestly: the recorded operations name the **estabelecimentos**
-> staging table, not socios (empresas and socios are under 32 columns and carry
-> no stats property). This is a demonstrated *class* exposure on a staging table
-> of the same layer under the same owner, not a socios measurement — which is
-> exactly why it belongs here rather than being waved off.
+>
+> **Why a different table still falsifies the claim, stated rather than assumed.**
+> The sentence being falsified is "Only the owner can read staging", and it was
+> derived from a *method* — enumerate `table_privileges`, find no `SELECT`,
+> conclude nobody else reads. That method is metastore-wide, and one principal
+> reading one table in this schema with no grant of any kind refutes it wherever
+> that read happened. The refutation is of the reasoning, not of a per-table fact,
+> so it does not need the instance to be socios.
+>
+> **What it does not establish, equally plainly.** It is *not* evidence that
+> Predictive Optimization has read `bronze_cnpj_socios_staging`. The observed
+> trigger is a workload of `_batch_id`-filtered scans against a wide table —
+> estabelecimentos is 30 columns and the only registered table over the
+> `delta.dataSkippingNumIndexedCols` default of 32 once audit columns are counted;
+> empresas and socios are narrower and carry no stats property. So the honest
+> statement is a demonstrated *class* exposure: a staging table of the same layer,
+> in the same schema, under the same owner, read and rewritten by a principal no
+> grant mentions. Whether socios staging has been read is **unmeasured**, and
+> "unmeasured" is the word — the query that would settle it is the same
+> `system.storage.predictive_optimization_operations_history` filter, and it
+> returns nothing for that table today.
 
 **Where this reasoning is weak, said plainly rather than dressed up.**
 

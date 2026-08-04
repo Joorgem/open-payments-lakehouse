@@ -69,7 +69,13 @@ Three parts, deliberately separated by risk:
    ADR was accepted; corrected in F1.4a, see below), specified here rather than left as a
    vague intention: block promotion when the reject *rate* exceeds a threshold,
    otherwise quarantine and continue. The threshold must be chosen against
-   measured history, not guessed — the observed baseline is ~1e-7. This keeps
+   measured history, not guessed — the observed baseline is ~1e-7. [**That number
+   is wrong, and the withdrawal below is partly why**: the six cells measured in
+   F1.4b PR B put socios at 6.4e-5–6.5e-5, roughly 640× higher, and empresas at
+   1.4e-8. There is no single baseline to threshold against — the spread is per
+   table. Flagged inside the withdrawn specification rather than corrected, because
+   what is on the page has to be the reasoning the resolution actually answered.]
+   This keeps
    the failure modes that matter fail-closed, because none of them produce four
    bad rows: a wrong encoding, a schema shift, a changed delimiter or a
    truncated file all move the rate by orders of magnitude.
@@ -113,14 +119,43 @@ Three parts, deliberately separated by risk:
   would accumulate silently unless someone watches them. The alert must be on
   the **trend** of the quarantine, not on the presence of rows in it — otherwise
   the threshold just relocates the noise.
+
+  > **Stale in tone, 2026-08-03.** This is written as a live design consideration
+  > for something now **decided against** (Decision 3, resolved below). It is
+  > conditional, so it is not false — the obligation it describes is exactly what
+  > adopting a threshold would still cost — but it is no longer a trade-off this
+  > repository is weighing. Read it as part of the record of why the answer was no,
+  > not as pending design work.
 - Two known gaps stay open and are carried into F1.4b — unlike Decision 3 these
   two are placed: the F1.4a design (§4.8) moves carry-forwards #4 and #5 to F1.4b,
   where new rule sets for `empresas` and `socios` are being authored anyway and the
   checks are cheap. Both are cases where bronze accepts damage without a signal:
+
+  > **Status as of 2026-08-03 (F1.4b PR B, the phase this list was carried into).**
+  > "Two known gaps stay open" is no longer accurate and neither bullet below should
+  > be read in the present tense. The encoding gap is **closed** on the half that
+  > was a coverage claim and open only on the metric half; the completeness gap is
+  > **narrower** than its wording says. Each bullet carries its own annotation
+  > below, and this line is kept rather than rewritten because F1.4b is what
+  > discharged it and a consequences list that silently updates itself cannot be
+  > checked against the phase that acted on it.
   - **No completeness rule.** A row whose entire trailing tail is NULL passes
     all key rules. ADR 0005's fix removes the known cause of that shape, not the
     class. A field-count or trailing-NULL check would have made the original
     incident fail-closed instead of silent.
+
+    > **Narrowed, 2026-08-03 (F1.4b PR B Task 7).** The wording above overstates
+    > the gap, and the narrowing is recorded here as well as in ADR 0005 because
+    > the pointer between the two was one-directional: a reader who opens this ADR
+    > alone got the overstated version with nothing telling them so. `caed88e`
+    > made `municipio` a required field for estabelecimentos, and `municipio` is
+    > ordinal 21 of 30 — while the parent row ADR 0005 describes lost 18 of 30,
+    > i.e. everything from ordinal 13 on. **That exact row would be rejected
+    > today**, by `null_or_empty_municipio`. What remains true is the narrower
+    > statement: **no *completeness* rule exists**, so a break losing only the
+    > last few ordinals (22–30) still passes. See
+    > [ADR 0005](0005-csv-multiline-parallelism-ceiling.md) for the measurement
+    > that made the widening safe to add live.
   - **The encoding check covers 2 of 30 columns.** `rules_for("estabelecimentos")`
     looks for the Unicode replacement character only in `nome_fantasia` and
     `logradouro`. One record in `Estabelecimentos8` carries a byte (`0x8f`) that
@@ -134,6 +169,25 @@ Three parts, deliberately separated by risk:
     explicitly rejected: `0x8f` is undefined in windows-1252, so the source has
     non-cp1252 contamination and guessing a codepage per record would be
     inventing data.
+
+    > **Closed on the coverage half by `caed88e`, 2026-07-31** (recorded here
+    > 2026-08-03). The headline above is false in the present tense and has been
+    > since before this branch. `opl.bronze.rules._encoding_check` now folds the
+    > U+FFFD test over **every column of the contract**, derived from `TABLES` so a
+    > contract gaining a column gains the check with it, and it is wired for all
+    > four contracts — not for `estabelecimentos` alone. The "2 of 30" figure and
+    > the `nome_fantasia`/`logradouro` pair describe the rule as it stood **up to
+    > `caed88e`**, which is exactly why they must stay on the page: the 2026-06
+    > estabelecimentos run measured 0 rejects under that rule and the 2026-07 run
+    > measured 4 under this one, and the difference is the rule, not the data. That
+    > is the fact Decision 3's `†` footnote, and §20.3, §23.1 and §25.2 of
+    > `docs/f1.4b-pr-b-run-evidence.md`, all rest on.
+    >
+    > **What is still open is the metric half only.** This bullet states the fix as
+    > two things — fold the check over every column, *and* count occurrences per
+    > column as a metric rather than only as a reject reason. The first is done; the
+    > second is not, and nothing counts U+FFFD per column today. §25.6 of the run
+    > evidence already calls this gap "half closed"; that is the accurate reading.
 
     **Answered 2026-08-03.** `correio_eletronico`. Four estabelecimentos rows
     in the 2026-07 ingest were rejected for `encoding_replacement_char`, all
@@ -324,7 +378,7 @@ task instances hung off the ingestion jobs, two executions, zero bytes
 (`docs/f1.4b-pr-b-run-evidence.md` §16). It has deleted bytes exactly once, and
 not through that path: F1.4a invoked it through a temporary job resource on
 2026-07-31 and it reclaimed **16,743,815,717 B** correctly
-(`docs/f1.4a-migration-evidence.md:457-475`). An earlier revision of this
+(`docs/f1.4a-migration-evidence.md:467-485`). An earlier revision of this
 section said "never deleted a byte in this project's history", full stop; that
 was false and is corrected here — see `docs/f1.4b-pr-b-run-evidence.md` §26.1.
 The correction does not weaken the argument below and sharpens it: **the defect

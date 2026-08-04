@@ -6,19 +6,26 @@
 | Control-plane upload to UC Volume works (topology mitigation) | `scripts/validate_uc_volume.py` | OK. `UC Volume upload+download roundtrip: OK` against `workspace.default.landing` (this workspace has no `main` catalog; `workspace.default` used instead, documented in ADR 0002). Byte-identical upload/download confirmed via the control-plane PAT from off-Databricks compute. |
 | Asset Bundles validate on Free (PAT/serverless) | `databricks bundle validate` | OK. `databricks bundle validate --profile opl-free -t free` → `Validation OK!` (no warnings). Required dropping the literal `workspace.host: ${DATABRICKS_HOST}` from `databricks.yml` — bundle `${...}` syntax is for bundle variables, not shell env vars; the CLI profile resolves the host instead. |
 | 2–3 consecutive CNPJ monthly snapshots downloadable | `scripts/validate_cnpj_snapshots.py` | OK, and better than the bar: 4/4 of the most recent months reachable (2026-04, 2026-05, 2026-06, 2026-07) via the Nextcloud/SERPRO+ WebDAV public share (`https://arquivos.receitafederal.gov.br/public.php/webdav/<YYYY-MM>/...`, HTTP Basic auth with the public share token). A supplemental PROPFIND (outside the committed script) showed a gapless monthly series from 2023-05 through 2026-07 — **39 months** of history available for SCD2 backfill. |
+| BCB PTAX API reachable from extraction layer | same script | OK (200), quote array present. Brief's PTAX URL worked unmodified. |
 
-> **Correction, 2026-08-03 (F1.4b PR B Task 7).** This cell originally read
-> "44+ months". That figure is not what the range beside it produces: 2023-05
-> through 2026-07 inclusive is **39** months (8 + 12 + 12 + 7). This is an
-> arithmetic correction to the count, **not** a re-measurement of availability —
-> no PROPFIND was re-run for it, and the "4/4 most recent months reachable"
-> result and the gapless-from-2023-05 finding are untouched. It matters because
-> every later "N months remain uningested" figure is derived from it: with two
-> months ingested (2026-06 and 2026-07, F1.4b), **37 of 39 remain**, not 42 of 44.
-> The same 2023-05..2026-07 range is quoted in
+> **Correction, 2026-08-03 (F1.4b PR B Task 7).** Applies to the CNPJ snapshot
+> row above. That cell originally read "44+ months". That figure is not what the
+> range beside it produces: 2023-05 through 2026-07 inclusive is **39** months
+> (8 + 12 + 12 + 7). This is an arithmetic correction to the count, **not** a
+> re-measurement of availability — no PROPFIND was re-run for it, and the "4/4
+> most recent months reachable" result and the gapless-from-2023-05 finding are
+> untouched. It matters because every later "N months remain uningested" figure is
+> derived from it: with two months ingested (2026-06 and 2026-07, F1.4b), **37 of
+> 39 remain**, not 42 of 44. The same 2023-05..2026-07 range is quoted in
 > `scripts/validate_cnpj_snapshots.py` and `tests/integration/test_webdav_live.py`
 > without a count, so neither needed changing.
-| BCB PTAX API reachable from extraction layer | same script | OK (200), quote array present. Brief's PTAX URL worked unmodified. |
+>
+> *Placement note (same PR, final review):* this blockquote was originally inserted
+> directly beneath the row it corrects, which put a blank line in the middle of the
+> table — under GFM a table ends at the first blank line, so the PTAX row below it
+> stopped rendering as a table row and appeared as literal pipe-delimited text.
+> Since that row is one of the four go/no-go premises, the correction is now placed
+> after the table and names the row it applies to.
 
 ## Notes on deviations from the brief's assumptions
 - CNPJ access is **not** a plain Apache directory tree as originally assumed; Receita Federal serves it via a Nextcloud instance ("SERPRO+") public share over WebDAV. The extraction layer must speak WebDAV + share-token Basic auth, not a naive static-file HTTP client. See Task 6 report and `scripts/validate_cnpj_snapshots.py` for the full investigation.
