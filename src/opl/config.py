@@ -21,10 +21,12 @@ class OplConfig:
     # `reclaim_landing` -- after `add_audit_columns` had already refused it by
     # giving `snapshot_month` no default. It keeps coming back because
     # `DEFAULT.month` is the path of least resistance for anything that takes a
-    # month, and because it never LOOKS wrong: this pinned value equals the job YAMLs'
-    # own default, so substituting it is invisible until the first run for
-    # another month, and then it is wrong in data (`_snapshot_month`) or in a
-    # delete boundary, with nothing in the log naming the month that was used.
+    # month, and because it never LOOKED wrong: this pinned value EQUALLED the job
+    # YAMLs' own default until F1.4b PR B, so substituting it was invisible until the
+    # first run for another month, and then it is wrong in data (`_snapshot_month`) or
+    # in a delete boundary, with nothing in the log naming the month that was used.
+    # Those YAMLs now default to `SENTINEL_MONTH`, so a substitution here no longer
+    # hides in a no-op -- it silently replaces `require_month`'s refusal.
     month: str = "2026-06"
 
     @property
@@ -104,6 +106,29 @@ def is_month(value: str) -> bool:
     return _MONTH.match(value) is not None
 
 
+# The `month` job-parameter default in every ingestion job YAML, and a value
+# `require_month` refuses BELOW as an absence. Same shape and same reason as
+# `opl.bronze.provenance.SENTINEL_REVISION` and `opl.bronze.promote.SENTINEL_BATCH_ID`:
+# a job parameter must have SOME default, no month is a valid one, and so the
+# default's whole job is to fail.
+#
+# WHAT THE REAL MONTH THERE COST, and it is not the F1.2 stamping argument the pinned
+# `month` above already carries. Until F1.4b PR B the four YAMLs defaulted to
+# `"2026-06"`, and a run launched without `--params month=...` read that month's
+# landing dir against a checkpoint that already recorded every one of its files -- a
+# no-op, which is why the default looked harmless for two phases. Month-scoping the
+# Auto Loader state (`opl.bronze.autoloader.checkpoint_location`) turned the same
+# launch into a duplicate append: the month-scoped checkpoint is EMPTY, so all of
+# 2026-06 is new, the rows land in staging under a fresh `_batch_id`, and
+# `promote.rows_of_batch` keys idempotence on `_batch_id` -- so it cannot see the
+# duplication and carries it into bronze. Nothing fails; the row counts double.
+#
+# `tests/test_job_yaml_wiring.py` asserts each YAML default is this exact value, for
+# the reason the revision sentinel is asserted the same way: a default that happened
+# to be a real month would put every un-parameterised run back on that path.
+SENTINEL_MONTH = "REQUIRED-PASS-A-MONTH"
+
+
 def require_month(month: str | None, *, action: str) -> str:
     """The month `action` will work in, or refuse: absent and malformed both.
 
@@ -128,8 +153,10 @@ def require_month(month: str | None, *, action: str) -> str:
     no-default decorative. A decorative guard is worse than none: the next reader
     sees it and believes the hole is closed.
 
-    WHY A CRASH BEATS THE SUBSTITUTION, concretely. The pinned month equals the
-    job YAMLs' own default, so an omission changes nothing observable today. On
+    WHY A CRASH BEATS THE SUBSTITUTION, concretely. The pinned month EQUALLED the
+    job YAMLs' own default until F1.4b PR B, so an omission changed nothing
+    observable; now those YAMLs default to `SENTINEL_MONTH` and a substitution
+    silently replaces this refusal instead of vanishing into a no-op. On
     the first run for another month an ingest stamps `_snapshot_month = 2026-06`
     on rows read from the 2026-06 landing dir, and a reclaim scopes containment
     to 2026-06, reports every proven file as REFUSED and exits green. Neither
@@ -152,19 +179,30 @@ def require_month(month: str | None, *, action: str) -> str:
     wrote, reports every proven file REFUSED and exits green. See `_MONTH` for why
     the range is in the regex here and not in a caller.
 
+    THE SENTINEL IS THE THIRD SHAPE OF ABSENCE, and it is the one an operator will
+    actually hit. `SENTINEL_MONTH` is what the ingestion job YAMLs default `month` to,
+    so reaching here with it means the run was launched without `--params month=...`.
+    It is refused as an ABSENCE rather than as a malformed value -- which is the truth
+    of it, and which is also how `require_batch_id` treats its own sentinel -- so the
+    message is the one that names the missing parameter instead of explaining what a
+    month looks like. It would be refused by `is_month` regardless; naming it here is
+    what makes the refusal a decision rather than a shape check getting lucky.
+
     Refuses BEFORE Spark, like `table_spec` and `require_batch_id`: nothing about
     an absent or malformed month needs a serverless session to diagnose."""
     candidate = month or ""
-    if not candidate.strip():
+    if not candidate.strip() or candidate == SENTINEL_MONTH:
         raise ValueError(
             f"refusing to {action}: no month was given, and there is no default to "
             "fall back on. The month selects the ONE directory under cnpj/ this task "
             "works in, and for an ingest it is also the value stamped into every "
             "row's _snapshot_month -- so a guessed month is a wrong answer written "
             "into the data or into a delete boundary, not a missing one. The config's "
-            "pinned month is the worst guess available: it equals the job YAMLs' own "
-            "default, so the omission stays invisible until the first run for another "
-            "month and nothing in the log names the month that was used. Pass the "
+            "pinned month is the worst guess available: it EQUALLED the job YAMLs' own "
+            "default until F1.4b PR B, so substituting it stayed invisible until the "
+            "first run for another month -- and now that those YAMLs default to a value "
+            "this guard refuses, substituting it no longer disappears into a no-op, it "
+            "silently replaces THIS refusal with a run against 2026-06. Pass the "
             "SAME month the rest of the flow was given -- in the job YAMLs that is "
             "{{job.parameters.month}}."
         )

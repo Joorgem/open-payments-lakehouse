@@ -51,9 +51,13 @@ def skip_notice(
     WHY THIS EXISTS, and why it is a line rather than a raise. Skipping is
     CORRECT: a frame written before a derivation existed is not a defective
     frame, and the documented rebuild procedure produces exactly one -- it drops
-    bronze while LEAVING staging (see `promote.plan_promotion`), and the live
-    estab staging table is still the 35-column pre-F1.4a shape. What was wrong is
-    that the skip was INAUDIBLE. Repromoting such a batch skips
+    bronze while LEAVING staging (see `promote.plan_promotion`). The LIVE instance
+    this was written for is closed: estab staging was the 35-column pre-F1.4a
+    shape until F1.4b PR B migrated it to 37 on 2026-08-03, so no batch sitting in
+    it today is narrow. The mechanism stays because the SHAPE recurs -- the next
+    derivation added to a contract re-opens it for every batch staged before that
+    derivation existed. What was wrong is that the skip was INAUDIBLE.
+    Repromoting such a batch skips
     `unprovable_snapshot_ref_date`, every row reads clean, and the rows land in
     37-column bronze where Delta fills the absent column with NULL -- the exact
     value that rule exists to refuse. The control did not fail; it disappeared.

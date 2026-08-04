@@ -142,13 +142,26 @@ def purge_state_dir(w: WorkspaceClient, path: str) -> int | None:
     return removed
 
 
-def clear_state(w: WorkspaceClient, spec: BronzeTable) -> None:
-    """Remove this table's Auto Loader checkpoint and inferred schema.
+def clear_state(w: WorkspaceClient, spec: BronzeTable, month: str) -> None:
+    """Remove this table's Auto Loader checkpoint and inferred schema for `month`.
 
     BOTH, because both reference the OLD path: the checkpoint holds those paths as
     consumed, and the schema was inferred under that location. Clearing them is
     what makes the reload a clean FIRST ingest rather than an Auto Loader carrying
     opinions about a directory that no longer holds anything.
+
+    `month` IS THE THIRD THING THIS SCRIPT'S ONE MONTH LOCAL SELECTS, after the
+    directory read from and the directory written to. Since F1.4b PR B Task 5
+    Step 0 the state locations are `<kind>/<month>/<table_key>`, so clearing is
+    scoped to one month like everything else here -- and deliberately does NOT
+    also clear the pre-Step-0 unscoped `_checkpoints/<table_key>`. That directory
+    is orphaned (nothing reads it) but it is not this month's to delete: one
+    unscoped dir held every month's state, so reaching into it while migrating one
+    month is the boundary violation `require_month` and `scope_to_landing_dir`
+    both exist to refuse. The 2026-06 run this script actually made cleared it
+    under the old layout; that run is recorded in
+    `docs/f1.4a-migration-evidence.md`, and 2026-06 cannot reach here again
+    because `lookup_files` refuses a month root that no longer holds the six.
 
     Called TWICE by `main` -- before the moves and after them. It is idempotent
     (`purge_state_dir` returns None for a directory that is not there), which is
@@ -156,8 +169,8 @@ def clear_state(w: WorkspaceClient, spec: BronzeTable) -> None:
     site for the window it closes.
     """
     for state in (
-        checkpoint_location(DEFAULT, spec.table_key),
-        schema_location(DEFAULT, spec.table_key),
+        checkpoint_location(DEFAULT, spec.table_key, month=month),
+        schema_location(DEFAULT, spec.table_key, month=month),
     ):
         removed = purge_state_dir(w, state)
         if removed is None:
@@ -324,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     # script is a clean retry. The other order leaves six moved files and a stale
     # checkpoint, and the re-run refuses because the month root no longer holds
     # the set (`lookup_files` above).
-    clear_state(w, spec)
+    clear_state(w, spec, month)
 
     total = 0
     with tempfile.TemporaryDirectory(prefix="opl-lookup-migrate-") as tmp:
@@ -347,17 +360,25 @@ def main(argv: list[str] | None = None) -> int:
     # proved the recursion when a probe.txt planted in zips/estabelecimentos/ was
     # ingested by a stream on the root -- and the new subdir is UNDER that root.
     # So an old-wheel run landing between the clear and the moves would find the
-    # six files at their new paths, ingest them, and RECREATE the checkpoint at
-    # this very location, silently restoring the state the first call removed and
+    # six files at their new paths, ingest them, and RECREATE a checkpoint that
+    # records them as read, silently restoring the state the first call removed and
     # costing the clean-first-ingest guarantee. It would surface only at
     # reconcile, as a row count nobody could explain.
+    #
+    # WHAT THIS SECOND CALL REACHES, since F1.4b PR B Task 5 Step 0 month-scoped the
+    # state locations: the state a wheel carrying THAT layout would write. A
+    # concurrent run of a PRE-Step-0 wheel writes the unscoped
+    # `_checkpoints/<table_key>` instead, which this deliberately does not touch and
+    # could not without deleting every other month's state (see `clear_state`).
+    # Stated rather than left as an implied guarantee: this script is spent, its one
+    # 2026-06 run is history, and no pre-Step-0 wheel is deployed.
     #
     # Reachability, stated honestly: no job is scheduled on this workspace, so it
     # takes a concurrent manual run. This is cheap (`purge_state_dir` is
     # idempotent and returns None for an absent directory) and the alternative is
     # a guarantee that rests on nobody doing anything, so it is closed rather than
     # documented.
-    clear_state(w, spec)
+    clear_state(w, spec, month)
     _print_next_steps(spec, month, files)
     return 0
 

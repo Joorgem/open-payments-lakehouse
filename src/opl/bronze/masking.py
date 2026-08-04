@@ -128,7 +128,8 @@ def create_table_ddl(table: str, contract: str) -> str:
     may have already run, and `max_retries: 0` does not prevent a retry on
     INTERNAL_ERROR. A `CREATE OR REPLACE TABLE` that reached a populated bronze
     table would drop every row in it. Both socios tables this control covers are
-    populated today (27,836,651 and 1,797 rows), so that is not a hypothetical."""
+    populated, and grow every month: 55,827,243 and 3,583 rows across 2026-06 and
+    2026-07 as of 2026-08-03, so that is not a hypothetical."""
     return _create_table_ddl(table, _bronze_columns(contract))
 
 

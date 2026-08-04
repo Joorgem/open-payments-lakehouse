@@ -54,9 +54,10 @@ def test_evaluate_tolerates_missing_rescued_column(spark):
 # The skip is correct and stays correct. What was wrong is that it was INAUDIBLE,
 # and the reachable silent path is rebuild + repromote: `plan_promotion`'s own
 # docstring records that the documented rebuild drops bronze while LEAVING
-# staging, and the live `bronze_cnpj_estab_staging` is 35 columns -- it carries
-# neither snapshot column, because no estabelecimentos ingest has run since
-# F1.4a. Repromoting a pre-F1.4a batch therefore evaluates a 35-column frame
+# staging, so a batch staged before a derivation existed can be repromoted after
+# it. `bronze_cnpj_estab_staging` was 35 columns until F1.4b PR B migrated it to
+# 37 (2026-08-03), which closes that live instance and not the shape: the next
+# derivation re-opens it. Repromoting such a batch evaluates a narrow frame
 # (rule skipped, reason None), then appends into 37-column bronze, where Delta
 # fills the absent column with NULL. Exactly the value the rule exists to refuse,
 # waved in wordlessly. The control did not fail -- it disappeared.
@@ -116,8 +117,8 @@ def test_the_notice_and_the_gate_cannot_disagree(spark):
     rules = rules_for("empresas")
     row = [("11111111", "ACME LTDA", "2062", "49", "1000,00", "05", "")]
 
-    # The live staging shape: no snapshot column. Rule skipped -> row reads CLEAN,
-    # and the notice is what says so out loud.
+    # A pre-derivation staging shape: no snapshot column. Rule skipped -> row reads
+    # CLEAN, and the notice is what says so out loud.
     bare = spark.createDataFrame(row, TABLES["empresas"])
     assert [r[REJECT_COLUMN] for r in evaluate(bare, rules=rules).collect()] == [None]
     assert skip_notice(bare.columns, rules, task="t", source="s") is not None

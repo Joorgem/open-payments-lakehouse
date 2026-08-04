@@ -307,10 +307,25 @@ def rows_of_batch(spark: SparkSession, table: str, batch_id: str) -> int:
     this count with the number of rows the batch should contribute instead of
     treating any nonzero value as "already done".
 
-    COST: one narrow scan of `_batch_id` over the whole target table (71.9M rows
-    at the end of F1.3) per call, since `_batch_id` is past the 32 columns Delta
-    keeps min/max stats for and so cannot be file-skipped. Cheap next to writing
-    the batch, and it is the price of not double-counting one."""
+    COST: one narrow scan of `_batch_id` over the target table per call -- 144.2M
+    rows across two months as of 2026-08. Cheap next to writing the batch, and it
+    is the price of not double-counting one.
+
+    This used to say `_batch_id` "cannot be file-skipped" because it sits past the
+    32 columns Delta indexes by default. True when written, false now. It is at
+    ordinal 34 of 37 in estabelecimentos, so it did start outside that prefix --
+    but on 2026-08-02 Databricks' Predictive Optimization ran a
+    DATA_SKIPPING_COLUMN_SELECTION unprompted, added `_batch_id` to
+    `delta.workloadBasedColumns.deltaFileStatistics` and backfilled stats onto the
+    existing files (Delta versions 12 and 13). Measured after the 2026-07 promote:
+    the batch filter reads 29 of 59 files and 7.6MB where the same rows selected
+    via an unindexed column read all 59 and 15.5MB. In empresas (14 columns) and
+    socios (18 columns) `_batch_id` is at ordinal 11 and 15, inside the default
+    32, so it was always skippable there and the old claim never applied.
+
+    Depend on this for cost only, never for correctness. Nothing in this repo sets
+    it, the same operation reports a `removed_data_skipping_columns` counterpart,
+    and a platform that added the column unprompted can drop it the same way."""
     if not spark.catalog.tableExists(table):
         return 0
     landed = spark.read.table(table)

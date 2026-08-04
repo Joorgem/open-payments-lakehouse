@@ -47,20 +47,34 @@ def _cannot_ingest(spec: BronzeTable) -> str:
     )
 
 
+def _refuse_non_zip_landing(spec: BronzeTable) -> None:
+    """Refuse a table whose files do not land as zips, before anything else is read.
+
+    The third of this file's argument refusals and the only one that is not a shared
+    guard, so it is named like the other two rather than left as a branch inside
+    `main`: `table_spec` refuses the table, `require_batch_id` and `require_month`
+    refuse the ids, and this refuses the pairing of a registered table with the task
+    that cannot ingest it.
+    """
+    if spec.landing != LANDING_ZIPS:
+        # No job passes the lookup to this entry point (bronze_job.yml runs
+        # bronze_lookup_ingest), so this is the manual or misconfigured invocation
+        # -- the same case require_batch_id exists for. It has to be loud BEFORE THE
+        # SESSION, which is why `main` calls this the moment it has a spec and ahead
+        # of the batch id: this stream adds no `lookup_type`, so the rows would be
+        # read and only then refused by the Delta append's schema check, after a
+        # serverless session and a full scan of the landed files. The registry
+        # refuses unknown landing modes where they are declared, so this comparison
+        # cannot swallow a typo.
+        raise ValueError(_cannot_ingest(spec))
+
+
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     # Table first, and resolved BEFORE the batch id: a mistyped table name is
     # refused by table_spec naming the valid ones, and neither refusal needs Spark.
     spec = table_spec(args[0] if args else "")
-    if spec.landing != LANDING_ZIPS:
-        # No job passes the lookup here (bronze_job.yml runs bronze_lookup_ingest),
-        # so this is the manual or misconfigured invocation -- the same case
-        # require_batch_id exists for. It has to be loud HERE: this stream adds no
-        # `lookup_type`, so the rows would be read and only then refused by the
-        # Delta append's schema check, after a serverless session and a full scan
-        # of the landed files. The registry refuses unknown landing modes where
-        # they are declared, so this comparison cannot swallow a typo.
-        raise ValueError(_cannot_ingest(spec))
+    _refuse_non_zip_landing(spec)
     batch_id = require_batch_id(args[1] if len(args) > 1 else "", action="ingest")
     # NO DEFAULT. This local is handed to `add_audit_columns(snapshot_month=...)`
     # below, and that parameter was deliberately given no default so the config's
@@ -81,14 +95,22 @@ def main(argv: list[str] | None = None) -> None:
         spec.contract,
         DEFAULT.landing_table(spec.subdir, month),
         spec.table_key,
+        month=month,
     )
-    # The SAME `month` the stream read from -- one local, fed to both, so the
-    # snapshot the rows are stamped with cannot drift from the folder they came
-    # out of.
+    # The SAME `month` the stream read from -- ONE local, fed to all four consumers,
+    # so the snapshot the rows are stamped with cannot drift from the folder they
+    # came out of, and neither can the Auto Loader state that decides which of that
+    # folder's files are new. The checkpoint became the fourth consumer in F1.4b PR B
+    # Task 5 Step 0, and it is the one where a divergence is not merely wrong data:
+    # a checkpoint keyed on another month is a stream restarted against a source
+    # directory it never checkpointed, which Spark's recovery semantics call "not
+    # allowed" and "likely to fail with unpredictable errors".
     audited = add_audit_columns(df, batch_id=batch_id, snapshot_month=month)
     query = (
         audited.writeStream.format("delta")
-        .option("checkpointLocation", checkpoint_location(DEFAULT, spec.table_key))
+        .option(
+            "checkpointLocation", checkpoint_location(DEFAULT, spec.table_key, month=month)
+        )
         .trigger(availableNow=True)
         .toTable(DEFAULT.table(spec.staging))
     )

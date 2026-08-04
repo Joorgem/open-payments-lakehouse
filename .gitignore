@@ -15,3 +15,6 @@ __pycache__/
 # databricks
 .databricks/
 dist/
+
+# working plans and handoffs (local only)
+/.plans/

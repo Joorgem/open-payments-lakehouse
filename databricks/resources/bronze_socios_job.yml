@@ -43,9 +43,42 @@ resources:
       name: opl-bronze-cnpj-socios
       parameters:
         - name: month
-          default: "2026-06"
+          # The month this run ingests; the default is a value the tasks refuse
+          # (opl.config.SENTINEL_MONTH), because a real month here re-ingests that
+          # month against an EMPTY month-scoped checkpoint and silently doubles the
+          # row counts -- the promote's idempotence is keyed on _batch_id and cannot
+          # see it. Estabelecimentos' job carries the full argument.
+          default: "REQUIRED-PASS-A-MONTH"
+        - name: revision
+          # The revision this run is launched for; the default is a value the guard
+          # below refuses. Estabelecimentos' job carries the full argument.
+          #
+          #     databricks bundle run bronze_cnpj_socios -t free \
+          #       --params month=2026-07,revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
       tasks:
+        # FIRST -- AHEAD EVEN OF THE MASKS, and that ordering is deliberate in both
+        # directions (ADR 0009). This task reads nothing and writes nothing: it
+        # compares the revision above against the revision the deployed wheel was
+        # built from, and returns. So it does not weaken ADR 0008's claim that the
+        # control was applied before any byte landed -- ensure_masked_table is still
+        # the first task that touches a table at all.
+        #
+        # It has to be ahead rather than after, because ensure_masked_table issues
+        # DDL: a wrong wheel would create and mask the socios tables with a masking
+        # module nobody reviewed, and that is the incident this guard is named after.
+        # On 2026-08-01 a socios re-run terminated SUCCESS having masked only bronze,
+        # because the workspace was still running a bundle deployed four commits
+        # earlier -- the commits that masked the quarantine had never left the laptop.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
         - task_key: ensure_masked_table
+          depends_on: [{ task_key: assert_deployed_revision }]
           max_retries: 0
           environment_key: opl_env
           spark_python_task:
@@ -55,9 +88,14 @@ resources:
             # quarantine names to build them under are all resolved from the
             # registry, so no column name and no table name is spelled here.
             #
-            # NO depends_on, and that is the control rather than an omission.
-            # Anything running before this creates one of those tables by
-            # writing to it, and then the mask arrives after the names did.
+            # IT WAITS FOR THE REVISION GUARD AND FOR NOTHING ELSE, and that
+            # remains the control rather than an omission. Anything that TOUCHES
+            # A TABLE before this creates one of them by writing to it, and then
+            # the mask arrives after the names did -- so the only task allowed
+            # ahead of this one is the one that touches nothing.
+            # tests/test_job_yaml_wiring.py asserts exactly that: this task's
+            # depends_on is empty or the guard, and no other task can start
+            # before it.
             parameters: ["socios"]
 
         - task_key: unzip

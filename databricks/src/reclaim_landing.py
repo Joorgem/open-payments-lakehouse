@@ -46,8 +46,10 @@ def _cannot_reclaim(spec: BronzeTable) -> str:
     and 4 were parse defects found AFTER ingestion whose fix required re-reading
     that source. For a `local`-landed table there is no zip in the Volume to go
     back to: `scripts/extract_cnpj.py` unzips on the extraction host and PUTs only
-    the inner file, so a read-only listing of `cnpj/<month>/zips/` holds
-    `estabelecimentos` and nothing else. The six lookup CSVs under `lookups/` are
+    the inner file, so no zip of it ever reaches the Volume -- `cnpj/<month>/zips/`
+    holds a subdirectory only for the groups that land AS zips (2026-06:
+    `estabelecimentos`; 2026-07: `empresas`, `estabelecimentos`, `socios`) and
+    never one for a `local`-landed table. The six lookup CSVs under `lookups/` are
     the ONLY copy in the workspace, and recovery would mean a fresh WebDAV download
     of a monthly snapshot the RFB may have rotated -- from a share ADR 0003
     measured at ~50% transient 500s.

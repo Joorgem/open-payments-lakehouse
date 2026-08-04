@@ -16,7 +16,11 @@ pyspark = pytest.importorskip("pyspark")
 
 from pyspark.sql import functions as F  # noqa: E402
 
-from opl.bronze.snapshot import ref_date_column  # noqa: E402
+from opl.bronze.snapshot import (  # noqa: E402
+    ref_date_column,
+    token_month_column,
+    token_month_key,
+)
 
 _ROOT = "/Volumes/workspace/default/landing/cnpj"
 ESTAB = f"{_ROOT}/2026-06/estabelecimentos/K3241.K03200Y0.D60613.ESTABELE"
@@ -167,3 +171,76 @@ def test_a_malformed_month_parameter_raises_instead_of_building_a_null_column(sp
     all; nothing here executes a query."""
     with pytest.raises(ValueError, match="YYYY-MM"):
         ref_date_column(F.col("src"), bad)
+
+
+# --- the month the FILENAME asserts, on its own -------------------------------
+#
+# `ref_date_column` collapses every disagreement to NULL, so it can say "this row
+# is not provable against the month I was given" and never "this row claims a
+# DIFFERENT month". The backfill needs the second answer BEFORE it writes: a
+# legacy table has no `_snapshot_month` to contradict, so the only evidence of the
+# month it belongs to is in `_source_file`.
+
+
+def _token_month(spark, path: str):
+    df = spark.createDataFrame([(path,)], "src string")
+    return df.select(token_month_column(F.col("src")).alias("m")).collect()[0]["m"]
+
+
+def test_the_key_is_the_single_year_digit_the_filename_can_actually_carry():
+    """`'6-07'`, not `'2026-07'`. The token has ONE year digit, so a key claiming
+    four would assert a fact the filename does not carry -- the same reason
+    `ref_date_column` takes the decade from the job parameter."""
+    assert token_month_key("2026-07") == "6-07"
+    assert token_month_key("2026-06") == "6-06"
+    # Different decade, same key: the filename genuinely cannot tell them apart.
+    assert token_month_key("2016-06") == token_month_key("2026-06")
+
+
+@pytest.mark.parametrize("bad", ["2026-6", "202606", "", "2026-13", "2026-00"])
+def test_a_malformed_month_cannot_produce_a_key(bad):
+    """The key feeds an equality test. A malformed month would silently match no
+    filename at all, which reads as 'every file disagrees' -- a refusal message
+    naming the wrong cause."""
+    with pytest.raises(ValueError, match="YYYY-MM"):
+        token_month_key(bad)
+
+
+def test_the_filename_month_is_read_even_when_it_disagrees_with_everything(spark):
+    """The whole point: this answers WHICH month the file claims, with no month to
+    compare against. A June file is '6-06' whatever the run was asked for."""
+    assert _token_month(spark, ESTAB) == "6-06"
+    assert _token_month(spark, JULY) == "6-07"
+    assert _token_month(spark, LOOKUP) == "6-06"
+
+
+def test_a_filename_with_no_token_asserts_no_month(spark):
+    """NULL, not "". A caller must not be able to read absence as agreement, and
+    `collect_set` drops NULLs so an untokenised file simply is not in the set."""
+    assert _token_month(spark, "/Volumes/x/2026-06/lookups/Cnaes.csv") is None
+
+
+def test_two_tokens_assert_no_month_either(spark):
+    """Matching `ref_date_column` exactly. A filename with two tokens does not
+    claim one month, and picking the leftmost is the guess this module refuses."""
+    two = "/Volumes/x/2026-06/estabelecimentos/K3241.D60601.K03200Y0.D60613.ESTABELE"
+    assert _token_month(spark, two) is None
+
+
+def test_a_token_in_a_DIRECTORY_name_does_not_win_here_either(spark):
+    """Both functions read the same characters of the same filename -- they share
+    `_token_parts`. A directory token winning here would let the backfill accept a
+    month the reference date would then reject, which is the disagreement the
+    guard exists to prevent, planted by the guard itself."""
+    path = "/Volumes/x/2026-06/batch.D60501.reprocess/K3241.K03200Y0.D60613.ESTABELE"
+    assert _token_month(spark, path) == "6-06"
+
+
+def test_the_two_functions_agree_on_what_a_provable_row_is(spark):
+    """The invariant that makes the backfill's pre-write refusal sound: a row whose
+    token month equals the key is exactly a row `ref_date_column` will date, and a
+    row whose token month differs is exactly one it will send to NULL."""
+    assert _token_month(spark, ESTAB) == token_month_key("2026-06")
+    assert _derive(spark, ESTAB, "2026-06") is not None
+    assert _token_month(spark, ESTAB) != token_month_key("2026-07")
+    assert _derive(spark, ESTAB, "2026-07") is None

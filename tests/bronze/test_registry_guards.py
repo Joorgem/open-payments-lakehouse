@@ -167,13 +167,16 @@ def test_a_delta_name_collision_in_one_spelling_reads_as_one_name(monkeypatch):
 def test_a_pasted_checkpoint_namespace_is_refused_at_import(monkeypatch):
     """`table_key` is the fourth name a paste leaves stale, and the quietest.
 
-    It names no Delta table. It is the namespace under which `autoloader.
-    checkpoint_location` and `schema_location` put `_checkpoints/<table_key>` and
-    `_schemas/<table_key>` in the Volume, so two tables sharing one share an Auto
-    Loader CHECKPOINT -- and a checkpoint is a record of which files are already
-    processed. The second table's stream would start up believing the first's files
-    were its own and already ingested, and report SUCCESS having written nothing.
-    The shared `_schemas` entry compounds it by merging two unrelated schemas.
+    It names no Delta table. It is the last component `autoloader.
+    checkpoint_location` and `schema_location` put `_checkpoints/<month>/<table_key>`
+    and `_schemas/<month>/<table_key>` in the Volume under, so two tables sharing one
+    share an Auto Loader CHECKPOINT -- and a checkpoint is a record of which files
+    are already processed. The second table's stream would start up believing the
+    first's files were its own and already ingested, and report SUCCESS having
+    written nothing. The shared `_schemas` entry compounds it by merging two
+    unrelated schemas. Month-scoping (F1.4b PR B Task 5 Step 0) does not soften
+    this: two tables ingesting the same month still collide, and every month
+    collides, so the guard is exactly as strong as before.
 
     `test_every_registered_table_has_a_checkpoint_namespace_of_its_own`
     (test_registry.py) asserts the same property, and for the reason given in the
