@@ -396,6 +396,32 @@ happened selected neither name column, which is a discipline and not a control.
 the clear, and it will keep holding them. That is a decision, recorded here rather
 than left as a silence for a reader to discover.
 
+> **⚠️ UPDATE, 2026-08-03 (F1.4b PR B): the exposure has roughly doubled, exactly
+> as this section predicted it would.** F1.4b PR B ingested 2026-07, appending a
+> **27,992,378**-row socios batch to the same staging table, and nothing drains
+> it — which is this section's own thesis, now observed over a second month
+> rather than argued. **Every `27,838,448` below is the one-month figure and
+> should be read as `+ 27,992,378` per month thereafter.** Derived totals as of
+> 2026-08-03:
+>
+> | | 2026-06 | 2026-07 | total |
+> |---|---|---|---|
+> | `bronze_cnpj_socios_staging` (names in the clear) | 27,838,448 | 27,992,378 | **55,830,826** |
+> | `bronze_cnpj_socios` (masked) | 27,836,651 | 27,990,592 | **55,827,243** |
+> | `bronze_cnpj_socios_quarantine` (masked) | 1,797 | 1,786 | **3,583** |
+>
+> **The three totals are arithmetic, not printed by any run.** The per-month
+> figures are measured (`docs/f1.4b-pr-b-run-evidence.md` §18, §21.2, §23.1); the
+> sums are this correction's own addition and should be re-queried before anyone
+> relies on them. They reconcile — 55,827,243 + 3,583 = 55,830,826 — which is a
+> consistency check, not an independent measurement.
+>
+> One property does **not** carry over with the row count. The "every row, not a
+> `LIMIT 5`" verification below was a whole-table `count(DISTINCT)` over
+> 27,836,651 rows. PR B's post-ingest re-check was a `SELECT` returning `*** ***`,
+> not a whole-table aggregate, so **the exhaustive read-through property is still
+> established only over the 2026-06 half.**
+
 **The decision.** Staging is not drained after a successful promote, and this ADR
 introduces no policy that drains it. `promote_batch` appends to bronze and deletes
 nothing; `opl.bronze.retention` reclaims *landed files* and documents that it
@@ -433,16 +459,39 @@ on quarantine, to any principal. Only the owner can read staging. The old claim
 turns out to have been true — and true by accident, since it was written without
 this evidence, which is precisely the species of claim this ADR was caught making.
 
+> **⚠️ CORRECTION, 2026-08-03 (F1.4b PR B).** **"Only the owner can read staging"
+> is false, and the way it fails is worse than a missed GRANT.** Databricks
+> **Predictive Optimization**, running as the metastore-inherited service
+> principal `6dfb9574-f409-433e-9e93-5acc4a190ffe`, read and rewrote
+> `bronze_cnpj_estab_staging` with **no grant of any kind**: on 2026-07-30 it ran
+> `DATA_SKIPPING_COLUMN_SELECTION` against that table (0.187 estimated DBU) and
+> set `delta.workloadBasedColumns.deltaFileStatistics`, and it **compacted that
+> staging table from 42 files into 21**
+> (`docs/f1.4b-pr-b-run-evidence.md` §24).
+> The `table_privileges` measurement above is still **correct** — it returned no
+> rows, and still would. What fails is the inference: **a platform service's
+> access does not flow through `table_privileges`, so measuring grants does not
+> bound who reads a table.**
+> Scope it honestly: the recorded operations name the **estabelecimentos**
+> staging table, not socios (empresas and socios are under 32 columns and carry
+> no stats property). This is a demonstrated *class* exposure on a staging table
+> of the same layer under the same owner, not a socios measurement — which is
+> exactly why it belongs here rather than being waved off.
+
 **Where this reasoning is weak, said plainly rather than dressed up.**
 
 - **The guard is an absence, not a control.** What protects staging is that no
   `GRANT SELECT` was ever issued. One `GRANT` reverses it, nothing in this
   repository would notice, and no test asserts the empty result above. It is a
-  measurement of a moment, not an invariant.
+  measurement of a moment, not an invariant. **And it is narrower than that:**
+  the second reader that actually arrived needed no `GRANT` — see the correction
+  above.
 - **One workspace, one user.** A Free Edition workspace with a single account is
   the easiest possible case for this argument. The same queries against a shared
   workspace would very likely return rows, and the conclusion would have to be
-  re-derived rather than cited.
+  re-derived rather than cited. **This premise is also false as stated:** there
+  are demonstrably at least two principals touching these tables, and the second
+  is not an account anyone created.
 - **The rebuild reason justifies keeping *a* batch, not every batch.** It covers
   retaining the most recent promoted batch. Staging accumulates monthly and nothing
   bounds it, so the reason given is narrower than the policy adopted. Bounded

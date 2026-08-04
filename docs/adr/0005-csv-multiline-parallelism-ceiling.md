@@ -31,7 +31,9 @@ have caught this.
 
 ## Decision
 Set `multiLine=true` in the shared `csv_read_options()`, so it applies to the
-Auto Loader streams (lookup and estabelecimentos) and to the local batch reader
+Auto Loader streams (lookup and estabelecimentos when this was written; empresas
+and socios joined them in F1.4b PR A, so it is **four** streams today) and to the
+local batch reader
 that exists to be their testable twin. Scoping it to one call site was
 considered and rejected: the defect is latent in the lookup path by the same
 mechanism (only its file sizes and current content make it lucky), and
@@ -54,6 +56,19 @@ that both paths parse the RFB files byte-identically.
   it was read, parsed and written by a **single task**: 29,093,533 rows in a run
   of about nine minutes, taking bronze to 71,874,448 rows. Wall clocks in
   [`docs/f1.3-estabelecimentos-run-evidence.md`](../f1.3-estabelecimentos-run-evidence.md).
+
+  > **Dated, 2026-08-03 (F1.4b PR B Task 7).** Every byte count in this bullet and
+  > the one above is **keyed to the 2026-06 object** and moves every month:
+  > 2026-07's `Estabelecimentos0.zip` is 2,164,567,397 B, not 2,128,818,559 B, and
+  > took 42 upload parts rather than 41 (ADR 0007 carries the same correction).
+  > "Ten parts in total" and "~320–370 MB" both held for 2026-07. The 71,874,448
+  > figure is the 2026-06 table; `bronze_cnpj_estabelecimentos` now holds
+  > **144,193,412** rows over two months, at Delta version 17, 59 files,
+  > 6,886,570,119 B. Part 0 has now been read under `multiLine=true` **twice**,
+  > the second time in the 2026-07 ingest — but PR B published no per-task
+  > timings, so **the ~9 min single-task read is still one observation**, neither
+  > reproduced nor challenged, and the ceiling is still uncompared against
+  > `multiLine=false`.
   That is one run with nothing isolated — not a benchmark, and no comparison
   against `multiLine=false` exists — so what it settles is that the ceiling is
   livable at this scale, not what it costs. No pre-splitting was needed. Should a
@@ -70,3 +85,14 @@ that both paths parse the RFB files byte-identically.
 - The defect *class* is not closed, only its known cause. No rule detects a row
   whose entire trailing tail is NULL, so a future parse break of a different
   shape would again pass fail-closed gating. See ADR 0006.
+
+  > **Narrowed, 2026-08-03 (F1.4b PR B Task 7).** As written this overstates the
+  > gap. `caed88e` made `municipio` a required field for estabelecimentos, and
+  > `municipio` is ordinal 21 of 30 — while the parent row this ADR describes lost
+  > 18 of 30 columns, i.e. everything from ordinal 13 on. **That exact row would
+  > be rejected today**, by `null_or_empty_municipio`, and the widening was safe
+  > to add live because blanks in `municipio` measured 0 over the table
+  > (F1.4b PR A §8). What remains true is the narrower statement: **no
+  > *completeness* rule exists**, so a break losing only the last few ordinals
+  > (22–30) still passes. ADR 0006 repeats the original wording; both should be
+  > read with this narrowing.

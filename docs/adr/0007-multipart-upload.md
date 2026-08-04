@@ -120,7 +120,10 @@ Two consequences were followed through rather than left implicit:
   `_retry_cloud_idempotent_operation` — to each presigned part PUT. The largest
   unit is one 50 MiB part, and because ten parts upload concurrently over a
   ~67 MB/min link, one part takes ~7.8 min of wall clock rather than the ~47 s it
-  would take alone. 30 min is ~3.8× that. The SDK's own 300 s default is *smaller*
+  would take alone. 30 min is ~3.8× that. (**Measured since**: ~2.6 min per part
+  and ~11×, because ~67 MB/min was PR A's mix — see the correction under
+  "What PR A measured" below. The conclusion is unchanged and the margin is
+  larger than derived.) The SDK's own 300 s default is *smaller*
   than one worst-case part here, which would reproduce the F1.3 timeout at part
   granularity, so an explicit value is still required — just a different one.
 - **The post-PUT size check stays**, as defence in depth rather than as a
@@ -173,11 +176,23 @@ Two consequences were followed through rather than left implicit:
   observed it at 3-8 across every multipart object, **7** on
   `Estabelecimentos0.zip`
   ([`docs/f1.4b-pr-b-run-evidence.md` §13.5](../f1.4b-pr-b-run-evidence.md#135-the-estabelecimentos0zip-geometry--42-parts-not-41)).
-  So every upload this repo performs fetches presigned URLs in batches of up to
-  8, not one at a time, and the config's own stated mitigation is not in
-  effect. Nothing has gone wrong from it — zero URL expiries across 505 parts
-  and two PRs — so this is a documentation gap and a latent risk, not an
-  incident. It sits directly beside the per-part-retry argument below and
+  So every **multipart** upload this repo performs fetches presigned URLs in
+  batches of up to 8, not one at a time, and the config's own stated mitigation
+  is not in effect. (Single-PUT objects fetch no presigned URL at all — nine of
+  PR A's twenty and nine of PR B's thirty took that path.) Nothing has gone wrong
+  from it — **zero URL expiries across PR B's 505 parts; PR A's parts were never
+  instrumented**, so no two-PR part total exists — so this is a documentation gap
+  and a latent risk, not an incident.
+
+  > **Correction, 2026-08-03 (F1.4b PR B Task 7).** This bullet originally read
+  > "zero URL expiries across 505 parts and two PRs", and said "every upload"
+  > where it meant every multipart upload. 505 is PR B's count alone (23 socios +
+  > 135 empresas + 347 estabelecimentos, over its 21 multipart objects); the
+  > per-part geometry came from a scratch logger that existed only for PR B's run
+  > (`docs/f1.4b-pr-b-run-evidence.md` §13.9), so **PR A contributed an unknown,
+  > unlogged number of parts.** What is true across both PRs is 9.376 GB moved
+  > with nothing having ever retried. The open item below states it correctly;
+  > this bullet did not. It sits directly beside the per-part-retry argument below and
   belongs in this ADR rather than only in run evidence.
 - **The upload-as-ZIP design outlives the constraint that created it.** It was
   forced by the 5 GiB single-PUT ceiling of the 0.40 pin; that ceiling is gone
@@ -204,6 +219,20 @@ Two consequences were followed through rather than left implicit:
   **consistent with observed aggregate throughput** — the rate the derivation was
   built on survives contact with this link.
 
+  > **⚠️ Corrected, 2026-08-03 (F1.4b PR B).** "The rate the derivation was built
+  > on survives contact with this link" **did not survive PR B.** PR B's whole
+  > run averaged **122.9 MB/min** (7,343,546,309 B in 59 m 44.7 s) and its
+  > multipart half **164.9 MB/min**, peaking at **199.3** on
+  > `Estabelecimentos0.zip`. So ~67 MB/min is a property of **PR A's mix**, not of
+  > the link — which is exactly what the PR B correction two bullets down
+  > concludes, and this bullet, the one the timeout derivation leans on, was not
+  > updated with it. The consequence is benign in direction: the 30-minute budget
+  > is **more** conservative than argued, not less. Measured per-part worst case
+  > is **~2.6 min** (`Estabelecimentos0.zip`'s 42 parts in 651.6 s at 10-way
+  > concurrency), so 30 min is ~11× it, not the ~3.8× derived above. **Do not
+  > tighten the budget from this**: a rate that moves 2.5× between two runs is not
+  > a link property either.
+
   That is weaker than "correctly sized by observation", which this bullet said
   until CodeRabbit read it on PR #6, and the difference is worth keeping. What was
   measured is twenty whole-object transfers and their aggregate rate. What the
@@ -228,7 +257,7 @@ Two consequences were followed through rather than left implicit:
 
   **The 3.8× figure above is PR A's sample, not this connection's throughput,
   and F1.4b PR B's Task 4 upload is where that stopped holding.** PR B moved
-  its 20 multipart objects at **164.9 MB/min** against single PUT's
+  20 of its 21 multipart objects at **164.9 MB/min** against single PUT's
   **24.8 MB/min** — **6.6×**, not 3.8× — and the single-PUT half of that ratio
   is the more telling one: PR B's 24.8 MB/min reproduces PR A's 24.8 MB/min to
   three significant figures, on a different day, against different bytes
