@@ -96,6 +96,7 @@ from opl.bronze.autoloader import SOURCE_FILE_COLUMN
 # costs, is in `opl.bronze.backfill_prewrite`'s module docstring.
 from opl.bronze.backfill_masks import observed_masks, restore_masks, verify_masks_or_raise
 from opl.bronze.backfill_prewrite import (
+    PreWriteScan,
     missing_columns,
     pre_write_scan,
     refuse_contradicting_month,
@@ -487,6 +488,101 @@ def _done_line(
     )
 
 
+def pre_write_or_refuse(
+    spark: SparkSession, before: DataFrame, *, tbl: str, month: str, spec: BronzeTable
+) -> tuple[int, PreWriteScan]:
+    """The RESTORE target and the one pre-write scan -- or a refusal. NOTHING IS WRITTEN.
+
+    Everything that has to happen before the ALTER and before the overwrite, in the
+    order their costs and their evidence demand. Extracted from `main` so that
+    ordering is a property of a function rather than of where the lines happen to
+    sit, and so the phase can be read without the write below it.
+
+    RETURNS THE SCAN, not its `rows`. A Delta version and a row count are both ints,
+    and both read as plausible in either position of a two-int return -- swapping
+    them prints `RESTORE TABLE <t> TO VERSION AS OF 71874448` and verifies the write
+    against a version number. The scan is a different type, so that swap does not
+    typecheck by eye.
+    """
+    # The version, then its RESTORE statement, then the row count -- in that
+    # order and each printed as it is known. The count is a full scan of 71.9M
+    # rows and can fail or be killed; a version obtained but never printed is a
+    # version nobody has.
+    version = latest_version(spark, tbl)
+    print(f"backfill: {tbl} at version {version}")
+    print(f"backfill: to undo -> RESTORE TABLE {tbl} TO VERSION AS OF {version}")
+    scan = pre_write_scan(before)
+    print(f"backfill: {scan.rows} rows, month={month}, already carries "
+          f"{list(scan.months)}, {SOURCE_FILE_COLUMN} says {list(scan.source_months)} "
+          f"({scan.rows_without_source_month} row(s) carry no single filename token)")
+    # All three refused HERE -- inside this function, which `main` calls before the
+    # ALTER and before the write -- because the write destroys or forges the evidence
+    # they are refused on: see
+    # `refuse_contradicting_month` for the months the table carries and
+    # `refuse_contradicting_source_month` for the months its FILENAMES carry, which
+    # is the half that survives a legacy table having no month column at all. None is
+    # scoped to a target: a staging table stamped with the wrong month is the same
+    # defect as a bronze one, and the quarantine guard decides from the name it was
+    # handed rather than from the flag that produced it.
+    refuse_contradicting_month(scan.months, month=month, tbl=tbl)
+    refuse_contradicting_source_month(scan.source_months, month=month, tbl=tbl)
+    refuse_non_empty_quarantine(scan.rows, month=month, tbl=tbl, spec=spec)
+    if scan.months:
+        print(f"backfill: {tbl} is already stamped {month} -- re-running is idempotent")
+    return version, scan
+
+
+def restore_and_verify_masks(
+    spark: SparkSession, spec: BronzeTable, tbl: str, *, wrote: bool, version: int
+) -> None:
+    """Put the UC column mask back, and refuse to report success if the catalog
+    disagrees. A contract with no masks pays for neither."""
+    # `main` calls this IMMEDIATELY after the write and ahead of every other check,
+    # because this is the only one whose failure state is personal names readable in
+    # the clear: the overwrite may have been planned as a table REPLACE, which drops
+    # the mask, and every statement between the commit and the re-apply is time that
+    # table spends unmasked. `_check`, which `verify_after_write` runs next, is a full
+    # aggregate over 71.9M rows; it is not the thing to do first.
+    restored = restore_masks(spark, spec, tbl, wrote=wrote)
+    if restored:
+        # The catalog is asked only when something was re-applied. An unmasked
+        # contract must not pay for a query against `system.information_schema` to
+        # be told it has no masks, and `verify_masks_or_raise` would accept any
+        # observed set against an empty requirement anyway.
+        verify_masks_or_raise(observed_masks(spark, tbl), restored, tbl=tbl, version=version)
+        print(f"backfill: verified {len(restored)} column mask(s) in the catalog on {tbl}")
+
+
+def verify_after_write(
+    spark: SparkSession,
+    spec: BronzeTable,
+    *,
+    tbl: str,
+    columns_before: frozenset[str],
+    rows_before: int,
+    version: int,
+) -> None:
+    """Read the table back, print the numbers, and refuse to claim a success that
+    does not hold -- then re-assert the constraints and warn about NULL ref dates.
+
+    The three are one phase because their ORDER is the decision, and the comment
+    below is the whole of it. Everything here raises or prints; nothing writes rows.
+    """
+    after = spark.read.table(tbl)
+    check = _check(after, columns_before)
+    print(
+        f"backfill: rows={check.rows} (was {rows_before}) null_month={check.null_month} "
+        f"null_ref_date={check.null_ref_date} months={list(check.months)} "
+        f"ref_dates={list(check.ref_dates)}"
+    )
+    # Verify BEFORE the constraint DDL: that statement re-validates a CHECK over
+    # the whole table, and a table this script is about to tell the operator to
+    # RESTORE should not be paid for twice.
+    verify_or_raise(check, rows_before=rows_before, tbl=tbl, version=version)
+    _assert_constraints(spark, spec, tbl)
+    _warn_on_null_ref_dates(check, tbl=tbl, version=version)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     # Every argument refused BEFORE Spark, the order every job task in this repo
@@ -512,31 +608,7 @@ def main(argv: list[str] | None = None) -> int:
             "Nothing was written."
         )
 
-    # The version, then its RESTORE statement, then the row count -- in that
-    # order and each printed as it is known. The count is a full scan of 71.9M
-    # rows and can fail or be killed; a version obtained but never printed is a
-    # version nobody has.
-    version = latest_version(spark, tbl)
-    print(f"backfill: {tbl} at version {version}")
-    print(f"backfill: to undo -> RESTORE TABLE {tbl} TO VERSION AS OF {version}")
-    scan = pre_write_scan(before)
-    rows_before = scan.rows
-    print(f"backfill: {rows_before} rows, month={month}, already carries "
-          f"{list(scan.months)}, {SOURCE_FILE_COLUMN} says {list(scan.source_months)} "
-          f"({scan.rows_without_source_month} row(s) carry no single filename token)")
-    # All three refused HERE, before the ALTER and before the write, because the
-    # write destroys or forges the evidence they are refused on -- see
-    # `refuse_contradicting_month` for the months the table carries and
-    # `refuse_contradicting_source_month` for the months its FILENAMES carry, which
-    # is the half that survives a legacy table having no month column at all. None is
-    # scoped to a target: a staging table stamped with the wrong month is the same
-    # defect as a bronze one, and the quarantine guard decides from the name it was
-    # handed rather than from the flag that produced it.
-    refuse_contradicting_month(scan.months, month=month, tbl=tbl)
-    refuse_contradicting_source_month(scan.source_months, month=month, tbl=tbl)
-    refuse_non_empty_quarantine(rows_before, month=month, tbl=tbl, spec=spec)
-    if scan.months:
-        print(f"backfill: {tbl} is already stamped {month} -- re-running is idempotent")
+    version, scan = pre_write_or_refuse(spark, before, tbl=tbl, month=month, spec=spec)
 
     to_add = missing_columns(columns_before)
     if to_add:
@@ -549,36 +621,13 @@ def main(argv: list[str] | None = None) -> int:
     # Re-read: the DataFrame above was resolved against the pre-ALTER schema.
     # No branch here on purpose -- whether the write happens at all is
     # `fill_and_overwrite`'s decision, stated once and tested both ways.
-    wrote = fill_and_overwrite(spark.read.table(tbl), month=month, tbl=tbl, rows=rows_before)
+    wrote = fill_and_overwrite(spark.read.table(tbl), month=month, tbl=tbl, rows=scan.rows)
 
-    # IMMEDIATELY after the write and ahead of every other check, because this is the
-    # only one whose failure state is personal names readable in the clear: the
-    # overwrite may have been planned as a table REPLACE, which drops the mask, and
-    # every statement between the commit and the re-apply is time that table spends
-    # unmasked. `_check` below is a full aggregate over 71.9M rows; it is not the
-    # thing to do first.
-    restored = restore_masks(spark, spec, tbl, wrote=wrote)
-    if restored:
-        # The catalog is asked only when something was re-applied. An unmasked
-        # contract must not pay for a query against `system.information_schema` to
-        # be told it has no masks, and `verify_masks_or_raise` would accept any
-        # observed set against an empty requirement anyway.
-        verify_masks_or_raise(observed_masks(spark, tbl), restored, tbl=tbl, version=version)
-        print(f"backfill: verified {len(restored)} column mask(s) in the catalog on {tbl}")
-
-    after = spark.read.table(tbl)
-    check = _check(after, columns_before)
-    print(
-        f"backfill: rows={check.rows} (was {rows_before}) null_month={check.null_month} "
-        f"null_ref_date={check.null_ref_date} months={list(check.months)} "
-        f"ref_dates={list(check.ref_dates)}"
+    restore_and_verify_masks(spark, spec, tbl, wrote=wrote, version=version)
+    verify_after_write(
+        spark, spec, tbl=tbl, columns_before=columns_before, rows_before=scan.rows,
+        version=version,
     )
-    # Verify BEFORE the constraint DDL: that statement re-validates a CHECK over
-    # the whole table, and a table this script is about to tell the operator to
-    # RESTORE should not be paid for twice.
-    verify_or_raise(check, rows_before=rows_before, tbl=tbl, version=version)
-    _assert_constraints(spark, spec, tbl)
-    _warn_on_null_ref_dates(check, tbl=tbl, version=version)
     # Which of the two lines is true of THIS run is `_done_line`'s decision, so that
     # it has both directions pinned by test like every other decision in this file.
     print(_done_line(wrote=wrote, to_add=to_add, tbl=tbl, version=version))
