@@ -400,8 +400,15 @@ than left as a silence for a reader to discover.
 > as this section predicted it would.** F1.4b PR B ingested 2026-07, appending a
 > **27,992,378**-row socios batch to the same staging table, and nothing drains
 > it — which is this section's own thesis, now observed over a second month
-> rather than argued. **Every `27,838,448` below is the one-month figure and
-> should be read as `+ 27,992,378` per month thereafter.** Derived totals as of
+> rather than argued. **Every `27,838,448` below is the one-month figure, and the
+> table reports two MEASURED months — it is not a forecast.** The two batches
+> already differ by 153,930 rows (27,838,448 → 27,992,378, +0.55%), so
+> `27,992,378` is the size of one month and not a constant: **every future month
+> needs a fresh count before it is added to a total.** If a number is needed for
+> retention planning before that count exists, use an explicit upper bound of
+> **28,500,000 rows/month** — that is a bound chosen to sit above the observed
+> trend with room, *not* a measurement, and any figure derived from it must say
+> so. Derived totals as of
 > 2026-08-03:
 >
 > | | 2026-06 | 2026-07 | total |

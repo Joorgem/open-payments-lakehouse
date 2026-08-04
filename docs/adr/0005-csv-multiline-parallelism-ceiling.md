@@ -94,5 +94,16 @@ that both paths parse the RFB files byte-identically.
   > to add live because blanks in `municipio` measured 0 over the table
   > (F1.4b PR A §8). What remains true is the narrower statement: **no
   > *completeness* rule exists**, so a break losing only the last few ordinals
-  > (22–30) still passes. ADR 0006 repeats the original wording; both should be
-  > read with this narrowing.
+  > (22–30) still passes.
+  >
+  > **The cross-reference, corrected 2026-08-04 (CodeRabbit on PR #7).** This note
+  > used to end "ADR 0006 repeats the original wording; both should be read with
+  > this narrowing", and that sentence was true when it was written and false by
+  > the time the branch was pushed: the same fix wave added the identical narrowing
+  > to [ADR 0006 §Consequences](0006-bronze-dq-gate-policy.md), under its **No
+  > completeness rule** bullet, precisely because the pointer between the two was
+  > one-directional. Both ADRs now carry it, and a reader arriving at either one
+  > alone gets the narrowed statement. The correction is recorded rather than
+  > silently deleted because the stale sentence is what a reviewer read, and an ADR
+  > that quietly repairs its own claims cannot be checked against the review that
+  > found them.

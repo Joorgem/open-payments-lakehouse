@@ -59,11 +59,14 @@ UPLOAD_PROFILE = "opl-free"
 # only the margin is bigger than it was argued to be. Do not tighten the budget
 # from this -- the rate is a property of a run, not of the link.
 #
-# 30 min is ~3.8x that worst-case part by the derivation above, so the largest
-# part can fail and be retried the 3 times the cloud-retry cap allows without
-# the budget going flat mid-way. Note the SDK's own 300 s default is SMALLER
-# than one worst-case part here, which would recreate the F1.3 failure exactly
-# at part granularity: the budget is
+# 30 min is ~3.8x the DERIVED worst-case part (~7.8 min) and ~11x the MEASURED
+# one (~2.6 min), so the largest part can fail and be retried the 3 times the
+# cloud-retry cap allows without the budget going flat mid-way. Both figures are
+# kept deliberately: the derived one is what the budget was SIZED against, and it
+# is the smaller margin, so the headroom argument is made on the pessimistic
+# number and the measurement only widens it. Note the SDK's own 300 s default is
+# SMALLER than one worst-case part here, which would recreate the F1.3 failure
+# exactly at part granularity: the budget is
 # spent inside the first attempt, so the first retryable failure is fatal
 # (that is how Estabelecimentos3.zip, 366,824,247 B, died as
 # `Timed out after 0:05:00`). So this stays explicit rather than reverting to
