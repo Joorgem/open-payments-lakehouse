@@ -192,8 +192,14 @@ Two consequences were followed through rather than left implicit:
   > (`docs/f1.4b-pr-b-run-evidence.md` §13.9), so **PR A contributed an unknown,
   > unlogged number of parts.** What is true across both PRs is 9.376 GB moved
   > with nothing having ever retried. The open item below states it correctly;
-  > this bullet did not. It sits directly beside the per-part-retry argument below and
-  belongs in this ADR rather than only in run evidence.
+  > this bullet did not.
+  >
+  > *(Two fixes here on 2026-08-03, final review: the last line had lost its `>`
+  > and fell out of the blockquote, and the sentence it carried — "it sits beside
+  > the per-part-retry argument and belongs in this ADR rather than only in run
+  > evidence" — was a leftover from the original bullet arguing for its own
+  > placement. It had nothing to do with the count error this correction is about,
+  > so it is retired rather than re-indented.)*
 - **The upload-as-ZIP design outlives the constraint that created it.** It was
   forced by the 5 GiB single-PUT ceiling of the 0.40 pin; that ceiling is gone
   and a 6.78 GB object would upload fine today. Uploading compressed stays
@@ -222,7 +228,10 @@ Two consequences were followed through rather than left implicit:
   > **⚠️ Corrected, 2026-08-03 (F1.4b PR B).** "The rate the derivation was built
   > on survives contact with this link" **did not survive PR B.** PR B's whole
   > run averaged **122.9 MB/min** (7,343,546,309 B in 59 m 44.7 s) and its
-  > multipart half **164.9 MB/min**, peaking at **199.3** on
+  > multipart half **164.9 MB/min** — measured over **20 of its 21 multipart
+  > objects**, the same population the bullet two down names, not the whole
+  > multipart half (`docs/f1.4b-pr-b-run-evidence.md` §13.6 discloses the excluded
+  > object and bounds the effect at ≤0.2 MB/min) — peaking at **199.3** on
   > `Estabelecimentos0.zip`. So ~67 MB/min is a property of **PR A's mix**, not of
   > the link — which is exactly what the PR B correction two bullets down
   > concludes, and this bullet, the one the timeout derivation leans on, was not
@@ -257,7 +266,9 @@ Two consequences were followed through rather than left implicit:
 
   **The 3.8× figure above is PR A's sample, not this connection's throughput,
   and F1.4b PR B's Task 4 upload is where that stopped holding.** PR B moved
-  20 of its 21 multipart objects at **164.9 MB/min** against single PUT's
+  20 of its 21 multipart objects at **164.9 MB/min** (the same 20-object
+  population as the corrected bullet above — the two now agree on what 164.9
+  measures) against single PUT's
   **24.8 MB/min** — **6.6×**, not 3.8× — and the single-PUT half of that ratio
   is the more telling one: PR B's 24.8 MB/min reproduces PR A's 24.8 MB/min to
   three significant figures, on a different day, against different bytes
