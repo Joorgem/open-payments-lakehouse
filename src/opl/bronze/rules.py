@@ -123,8 +123,14 @@ def _encoding_check(contract: str) -> Callable[[], Column]:
     `Estabelecimentos8` carries a byte (0x8f) that windows-1252 cannot decode at
     all. Python raises on it; Java's decoder substitutes U+FFFD SILENTLY, which
     makes that character the only in-band evidence a byte was lost (ADR 0006).
-    WHICH COLUMN HOLDS IT IS NOT KNOWN -- so a check over 2 of 30 columns was a
-    coin flip on the one record it was written for.
+    WHICH COLUMN HOLDS IT IS `correio_eletronico`, and that answer arrived only
+    once the check was total: the 2026-07 estabelecimentos ingest rejected four
+    rows for `encoding_replacement_char`, all four in that column (observed
+    2026-08-03). `nome_fantasia` and `logradouro` -- the hand-picked pair the check
+    covered before -- are neither of them it. So the old rule was not merely a coin
+    flip on the record it was written for; it would have missed it, and did: the
+    same four records sit un-flagged in 2026-06's bronze, promoted by a run whose
+    gate measured zero. See ADR 0006 and `docs/f1.4b-pr-b-run-evidence.md` §20.3.
 
     The chain starts at `F.lit(False)` rather than at the first column's
     `contains`, so the fold is total over a contract of any length instead of

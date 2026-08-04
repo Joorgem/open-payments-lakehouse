@@ -100,5 +100,15 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: requires the docker compose stack running"]
+markers = [
+  "integration: requires the docker compose stack running",
+  # DIAGNOSTIC, NOT A DESELECTION -- deliberately absent from `addopts` below, so a
+  # marked test still runs in every default invocation. It labels the tests whose
+  # runtime is dominated by something other than the assertion (a real `uv build
+  # --wheel`, which on a cold uv cache resolves and downloads), so a CI failure that
+  # is a timeout can be read as environment rather than as a regression in the thing
+  # being tested. Deselect it explicitly (`-m 'not integration and not slow'`) when
+  # that is what you want.
+  "slow: dominated by build or download time, not by the assertion",
+]
 addopts = "-m 'not integration'"

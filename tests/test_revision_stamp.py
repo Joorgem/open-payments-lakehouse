@@ -332,9 +332,17 @@ def test_the_stamp_lands_at_the_path_the_runtime_imports_it_from():
     )
 
 
+@pytest.mark.slow
 def test_the_wheel_this_repo_builds_can_be_asked_what_it_was_built_from(tmp_path):
     """THE END-TO-END CLAIM, through the real `uv build --wheel` that the bundle runs
     and then through the IMPORT the deployed job actually performs.
+
+    MARKED `slow`, AND STILL SELECTED BY DEFAULT (see `addopts` in pyproject.toml).
+    The marker is a diagnostic, not a deselection: this test's runtime is a real `uv
+    build --wheel`, which on a cold uv cache resolves and downloads before it builds,
+    so it is the one test here that can fail a CI job by timing out while the
+    behaviour it checks is fine. The marker is what lets that failure be read as
+    environment rather than as a regression in the stamp.
 
     Every other test here reads the hook directly, which cannot see whether hatchling
     is configured to call it, whether the destination lands inside the package, or
@@ -387,9 +395,24 @@ def test_the_wheel_this_repo_builds_can_be_asked_what_it_was_built_from(tmp_path
     )
 
 
-_RUNTIME_SOURCES = sorted(
-    (_REPO / "src" / "opl").rglob("*.py")
-) + sorted((_REPO / "databricks" / "src").glob("*.py"))
+# EVERY FILE THAT SHIPS OR RUNS, which is what the test below claims and what this
+# list has to actually be. The wheel (`src/opl`) and the job entry points
+# (`databricks/src`) were the first two; `scripts/backfill_snapshot_columns.py` is the
+# third and was missed, because it lives under `scripts/` beside genuinely local tools
+# (`extract_cnpj.py`, `migrate_lookups_to_subdir.py`) that run on the extraction host
+# and may shell out freely. Its own docstring says it runs ON Databricks as a
+# `spark_python_task` -- so it is in the same position as `databricks/src`: no `.git`
+# beside it, and a `git rev-parse` there either crashes or answers from the operator's
+# own repository. Named one by one rather than globbed off `scripts/`, so adding a
+# local-only tool does not silently widen the ban and adding a second deployed script
+# is a deliberate line here.
+_DEPLOYED_SCRIPTS = ("backfill_snapshot_columns.py",)
+
+_RUNTIME_SOURCES = (
+    sorted((_REPO / "src" / "opl").rglob("*.py"))
+    + sorted((_REPO / "databricks" / "src").glob("*.py"))
+    + [_REPO / "scripts" / name for name in _DEPLOYED_SCRIPTS]
+)
 
 
 @pytest.mark.parametrize("source", _RUNTIME_SOURCES, ids=lambda p: p.name)

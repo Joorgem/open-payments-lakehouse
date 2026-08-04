@@ -365,13 +365,20 @@ def test_every_consumer_of_the_month_reads_the_one_required_local(script):
     # spelling, an attribute access for `month` on the config -- so it catches the
     # consumer this file has not been taught about yet. `require_month`'s docstring
     # names four entry points that each wrote it; two of them are these.
+    #
+    # THE SECOND DOOR: the owner is matched on its LAST dotted component, not on being
+    # a bare `Name`. `isinstance(node.value, ast.Name)` saw `DEFAULT.month` and missed
+    # `opl.config.DEFAULT.month` -- the same substitution written with the import spelled
+    # out, which is a normal thing to write and which this file's own imports make
+    # available. Unparsing and taking the tail catches every spelling of the owner while
+    # still requiring that it BE the config object, so `spec.month` or a local
+    # `parsed.month` is untouched.
     substitutions = [
         node
         for node in ast.walk(main)
         if isinstance(node, ast.Attribute)
         and node.attr == "month"
-        and isinstance(node.value, ast.Name)
-        and node.value.id in {"DEFAULT", "cfg"}
+        and ast.unparse(node.value).rsplit(".", 1)[-1] in {"DEFAULT", "cfg"}
     ]
     assert not substitutions, (
         f"{script}.py main() reads the config's pinned month directly ("

@@ -397,6 +397,29 @@ def test_the_ordering_lock_catches_an_ingest_that_no_longer_waits_for_the_masks(
         _assert_the_masks_precede_every_other_task("socios", root=root)
 
 
+def test_the_masks_lock_catches_a_masking_task_that_no_longer_waits_for_the_guard(
+    tmp_path,
+):
+    """Proves the OTHER half of that lock can fail -- the `== [guard]` equality, which
+    had no mutation while its two siblings did.
+
+    `[]` is the mutation because it is what the equality exists to reject and what a
+    weaker `in`-style check would have admitted. With the masking task depending on
+    nothing, it becomes the job's first task and the revision guard no longer stands
+    ahead of the DDL that creates the masked tables: a wheel nobody deployed would
+    create them with whatever `opl.bronze.masking` it happens to carry. The run is
+    still green, both tasks are still present, and the masks still precede every
+    ingest -- so nothing else in this file notices."""
+    root = _mutated(
+        "bronze_socios_job.yml",
+        tmp_path,
+        f"          depends_on: [{{ task_key: {_REVISION_GUARD} }}]\n",
+        "          depends_on: []\n",
+    )
+    with pytest.raises(AssertionError, match="rather than exactly the"):
+        _assert_the_masks_precede_every_other_task("socios", root=root)
+
+
 @pytest.mark.parametrize("table", sorted(_JOB_OF))
 def test_the_gate_verdict_routes_promotion_to_true_and_the_failure_to_false(table):
     """The one branch in these jobs, and swapping its two outcomes is silent in the

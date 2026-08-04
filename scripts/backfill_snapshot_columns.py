@@ -535,7 +535,17 @@ def fill_and_overwrite(source: DataFrame, *, month: str, tbl: str, rows: int) ->
     That exposure is bounded rather than a leak: `ensure_masked_table` runs first in
     `databricks/resources/bronze_socios_job.yml` with everything downstream depending
     on it, and ADR 0008 records its statements as idempotent, so a dropped mask is
-    re-applied before the next append. A window over an empty table, not disclosure.
+    re-applied before the next append.
+
+    "A WINDOW OVER AN EMPTY TABLE" IS THE 0-ROW CASE ONLY -- the case this function
+    SKIPS, and the only one the paragraph above is about. It is not a claim about
+    `--bronze` against a populated masked table: there the overwrite is issued, it
+    may still be planned as a table REPLACE, and the rows behind the dropped mask are
+    real. What bounds that case is the re-application above and nothing else, so it
+    is a window over DATA until the next `ensure_masked_table` runs, which is why
+    that ordering is a control rather than housekeeping (ADR 0008). Distinguishing
+    the two matters here because the sentence sits in the docstring of the function
+    an operator reads before running the bronze backfill.
 
     THE POINT IS STRUCTURE, NOT THE WINDOW. Before this, the only thing keeping the
     script away from a masked quarantine was `refuse_non_empty_quarantine` happening
