@@ -12,7 +12,26 @@ resources:
       name: opl-bronze-cnpj-estabelecimentos
       parameters:
         - name: month
-          default: "2026-06"
+          # THE MONTH THIS RUN INGESTS, and this default is a value the tasks refuse
+          # (opl.config.SENTINEL_MONTH). It was "2026-06" until F1.4b PR B, and the
+          # change is not tidiness -- that default became a SILENT DUPLICATE-APPEND
+          # trigger the moment the Auto Loader state was month-scoped.
+          #
+          # BEFORE month-scoping, launching this job without --params read 2026-06's
+          # landing dir against a checkpoint that already recorded every one of those
+          # files: a no-op, which is why the real month looked harmless. AFTER it
+          # (opl.bronze.autoloader.checkpoint_location), the same launch finds an EMPTY
+          # month-scoped checkpoint, treats all of 2026-06 as new, and appends a full
+          # month into staging under a fresh _batch_id -- and promote.rows_of_batch
+          # keys idempotence on _batch_id, so it returns 0 for the new batch and
+          # carries the duplicate into bronze. Nothing fails; the row counts double.
+          #
+          # Same shape and same reason as the revision default below: a job parameter
+          # has to have SOME default, no month is a valid one, so the default's whole
+          # job is to fail. tests/test_job_yaml_wiring.py asserts that this value is
+          # one require_month rejects, because a default that happened to be a real
+          # month would put every un-parameterised run back on the path above.
+          default: "REQUIRED-PASS-A-MONTH"
         - name: revision
           # THE REVISION THIS RUN IS LAUNCHED FOR, and this default is a value the
           # task refuses (opl.bronze.provenance.SENTINEL_REVISION). A job parameter

@@ -17,7 +17,7 @@ from opl.bronze.snapshot import (
     SNAPSHOT_REF_DATE_COLUMN,
     ref_date_column,
 )
-from opl.config import OplConfig
+from opl.config import OplConfig, require_month
 
 RECORD_SOURCE = "rfb_cnpj_webdav"
 # The one spelling of the column that records WHICH LANDED FILE a row came out of.
@@ -99,8 +99,26 @@ SOURCE_FILE_COLUMN = "_source_file"
 # changes; what changes is that the dangerous call no longer exists.
 
 
+# BOTH STATE PATHS ASK `require_month` FIRST, and it is the same argument the guard
+# below now carries: a state path must never be BUILDABLE from a value `require_month`
+# would have rejected. Keyword-only and no-default stops the month being FORGOTTEN;
+# neither stops it being SUPPLIED EMPTY. `checkpoint_location(cfg, key, month="")`
+# type-checks, satisfies both, and yields `.../_checkpoints//<table_key>` -- which on a
+# Volumes path collapses onto `_checkpoints/<table_key>`, the pre-Step-0 directory this
+# layout deliberately ORPHANS. The ingest would then advance 2026-06's abandoned state
+# for a 2026-07 read: the precise pairing month-scoping exists to make impossible.
+#
+# `require_month` and not a local `is_month` test, because the rule then has ONE
+# spelling for the entry points and for the paths they build. A second copy here is how
+# `2026-13` came to be refused at two of four entry points (see `opl.config._MONTH`).
+# Free of Spark, like everything else in this module's path half.
+
+
 def schema_location(cfg: OplConfig, table_key: str, *, month: str) -> str:
-    return f"{cfg.volume_root}/_schemas/{month}/{table_key}"
+    return (
+        f"{cfg.volume_root}/_schemas/"
+        f"{require_month(month, action='locate the inferred-schema store')}/{table_key}"
+    )
 
 
 def checkpoint_location(cfg: OplConfig, table_key: str, *, month: str) -> str:
@@ -118,8 +136,14 @@ def checkpoint_location(cfg: OplConfig, table_key: str, *, month: str) -> str:
     `_batch_id`, so it cannot see the duplication and will carry it into bronze.
     Nothing fails; the row counts double. Recorded for operators in
     `docs/f1.4b-pr-b-run-evidence.md`, and it is why re-running a month that has
-    already been promoted is a manual, deliberate act rather than a retry."""
-    return f"{cfg.volume_root}/_checkpoints/{month}/{table_key}"
+    already been promoted is a manual, deliberate act rather than a retry.
+
+    REFUSES A MONTH THAT IS NOT ONE before it builds anything -- see the comment above
+    this pair for why an empty string is the case that mattered."""
+    return (
+        f"{cfg.volume_root}/_checkpoints/"
+        f"{require_month(month, action='locate the checkpoint')}/{table_key}"
+    )
 
 
 def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: str) -> None:
@@ -143,7 +167,20 @@ def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: st
     only because a registered `subdir` is ONE directory name. Were that check
     relaxed to allow `a/b`, this comparison would refuse every legitimate call from
     such a table -- loudly, at the top of the ingest, which is the right direction to
-    fail in, but it would be THIS function's assumption that broke, not that one's."""
+    fail in, but it would be THIS function's assumption that broke, not that one's.
+
+    IT WAS BLIND TO THE ONE VALUE IT WAS WRITTEN TO REFUSE, and that is what the first
+    line fixes. The equality rebuilds through `cfg.landing_table(subdir, month)`, and
+    `opl.config.landing_cnpj_month` is `f"{...}/{month or self.month}"` -- so `month=""`
+    or `None` resolves to the config's PINNED month INSIDE the rebuild. For a
+    `source_dir` of the pinned month the comparison then PASSED, while the same empty
+    string handed to `checkpoint_location` gave `.../_checkpoints//<table_key>`. That is
+    the substituted-pinned-month pair this guard exists for, arriving in the one form
+    the rebuild could not see it in. Not reachable from either entry point today -- both
+    bind `require_month`, and `test_task_wiring.py` locks that -- so this is
+    defence-in-depth; but the docstring above says this function refuses the pair rather
+    than trusting it, and until now that was not true of every spelling of it."""
+    require_month(month, action="read")
     subdir = source_dir.rsplit("/", 1)[-1]
     if source_dir != cfg.landing_table(subdir, month):
         raise ValueError(

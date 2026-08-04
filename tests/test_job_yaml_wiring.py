@@ -38,6 +38,7 @@ import yaml
 from opl.bronze.masking import MASKED_COLUMNS
 from opl.bronze.provenance import SENTINEL_REVISION, is_object_name
 from opl.bronze.registry import REGISTRY, table_spec
+from opl.config import SENTINEL_MONTH, is_month
 
 _REPO = Path(__file__).resolve().parents[1]
 _SRC = _REPO / "databricks" / "src"
@@ -605,6 +606,73 @@ def test_the_guard_ordering_lock_catches_a_task_that_no_longer_waits_for_it(tmp_
     )
     with pytest.raises(AssertionError, match="can start before"):
         _assert_the_revision_guard_precedes_every_other_task(
+            "bronze_estabelecimentos_job.yml", root=root
+        )
+
+
+def _assert_the_month_default_cannot_pass(job_yml: str, root: Path = _RESOURCES) -> None:
+    parameters = {
+        parameter["name"]: parameter.get("default")
+        for parameter in _job_of(job_yml, root).get("parameters", [])
+    }
+    assert "month" in parameters, (
+        f"{job_yml} declares no `month` job parameter, so there is nothing for "
+        "--params month=... to reach and every task falls back on a month nobody chose"
+    )
+    default = parameters["month"]
+    assert not is_month(default), (
+        f"{job_yml}'s month default is {default!r}, which `require_month` ACCEPTS as a "
+        "real month -- so a run launched without --params month=... would ingest that "
+        "month against an EMPTY month-scoped checkpoint, treat every one of its files "
+        "as new, and append the whole month into staging under a fresh _batch_id. "
+        "promote.rows_of_batch keys idempotence on _batch_id, so it cannot see the "
+        "duplication and would carry it into bronze: nothing fails and the row counts "
+        "double. A job-parameter default cannot validate anything; it can only refuse"
+    )
+    assert default == SENTINEL_MONTH, (
+        f"{job_yml}'s month default is {default!r} rather than the sentinel the code "
+        f"names ({SENTINEL_MONTH!r}). Two spellings of one sentinel is a default that "
+        "drifts into a value nobody checked"
+    )
+
+
+@pytest.mark.parametrize("job_yml", sorted(set(_JOB_OF.values())))
+def test_the_month_default_refuses_rather_than_naming_a_month_nobody_chose(job_yml):
+    """The `month` default, locked for the reason the `revision` default is.
+
+    THIS ONE CHANGED MEANING WITHOUT ITS TEXT CHANGING, which is why it needs a lock
+    of its own rather than the operator's memory. `default: "2026-06"` was harmless
+    while the Auto Loader checkpoint was keyed on `table_key` alone: an un-parameterised
+    launch read 2026-06's landing dir against a checkpoint that already recorded every
+    one of those files, so it drained nothing. Month-scoping that state (F1.4b PR B
+    Task 5 Step 0) made the same launch find an EMPTY checkpoint and re-ingest a full
+    month -- and because `promote.rows_of_batch` keys idempotence on `_batch_id`, the
+    fresh batch is invisible to it and the duplicate reaches bronze. The consequence is
+    written in `checkpoint_location`'s own docstring; this asserts the four YAMLs an
+    operator launches from do not walk into it.
+
+    Over the ingestion jobs only, because they are the ones that read a landing dir and
+    advance a checkpoint. `repromote_batch_job.yml` and `smoke_job.yml` take no month
+    at all -- adding one is what this parametrization would have to be taught about,
+    and `_JOB_OF` is the list that already knows which jobs ingest."""
+    _assert_the_month_default_cannot_pass(job_yml)
+
+
+def test_the_month_default_lock_catches_the_real_month_it_used_to_carry(tmp_path):
+    """Proves the lock above can fail, in the exact value and exact shape of the defect.
+
+    `2026-06` is not an invented mutation: it is what all four of these files carried
+    until this branch, and it is a fully-promoted month. Restoring it makes every run
+    launched without `--params month=...` a second ingest of data bronze already holds
+    -- green, with the row counts doubled and nothing in the log naming the month."""
+    root = _mutated(
+        "bronze_estabelecimentos_job.yml",
+        tmp_path,
+        f'default: "{SENTINEL_MONTH}"',
+        'default: "2026-06"',
+    )
+    with pytest.raises(AssertionError, match="row counts.*double"):
+        _assert_the_month_default_cannot_pass(
             "bronze_estabelecimentos_job.yml", root=root
         )
 

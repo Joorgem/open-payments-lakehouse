@@ -29,7 +29,12 @@ resources:
       name: opl-bronze-cnpj-empresas
       parameters:
         - name: month
-          default: "2026-06"
+          # The month this run ingests; the default is a value the tasks refuse
+          # (opl.config.SENTINEL_MONTH), because a real month here re-ingests that
+          # month against an EMPTY month-scoped checkpoint and silently doubles the
+          # row counts -- the promote's idempotence is keyed on _batch_id and cannot
+          # see it. Estabelecimentos' job carries the full argument.
+          default: "REQUIRED-PASS-A-MONTH"
         - name: revision
           # The revision this run is launched for; the default is a value the guard
           # below refuses, so a run launched without --params stops instead of

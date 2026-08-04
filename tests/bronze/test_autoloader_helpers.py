@@ -404,6 +404,42 @@ def test_bronze_stream_refuses_a_source_dir_that_is_not_the_given_months(source_
         )
 
 
+@pytest.mark.parametrize("month", ["", None, "   ", "2026-13", "2026-06/zips"])
+def test_no_state_path_and_no_source_check_accepts_a_month_require_month_would_refuse(
+    month,
+):
+    """The hole keyword-only-and-no-default cannot close: SUPPLIED, but not a month.
+
+    THE EMPTY STRING IS THE ONE THAT MATTERED, and it defeated the source/month guard
+    by being invisible to it. That guard rebuilds through `cfg.landing_table(subdir,
+    month)`, and `landing_cnpj_month` is `f"{...}/{month or self.month}"` -- so `""` and
+    `None` resolve to the config's PINNED month inside the rebuild, and the equality
+    PASSES for a `source_dir` of the pinned month. The same `""` handed to
+    `checkpoint_location` gave `.../_checkpoints//<table_key>`, which on a Volumes path
+    collapses onto `_checkpoints/<table_key>` -- the pre-Step-0 directory this layout
+    deliberately orphans and never migrates. A run wired that way advanced 2026-06's
+    abandoned state for a read of another month, which is exactly the pair the guard's
+    docstring says it refuses rather than trusts.
+
+    `2026-13` and `2026-06/zips` are here because the state paths are the OTHER place
+    the month is interpolated raw, and a rule with two homes is how `2026-13` came to be
+    refused at two of four entry points. One predicate (`require_month`) now answers for
+    the entry points and for every path they build.
+
+    Defence-in-depth and said so: `bronze_ingest.py` and `bronze_lookup_ingest.py` both
+    bind `require_month`, and `tests/test_task_wiring.py` locks that they keep doing so.
+    This is what stops a FIFTH caller from being the one that finds out.
+
+    No Spark anywhere: every refusal is a string check in the signature's own frame."""
+    for locate in (schema_location, checkpoint_location):
+        with pytest.raises(ValueError, match="month"):
+            locate(DEFAULT, "bronze_cnpj_empresas", month=month)
+    with pytest.raises(ValueError, match="month"):
+        al._assert_source_dir_is_this_months(
+            DEFAULT, DEFAULT.landing_table("empresas", DEFAULT.month), month
+        )
+
+
 def test_lookup_type_column_maps_paths(spark):
     df = spark.createDataFrame(
         [

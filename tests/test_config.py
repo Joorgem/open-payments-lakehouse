@@ -1,7 +1,7 @@
 # tests/test_config.py
 import pytest
 
-from opl.config import DEFAULT, OplConfig, require_month
+from opl.config import DEFAULT, SENTINEL_MONTH, OplConfig, is_month, require_month
 
 
 def test_defaults_match_free_edition_layout():
@@ -79,6 +79,41 @@ def test_an_absent_month_is_refused_and_never_defaulted(month, action):
     assert f"refusing to {action}" in message
     assert "{{job.parameters.month}}" in message
     assert "no default" in message
+
+
+@pytest.mark.parametrize("action", ["ingest", "reclaim", "unzip"])
+def test_the_job_yaml_month_default_is_refused_as_an_absence(action):
+    """The sentinel the four ingestion job YAMLs default `month` to, and what it means.
+
+    Reaching this guard with `SENTINEL_MONTH` means one thing only: the run was
+    launched without `--params month=...`. So it is refused as an ABSENCE and not as a
+    malformed value -- the operator needs the message that names the missing parameter,
+    not one explaining what a month looks like. `require_batch_id` treats its own
+    sentinel exactly this way.
+
+    THE REFUSAL IS THE POINT, and it is behaviour rather than configuration. The
+    default was a REAL month (`2026-06`) until F1.4b PR B, and month-scoping the Auto
+    Loader state turned that into a silent duplicate append: an un-parameterised launch
+    finds an EMPTY month-scoped checkpoint, treats every 2026-06 file as new, and
+    appends the whole month into staging under a fresh `_batch_id` -- which
+    `promote.rows_of_batch` keys idempotence on, so it cannot see the duplication and
+    carries it into bronze. Nothing fails; the row counts double.
+
+    `is_month` is asserted separately because the two are different claims. If someone
+    later re-spells the sentinel as something month-shaped, the branch below still
+    refuses it while every path built from it is wrong -- so the shape is pinned too,
+    which is the same pairing `test_the_revision_default_cannot_pass` makes for
+    `is_object_name`."""
+    assert not is_month(SENTINEL_MONTH), (
+        f"SENTINEL_MONTH={SENTINEL_MONTH!r} is month-shaped, so it names a landing "
+        "directory and a checkpoint -- a sentinel has to be a value nothing can build "
+        "a path from"
+    )
+    with pytest.raises(ValueError, match="no month was given") as excinfo:
+        require_month(SENTINEL_MONTH, action=action)
+    message = str(excinfo.value)
+    assert f"refusing to {action}" in message
+    assert "{{job.parameters.month}}" in message
 
 
 @pytest.mark.parametrize(
