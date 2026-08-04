@@ -319,10 +319,17 @@ through.
 
 ### The defect this decision must not leave standing: reclaim is unreachable
 
-`reclaim_landing` has **never deleted a byte** in this project's history — eight
-task instances, two executions, zero bytes (`docs/f1.4b-pr-b-run-evidence.md`
-§16). The mechanism is wiring, not `retention.py`, which behaved correctly at
-every step it was actually reached:
+`reclaim_landing` has **never deleted a byte through the wired path** — eight
+task instances hung off the ingestion jobs, two executions, zero bytes
+(`docs/f1.4b-pr-b-run-evidence.md` §16). It has deleted bytes exactly once, and
+not through that path: F1.4a invoked it through a temporary job resource on
+2026-07-31 and it reclaimed **16,743,815,717 B** correctly
+(`docs/f1.4a-migration-evidence.md:457-475`). An earlier revision of this
+section said "never deleted a byte in this project's history", full stop; that
+was false and is corrected here — see `docs/f1.4b-pr-b-run-evidence.md` §26.1.
+The correction does not weaken the argument below and sharpens it: **the defect
+is wiring, and `retention.py` is not merely believed correct but measured
+correct on a real Volume, on this exact table.**
 
 1. `reclaim_landing` depends on `promote`; `promote` depends on
    `check_bad_rows outcome: "true"`. **A batch with one reject never reaches it.**
@@ -352,11 +359,12 @@ persisted", and `repromote_triaged_batch` satisfies that at exactly the point
 the in-flow promote does. Wiring it there restores the control on both paths
 without loosening the gate on either.
 
-**Carried to F1.4b Task 7 as its own change**, not done here: it alters the
+**Carried past F1.4b PR B as its own change**, not done here: it alters the
 storage projection for every month added and belongs in a change that says so.
-The method for proving `retention.py` itself deletes correctly once reached is
-already specified (§16.2) — run it through a temporary job resource against an
-already-promoted batch, decoupling the test from the gate.
+`retention.py` deleting correctly once reached no longer needs proving — F1.4a
+already ran it decoupled from the gate, through a temporary job resource against
+an already-promoted batch, and it deleted 16.74 GB with zero refusals and zero
+failures. **What remains unproven is only that the new wiring reaches it.**
 
 ### What would reverse this decision
 
