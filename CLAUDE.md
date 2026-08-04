@@ -15,7 +15,11 @@ with full DataOps. See the design spec in the campaign repo.
 ## Autonomy rules
 - Autonomous: code, tests, docs, commits on a branch, bundle validate, local runs.
 - Human gate (Jorge): creating accounts/tokens, marking repo public, final push to
-  main, and per-phase TEACH-BACK (explain the diff before merge).
+  main.
+- Architectural decisions are the agent's, taken from research and a complete
+  reading of the project rather than handed to Jorge as a menu at each fork. State
+  the decision and what drove it, and say what was rejected, so overruling stays
+  cheap.
 - Never commit secrets. PAT only in git-ignored .env / GitHub secret.
 - English only. Conventional commits explaining *why*.
 
