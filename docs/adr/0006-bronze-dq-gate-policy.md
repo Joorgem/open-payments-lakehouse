@@ -373,7 +373,7 @@ through.
 
 ### The defect this decision must not leave standing: reclaim is unreachable
 
-`reclaim_landing` has **never deleted a byte through the wired path** — eight
+`reclaim_landing` has **never deleted a byte through the wired path** — nine
 task instances hung off the ingestion jobs, two executions, zero bytes
 (`docs/f1.4b-pr-b-run-evidence.md` §16). It has deleted bytes exactly once, and
 not through that path: F1.4a invoked it through a temporary job resource on
