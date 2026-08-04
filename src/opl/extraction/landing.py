@@ -42,18 +42,29 @@ UPLOAD_PROFILE = "opl-free"
 #
 # Sizing it, from measured part geometry (see ADR 0007). The SDK picks the
 # smallest part size giving <= 100 parts: Estabelecimentos0.zip lands on 50 MiB
-# parts (41 of them), every other zip we upload on 10 MiB parts. Uploads run
+# parts (42 of them as of the 2026-07 object -- the COUNT is keyed to the month's
+# byte size and moves; the 50 MiB part SIZE is what generalises), every other zip
+# we upload on 10 MiB parts. Uploads run
 # `files_ext_multipart_upload_default_parallelism` = 10 parts concurrently, so
 # the ~67 MB/min link is shared ten ways and a single 50 MiB part takes
 # ~52.4 MB / (67/10 MB/min) ~= 7.8 min of wall clock -- an order of magnitude
 # longer than the same part would take alone. That is the number this budget has
 # to clear.
 #
-# 30 min is ~3.8x that worst-case part, so the largest part can fail and be
-# retried the 3 times the cloud-retry cap allows without the budget going flat
-# mid-way. Note the SDK's own 300 s default is SMALLER than one worst-case part
-# here, which would recreate the F1.3 failure exactly at part granularity: the
-# budget spent inside the first attempt, so the first retryable failure is fatal
+# MEASURED SINCE, and the budget is more conservative than this derivation says:
+# F1.4b PR B moved Estabelecimentos0.zip's 42 parts in 651.6 s at 10-way
+# concurrency -- ~2.6 min per part, not ~7.8, because ~67 MB/min was PR A's mix
+# and PR B's multipart half ran 164.9 MB/min. So 30 min is ~11x the observed
+# worst-case part rather than ~3.8x. The DECISION is unchanged and strengthened;
+# only the margin is bigger than it was argued to be. Do not tighten the budget
+# from this -- the rate is a property of a run, not of the link.
+#
+# 30 min is ~3.8x that worst-case part by the derivation above, so the largest
+# part can fail and be retried the 3 times the cloud-retry cap allows without
+# the budget going flat mid-way. Note the SDK's own 300 s default is SMALLER
+# than one worst-case part here, which would recreate the F1.3 failure exactly
+# at part granularity: the budget is
+# spent inside the first attempt, so the first retryable failure is fatal
 # (that is how Estabelecimentos3.zip, 366,824,247 B, died as
 # `Timed out after 0:05:00`). So this stays explicit rather than reverting to
 # the default -- but it is 30 min because a part takes ~8 min, not 2 h because a
@@ -149,8 +160,9 @@ def upload_to_volume(w: WorkspaceClient, local_path: Path, volume_dir: str) -> s
 
     So this check is DEFENCE IN DEPTH, not a stand-in for a fix we are missing.
     It compares the landed object's ``content_length`` against the local file's
-    size, which is independent of how the bytes got there -- one PUT, or the 41
-    presigned parts Estabelecimentos0.zip is now split into. That independence is
+    size, which is independent of how the bytes got there -- one PUT, or the 42
+    presigned parts 2026-07's Estabelecimentos0.zip was split into (the count is
+    keyed to the month's byte size; 2026-06's was 41). That independence is
     the point: multipart moves the ways an upload can be short (a part silently
     dropped, a part written twice, a complete-upload that commits a subset) but
     does not remove them, and it enlarges the surface -- every part is its own

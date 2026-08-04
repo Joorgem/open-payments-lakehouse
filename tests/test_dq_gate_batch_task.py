@@ -240,11 +240,12 @@ def test_it_counts_both_sides_of_the_batch_in_one_pass(monkeypatch):
 
 # --- the skipped rule must be audible in the run log -------------------------
 
-# The live `bronze_cnpj_estab_staging` shape, and it is 35 columns for a reason
-# worth writing down: the 30 contract columns plus the 5 audit columns
+# The pre-F1.4a `bronze_cnpj_estab_staging` shape, 35 columns for a reason worth
+# writing down: the 30 contract columns plus the 5 audit columns
 # `add_audit_columns` wrote BEFORE F1.4a added the two snapshot ones. Bronze is
-# 37. No estabelecimentos ingest has run since, so this is not a hypothetical
-# frame -- it is what a repromote of a pre-F1.4a batch evaluates today.
+# 37. F1.4b PR B migrated staging to 37 on 2026-08-03, so this is no longer the
+# live shape -- it is the shape any batch staged before a derivation exists has,
+# and the next derivation added to a contract makes one again.
 _PRE_F14A_STAGING_COLUMNS = [
     *TABLES["estabelecimentos"],
     "_ingested_at", "_record_source", "_batch_id", "_source_file", "_rescued_data",
@@ -264,7 +265,7 @@ def test_a_rule_skipped_for_a_missing_column_is_named_in_the_run_log(monkeypatch
     Deliberately NOT an error: the pre-F1.4a staging table is a legitimate input
     and raising here would make the documented rebuild procedure unrunnable. The
     line is the fix; the skip is not the bug."""
-    assert len(_PRE_F14A_STAGING_COLUMNS) == 35, "the shape measured on the live table"
+    assert len(_PRE_F14A_STAGING_COLUMNS) == 35, "the pre-F1.4a shape, measured live"
     seen = _wire(monkeypatch, already=0, batch_columns=_PRE_F14A_STAGING_COLUMNS)
 
     task.main(["estabelecimentos", "999"])

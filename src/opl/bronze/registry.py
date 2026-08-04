@@ -4,7 +4,7 @@ WHY DECLARED AND NOT DERIVED: the live names follow no single pattern --
 `bronze_cnpj_estab_staging` is abbreviated where `bronze_cnpj_estabelecimentos`
 is spelled out, and the lookup uses `lookup` where estab uses `estab`. Deriving
 `f"bronze_cnpj_{name}_staging"` would be DRY-er and would force renaming Delta
-tables, one of them holding 71,874,448 rows, to satisfy an aesthetic.
+tables, one of them holding 144,193,412 rows, to satisfy an aesthetic.
 
 So the point is not less repetition. The point is that each table's
 staging/bronze/quarantine TRIPLE lives in one literal, where it cannot drift --

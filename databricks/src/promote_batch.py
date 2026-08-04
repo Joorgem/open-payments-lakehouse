@@ -88,9 +88,11 @@ def _announce_skipped_rules(spark: SparkSession, staging: str, rules) -> None:
 
     This is the task where that silence costs something. The documented rebuild
     procedure drops bronze and LEAVES staging (`promote.plan_promotion` says so),
-    and the live estab staging table is still the 35-column pre-F1.4a shape -- it
-    carries neither snapshot column, because no estabelecimentos ingest has run
-    since. Repromoting such a batch therefore skips `unprovable_snapshot_ref_date`
+    which leaves batches staged before a derivation existed to be repromoted after
+    it. Estab staging was the 35-column pre-F1.4a shape until F1.4b PR B migrated
+    it to 37 on 2026-08-03, so that live instance is closed; the shape re-opens
+    with the next derivation added to any contract.
+    Repromoting such a batch therefore skips `unprovable_snapshot_ref_date`
     correctly, every row reads clean, and the rows are appended into 37-column
     bronze where Delta fills the absent column with NULL. That NULL is the value
     the rule exists to refuse, arriving precisely because the rule was not there

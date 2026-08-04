@@ -11,14 +11,22 @@ what `scripts/migrate_lookups_to_subdir.py` sets up.
 THREE TABLES AND NOT ONE, because the gap is per TABLE and not per contract. F1.4a
 added the columns to `bronze_cnpj_estabelecimentos` alone, and F1.4b measured what
 that left behind: `bronze_cnpj_estab_staging` (35 columns) and
-`bronze_cnpj_estab_quarantine` (36) carry neither. Nothing in this repo writes with
-`mergeSchema` -- deliberately; a schema is a contract, and a write that widens it
-without being asked is a drift you find out about later -- so the next estab ingest
-sends a 37-column stream into the 35-column staging table and fails at the Delta
-write, and the DQ gate then appends a 38-column reject frame into the 36-column
-quarantine and fails there too. The second failure is the worse one: it needs a
-dirty row to appear, so it can stay latent for months after the expensive ingest
-that unblocked it.
+`bronze_cnpj_estab_quarantine` (36) carried neither. Nothing in this repo writes
+with `mergeSchema` -- deliberately; a schema is a contract, and a write that widens
+it without being asked is a drift you find out about later -- so the next estab
+ingest would have sent a 37-column stream into the 35-column staging table and
+failed at the Delta write, and the DQ gate would then have appended a 38-column
+reject frame into the 36-column quarantine and failed there too. The second failure
+is the worse one: it needs a dirty row to appear, so it can stay latent for months
+after the expensive ingest that unblocked it.
+
+BOTH ESTAB TARGETS ARE MIGRATED. This script ran against them on 2026-08-03 (F1.4b
+PR B Task 1): staging is 37 columns, quarantine 38, and the 2026-07 ingest that
+followed exercised both -- including the reject append, which landed 4 rows in the
+quarantine that the second failure above would otherwise have blocked. The past
+tense above is the pre-migration state, kept because it is the argument for why
+three tables and not one. What is still outstanding is every OTHER contract's
+staging and quarantine, which no one has measured.
 
 A QUARANTINE THAT HOLDS ROWS IS REFUSED -- see `refuse_non_empty_quarantine`.
 Adding the columns to an empty one is a schema migration; filling them on rows

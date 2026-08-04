@@ -72,10 +72,12 @@ def ref_date_column(source_file: Column, snapshot_month: str) -> Column:
 
     NULL rather than a best guess, because a wrong `applied_date` is worse than a
     missing one: it would order the vault's history incorrectly with nothing to
-    show for it. OWED, NOT YET BUILT (F1.4b, with the new rule sets): a DQ rule
-    that COUNTS these NULLs. Today nothing looks at them, so a month shipping a
-    different filename format produces an all-NULL column silently -- refusing is
-    only half the control, and the half that speaks is the one still outstanding.
+    show for it. THE OTHER HALF IS BUILT (F1.4b): `rules._unprovable_ref_date`,
+    registered as `unprovable_snapshot_ref_date` in every non-lookup contract,
+    rejects the rows this function leaves NULL, so a month shipping a different
+    filename format now goes red naming the cause instead of producing an all-NULL
+    column silently. This docstring booked that debt; rules.py's own docstring for
+    the rule records it as paid.
 
     `snapshot_month` is 'YYYY-MM' naming a real month. Raises ValueError on any
     other shape or an out-of-range month, before Spark builds anything -- a

@@ -56,10 +56,14 @@ REQUIRES_COLUMN: dict[str, str] = {
 # table the defects actually happened in. The three keys already checked
 # (cnpj_basico/ordem/dv) sit at contract indices 0-2, so a truncated record keeps
 # all three and passes -- the check has to reach PAST the truncation point to see
-# it. `municipio` is index 20 of 30 and is MEASURED clean: over all 71,874,448
-# live rows, blanks in municipio, situacao_cadastral, uf and data_inicio_atividade
-# are 0. Declaring it required therefore rejects nothing that exists today, which
-# is why it can be added to a live table's rule set at all.
+# it. `municipio` is index 20 of 30 and is MEASURED clean: over the 71,874,448
+# rows live when this was written (2026-06), blanks in municipio,
+# situacao_cadastral, uf and data_inicio_atividade are 0 -- and the 2026-07 ingest
+# re-confirmed it on a further 72,318,968 staged rows whose only rejects were 4
+# `encoding_replacement_char`. Declaring it required therefore rejects nothing
+# that exists today, which is why it can be added to a live table's rule set at
+# all. That is a claim about a (month, rule set) pair, and it is re-earned every
+# month, not inherited.
 #
 # What is deliberately ABSENT is as much a decision as what is present, because
 # the gate is all-or-nothing (any reject fails the run) and every entry here is a
@@ -161,12 +165,15 @@ def _unprovable_ref_date() -> Column:
     that speaks, and it is the debt `snapshot.py`'s docstring booked to F1.4b.
 
     SAFE ON A LIVE TABLE BECAUSE IT IS MEASURED, the same precondition
-    `municipio` had to meet: over all 71,874,448 rows of
-    workspace.default.bronze_cnpj_estabelecimentos the NULL count for this column
-    is 0, verified by a SQL query independent of the backfill script's own log
-    (docs/f1.4a-migration-evidence.md). So this rejects nothing that exists today.
+    `municipio` had to meet: over the 71,874,448 rows of
+    workspace.default.bronze_cnpj_estabelecimentos live when this was written, the
+    NULL count for this column is 0, verified by a SQL query independent of the
+    backfill script's own log (docs/f1.4a-migration-evidence.md) -- and the 2026-07
+    ingest re-confirmed it on a further 72,318,968 staged rows whose only rejects
+    were 4 `encoding_replacement_char`. So this rejects nothing that exists today.
     The gate is all-or-nothing -- any reject fails the run -- so that number is a
-    precondition and not a footnote.
+    precondition and not a footnote, and it is re-earned each month rather than
+    inherited: it is a claim about a (month, rule set) pair.
 
     A row-level rule for a FILE-level fact, deliberately. The gate has no other
     vocabulary -- it tags rows -- and the shape that follows from that is the
