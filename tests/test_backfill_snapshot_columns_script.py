@@ -146,6 +146,91 @@ def test_no_warning_when_every_row_has_a_reference_date(capsys):
     assert capsys.readouterr().out == ""
 
 
+# --- refusing a month the FILENAMES contradict, BEFORE the write ---------------
+#
+# The half ``refuse_contradicting_month`` structurally cannot see. A legacy table
+# with no ``_snapshot_month`` passes that guard on an empty tuple -- by design --
+# and then ``_fill`` stamps the requested month, ``ref_date_column`` returns NULL
+# for every row whose filename token disagrees, and the post-write verification
+# PASSES: the row count is unchanged and the month column has no NULLs, because
+# this run just wrote it. A check that reads the value it wrote cannot fail for
+# the right reason.
+
+_LANDING = "/Volumes/workspace/default/landing/cnpj"
+_JUNE_FILE = f"{_LANDING}/2026-06/estabelecimentos/K3241.K03200Y0.D60613.ESTABELE"
+_JULY_FILE = f"{_LANDING}/2026-07/estabelecimentos/K3241.K03200Y0.D60711.ESTABELE"
+
+
+def test_filenames_agreeing_with_the_month_are_the_normal_case():
+    """Both live runs of this phase were exactly this: one month in the table, and
+    the run named it. That is what must stay unrefused."""
+    cli.refuse_contradicting_source_month(("6-06",), month="2026-06", tbl="wh.d.b")
+    cli.refuse_contradicting_source_month((), month="2026-06", tbl="wh.d.b")
+
+
+def test_a_legacy_table_whose_files_carry_another_month_is_refused():
+    """The state neither internal review caught. Nothing here has a
+    ``_snapshot_month`` to contradict, so this is the only evidence there is."""
+    with pytest.raises(RuntimeError) as exc:
+        cli.refuse_contradicting_source_month(("6-06",), month="2026-07", tbl="wh.d.b")
+    message = str(exc.value)
+    # Both sides of the disagreement, in the spelling the filename actually uses.
+    assert "'2026-07'" in message and "'6-07'" in message and "'6-06'" in message
+    assert "NOTHING WAS WRITTEN" in message and "no ALTER" in message
+    # And WHY the post-write check would not have caught it -- otherwise an operator
+    # reading this concludes the verification is enough.
+    assert "PASS THIS SCRIPT'S VERIFICATION" in message
+    # A refusal that names no alternative is a wall.
+    assert "re-run with the month the files actually carry" in message
+
+
+def test_a_table_holding_two_months_of_files_is_refused_whichever_month_is_named():
+    """Mixed, not merely mismatched. Bronze is multi-month from F1.4b onward, so
+    such a table is a normal object -- it is simply not a thing this script may
+    write, because whichever month is passed, the other month's rows get a
+    ``_snapshot_month`` contradicting their own filename and a NULL reference date."""
+    for month in ("2026-06", "2026-07"):
+        with pytest.raises(RuntimeError, match="NOTHING WAS WRITTEN"):
+            cli.refuse_contradicting_source_month(
+                ("6-06", "6-07"), month=month, tbl="wh.d.b"
+            )
+
+
+def test_the_mixed_refusal_says_the_named_month_was_present_too():
+    """``6-06`` and ``6-07`` with ``2026-06`` requested: listing only the
+    contradicting one would read as 'no file agrees', which is a different
+    incident from 'this table holds two months'."""
+    with pytest.raises(RuntimeError) as exc:
+        cli.refuse_contradicting_source_month(
+            ("6-06", "6-07"), month="2026-06", tbl="wh.d.b"
+        )
+    assert "as well as '6-06'" in str(exc.value)
+
+
+def test_the_decade_cannot_be_used_to_smuggle_a_disagreement_past_the_guard():
+    """The token carries one year digit, so ``2016-06`` and ``2026-06`` produce the
+    same key. That is a property of the filename, not a hole: ``_snapshot_month``
+    sits beside the date carrying the operator's own decade, which is the
+    ``ref_date_column`` bargain, and this guard must not pretend to close it."""
+    cli.refuse_contradicting_source_month(("6-06",), month="2016-06", tbl="wh.d.b")
+
+
+def test_the_guard_still_holds_on_the_idempotent_repeat():
+    """``refuse_contradicting_month`` deliberately permits re-running with the month
+    the table already carries. An idempotent repeat of a stamp that was WRONG is
+    still wrong, so this guard is not scoped to legacy tables."""
+    with pytest.raises(RuntimeError, match="NOTHING WAS WRITTEN"):
+        cli.refuse_contradicting_source_month(("6-06",), month="2026-07", tbl="wh.d.b")
+
+
+def test_a_malformed_month_is_refused_by_the_key_rather_than_matching_nothing():
+    """Reached only by a direct caller -- ``resolve_target`` has already been through
+    ``require_month`` -- but a key built from a malformed month would silently equal
+    no filename at all, and the refusal would then name the wrong cause."""
+    with pytest.raises(ValueError, match="YYYY-MM"):
+        cli.refuse_contradicting_source_month(("6-06",), month="2026-6", tbl="wh.d.b")
+
+
 # --- refusing to back-stamp rejects that are already in quarantine -------------
 
 _ESTAB = "workspace.default.bronze_cnpj_estab_quarantine"
@@ -213,18 +298,39 @@ def test_the_guard_is_about_the_quarantine_of_the_table_it_was_given():
 # --- constraint DDL is bronze DDL, and only bronze gets it ---------------------
 
 
+class _CatalogRows:
+    """What ``system.information_schema.column_masks`` hands back."""
+
+    def __init__(self, columns: tuple[str, ...]) -> None:
+        self._columns = columns
+
+    def collect(self) -> list[dict[str, str]]:
+        return [{"column_name": column} for column in self._columns]
+
+
 class _RecordingSpark:
     """A ``SparkSession`` stand-in that records the SQL it is asked to run.
 
     Recording and not a no-op: the assertion that matters is that the list is
     EMPTY for a staging or quarantine target, and a no-op double cannot tell an
-    unissued statement from an issued one."""
+    unissued statement from an issued one.
 
-    def __init__(self) -> None:
+    ``masked`` is what the CATALOG will report when asked, INDEPENDENTLY of the
+    statements this session was handed. That independence is the whole of the mask
+    regression test: a stand-in that answered the probe out of the ``SET MASK``
+    statements it had just recorded could never express the failure being guarded
+    against -- an ALTER that returns without error against a table whose metadata
+    does not end up carrying the mask."""
+
+    def __init__(self, masked: tuple[str, ...] = ()) -> None:
         self.statements: list[str] = []
+        self._masked = masked
 
-    def sql(self, statement: str) -> None:
+    def sql(self, statement: str) -> _CatalogRows | None:
         self.statements.append(statement)
+        if "column_masks" in statement:
+            return _CatalogRows(self._masked)
+        return None
 
 
 def test_constraints_are_re_asserted_on_bronze_with_the_table_filled_in():
@@ -269,6 +375,168 @@ def test_no_constraint_ddl_is_issued_against_staging_or_quarantine(tbl, capsys):
     # Silence would leave an operator comparing this run against F1.4a's output
     # unable to see that the missing line was a decision.
     assert "NOT issued" in out and tbl in out
+
+
+# --- the PII mask the overwrite may have dropped ------------------------------
+#
+# ``mode("overwrite").saveAsTable`` is planned either as an overwrite of the DATA
+# or as a replace of the TABLE, and a replace drops CHECK constraints, NOT NULL
+# *and a UC column mask*. ``_assert_constraints`` put the first two back and
+# nothing put the third back -- which left the PII control as the one piece of
+# metadata resting on Unity Catalog choosing the other plan.
+
+_SOCIOS = table_spec("socios")
+_SOCIOS_BRONZE = "workspace.default.bronze_cnpj_socios"
+_SOCIOS_STAGING = "workspace.default.bronze_cnpj_socios_staging"
+_SOCIOS_QUARANTINE = "workspace.default.bronze_cnpj_socios_quarantine"
+_BOTH_NAMES = ("nome_socio_razao_social", "nome_do_representante")
+
+
+@pytest.mark.parametrize("tbl", [_SOCIOS_BRONZE, _SOCIOS_QUARANTINE])
+def test_both_masked_tables_get_their_masks_back_after_a_populated_overwrite(tbl):
+    """Bronze AND quarantine, which is where this differs from
+    ``_assert_constraints``: those statements are bronze DDL and return early off
+    bronze, so a quarantine backfill had nothing at all restoring its metadata."""
+    spark = _RecordingSpark()
+    assert cli.restore_masks(spark, _SOCIOS, tbl, wrote=True) == _BOTH_NAMES
+    # The function FIRST -- a ``SET MASK`` naming a routine that does not exist
+    # fails the ALTER, which is ``ensure_masked_table``'s own ordering.
+    assert spark.statements[0].startswith("CREATE OR REPLACE FUNCTION")
+    masks = [s for s in spark.statements if "SET MASK" in s]
+    assert len(masks) == len(_BOTH_NAMES)
+    for column in _BOTH_NAMES:
+        assert any(f"ALTER TABLE {tbl} ALTER COLUMN `{column}` SET MASK" in s for s in masks)
+
+
+def test_the_ddl_is_the_masking_modules_and_not_a_second_spelling():
+    """Byte-identical to what ``ensure_masked_table`` issues, because both ask
+    ``opl.bronze.masking``. Two spellings of a mask statement is two things that
+    can drift, on the one control whose drift is personal names in the clear."""
+    from opl.bronze.masking import MASK_FUNCTION, mask_function_ddl, set_mask_ddl
+    from opl.config import DEFAULT
+
+    spark = _RecordingSpark()
+    cli.restore_masks(spark, _SOCIOS, _SOCIOS_BRONZE, wrote=True)
+    function = DEFAULT.table(MASK_FUNCTION)
+    assert spark.statements == [mask_function_ddl(function)] + [
+        set_mask_ddl(_SOCIOS_BRONZE, column, function) for column in _BOTH_NAMES
+    ]
+
+
+def test_staging_is_never_masked_by_this_script(capsys):
+    """THE DIRECTION THAT MATTERS MOST, and it is not the one CodeRabbit raised.
+    ``promote_batch`` READS staging and writes what it read into bronze, so a mask
+    there would put ``***`` into bronze permanently and would make the DQ gate stop
+    rejecting rows with a missing name -- the 1,797 rows that rule caught in the
+    live run would have landed. ``required_masks`` asks ``masked_table_ddls``
+    which tables are covered rather than listing them again here, so a restoration
+    that grew a third table would have to be argued for in the module that argues
+    about it."""
+    spark = _RecordingSpark()
+    assert cli.required_masks(_SOCIOS, _SOCIOS_STAGING) == ()
+    assert cli.restore_masks(spark, _SOCIOS, _SOCIOS_STAGING, wrote=True) == ()
+    assert spark.statements == []
+    assert "no column mask to restore" in capsys.readouterr().out
+
+
+def test_an_unmasked_contract_issues_no_mask_ddl_at_all(capsys):
+    """estabelecimentos is every live run this script has had. Restoration must be
+    a no-op there, and must SAY so -- an operator has to be able to tell 'this
+    table carries no mask' from 'the restoration did not run'."""
+    spark = _RecordingSpark()
+    estab = "workspace.default.bronze_cnpj_estabelecimentos"
+    assert cli.restore_masks(spark, table_spec("estabelecimentos"), estab, wrote=True) == ()
+    assert spark.statements == []
+    assert "declares no masked column" in capsys.readouterr().out
+
+
+def test_nothing_is_re_applied_when_no_overwrite_was_issued(capsys):
+    """The ``ALTER TABLE ADD COLUMNS`` is a metadata commit that does not replace
+    the table, so ``wrote=False`` is not a state in which a mask can have been
+    dropped -- and it is the 0-row quarantine path ``fill_and_overwrite`` skips."""
+    spark = _RecordingSpark()
+    assert cli.restore_masks(spark, _SOCIOS, _SOCIOS_BRONZE, wrote=False) == ()
+    assert spark.statements == []
+    assert "cannot have been replaced" in capsys.readouterr().out
+
+
+def test_the_catalog_is_asked_about_this_table_only():
+    """Verification, not the fix. A ``SET MASK`` returning without error proves the
+    ALTER was accepted; it does not prove the catalog reports a mask on the column
+    an operator will read from."""
+    sql = cli.mask_probe_sql(_SOCIOS_BRONZE)
+    assert "system.information_schema.column_masks" in sql
+    assert "table_catalog = 'workspace'" in sql
+    assert "table_schema = 'default'" in sql
+    assert "table_name = 'bronze_cnpj_socios'" in sql
+    # Not the staging table, whose masks would be a defect rather than a match.
+    assert "staging" not in sql
+
+
+def test_observed_masks_reads_the_column_names_the_catalog_returned():
+    spark = _RecordingSpark(masked=_BOTH_NAMES)
+    assert cli.observed_masks(spark, _SOCIOS_BRONZE) == frozenset(_BOTH_NAMES)
+
+
+def test_a_catalog_that_agrees_is_accepted():
+    cli.verify_masks_or_raise(
+        frozenset(_BOTH_NAMES), _BOTH_NAMES, tbl=_SOCIOS_BRONZE, version=7
+    )
+
+
+def test_the_run_REFUSES_to_report_success_when_a_mask_did_not_come_back():
+    """THE REGRESSION CodeRabbit asked for, exercised through the real path: the
+    statements are issued and the CATALOG still does not carry one of them.
+
+    ``_RecordingSpark`` answers the probe from its own ``masked`` argument and not
+    from the statements it recorded, so this states exactly the failure being
+    guarded against -- an ALTER that returns without error against a table whose
+    metadata does not end up carrying the mask. A stand-in that echoed the
+    statements back could not express it at all."""
+    spark = _RecordingSpark(masked=("nome_socio_razao_social",))
+    restored = cli.restore_masks(spark, _SOCIOS, _SOCIOS_BRONZE, wrote=True)
+    with pytest.raises(RuntimeError) as exc:
+        cli.verify_masks_or_raise(
+            cli.observed_masks(spark, _SOCIOS_BRONZE),
+            restored,
+            tbl=_SOCIOS_BRONZE,
+            version=42,
+        )
+    message = str(exc.value)
+    # The column that is unmasked, and not the one that is.
+    assert "nome_do_representante" in message
+    # What the state actually IS, in the words an operator needs to act on.
+    assert "READABLE IN" in message and "THE CLEAR" in message
+    # The supported repair, and what RESTORE does and does not fix.
+    assert "ensure_masked_table.py" in message
+    assert f"RESTORE TABLE {_SOCIOS_BRONZE} TO VERSION AS OF 42" in message
+    assert "RESTORE moves the DATA and does not put a mask back" in message
+    # And what the catalog does hold, so the operator is not left guessing.
+    assert "nome_socio_razao_social" in message
+
+
+def test_an_empty_catalog_answer_fails_every_required_column():
+    """A table replace that dropped both, and a re-application that did not take."""
+    with pytest.raises(RuntimeError) as exc:
+        cli.verify_masks_or_raise(
+            frozenset(), _BOTH_NAMES, tbl=_SOCIOS_BRONZE, version=1
+        )
+    assert all(column in str(exc.value) for column in _BOTH_NAMES)
+    assert "(none)" in str(exc.value)
+
+
+def test_a_masked_contract_declares_no_check_constraint_so_the_order_is_safe():
+    """Why the mask goes on BEFORE ``_assert_constraints`` rather than after. UC
+    refuses a CHECK on a table carrying a column mask, so masking first would break
+    the constraint DDL for any masked contract that declared one -- and the
+    registry refuses that combination at import. Restated from this file because it
+    is what makes the ordering chosen here safe, and the ordering is what keeps the
+    PII window from sitting behind a statement that re-validates metadata over the
+    whole table."""
+    from opl.bronze.masking import MASKED_COLUMNS
+
+    assert MASKED_COLUMNS.get(_SOCIOS.contract)
+    assert not any("CHECK" in statement.upper() for statement in _SOCIOS.constraints)
 
 
 # --- no write where there is nothing to write ---------------------------------
@@ -510,7 +778,12 @@ def test_pre_write_scan_returns_no_months_when_the_column_does_not_exist_yet(spa
     """The case this script was written for. The aggregate has to be conditional:
     ``collect_set`` on a column that is not there fails analysis."""
     df = spark.createDataFrame([("a",), ("b",)], ["_source_file"])
-    assert cli.pre_write_scan(df) == (2, ())
+    scan = cli.pre_write_scan(df)
+    assert scan.rows == 2 and scan.months == ()
+    # Neither filename carries a token, so neither asserts a month -- and both are
+    # counted, so the operator sees before the commit how many rows can only get a
+    # NULL reference date.
+    assert scan.source_months == () and scan.rows_without_source_month == 2
 
 
 def test_pre_write_scan_collects_the_months_a_table_already_carries(spark):
@@ -520,7 +793,30 @@ def test_pre_write_scan_collects_the_months_a_table_already_carries(spark):
         [("a", "2026-06"), ("b", "2026-06"), ("c", None)],
         ["_source_file", SNAPSHOT_MONTH_COLUMN],
     )
-    assert cli.pre_write_scan(df) == (3, ("2026-06",))
+    scan = cli.pre_write_scan(df)
+    assert scan.rows == 3 and scan.months == ("2026-06",)
+
+
+def test_pre_write_scan_reads_the_months_the_FILENAMES_assert(spark):
+    """The evidence a LEGACY table does carry. It has no ``_snapshot_month`` for
+    ``refuse_contradicting_month`` to read, and ``_source_file`` is the only thing
+    that can say which month its rows belong to -- so the scan has to collect it in
+    the same pass, or the two refusals are made from two different reads of a
+    71.9M-row table."""
+    df = spark.createDataFrame(
+        [
+            (f"{_LANDING}/2026-06/estabelecimentos/K3241.K03200Y0.D60613.ESTABELE",),
+            (f"{_LANDING}/2026-07/estabelecimentos/K3241.K03200Y0.D60711.ESTABELE",),
+            (f"{_LANDING}/2026-06/lookups/Cnaes.csv",),
+        ],
+        ["_source_file"],
+    )
+    scan = cli.pre_write_scan(df)
+    assert scan.rows == 3
+    assert scan.source_months == ("6-06", "6-07")
+    # The untokenised file is absent from the set rather than disagreeing with it,
+    # and counted separately.
+    assert scan.rows_without_source_month == 1
 
 
 def test_check_reports_counts_distincts_and_lost_columns_in_one_pass(spark):
@@ -541,3 +837,110 @@ def test_check_reports_counts_distincts_and_lost_columns_in_one_pass(spark):
     assert check.months == ("2026-06",)
     assert check.ref_dates == ("2026-06-13",)
     assert check.lost_columns == ("dropped_by_the_write",)
+
+
+# --- neither the ALTER nor the overwrite happens on a contradicting table ------
+
+
+class _StoppedAfterTheAlter(Exception):
+    """Raised by the stub the SECOND time ``spark.read.table`` is called.
+
+    ``main`` reads the table once up front and once more to build the fill, so the
+    second read is the first thing that happens AFTER the ALTER. Stopping there is
+    what lets one stub express both directions: a run that reaches it got past
+    every refusal, and a run that does not never issued the ALTER either.
+    """
+
+
+class _StubSession:
+    """A ``SparkSession`` stand-in for ``main``: records SQL, hands out one frame.
+
+    The frame is a REAL local DataFrame, so ``pre_write_scan``'s aggregate is the
+    real aggregate over real filenames -- the refusal under test is made from the
+    same expression the workspace would evaluate, not from a hand-written tuple.
+    Only the session is faked, because ``main`` builds one and reads a Unity
+    Catalog table by name.
+    """
+
+    def __init__(self, frame, history) -> None:
+        self._frame = frame
+        self._history = history
+        self.statements: list[str] = []
+        self.reads = 0
+
+    @property
+    def read(self) -> _StubSession:
+        return self
+
+    def table(self, _name: str):
+        self.reads += 1
+        if self.reads > 1:
+            raise _StoppedAfterTheAlter
+        return self._frame
+
+    def sql(self, statement: str):
+        self.statements.append(statement)
+        return self._history if statement.startswith("DESCRIBE HISTORY") else None
+
+
+def _run_main(monkeypatch, spark, paths: list[str], month: str) -> _StubSession:
+    """``main`` against a LEGACY table -- ``_source_file`` and nothing else."""
+    frame = spark.createDataFrame([(p,) for p in paths], ["_source_file"])
+    session = _StubSession(frame, spark.createDataFrame([(3,)], ["version"]))
+    monkeypatch.setattr(
+        cli, "SparkSession", type("_B", (), {"builder": type("_G", (), {
+            "getOrCreate": staticmethod(lambda: session)})()})
+    )
+    cli.main(["estabelecimentos", month, "--staging"])
+    return session
+
+
+def test_a_legacy_table_whose_files_are_another_month_reaches_no_ALTER_and_no_write(
+    monkeypatch, spark
+):
+    """THE END-TO-END REGRESSION. A legacy table -- no ``_snapshot_month`` at all,
+    which is the case this script exists for -- whose ``_source_file`` values carry
+    2026-06, asked to stamp 2026-07.
+
+    Before this guard the run proceeded: the ALTER added the columns, the overwrite
+    stamped 2026-07 on 71.9M rows, every ``_snapshot_ref_date`` went NULL, and
+    ``verify_or_raise`` PASSED, because the row count was unchanged and the month
+    column it had just written held no NULLs. The only symptom was a warning after
+    the commit.
+
+    ``session.reads == 1`` is the overwrite half: ``main`` re-reads the table to
+    build the fill, so a second read is the write path having been entered."""
+    session = _run_main_expecting_refusal(monkeypatch, spark, [_JUNE_FILE] * 3, "2026-07")
+    assert not any(s.startswith("ALTER TABLE") for s in session.statements)
+    assert session.reads == 1
+
+
+def test_a_table_holding_two_months_of_files_reaches_no_ALTER_either(monkeypatch, spark):
+    """Mixed rather than mismatched, and the month asked for is one the files DO
+    carry -- so the naive 'does any file agree?' test would have let this through."""
+    session = _run_main_expecting_refusal(
+        monkeypatch, spark, [_JUNE_FILE, _JULY_FILE], "2026-06"
+    )
+    assert not any(s.startswith("ALTER TABLE") for s in session.statements)
+    assert session.reads == 1
+
+
+def _run_main_expecting_refusal(monkeypatch, spark, paths, month) -> _StubSession:
+    frame = spark.createDataFrame([(p,) for p in paths], ["_source_file"])
+    session = _StubSession(frame, spark.createDataFrame([(3,)], ["version"]))
+    monkeypatch.setattr(
+        cli, "SparkSession", type("_B", (), {"builder": type("_G", (), {
+            "getOrCreate": staticmethod(lambda: session)})()})
+    )
+    with pytest.raises(RuntimeError, match="NOTHING WAS WRITTEN"):
+        cli.main(["estabelecimentos", month, "--staging"])
+    return session
+
+
+def test_the_same_table_with_an_agreeing_month_DOES_reach_the_ALTER(monkeypatch, spark):
+    """THE OTHER DIRECTION, or the two tests above pass against a script that
+    refuses everything. Identical table, identical stub, the month its filenames
+    actually carry: the run gets past every refusal, issues the ALTER for both
+    snapshot columns, and is stopped only by the stub at the fill's re-read."""
+    with pytest.raises(_StoppedAfterTheAlter):
+        _run_main(monkeypatch, spark, [_JUNE_FILE] * 3, "2026-06")

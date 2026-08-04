@@ -55,6 +55,75 @@ _LAST_SEGMENT = r"[^/]*$"
 _TOKEN = _TOKEN_CORE + _LAST_SEGMENT
 
 
+def _token_parts(source_file: Column) -> tuple[Column, Column, Column, Column]:
+    """(tokens found in the filename, year digit, month, day) for one path.
+
+    ONE extraction shared by the two public functions below, so the thing that
+    decides which characters of a mainframe name are the RFB's date is spelled
+    once. `ref_date_column` needs all four; `token_month_column` needs the first
+    three. Splitting the regex between them would let a change to the anchoring
+    fix one caller and leave the other reading a different filename.
+
+    `tokens` is the list of matches in the LAST path segment, so its size is what
+    both callers test the ambiguity of; the three groups come from `_TOKEN`, whose
+    leftmost match is the same one when the size is 1.
+    """
+    filename = F.regexp_extract(source_file, _LAST_SEGMENT, 0)
+    tokens = F.regexp_extract_all(filename, F.lit(_TOKEN_CORE), F.lit(0))
+    return (
+        tokens,
+        F.regexp_extract(source_file, _TOKEN, 1),
+        F.regexp_extract(source_file, _TOKEN, 2),
+        F.regexp_extract(source_file, _TOKEN, 3),
+    )
+
+
+def token_month_key(snapshot_month: str) -> str:
+    """What `token_month_column` yields for a row that BELONGS to `snapshot_month`.
+
+    `'2026-07'` -> `'6-07'`: the single year digit the RFB's filename actually
+    carries, then the month. NOT `'2026-07'`, because the filename cannot say
+    which decade it means -- `ref_date_column` takes the decade from the job
+    parameter for exactly that reason, and a key claiming four year digits would
+    assert a fact the token does not carry.
+
+    The key exists so that a caller comparing a row's filename against a requested
+    month compares STRINGS produced by one rule, rather than re-deriving
+    `year[-1]` at every call site. Raises on a malformed month for the same reason
+    `ref_date_column` does: the comparison it feeds would otherwise silently match
+    nothing and read as "every file disagrees"."""
+    if not is_month(snapshot_month):
+        raise ValueError(
+            f"snapshot_month must be 'YYYY-MM' naming a real month, got "
+            f"{snapshot_month!r} -- this is the job's month parameter; a malformed "
+            "one would make every filename look like it disagreed with it"
+        )
+    year, _, month = snapshot_month.partition("-")
+    return f"{year[-1]}-{month}"
+
+
+def token_month_column(source_file: Column) -> Column:
+    """The month the FILENAME itself asserts, spelled as `token_month_key` spells
+    it -- or NULL when the filename carries no token, or two.
+
+    WHAT THIS IS FOR, and why it is not just `ref_date_column`'s inner half.
+    `ref_date_column` answers "is this row's date PROVABLE against the month I was
+    given?" and collapses every disagreement to NULL; it therefore cannot say
+    WHICH other month a row claims. Backfilling a legacy table needs that second
+    question answered BEFORE the write: a table with no `_snapshot_month` yet is
+    exactly the case `refuse_contradicting_month` cannot see, and stamping it with
+    a month its filenames contradict sends every reference date to NULL and then
+    passes every post-write check, because the check reads the value it just wrote.
+
+    NULL on zero tokens and NULL on two, matching `ref_date_column` exactly: a
+    filename with two tokens does not assert one month, and guessing which is the
+    RFB's is the thing this module refuses to do anywhere. A caller that needs to
+    know how many rows are in that state counts the NULLs; it must not read a NULL
+    as agreement."""
+    tokens, year, month, _ = _token_parts(source_file)
+    return F.when(F.size(tokens) == 1, F.concat_ws("-", year, month))
+
+
 def ref_date_column(source_file: Column, snapshot_month: str) -> Column:
     """The RFB-declared reference date for a row, or NULL if it cannot be proven.
 
@@ -106,18 +175,16 @@ def ref_date_column(source_file: Column, snapshot_month: str) -> Column:
     # are reading a value already proven to be four digits and a real month.
     year, _, month = snapshot_month.partition("-")
 
-    token_year = F.regexp_extract(source_file, _TOKEN, 1)
-    token_month = F.regexp_extract(source_file, _TOKEN, 2)
-    token_day = F.regexp_extract(source_file, _TOKEN, 3)
-
     # Exactly one token in the filename, or NULL. Two of them
     # (`K3241.D60601.K03200Y0.D60613.ESTABELE`) both sit in the last segment and
     # both cross-check clean, so leftmost-wins would silently stamp the 1st. Which
     # one the RFB meant is not knowable from the name, and this module does not
     # guess: both months observed shipped exactly one token, so a second one is a
     # naming shape nobody has seen and NULL is the honest answer.
-    filename = F.regexp_extract(source_file, _LAST_SEGMENT, 0)
-    tokens = F.regexp_extract_all(filename, F.lit(_TOKEN_CORE), F.lit(0))
+    #
+    # The four come from `_token_parts`, shared with `token_month_column`, so both
+    # functions read the same characters of the same filename.
+    tokens, token_year, token_month, token_day = _token_parts(source_file)
 
     # regexp_extract yields "" when nothing matches, so a filename with no token
     # fails both comparisons and lands in the NULL branch without a special case.

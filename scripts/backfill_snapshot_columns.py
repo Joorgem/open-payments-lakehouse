@@ -46,6 +46,23 @@ write is what destroys the evidence: restamping 2026-06 rows as 2026-07 sends
 every `_snapshot_ref_date` to NULL and then passes every post-write check. A new
 month's rows are stamped at ingestion by `add_audit_columns`; run the job.
 
+AND THE SAME REFUSAL OFF THE FILENAMES, which is the half that survives the case
+this script is FOR. A legacy table has no `_snapshot_month` to contradict, so the
+guard above passes it on an empty tuple; `refuse_contradicting_source_month` reads
+`_source_file` instead and refuses a run whose month the filenames disagree with,
+or that would stamp one month onto a table holding two. Both are refused before
+the ALTER, because after the overwrite the only symptom is a NULL reference date
+in a warning -- the verification itself passes, having just written the value it
+checks.
+
+AND THE PII MASK IS PUT BACK, not left to the next job. `--bronze` against a
+populated masked table issues an overwrite that Unity Catalog may plan as a table
+REPLACE, which drops the UC column mask along with the constraints. `restore_masks`
+re-applies it from `opl.bronze.masking` -- the same statements
+`databricks/src/ensure_masked_table.py` issues, and idempotent by measurement --
+and `verify_masks_or_raise` asks the catalog and refuses to report success if it
+disagrees.
+
 REFUSES TO CLAIM SUCCESS IT HAS NOT VERIFIED. The write is an overwrite of a
 71.9M-row table, and the three ways it can go wrong that still return without
 error are all checked afterwards, with the numbers printed either way: the row
@@ -70,11 +87,20 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from opl.bronze.autoloader import SOURCE_FILE_COLUMN
+from opl.bronze.masking import (
+    MASK_FUNCTION,
+    MASKED_COLUMNS,
+    mask_function_ddl,
+    masked_table_ddls,
+    set_mask_ddl,
+)
 from opl.bronze.registry import BronzeTable, table_spec
 from opl.bronze.snapshot import (
     SNAPSHOT_MONTH_COLUMN,
     SNAPSHOT_REF_DATE_COLUMN,
     ref_date_column,
+    token_month_column,
+    token_month_key,
 )
 from opl.config import DEFAULT, require_month
 
@@ -204,8 +230,31 @@ def missing_columns(existing: frozenset[str]) -> tuple[tuple[str, str], ...]:
     return tuple((name, sql_type) for name, sql_type in _NEW_COLUMNS if name not in existing)
 
 
-def pre_write_scan(before: DataFrame) -> tuple[int, tuple[str, ...]]:
-    """(row count, distinct non-NULL `_snapshot_month` values), in ONE pass.
+@dataclass(frozen=True)
+class PreWriteScan:
+    """What the table looked like BEFORE anything was written. Evidence, not state.
+
+    Every field comes from ONE aggregate pass (see `pre_write_scan`), so the row
+    count the verification compares against, the months the run is refused on and
+    the source months it is refused on cannot disagree with each other.
+    """
+
+    rows: int
+    # Distinct non-NULL `_snapshot_month` values already in the table. Empty when
+    # the column does not exist yet -- the case this script was written for.
+    months: tuple[str, ...]
+    # Distinct `token_month_key`-shaped months the FILENAMES assert ('6-07', ...).
+    # NULLs are dropped by `collect_set`, so this is what the files that DO carry
+    # exactly one token say, and nothing about the ones that do not.
+    source_months: tuple[str, ...]
+    # Rows whose `_source_file` carries no token, or two. Not a refusal -- their
+    # reference date is legitimately NULL -- but reported before the commit rather
+    # than only after it.
+    rows_without_source_month: int
+
+
+def pre_write_scan(before: DataFrame) -> PreWriteScan:
+    """Everything the refusals need, in ONE pass over the table.
 
     BEFORE the write, and that ordering is the whole point rather than an
     optimisation: the write overwrites `_snapshot_month`, so a month already in
@@ -214,18 +263,38 @@ def pre_write_scan(before: DataFrame) -> tuple[int, tuple[str, ...]]:
     the month that was passed in, which is how a contradicting month satisfied
     every post-write invariant and exited 0.
 
-    One pass, so the row count the verification compares against and the months
-    it is refused on come from the same scan of the same 71.9M rows.
+    THE SOURCE MONTHS ARE READ HERE FOR A DIFFERENT REASON, and it is the one that
+    survives a table with no `_snapshot_month` at all. `_source_file` is NOT
+    overwritten by the fill, so unlike the months above it does not stop existing
+    -- but the post-write check that would notice a disagreement does not exist:
+    `_check` counts NULL `_snapshot_ref_date` and `verify_or_raise` deliberately
+    does not raise on it. So the disagreement is refused here, before the ALTER
+    and before the overwrite, rather than reported after the commit. See
+    `refuse_contradicting_source_month`.
+
+    One pass, so all four numbers come from the same scan of the same 71.9M rows.
     """
-    aggregates = [F.count(F.lit(1)).alias("rows")]
+    aggregates = [
+        F.count(F.lit(1)).alias("rows"),
+        F.collect_set(token_month_column(F.col(SOURCE_FILE_COLUMN))).alias("source_months"),
+        F.count(
+            F.when(token_month_column(F.col(SOURCE_FILE_COLUMN)).isNull(), F.lit(1))
+        ).alias("no_source_month"),
+    ]
     # Conditional because the column is exactly what may not exist yet -- that is
-    # the case this script was written for.
+    # the case this script was written for. `_source_file` is not conditional:
+    # `main` refuses a table without it before reaching here, because the whole
+    # backfill would fill `_snapshot_ref_date` with NULL on every row.
     has_month = SNAPSHOT_MONTH_COLUMN in before.columns
     if has_month:
         aggregates.append(F.collect_set(SNAPSHOT_MONTH_COLUMN).alias("months"))
     row = before.agg(*aggregates).collect()[0]
-    months = tuple(sorted(str(m) for m in row["months"])) if has_month else ()
-    return int(row["rows"]), months
+    return PreWriteScan(
+        rows=int(row["rows"]),
+        months=tuple(sorted(str(m) for m in row["months"])) if has_month else (),
+        source_months=tuple(sorted(str(m) for m in row["source_months"])),
+        rows_without_source_month=int(row["no_source_month"]),
+    )
 
 
 def refuse_contradicting_month(existing: tuple[str, ...], *, month: str, tbl: str) -> None:
@@ -270,6 +339,73 @@ def refuse_contradicting_month(existing: tuple[str, ...], *, month: str, tbl: st
         f"instead. If you really do mean to re-stamp {tbl}, say so by passing the "
         "month it already carries, or clear the column first -- deliberately, and "
         "with the reason written down."
+    )
+
+
+def refuse_contradicting_source_month(
+    source_months: tuple[str, ...], *, month: str, tbl: str
+) -> None:
+    """Refuse when the FILENAMES disagree with the month, or with each other.
+
+    THE HALF `refuse_contradicting_month` STRUCTURALLY CANNOT SEE. A legacy table
+    with no `_snapshot_month` column passes that guard on an empty tuple -- by
+    design; it is the case this script exists for. `_fill` then stamps the
+    requested month on every row, and `ref_date_column` returns NULL for
+    `_snapshot_ref_date` on every row whose `_source_file` token disagrees with
+    it. The post-write verification then PASSES: the row count is unchanged and
+    `_snapshot_month` holds no NULLs, because it holds the month this run just
+    wrote. A verification that reads the value it just wrote cannot fail for the
+    right reason, so the disagreement only ever surfaced as a NULL reference date
+    AFTER the overwrite was committed, in a warning.
+
+    So it is refused BEFORE the ALTER and before the overwrite, on the one piece of
+    evidence a legacy table does carry: the filenames. Both live runs of this phase
+    were unaffected -- estab staging held exactly one month and the run measured
+    `null_ref = 0` -- which is the data being safe, not the guard being there.
+
+    MIXED IS REFUSED TOO, and not only mismatched. A table whose files carry two
+    months has no single month to be stamped with: whichever one is passed, the
+    other month's rows get a `_snapshot_month` that contradicts their own filename
+    and a NULL reference date. Bronze is multi-month from F1.4b onward, so such a
+    table is a normal object now -- it is simply not a thing this script may write,
+    and the rows it would silently mislabel are the reason.
+
+    NOT SCOPED TO LEGACY TABLES, deliberately. A table that already carries the
+    month is refused by `refuse_contradicting_month` when the month differs and
+    permitted when it matches; on that permitted repeat this guard still has to
+    hold, because an idempotent re-run of a stamp that was wrong is still wrong.
+
+    A ROW WITH NO TOKEN IS NOT REFUSED. `token_month_column` returns NULL for a
+    filename carrying no token or two, and `collect_set` drops those, so they are
+    absent from `source_months` rather than disagreeing with it. Their reference
+    date is legitimately NULL -- see `_warn_on_null_ref_dates`, which is the
+    control for absence -- and refusing them here would refuse the lookup tables
+    and any future source whose naming this module has not seen. The count is
+    printed before the write instead; `PreWriteScan.rows_without_source_month`
+    carries it.
+    """
+    key = token_month_key(month)
+    contradicting = tuple(m for m in source_months if m != key)
+    if not contradicting:
+        return
+    raise RuntimeError(
+        f"refusing to backfill {tbl}: this run was given month={month!r}, whose "
+        f"filename token is {key!r}, and {SOURCE_FILE_COLUMN} says its rows came "
+        f"from {', '.join(repr(m) for m in contradicting)}"
+        + (f" as well as {key!r}" if key in source_months else "")
+        + ". NOTHING WAS WRITTEN -- no ALTER and no overwrite. Proceeding would "
+        f"stamp {SNAPSHOT_MONTH_COLUMN}={month!r} on rows whose own filename "
+        f"contradicts it and send their {SNAPSHOT_REF_DATE_COLUMN} to NULL, "
+        "because the reference date is only derived when the filename's token "
+        "agrees with the month. THAT WOULD THEN PASS THIS SCRIPT'S VERIFICATION: "
+        "the row count would be unchanged and the month column would have no "
+        "NULLs, because this run had just written it -- the disagreement would "
+        "reach you as a warning after the commit, if at all. The token carries a "
+        "single year digit, so 'Y-MM' is all the filename can prove and the decade "
+        "is this run's parameter. If the table really does hold more than one "
+        "month it is not a backfill target at all: a month's rows are stamped at "
+        "ingestion (add_audit_columns). If it holds exactly one and this run named "
+        "the other, re-run with the month the files actually carry."
     )
 
 
@@ -468,11 +604,14 @@ def _assert_constraints(spark: SparkSession, spec: BronzeTable, tbl: str) -> Non
     every append. Only the application is duplicated, not the statements, so
     there is nothing here to drift from them.
 
-    Constraints are the only declarative metadata this repo sets on a bronze
-    table today (`delta.dataSkippingStatsColumns` is deferred to F1.4b). If that
-    changes -- or if the registry ever grows metadata scoped to staging or
-    quarantine -- this function has to grow with it, and the skip below is the line
-    that would then be wrong.
+    NOT THE ONLY METADATA THIS SCRIPT RESTORES ANY MORE. `restore_masks` puts the
+    UC column mask back, and it is deliberately NOT folded into this function: a
+    mask is scoped to the tables `opl.bronze.masking` names (bronze and quarantine,
+    never staging), while these statements are scoped to bronze alone, so one skip
+    cannot serve both. Constraints remain the only declarative metadata the
+    REGISTRY sets (`delta.dataSkippingStatsColumns` is deferred). If the registry
+    ever grows metadata scoped to staging or quarantine, this function has to grow
+    with it, and the skip below is the line that would then be wrong.
     """
     bronze = DEFAULT.table(spec.bronze)
     if tbl != bronze:
@@ -491,6 +630,171 @@ def _assert_constraints(spark: SparkSession, spec: BronzeTable, tbl: str) -> Non
     for statement in spec.constraints:
         spark.sql(statement.format(table=tbl))
     print(f"backfill: re-asserted {len(spec.constraints)} constraint statement(s) on {tbl}")
+
+
+def required_masks(spec: BronzeTable, tbl: str) -> tuple[str, ...]:
+    """The columns UC must be masking on `tbl` once this run is over, or ().
+
+    WHICH TABLES ARE MASKED IS `opl.bronze.masking`'S DECISION, asked rather than
+    restated: `masked_table_ddls` names them, and it names bronze and quarantine
+    and deliberately NOT staging. That exclusion is load-bearing in the other
+    direction from everything else here -- `promote_batch` READS staging and writes
+    what it read into bronze, so applying a mask there would put `***` into bronze
+    permanently and would make the DQ gate stop rejecting rows with a missing name.
+    A list of masked tables spelled again in this file could gain staging by a
+    plausible-looking edit; asking the module that argues about it cannot.
+
+    WHICH COLUMNS is `MASKED_COLUMNS`, keyed by CONTRACT, so a contract that is not
+    masked returns () and the whole of the restoration below is a no-op. That is
+    what lets this run against estabelecimentos unchanged."""
+    columns = MASKED_COLUMNS.get(spec.contract, ())
+    if not columns:
+        return ()
+    covered = tuple(
+        table
+        for table, _ in masked_table_ddls(
+            bronze=DEFAULT.table(spec.bronze),
+            quarantine=DEFAULT.table(spec.quarantine),
+            contract=spec.contract,
+        )
+    )
+    return columns if tbl in covered else ()
+
+
+def mask_probe_sql(tbl: str) -> str:
+    """The columns UC reports as masked on `tbl` -- the VERIFICATION, not the fix.
+
+    `system.information_schema.column_masks` is the view ADR 0008 and both run
+    evidence documents already query against this workspace, so it is a measured
+    object rather than a guessed one; the three name filters follow
+    `information_schema.columns`' own `table_catalog`/`table_schema`/`table_name`
+    spelling, which §8.2 of the PR B evidence queries the same way.
+
+    ASKED OF THE CATALOG RATHER THAN INFERRED FROM THE STATEMENT SUCCEEDING,
+    because the failure this closes is precisely a statement that ran against a
+    table whose metadata something else had changed underneath it. A `SET MASK`
+    that returns without error proves the ALTER was accepted; it does not prove the
+    catalog now reports a mask on the column an operator will read from."""
+    catalog, schema, name = tbl.split(".")
+    return (
+        "SELECT column_name FROM system.information_schema.column_masks "
+        f"WHERE table_catalog = '{catalog}' AND table_schema = '{schema}' "
+        f"AND table_name = '{name}'"
+    )
+
+
+def restore_masks(
+    spark: SparkSession, spec: BronzeTable, tbl: str, *, wrote: bool
+) -> tuple[str, ...]:
+    """Re-apply the UC column masks the overwrite may have dropped. The columns it
+    re-applied, so the caller can verify exactly those.
+
+    WHY THIS EXISTS, and why it is not symmetric decoration beside
+    `_assert_constraints`. `mode("overwrite").saveAsTable` on an existing table is
+    planned either as an overwrite of the DATA (`OverwriteByExpression`, metadata
+    kept) or as a replace of the TABLE (`AtomicReplaceTableAsSelect`, which does
+    not keep it) -- both plans were OBSERVED for this exact write, and which one
+    Unity Catalog picks is not knowable from here. A replace drops CHECK
+    constraints, NOT NULL *and a column mask*. `_assert_constraints` put the first
+    two back and nothing put the third back, which left the PII control as the one
+    piece of metadata resting on the plan going the other way.
+
+    "UNREACHABLE TODAY" WAS TRUE AND IS NOT THE POINT. Today a `socios --bronze`
+    run is refused by `refuse_contradicting_month`, because that table carries both
+    2026-06 and 2026-07; and `ensure_masked_table` re-applies `SET MASK`
+    idempotently at the top of the next socios job. Both are properties of today's
+    DATA and of a job that has to run next -- not of this code. A mask is not the
+    control to leave resting on either.
+
+    NOT A SECOND SPELLING OF THE DDL. The statements come from
+    `opl.bronze.masking`, the same module `databricks/src/ensure_masked_table.py`
+    issues them from, and both are idempotent by measurement: `CREATE OR REPLACE
+    FUNCTION` is the documented way to modify a function a live mask references,
+    and a second `SET MASK` on an already-masked column was PROBED against this
+    workspace and succeeded (ADR 0008). So this costs nothing on the far commoner
+    path where the plan kept the metadata and the mask never went anywhere.
+
+    THE FUNCTION FIRST, then the masks -- `ensure_masked_table`'s ordering, and for
+    its reason: a `SET MASK` naming a routine that does not exist fails the ALTER.
+    A table REPLACE cannot drop the function (it is a separate object), but this
+    script may also be the first thing to run in a workspace where the socios job
+    has not, and `CREATE OR REPLACE` is free.
+
+    NO WRITE, NOTHING TO RESTORE. The ALTER that adds the columns is a metadata
+    commit that does not replace the table, so `wrote=False` is not a case where a
+    mask can have been dropped -- and `fill_and_overwrite` returning False is
+    exactly the 0-row quarantine path whose docstring argues that skipping the
+    write is what removes the class.
+
+    BEFORE `_assert_constraints`, and the order matters rather than being tidy. UC
+    refuses a CHECK constraint on a table carrying a column mask
+    (`COLUMN_MASKS_CHECK_CONSTRAINT_UNSUPPORTED`), which is why the registry fails
+    at import if a masked contract declares one -- so for every contract that
+    reaches here masked, `spec.constraints` is NOT NULL DDL only, and applying the
+    mask first cannot make the constraint DDL fail. Going the other way would put
+    the PII control behind a statement that re-validates metadata over the whole
+    table, widening the window in which the rows are readable in the clear for no
+    reason at all."""
+    columns = required_masks(spec, tbl)
+    if not columns or not wrote:
+        # Said out loud in both directions: an operator has to be able to tell "this
+        # table carries no mask" from "the restoration did not run".
+        print(
+            f"backfill: no column mask to restore on {tbl} -- "
+            + (
+                "no overwrite was issued, so the table cannot have been replaced"
+                if columns
+                else f"{spec.contract} declares no masked column"
+            )
+        )
+        return ()
+    function = DEFAULT.table(MASK_FUNCTION)
+    spark.sql(mask_function_ddl(function))
+    for column in columns:
+        spark.sql(set_mask_ddl(tbl, column, function))
+        print(f"backfill: re-applied the column mask on {tbl}.{column} ({function})")
+    return columns
+
+
+def observed_masks(spark: SparkSession, tbl: str) -> frozenset[str]:
+    """The columns UC currently reports a mask on for `tbl`."""
+    rows = spark.sql(mask_probe_sql(tbl)).collect()
+    return frozenset(str(row["column_name"]) for row in rows)
+
+
+def verify_masks_or_raise(
+    observed: frozenset[str], required: tuple[str, ...], *, tbl: str, version: int
+) -> None:
+    """Refuse to report success while a required mask is not in the catalog.
+
+    Pure, so both verdicts are covered by a test that needs no workspace -- which
+    matters more here than for the row counts: the state this refuses is a
+    populated table whose personal names are readable by anyone who can select
+    from it, and it is reachable only through a plan Unity Catalog chooses.
+
+    RAISES, and does not warn. `_warn_on_null_ref_dates` warns because a NULL
+    reference date is a DESIGNED outcome that a correct run can produce. An absent
+    mask is not: `restore_masks` has just issued the statement, so its absence
+    means the statement did not take, and there is no reading of that on which the
+    run succeeded."""
+    unmasked = tuple(column for column in required if column not in observed)
+    if not unmasked:
+        return
+    raise RuntimeError(
+        f"backfill REFUSED to report success on {tbl}: the UC column mask is NOT in "
+        f"the catalog for {', '.join(unmasked)} after this run re-applied it. THE "
+        "DATA IS WRITTEN AND THE PERSONAL NAMES IN THOSE COLUMNS ARE READABLE IN "
+        "THE CLEAR to every principal that can select from this table. This is why "
+        "the overwrite is dangerous on a masked table at all: it may be planned as "
+        "a table REPLACE, which drops the mask along with the constraints. Put the "
+        "mask back before anything reads the table -- `databricks/src/"
+        "ensure_masked_table.py` issues exactly these statements and is idempotent, "
+        "so running that task against this contract is the supported repair. The "
+        f"catalog currently reports masks on: {', '.join(sorted(observed)) or '(none)'}. "
+        f"The write itself is still reversible with: RESTORE TABLE {tbl} TO VERSION "
+        f"AS OF {version} -- but note that RESTORE moves the DATA and does not put a "
+        "mask back, so the mask is the thing to fix first."
+    )
 
 
 def _fill(source: DataFrame, month: str) -> DataFrame:
@@ -527,25 +831,30 @@ def fill_and_overwrite(source: DataFrame, *, month: str, tbl: str, rows: int) ->
     Unity Catalog picks is not knowable from here. A replace also drops a UC COLUMN
     MASK, and `socios` is masked on its bronze AND quarantine tables
     (`opl.bronze.masking.MASKED_COLUMNS`, applied by
-    `databricks/src/ensure_masked_table.py`). `_assert_constraints` is this script's
-    only metadata re-assertion and it now returns early for a non-bronze target --
-    correctly, those statements are bronze DDL -- so the one target where a 0-row
-    write is the NORMAL case is the one target nothing would put back.
+    `databricks/src/ensure_masked_table.py`).
 
-    That exposure is bounded rather than a leak: `ensure_masked_table` runs first in
-    `databricks/resources/bronze_socios_job.yml` with everything downstream depending
-    on it, and ADR 0008 records its statements as idempotent, so a dropped mask is
-    re-applied before the next append.
+    WHAT PUTS THE MASK BACK IS `restore_masks`, and it covers every target the
+    masking module names -- bronze AND quarantine -- unlike `_assert_constraints`,
+    which returns early off bronze because its statements are bronze DDL. That
+    asymmetry used to leave the mask as the one piece of metadata nothing restored
+    on a non-bronze target; it no longer does, and `verify_masks_or_raise` refuses
+    to report success while the catalog disagrees.
+
+    SKIPPING THE 0-ROW WRITE IS STILL THE RIGHT CALL, for a reason restoration does
+    not remove: the cheapest way not to have to put metadata back is not to issue
+    the statement that can take it away. `restore_masks` is a repair on a window
+    that has already opened -- between the commit and the re-apply the rows behind
+    the dropped mask are readable -- and at `rows == 0` there is nothing behind it
+    and nothing to gain by opening it.
 
     "A WINDOW OVER AN EMPTY TABLE" IS THE 0-ROW CASE ONLY -- the case this function
-    SKIPS, and the only one the paragraph above is about. It is not a claim about
-    `--bronze` against a populated masked table: there the overwrite is issued, it
-    may still be planned as a table REPLACE, and the rows behind the dropped mask are
-    real. What bounds that case is the re-application above and nothing else, so it
-    is a window over DATA until the next `ensure_masked_table` runs, which is why
-    that ordering is a control rather than housekeeping (ADR 0008). Distinguishing
-    the two matters here because the sentence sits in the docstring of the function
-    an operator reads before running the bronze backfill.
+    SKIPS. It is not a claim about `--bronze` against a populated masked table:
+    there the overwrite is issued, it may still be planned as a table REPLACE, and
+    the rows behind the dropped mask are real. That window is now closed by this
+    run rather than by the next `ensure_masked_table` -- which remains the ordering
+    ADR 0008 argues for, but is a job that has to run, not a property of this
+    script. Distinguishing the two matters here because the sentence sits in the
+    docstring of the function an operator reads before running the bronze backfill.
 
     THE POINT IS STRUCTURE, NOT THE WINDOW. Before this, the only thing keeping the
     script away from a masked quarantine was `refuse_non_empty_quarantine` happening
@@ -564,8 +873,8 @@ def fill_and_overwrite(source: DataFrame, *, month: str, tbl: str, rows: int) ->
             f"backfill: {tbl} has 0 rows, so no write was issued -- the ALTER above is "
             "the entire migration and there is nothing to stamp. Deliberate: an "
             "overwrite may be planned as a table REPLACE, which drops constraints, "
-            "NOT NULL and any UC column mask, and none of that would be put back for "
-            "a target that is not bronze."
+            "NOT NULL and any UC column mask -- and the cheapest way not to have to "
+            "put metadata back is not to issue the statement that takes it away."
         )
         return False
     _fill(source, month).write.format("delta").mode("overwrite").saveAsTable(tbl)
@@ -637,16 +946,23 @@ def main(argv: list[str] | None = None) -> int:
     version = latest_version(spark, tbl)
     print(f"backfill: {tbl} at version {version}")
     print(f"backfill: to undo -> RESTORE TABLE {tbl} TO VERSION AS OF {version}")
-    rows_before, months_before = pre_write_scan(before)
-    print(f"backfill: {rows_before} rows, month={month}, already carries {list(months_before)}")
-    # Both refused HERE, before the ALTER and before the write, because the write
-    # destroys the evidence they are refused on -- see `refuse_contradicting_month`.
-    # Neither is scoped to a target: a staging table stamped with the wrong month is
-    # the same defect as a bronze one, and the quarantine guard decides from the name
-    # it was handed rather than from the flag that produced it.
-    refuse_contradicting_month(months_before, month=month, tbl=tbl)
+    scan = pre_write_scan(before)
+    rows_before = scan.rows
+    print(f"backfill: {rows_before} rows, month={month}, already carries "
+          f"{list(scan.months)}, {SOURCE_FILE_COLUMN} says {list(scan.source_months)} "
+          f"({scan.rows_without_source_month} row(s) carry no single filename token)")
+    # All three refused HERE, before the ALTER and before the write, because the
+    # write destroys or forges the evidence they are refused on -- see
+    # `refuse_contradicting_month` for the months the table carries and
+    # `refuse_contradicting_source_month` for the months its FILENAMES carry, which
+    # is the half that survives a legacy table having no month column at all. None is
+    # scoped to a target: a staging table stamped with the wrong month is the same
+    # defect as a bronze one, and the quarantine guard decides from the name it was
+    # handed rather than from the flag that produced it.
+    refuse_contradicting_month(scan.months, month=month, tbl=tbl)
+    refuse_contradicting_source_month(scan.source_months, month=month, tbl=tbl)
     refuse_non_empty_quarantine(rows_before, month=month, tbl=tbl, spec=spec)
-    if months_before:
+    if scan.months:
         print(f"backfill: {tbl} is already stamped {month} -- re-running is idempotent")
 
     to_add = missing_columns(columns_before)
@@ -661,6 +977,21 @@ def main(argv: list[str] | None = None) -> int:
     # No branch here on purpose -- whether the write happens at all is
     # `fill_and_overwrite`'s decision, stated once and tested both ways.
     wrote = fill_and_overwrite(spark.read.table(tbl), month=month, tbl=tbl, rows=rows_before)
+
+    # IMMEDIATELY after the write and ahead of every other check, because this is the
+    # only one whose failure state is personal names readable in the clear: the
+    # overwrite may have been planned as a table REPLACE, which drops the mask, and
+    # every statement between the commit and the re-apply is time that table spends
+    # unmasked. `_check` below is a full aggregate over 71.9M rows; it is not the
+    # thing to do first.
+    restored = restore_masks(spark, spec, tbl, wrote=wrote)
+    if restored:
+        # The catalog is asked only when something was re-applied. An unmasked
+        # contract must not pay for a query against `system.information_schema` to
+        # be told it has no masks, and `verify_masks_or_raise` would accept any
+        # observed set against an empty requirement anyway.
+        verify_masks_or_raise(observed_masks(spark, tbl), restored, tbl=tbl, version=version)
+        print(f"backfill: verified {len(restored)} column mask(s) in the catalog on {tbl}")
 
     after = spark.read.table(tbl)
     check = _check(after, columns_before)
