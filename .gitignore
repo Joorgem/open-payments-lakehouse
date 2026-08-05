@@ -18,3 +18,10 @@ dist/
 
 # working plans and handoffs (local only)
 /.plans/
+
+# Agent context. Kept on disk so the tooling still reads it, deliberately unpublished:
+# it names the job this project was started for, records the agent-autonomy rules, and
+# carries this machine's JAVA_HOME/HADOOP_HOME and Databricks CLI specifics -- none of
+# which belong in a public repo whose point is the engineering.
+CLAUDE.md
+AGENTS.md
