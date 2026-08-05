@@ -164,16 +164,16 @@ def _month_shaped_table_key(spec_name: str, table_key: str) -> str:
         "<table_key> directories still exist in the Volume holding 2026-06 state, "
         "deliberately unmigrated -- so a month-shaped table_key makes this table's "
         "orphaned state directory BE a month directory, and every table's state for "
-        "that month is then written inside a checkpoint another query owns, its "
+        "that month is then written inside a checkpoint another query wrote, its "
         "RocksDB store and offset log included. It also makes a name under "
         "_checkpoints/ unreadable: an operator listing it can no longer tell a month "
-        "from a table. Give the table a table_key that is not YYYY-MM -- every "
+        "from a table. Give the table a table_key that is not a month -- every "
         "registered one is its own bronze name or an abbreviation of it."
     )
 
 
 def _assert_no_table_key_is_month_shaped(registry: Registry) -> None:
-    """Fail at import if a `table_key` is `YYYY-MM`, and so could name a month dir.
+    """Fail at import if a `table_key` is a MONTH, and so could name a month dir.
 
     THE GUARD THE 800-LINE CAP DECLINED, and the reason this module exists. It shipped
     as a LOCK inside `tests/bronze/test_autoloader_helpers.py::test_no_table_shares_or_

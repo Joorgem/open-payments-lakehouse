@@ -22,7 +22,11 @@ from opl.bronze.masking import MASKED_COLUMNS
 # guards, and nothing outside this package and its tests calls a guard. The `_assert_`
 # prefix is also the contract `tests/bronze/test_registry_guard_wiring.py` reads: an
 # `_assert_*` defined at module level in any `registry*.py` is a guard, and a guard is
-# CALLED from the block at the foot of THIS module. Imported by name rather than as
+# CALLED from the block at the foot of THIS module. THE `registry*` HALF IS ENFORCED, not
+# merely conventional: a guard called below whose module the lock's glob does not match
+# turns `test_every_guard_called_at_import_is_defined_where_the_lock_can_see_it` red, so
+# a future split has to be named `registry_*.py` or the lock stops seeing it. Imported
+# by name rather than as
 # `registry_collisions.x(...)` so the call block below reads the same for every guard,
 # whichever file it lives in; the wiring lock is correct for either spelling.
 from opl.bronze.registry_collisions import (

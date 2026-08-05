@@ -222,10 +222,14 @@ def test_a_month_shaped_table_key_is_refused_at_import(monkeypatch, table_key):
     What gets through is not an error. `autoloader` builds
     `_checkpoints/<month>/<table_key>`, and the pre-month-scoping `_checkpoints/
     <table_key>` directories still exist in the Volume holding 2026-06 state,
-    deliberately unmigrated. A table_key of `2026-06` makes that orphan directory BE
-    the month directory, so every table's 2026-06 state is written inside a checkpoint
-    another query owns -- a new RocksDB store and offset log under a live one, which is
-    the exact nesting month-scoping was introduced to make impossible.
+    deliberately unmigrated (probed in the workspace during the Task 0 review: all four
+    exist, beside the month-scoped `2026-07`). A table_key of `2026-06` makes that orphan
+    directory BE the month directory, so every table's 2026-06 state is written inside a
+    checkpoint another query wrote -- a new RocksDB store and offset log nested under an
+    existing one, which is the exact nesting month-scoping was introduced to make
+    impossible. "Wrote", not "owns": nothing reads those orphans today, which is why they
+    were left in place, and overstating that would be the kind of claim this repo treats
+    as a defect.
 
     `2026-06` is the sharpest of the three because it is a month this Volume already
     holds state for. The other two are months no key collides with TODAY, and are here

@@ -21,7 +21,19 @@ passing while certifying nothing about the moved guard -- the exact vacuity it e
 remove, turned on itself, and measured before the extraction rather than after.
 `test_the_lock_is_not_blind_to_a_guard_in_a_second_module` is the proof that it is
 closed. That proof is SYNTHETIC on purpose: the real modules are correctly wired, which
-is precisely why the blind version passed over them."""
+is precisely why the blind version passed over them.
+
+AND THE SAME HOLE, ONE FILENAME AWAY. The Task 0 review found that `defined` comes from
+a glob while `called` comes from `registry.py`, so a guard module named outside the glob
+-- `collisions.py` rather than `registry_collisions.py` -- contributes no definitions,
+lands its call in `called` anyway, and passes in silence. The naming convention was
+written in three places and enforced in none, which is the defect this whole task is
+about, committed by the task itself. Both containments are asserted now, each with its
+own synthetic probe:
+
+    defined  ->  called   test_every_guard_any_registry_module_defines_is_actually_...
+    called   ->  defined  test_every_guard_called_at_import_is_defined_where_the_...
+"""
 from __future__ import annotations
 
 import ast
@@ -35,11 +47,17 @@ from opl.bronze import registry
 _PRIMARY = "registry.py"
 
 # Which files may define a registry guard. A GLOB over the package directory rather than
-# a list of module names, so the next split is covered before it is written: a lock that
-# has to be edited to see a new module is a lock that gets forgotten, and being forgotten
-# is how this one came to certify nothing. `registry*.py` rather than `*.py` because the
-# naming convention is the contract -- an `_assert_*` at module level in a REGISTRY
-# module is a guard -- and `opl.bronze` is full of modules for which that is not true.
+# a list of module names, so a split NAMED `registry*` is covered before it is written: a
+# lock that has to be edited to see a new module is a lock that gets forgotten, and being
+# forgotten is how this one came to certify nothing. `registry*.py` rather than `*.py`
+# because the bound is what makes `defined` reviewable -- `opl.bronze` is full of modules
+# where an `_assert_*` would not be a registry guard.
+#
+# A SPLIT NAMED ANYTHING ELSE IS NOT COVERED BY THIS LINE, and saying so is the point:
+# the glob is a convention, and until the Task 0 review nothing enforced it. What makes
+# the convention binding is `test_every_guard_called_at_import_is_defined_where_the_lock_
+# can_see_it`, which refuses a guard registry.py calls that no module here defines. Widen
+# this glob and that test stops meaning anything; rename the module instead.
 _GUARD_MODULES = "registry*.py"
 
 
@@ -153,27 +171,40 @@ def _unwired(sources: dict[str, str]) -> set[str]:
     return set().union(*defined_by_module.values()) - called
 
 
+def _stray(sources: dict[str, str]) -> set[str]:
+    """The `_assert_*` names registry.py calls that NO module in `sources` defines.
+
+    The other direction, and the one the Task 0 review found open. `_unwired` compares
+    definitions against calls, so it can only see a guard the glob already read; a guard
+    module the glob does not match contributes no definitions at all and its call lands
+    harmlessly in `called`. This is what notices that."""
+    defined_by_module, called = _guard_wiring(sources)
+    return {
+        name for name in called if name.startswith("_assert_")
+    } - set().union(*defined_by_module.values())
+
+
 def test_every_guard_any_registry_module_defines_is_actually_called_at_import():
     """What makes every refusal test in `test_registry_guards.py` mean something.
 
     A guard that is defined and unwired is worth exactly as much as no guard, and the
-    entire point of these refusals is that they happen AT IMPORT and not only in CI --
-    a CI test protects a merge, not the ad-hoc run of a branch whose tests have not been
-    run, which is how these jobs get launched while a phase is in flight. Tests named
-    `..._at_import` that pass with the import wiring deleted are a vacuity an F1.4a
+    point of these refusals is that they happen AT IMPORT and not only in CI -- a CI test
+    protects a merge, not the ad-hoc run of a branch whose tests have not been run. Tests
+    named `..._at_import` that pass with the import wiring deleted are a vacuity an F1.4a
     implementer already found once in this repo.
 
     Structural rather than per-guard, so it does not have to be remembered: every phase
-    after this may add guards, and each new one is covered the moment it is written, in
-    whichever registry module it is written in. The naming convention is the contract --
-    an `_assert_*` at module level in a registry module is a guard, and a guard is called
-    at import from registry.py. A helper that is not meant to run at import must not be
-    named `_assert_*` (see `_malformed_subdir_reason`, `_reserved_subdirs`,
-    `_file_group_prefixes`, `_delta_name_collision`).
+    after this may add guards, and each is covered the moment it is written, in whichever
+    registry module. The naming convention is the contract -- an `_assert_*` at module
+    level in a registry module is a guard, and a guard is called at import from
+    registry.py. A helper not meant to run at import must not be named `_assert_*` (see
+    `_malformed_subdir_reason`, `_reserved_subdirs`, `_file_group_prefixes`,
+    `_delta_name_collision`, `_month_shaped_table_key`).
 
-    Does NOT pin the ORDER of the calls, which is load-bearing for two of them and
-    documented in comments there. Wiring and ordering are separate properties; this
-    closes the first."""
+    ONE DIRECTION ONLY -- defined implies called. The reverse is the sibling below, and
+    it is not a nicety: without it a guard module named outside the glob passes here in
+    silence. Neither pins the ORDER of the calls, which is load-bearing for two of them
+    and documented in comments there; wiring and ordering are separate properties."""
     sources = _registry_guard_sources()
     defined_by_module, _ = _guard_wiring(sources)
     # Guard the guard: a walk that found nothing satisfies `defined <= called`
@@ -201,6 +232,32 @@ def test_every_guard_any_registry_module_defines_is_actually_called_at_import():
         f"passes while the registry it guards is unprotected. Add the call to {_PRIMARY}'s "
         "guard block, in the ordered position its comment explains, and import the name "
         "there if it lives in another module."
+    )
+
+
+def test_every_guard_called_at_import_is_defined_where_the_lock_can_see_it():
+    """The REVERSE containment, and what turns the naming convention into a guard.
+
+    `defined` comes from the `registry*.py` glob; `called` comes from registry.py's body.
+    So a guard module named ANYTHING ELSE -- `collisions.py`, `contract_guards.py` --
+    contributes no definitions while its call still lands in `called`: `defined - called`
+    stays empty and the test above passes certifying nothing about it. That is this
+    file's own defect reached by choosing a FILENAME instead of by moving a function, and
+    it was open until the Task 0 review found it.
+
+    The convention was written in three places and enforced in none. Prose is not a
+    guard -- that is this whole task's thesis, applied to the task's own output.
+
+    THE FIX THIS DEMANDS IS THE RENAME, not a wider glob, and the message says so.
+    `registry*.py` is what keeps `defined` a bounded, reviewable set; `*.py` would drag in
+    every module in `opl.bronze` and make the `barren` check above meaningless."""
+    stray = sorted(_stray(_registry_guard_sources()))
+    assert not stray, (
+        f"{_PRIMARY} calls {stray} at import, but no module matching {_GUARD_MODULES!r} "
+        "defines them -- so this lock reads their calls and not their definitions, and "
+        "would stay green if one of them were never called at all. Rename the module "
+        f"they live in to match {_GUARD_MODULES!r}. Do NOT widen the glob: a bounded set "
+        "of guard modules is what makes the checks above mean anything."
     )
 
 
@@ -255,4 +312,37 @@ def test_the_lock_is_not_blind_to_a_guard_in_a_second_module():
     assert not _unwired(called_by_attribute), (
         "`module.guard(...)` is an ast.Attribute, and a walk that matches ast.Name only "
         "reads it as no call at all -- so the lock would accuse a wired guard"
+    )
+
+
+def test_the_lock_is_not_blind_to_a_guard_module_the_glob_does_not_match():
+    """The same blindness reached by a FILENAME rather than by moving a function.
+
+    A guard extracted to `collisions.py` instead of `registry_collisions.py` is never
+    read by `_registry_guard_sources`, so it contributes nothing to `defined` while its
+    call in registry.py still lands in `called`. `defined - called` is empty and the
+    wiring test is green -- about a guard whose definition the lock has never seen. Found
+    by the Task 0 review, one filename away from the hole Task 0 existed to close.
+
+    Modelled on the sibling above, and synthetic for the same reason. A module the glob
+    does not match is simply ABSENT from the sources dict, which is exactly what
+    `_registry_guard_sources` would hand the lock -- so the absence IS the fixture, and
+    no file has to be written to reproduce it.
+
+    Both assertions matter. The first pins the blindness as real rather than argued: the
+    old direction reports nothing here. The second is the fix."""
+    outside_the_glob = {
+        # `collisions.py` does not match `registry*.py`, so it is not in this dict --
+        # the guard is defined somewhere the lock never reads, and called from here.
+        "registry.py": "from opl.bronze.collisions import _assert_moved\n"
+                       "_assert_moved(REGISTRY)\n",
+    }
+    assert not _unwired(outside_the_glob), (
+        "the blind direction, pinned: nothing is DEFINED as far as the lock can see, so "
+        "`defined - called` is empty and the wiring test passes about a guard it has "
+        "never read"
+    )
+    assert _stray(outside_the_glob) == {"_assert_moved"}, (
+        "and the direction that catches it: a guard CALLED at import whose definition no "
+        "globbed module holds must be reported by name"
     )
