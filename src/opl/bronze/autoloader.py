@@ -85,7 +85,8 @@ SOURCE_FILE_COLUMN = "_source_file"
 # the argument `BronzeTable` is declared `kw_only=True` for.
 #
 # `table_key` LOST ITS `= "bronze_cnpj_lookup"` DEFAULT, and the reason is the same
-# collision `registry._assert_no_two_tables_share_a_checkpoint_namespace` refuses --
+# collision `registry_collisions._assert_no_two_tables_share_a_checkpoint_namespace`
+# refuses --
 # reached from the one direction that guard cannot see. It compares the `table_key`s
 # tables DECLARE; it cannot see a CALL SITE that omits the argument.
 # `checkpoint_location(cfg, month=m)` type-checked and silently returned the LOOKUP's

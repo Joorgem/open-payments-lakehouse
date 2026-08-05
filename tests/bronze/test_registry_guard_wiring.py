@@ -93,11 +93,6 @@ def _guard_wiring(sources: dict[str, str]) -> tuple[dict[str, set[str]], set[str
     return defined, _names_called_where_the_module_body_runs(ast.parse(sources[_PRIMARY]))
 
 
-def _module_level_guard_wiring() -> tuple[dict[str, set[str]], set[str]]:
-    """`_guard_wiring` over the real registry modules on disk."""
-    return _guard_wiring(_registry_guard_sources())
-
-
 def _called_name(func: ast.expr) -> str:
     """What a call site spells: `f(...)` and `module.f(...)` alike, or "" for neither.
 
@@ -152,9 +147,14 @@ def _names_called_where_the_module_body_runs(tree: ast.Module) -> set[str]:
     return called
 
 
+def _unwired(sources: dict[str, str]) -> set[str]:
+    """The guards `sources` define that registry.py never calls: what the lock reports."""
+    defined_by_module, called = _guard_wiring(sources)
+    return set().union(*defined_by_module.values()) - called
+
+
 def test_every_guard_any_registry_module_defines_is_actually_called_at_import():
-    """The test that makes every refusal test in `test_registry_guards.py` mean
-    something.
+    """What makes every refusal test in `test_registry_guards.py` mean something.
 
     A guard that is defined and unwired is worth exactly as much as no guard, and the
     entire point of these refusals is that they happen AT IMPORT and not only in CI --
@@ -174,29 +174,27 @@ def test_every_guard_any_registry_module_defines_is_actually_called_at_import():
     Does NOT pin the ORDER of the calls, which is load-bearing for two of them and
     documented in comments there. Wiring and ordering are separate properties; this
     closes the first."""
-    defined_by_module, called = _module_level_guard_wiring()
+    sources = _registry_guard_sources()
+    defined_by_module, _ = _guard_wiring(sources)
     # Guard the guard: a walk that found nothing satisfies `defined <= called`
     # vacuously. Named guards rather than a count -- a count says "the AST walk is
     # wrong" at the phase that legitimately retires one, which is a false accusation
     # pointed at the wrong file.
-    assert {"_assert_contracts_exist", "_assert_landing_modes_known"} <= defined_by_module[
-        _PRIMARY
-    ], (
-        f"the AST walk found {sorted(defined_by_module[_PRIMARY])} in {_PRIMARY}, missing "
-        "guards it certainly defines -- the walk is broken, not the module"
+    primary = defined_by_module[_PRIMARY]
+    assert {"_assert_contracts_exist", "_assert_landing_modes_known"} <= primary, (
+        f"the AST walk found {sorted(primary)} in {_PRIMARY}, missing guards it certainly "
+        "defines -- the walk is broken, not the module"
     )
-    # And the same protection for the OTHER modules, which cannot be named in advance:
-    # a module matching the glob that contributes no guard at all is either a broken
-    # walk or a file that should not have matched. Either way the lock is not covering
-    # what its name claims.
+    # The same protection for the OTHER modules, which cannot be named in advance: one
+    # that matches the glob and contributes no guard is either a broken walk or a file
+    # that should not have matched, and either way this lock is not covering it.
     barren = sorted(name for name, guards in defined_by_module.items() if not guards)
     assert not barren, (
         f"{barren} match {_GUARD_MODULES!r} but the walk found no guard in them, so this "
         "lock is certifying nothing about those files -- fix the walk, or stop matching "
         "modules that hold no guard"
     )
-    defined: set[str] = set().union(*defined_by_module.values())
-    unwired = defined - called
+    unwired = _unwired(sources)
     assert not unwired, (
         f"the registry modules define {sorted(unwired)} but {_PRIMARY} never calls them "
         "at module import, so they refuse nothing -- a direct-call test of such a guard "
@@ -219,9 +217,8 @@ def test_the_lock_is_not_blind_to_a_guard_in_a_second_module():
     one that breaks, because it is read as evidence.
 
     SYNTHETIC sources, not the real files, and that is the point: the real modules are
-    wired correctly, so running the lock over them cannot distinguish a lock that sees
-    them from a lock that sees nothing. Only a module the lock is KNOWN to be wrong about
-    can do that.
+    wired correctly, so running the lock over them cannot tell a lock that sees them from
+    one that sees nothing.
 
     Three cases, because two of them are the traps this extraction had to walk between.
     The first fixes the blindness. The second is its inverse -- a lock that reported the
@@ -230,34 +227,32 @@ def test_the_lock_is_not_blind_to_a_guard_in_a_second_module():
     site: `module.guard(...)` is an `ast.Attribute`, invisible to a walk that matches
     `ast.Name` only, and matching it is what keeps the lock correct whichever import
     style registry.py uses."""
-    unwired = {
+    moved = {
         "registry.py": "from opl.bronze.registry_collisions import _assert_moved\n",
         "registry_collisions.py": _MOVED_GUARD_MODULE,
     }
-    defined_by_module, called = _guard_wiring(unwired)
+    defined_by_module, _ = _guard_wiring(moved)
     assert defined_by_module["registry_collisions.py"] == {"_assert_moved"}, (
         "a guard in a second module is invisible to the lock -- this is the blindness "
         "the extraction would have walked into"
     )
-    assert set().union(*defined_by_module.values()) - called == {"_assert_moved"}, (
+    assert _unwired(moved) == {"_assert_moved"}, (
         "a guard moved out of registry.py and never re-called must be REPORTED unwired"
     )
 
-    wired_by_name = dict(unwired, **{
+    called_by_name = dict(moved, **{
         "registry.py": "from opl.bronze.registry_collisions import _assert_moved\n"
                        "_assert_moved(REGISTRY)\n",
     })
-    defined_by_module, called = _guard_wiring(wired_by_name)
-    assert not set().union(*defined_by_module.values()) - called, (
+    assert not _unwired(called_by_name), (
         "a guard that IS called by name must not be reported unwired"
     )
 
-    wired_by_attribute = dict(unwired, **{
+    called_by_attribute = dict(moved, **{
         "registry.py": "from opl.bronze import registry_collisions\n"
                        "registry_collisions._assert_moved(REGISTRY)\n",
     })
-    defined_by_module, called = _guard_wiring(wired_by_attribute)
-    assert not set().union(*defined_by_module.values()) - called, (
+    assert not _unwired(called_by_attribute), (
         "`module.guard(...)` is an ast.Attribute, and a walk that matches ast.Name only "
         "reads it as no call at all -- so the lock would accuse a wired guard"
     )

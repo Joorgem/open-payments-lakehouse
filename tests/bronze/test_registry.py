@@ -30,11 +30,17 @@ from opl.bronze.registry import (
     REGISTRY,
     RESERVED_SUBDIRS,
     UnknownTable,
-    _assert_no_two_tables_share_a_checkpoint_namespace,
-    _assert_no_two_tables_share_a_delta_name,
     _malformed_subdir_reason,
     spec_for_contract,
     table_spec,
+)
+
+# Extracted to their own module by F2 Task 0, and taking the registry they validate as
+# an argument -- see `opl.bronze.registry_collisions`. Nothing about the property below
+# changed with the move; the two guards are still two.
+from opl.bronze.registry_collisions import (
+    _assert_no_two_tables_share_a_checkpoint_namespace,
+    _assert_no_two_tables_share_a_delta_name,
 )
 from opl.config import DEFAULT
 from opl.contracts.cnpj_schemas import FILE_GROUPS, TABLES
@@ -136,8 +142,8 @@ def test_a_table_key_may_equal_its_own_tables_bronze_name():
     lookup = table_spec("lookup")
     assert lookup.table_key == lookup.bronze == "bronze_cnpj_lookup"
     # Neither guard may object to that, today or after F1.4b adds two more tables.
-    _assert_no_two_tables_share_a_delta_name()
-    _assert_no_two_tables_share_a_checkpoint_namespace()
+    _assert_no_two_tables_share_a_delta_name(REGISTRY)
+    _assert_no_two_tables_share_a_checkpoint_namespace(REGISTRY)
 
 
 def test_no_two_tables_share_a_landing_subdir():

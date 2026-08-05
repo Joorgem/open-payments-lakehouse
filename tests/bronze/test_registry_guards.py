@@ -39,12 +39,21 @@ from opl.bronze.registry import (
     _assert_contracts_exist,
     _assert_no_masked_contract_declares_a_check_constraint,
     _assert_no_table_claims_a_reserved_subdir,
-    _assert_no_two_tables_share_a_checkpoint_namespace,
     _assert_no_two_tables_share_a_contract,
-    _assert_no_two_tables_share_a_delta_name,
     _assert_no_two_tables_share_a_landing_subdir,
     _assert_prefixes_match_their_file_groups,
     _assert_subdirs_are_single_path_components,
+)
+
+# The three name-collision guards live in their own module since F2 Task 0 -- see
+# `opl.bronze.registry_collisions` for the seam. They take the registry they validate
+# as an argument, because `registry.py` calls them at its own import and importing it
+# back would be a cycle; `REGISTRY` above is the same dict object `monkeypatch.setitem`
+# mutates, so every trap below reaches them exactly as it reached them in-place.
+from opl.bronze.registry_collisions import (
+    _assert_no_table_key_is_month_shaped,
+    _assert_no_two_tables_share_a_checkpoint_namespace,
+    _assert_no_two_tables_share_a_delta_name,
 )
 
 
@@ -81,7 +90,7 @@ def test_a_pasted_delta_name_is_refused_at_import(monkeypatch):
     monkeypatch.setitem(REGISTRY, "empresas", pasted)
 
     with pytest.raises(ValueError, match="both declare Delta table"):
-        _assert_no_two_tables_share_a_delta_name()
+        _assert_no_two_tables_share_a_delta_name(REGISTRY)
 
 
 def test_a_delta_name_reused_in_a_different_role_is_refused(monkeypatch):
@@ -103,7 +112,7 @@ def test_a_delta_name_reused_in_a_different_role_is_refused(monkeypatch):
     monkeypatch.setitem(REGISTRY, "lookup", trap)
 
     with pytest.raises(ValueError, match="both declare Delta table"):
-        _assert_no_two_tables_share_a_delta_name()
+        _assert_no_two_tables_share_a_delta_name(REGISTRY)
 
 
 def test_a_delta_name_that_differs_only_in_case_is_refused(monkeypatch):
@@ -137,7 +146,7 @@ def test_a_delta_name_that_differs_only_in_case_is_refused(monkeypatch):
     monkeypatch.setitem(REGISTRY, "empresas", pasted)
 
     with pytest.raises(ValueError) as excinfo:
-        _assert_no_two_tables_share_a_delta_name()
+        _assert_no_two_tables_share_a_delta_name(REGISTRY)
     message = str(excinfo.value)
     assert "both declare Delta table" in message
     assert "'BRONZE_CNPJ_ESTAB_STAGING'" in message, (
@@ -159,7 +168,7 @@ def test_a_delta_name_collision_in_one_spelling_reads_as_one_name(monkeypatch):
     monkeypatch.setitem(REGISTRY, "lookup", pasted)
 
     with pytest.raises(ValueError) as excinfo:
-        _assert_no_two_tables_share_a_delta_name()
+        _assert_no_two_tables_share_a_delta_name(REGISTRY)
     message = str(excinfo.value)
     assert "CASE-INSENSITIVE" not in message
     assert message.count("'bronze_cnpj_estab_staging'") == 1
@@ -196,7 +205,69 @@ def test_a_pasted_checkpoint_namespace_is_refused_at_import(monkeypatch):
     monkeypatch.setitem(REGISTRY, "empresas", pasted)
 
     with pytest.raises(ValueError, match="both claim checkpoint namespace"):
-        _assert_no_two_tables_share_a_checkpoint_namespace()
+        _assert_no_two_tables_share_a_checkpoint_namespace(REGISTRY)
+
+
+@pytest.mark.parametrize("table_key", ["2026-06", "2026-07", "2027-01"])
+def test_a_month_shaped_table_key_is_refused_at_import(monkeypatch, table_key):
+    """The guard the 800-line cap declined, now that F2 Task 0 has made room.
+
+    It lived as a lock in `test_autoloader_helpers.py::test_no_table_shares_or_nests_
+    state_across_months_or_with_the_orphans`, whose docstring said the structural
+    version belonged in the registry and did not fit. A CI lock protects a merge; it
+    does not protect the ad-hoc run of a branch whose tests have not been run, which is
+    how these jobs get launched while a phase is in flight -- the same argument that put
+    every other guard exercised in this file at import.
+
+    What gets through is not an error. `autoloader` builds
+    `_checkpoints/<month>/<table_key>`, and the pre-month-scoping `_checkpoints/
+    <table_key>` directories still exist in the Volume holding 2026-06 state,
+    deliberately unmigrated. A table_key of `2026-06` makes that orphan directory BE
+    the month directory, so every table's 2026-06 state is written inside a checkpoint
+    another query owns -- a new RocksDB store and offset log under a live one, which is
+    the exact nesting month-scoping was introduced to make impossible.
+
+    `2026-06` is the sharpest of the three because it is a month this Volume already
+    holds state for. The other two are months no key collides with TODAY, and are here
+    because the defect is the SHAPE, not the coincidence."""
+    trap = replace(REGISTRY["socios"], table_key=table_key)
+    monkeypatch.setitem(REGISTRY, "socios", trap)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_no_table_key_is_month_shaped(REGISTRY)
+    message = str(excinfo.value)
+    assert "socios" in message and repr(table_key) in message
+    # Refused for being a MONTH, not for colliding with another table -- the operator
+    # told "give each table a table_key of its own" would rename it to another month.
+    assert "which is a MONTH" in message
+    assert "_checkpoints/<month>/<table_key>" in message
+
+
+@pytest.mark.parametrize("table_key", ["2026-13", "2026-00", "26-06", "2026-6", "bronze_2026-06"])
+def test_a_table_key_that_only_looks_month_shaped_is_left_alone(monkeypatch, table_key):
+    """GUARDS THE GUARD, in the direction that costs something if it goes wrong.
+
+    Everything above would also pass if this refused every table_key containing four
+    digits and a hyphen, which would refuse a registry nobody can fix by renaming --
+    and this guard runs at IMPORT, so a false positive breaks every module that reads
+    the registry, including the extraction scripts that never touch Spark.
+
+    `2026-13` and `2026-00` are the pointed cases and the reason the guard asks
+    `opl.config.is_month` rather than carrying its own pattern: they have the SHAPE of
+    a month and name no directory that can exist, because `require_month` refuses them
+    -- so there is no `_checkpoints/2026-13` for a table to be confused with, and
+    refusing them here would be a second spelling of the month rule diverging from the
+    first. Two spellings of that rule is how `2026-13` came to be refused at two of
+    four entry points in the first place."""
+    trap = replace(REGISTRY["socios"], table_key=table_key)
+    monkeypatch.setitem(REGISTRY, "socios", trap)
+
+    # The other three live keys go through the guard untouched on every one of these
+    # runs, so this also says the live registry is not refused. Deliberately NOT a pin
+    # of the four names: that is `test_registry.py`'s side of the seam, and the strongest
+    # enforcement of "the live registry passes" is the import at the top of this file --
+    # the guard runs there, so a false positive fails collection of the whole suite.
+    _assert_no_table_key_is_month_shaped(REGISTRY)
 
 
 def test_a_pasted_subdir_is_refused_at_import(monkeypatch):

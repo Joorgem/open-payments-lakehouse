@@ -16,6 +16,20 @@ import re
 from dataclasses import dataclass
 
 from opl.bronze.masking import MASKED_COLUMNS
+
+# PRIVATE NAMES IMPORTED ACROSS A MODULE BOUNDARY, on purpose. The leading underscore
+# says "not part of the registry's public surface", which stays true -- these are
+# guards, and nothing outside this package and its tests calls a guard. The `_assert_`
+# prefix is also the contract `tests/bronze/test_registry_guard_wiring.py` reads: an
+# `_assert_*` defined at module level in any `registry*.py` is a guard, and a guard is
+# CALLED from the block at the foot of THIS module. Imported by name rather than as
+# `registry_collisions.x(...)` so the call block below reads the same for every guard,
+# whichever file it lives in; the wiring lock is correct for either spelling.
+from opl.bronze.registry_collisions import (
+    _assert_no_table_key_is_month_shaped,
+    _assert_no_two_tables_share_a_checkpoint_namespace,
+    _assert_no_two_tables_share_a_delta_name,
+)
 from opl.config import OplConfig
 from opl.contracts.cnpj_schemas import FILE_GROUPS, TABLES
 
@@ -639,137 +653,6 @@ def _assert_no_two_tables_share_a_landing_subdir() -> None:
         seen[spec.subdir] = spec.name
 
 
-def _delta_name_collision(owner: str, name: str, other: tuple[str, str]) -> str:
-    """The refusal text for two specs naming one Delta table, in the words they wrote.
-
-    The comparison is casefolded, so the two strings this reports may not be EQUAL --
-    and an operator handed only a normalised name would search source for a string
-    nobody wrote. Both spellings, and the reason they are the same table, but ONLY
-    when they differ: a plain duplicate annotated with a case explanation sends the
-    operator looking for a difference that is not there, and the ordinary duplicate is
-    the case that actually happens."""
-    other_owner, other_name = other
-    note = "" if name == other_name else (
-        f", which {other_owner} spells {other_name!r} -- Unity Catalog and Spark "
-        "identifiers are CASE-INSENSITIVE, so two spellings that differ only in case "
-        "name ONE physical table"
-    )
-    return (
-        f"{owner} and {other_owner} both declare Delta table {name!r}{note}. "
-        "Two tables on one Delta name cross-contaminate: appends from both land in "
-        "one table, `_batch_id` idempotence counts the other table's rows as this "
-        "batch's, and a quarantine that doubles as someone's staging feeds DQ "
-        "rejects to a promote. Give each table its own staging/bronze/quarantine "
-        "triple."
-    )
-
-
-def _assert_no_two_tables_share_a_delta_name() -> None:
-    """Fail at import if two specs name the same Delta table in any of the three
-    roles that name one.
-
-    ONE namespace across all three roles rather than three checks of one role each,
-    because the defect is the same whichever role collides and the roles are NOT
-    disjoint in principle: a table whose `quarantine` equals another's `staging`
-    passes every per-role check, and routes DQ REJECTS into a table a promote reads
-    as trusted input. `test_no_two_tables_share_a_staging_bronze_or_quarantine_name`
-    has compared them cross-role since F1.4a for exactly that reason; this is that
-    test's property moved to where the values are DECLARED, because the CI test does
-    not protect an ad-hoc run.
-
-    Two tables appending to one bronze table also breaks `_batch_id` idempotence,
-    since `rows_of_batch` would count the other table's rows for the same batch. And
-    a stale `quarantine` in particular is the documented F1.2/F1.3 incident: a
-    hardcoded quarantine name "sent estab triagers to a table full of unrelated F1.2
-    lookup rows".
-
-    Verified by probe to be reachable: before this existed, a paste of the
-    estabelecimentos entry with the staging/bronze/quarantine triple left unchanged
-    imported CLEAN.
-
-    The three fields are spelled out rather than looped over by name with `getattr`.
-    `getattr(spec, role)` would be shorter and would type as `Any`, so renaming a
-    field of `BronzeTable` would break this guard silently as far as any static check
-    is concerned -- and a guard that reads its subject reflectively is the one place
-    that cost is not worth paying. It also matches
-    `test_no_two_tables_share_a_staging_bronze_or_quarantine_name`, which asserts this
-    same property in the same shape.
-
-    `table_key` is deliberately absent: it is a Volume path component, not a table.
-    See `_assert_no_two_tables_share_a_checkpoint_namespace`, which also records why
-    it and `subdir` compare case-SENSITIVELY where this one does not.
-
-    CASEFOLDED: UC and Spark identifiers are case-insensitive, so
-    `staging="BRONZE_CNPJ_ESTAB_STAGING"` IS estabelecimentos' staging table -- and
-    under the byte comparison this used until F1.4b it imported CLEAN, with every
-    consequence above intact. `_delta_name_collision` reports both spellings.
-
-    A plain ValueError: nothing here is an unknown table."""
-    seen: dict[str, tuple[str, str]] = {}
-    for spec in REGISTRY.values():
-        for role, name in (
-            ("staging", spec.staging),
-            ("bronze", spec.bronze),
-            ("quarantine", spec.quarantine),
-        ):
-            owner = f"{spec.name}.{role}"
-            key = name.casefold()
-            if key in seen:
-                raise ValueError(_delta_name_collision(owner, name, seen[key]))
-            seen[key] = (owner, name)
-
-
-def _assert_no_two_tables_share_a_checkpoint_namespace() -> None:
-    """Fail at import if two specs claim the same `table_key`.
-
-    SEPARATE from the Delta-name check above, and this is the one counter-intuitive
-    thing in this file, so it is stated rather than left to be rediscovered:
-    `table_key` names NO Delta table. It is the last component
-    `autoloader.checkpoint_location` and `schema_location` build
-    `_checkpoints/<month>/<table_key>` and `_schemas/<month>/<table_key>` from, so it
-    lives in a different namespace and is ALLOWED to spell itself like a Delta table --
-    `lookup.table_key` and `lookup.bronze` are both `bronze_cnpj_lookup` today, and
-    that is correct, not drift. The obvious implementation, one `seen` dict over all
-    four roles in one pass, therefore refuses the LIVE registry at import and breaks
-    every module that reads it. Pinned by
-    `test_a_table_key_may_equal_its_own_tables_bronze_name`, because the failure is
-    loud but its cause is not, and the natural fix on seeing it -- drop `table_key`
-    from the check -- silently reopens the hole below.
-
-    Which is why this is its own guard rather than a dropped field. The collision it
-    catches is the QUIETEST of the four. An Auto Loader checkpoint is a record of
-    which files have already been processed, so two tables sharing one means the
-    second stream starts up believing the first's files are its own and already
-    ingested: it writes nothing and reports SUCCESS. The shared `_schemas` entry
-    compounds it by merging two unrelated inferred schemas into one.
-
-    CASE-SENSITIVE, where the Delta-name guard casefolds, and the asymmetry is a
-    decision rather than an oversight. `table_key` and `subdir` are components of
-    Volume PATHS, and a Volume is backed by object storage, where `bronze_cnpj_estab`
-    and `BRONZE_CNPJ_ESTAB` are two directories -- so two spellings that differ only
-    in case are not one checkpoint, and there is no collision here to refuse. The
-    Delta guard casefolds because UC and Spark resolve identifiers case-insensitively,
-    which is a property of the thing NAMED; extending that to a path would be a claim
-    about storage this project has not measured, and it would refuse a registry that
-    is merely oddly capitalised. Stated because the opposite reading -- that the
-    casefold was simply forgotten here -- is the obvious one.
-
-    A plain ValueError: nothing here is an unknown table."""
-    seen: dict[str, str] = {}
-    for spec in REGISTRY.values():
-        if spec.table_key in seen:
-            raise ValueError(
-                f"{spec.name} and {seen[spec.table_key]} both claim checkpoint "
-                f"namespace {spec.table_key!r}. `table_key` is what autoloader "
-                "builds _checkpoints/<month>/<table_key> and _schemas/<month>/"
-                "<table_key> from, and a checkpoint records which files are already "
-                "processed -- so two tables sharing one means the second stream "
-                "treats the first's files as its own and already ingested, writes "
-                "nothing, and reports SUCCESS. Give each table a table_key of its own."
-            )
-        seen[spec.table_key] = spec.name
-
-
 _assert_contracts_exist()
 # Contract identity before anything derived FROM a contract: both checks below
 # resolve FILE_GROUPS entries by `spec.contract`, and neither is meaningful until
@@ -792,7 +675,17 @@ _assert_no_table_claims_a_reserved_subdir()
 # else reserved. Ordered last, the operator is told the real problem: neither value
 # may be used at all.
 _assert_no_two_tables_share_a_landing_subdir()
-# No ordering between these two or against anything above: they read fields nothing
-# else validates, in two namespaces that are independent of each other by design.
-_assert_no_two_tables_share_a_delta_name()
-_assert_no_two_tables_share_a_checkpoint_namespace()
+# The last three live in `opl.bronze.registry_collisions` -- see that module for why the
+# seam is there and why they take REGISTRY as an argument. They are called HERE, in this
+# one ordered block, because this is the module every consumer imports and because the
+# order below is load-bearing and has to be reviewable in one place.
+#
+# No ordering between this group and anything above: it reads fields nothing else
+# validates, in namespaces that are independent of the contract's by design.
+_assert_no_two_tables_share_a_delta_name(REGISTRY)
+# Shape before collision, for the reason the subdir group above is ordered that way:
+# two tables both keyed "2026-06" are a duplicate AND two month-shaped keys, and
+# uniqueness reported first would tell the operator to "give each table a table_key of
+# its own" -- advice to rename one of them to another value that is still a month.
+_assert_no_table_key_is_month_shaped(REGISTRY)
+_assert_no_two_tables_share_a_checkpoint_namespace(REGISTRY)
