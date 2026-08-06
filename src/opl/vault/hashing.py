@@ -68,10 +68,12 @@ close it:
      unambiguous by construction -- read the tag, then (for `S`) read digits up
      to `:`, then read exactly that many characters as the component, then expect
      `||` or end-of-string -- so two different component LISTS can never produce
-     the same encoded string, whatever their content. `["a||b", "c"]` encodes to
-     `S4:A||B||S1:C` (component one is the 4-character string `A||B`) and
-     `["a", "b||c"]` to `S1:A||S4:B||C` -- different strings on sight, and
-     provably so for any input, not merely the ones tested.
+     the same encoded string, GIVEN THE SAME NORMALISED CONTENT for each component
+     (case-folding itself is a deliberate many-to-one collapse -- see below -- so
+     this is a claim about the format's join, not about `str.upper()`).
+     `["a||b", "c"]` encodes to `S4:A||B||S1:C` (component one is the 4-character
+     string `A||B`) and `["a", "b||c"]` to `S1:A||S4:B||C` -- different strings on
+     sight, and provably so for any input, not merely the ones tested.
 
 The length prefix is taken from the NORMALISED (trimmed, upper-cased) string, not
 the raw one -- taking it from the raw string would let two components with
@@ -80,6 +82,25 @@ mid-string, which breaks the same unambiguous-decoding argument this format reli
 on for its collision-freedom. That constraint is also why `N`/`E`/`W` carry no
 length prefix of their own: each is already a complete, one-character segment with
 nothing following it to misalign.
+
+CASE-FOLDING IS A DELIBERATE MANY-TO-ONE COLLAPSE, NOT AN INJECTIVE MAP, AND THE
+FORMAT'S COLLISION-FREEDOM CLAIM ABOVE IS SCOPED AROUND THAT. `str.upper()` is not
+one-to-one: `"ss".upper() == "SS" == "ß".upper()` and `"fi".upper() == "FI" ==
+"ﬁ".upper()` (U+FB01 LATIN SMALL LIGATURE FI), so `hash_key(["ss"]) ==
+hash_key(["\xdf"])`. This is the SAME intended collapse as `hash_key(["abc"]) ==
+hash_key(["ABC"])` -- two spellings of what the business rule treats as one key --
+not a gap in the length-prefix argument, which is about component LISTS never
+colliding for a FIXED normalisation, not about `upper()` being injective.
+
+NO UNICODE NORMAL FORM IS APPLIED, AND THAT IS A STATED GAP, NOT A SILENT ONE.
+`"JOSÉ"` spelled NFC (`É` as one code point) and the same name spelled NFD (`E`
+plus a combining acute accent) are visually identical and semantically the same
+business key, but `_encode_component` does no `unicodedata.normalize` step, so
+they encode to different strings and `hash_key` returns two different digests for
+them -- a SPLIT, the opposite failure from the ss/ß merge above. Every business key
+this module hashes today is ASCII, so this is not load-bearing yet, but the module
+takes no normal-form stance and any caller depending on NFC/NFD equivalence would
+be wrong to assume one.
 
 CNPJ IS HANDLED SEPARATELY, BY `zero_pad_cnpj`, NOT BY THIS ENCODING. Zero-padding
 a business-key COMPONENT before it is hashed is a decision about that component's
@@ -134,6 +155,17 @@ def hash_key(components: Sequence[str | None]) -> str:
     round-trips every character this module's callers pass through it, RFB
     accented names included.
 
+    REFUSES A BARE `str`, ON PURPOSE. `str` satisfies `Sequence[str]` structurally,
+    so a type checker will not catch `hash_key("AB")` where the caller meant
+    `hash_key(["AB"])` -- and the two are NOT the same call: iterating a `str`
+    walks its characters, so `hash_key("AB")` hashes the two-COMPONENT list
+    `["A", "B"]`, not the one-component key `"AB"`, and returns a plausible
+    64-character digest for a completely different business key. Found by
+    adversarial review, the same review that found the empty-`components` gap
+    below -- and the same argument applies with more force here: cheap to refuse
+    now, and a re-keying of the whole vault once a loader has keyed on the wrong
+    digest.
+
     REFUSES AN EMPTY `components`, ON PURPOSE. A business key with zero
     components is not a business key -- it is a caller that built its column
     list wrong, and without this check the mistake is invisible: `hash_key([])`
@@ -143,6 +175,13 @@ def hash_key(components: Sequence[str | None]) -> str:
     satellite called this, which is the only time to close it for free -- once a
     loader exists, an empty column list starts looking like "this hub has no
     business key" rather than "this call is a bug"."""
+    if isinstance(components, str):
+        raise TypeError(
+            f"hash_key() received a bare str {components!r} -- a str is a "
+            "Sequence[str] structurally, so this call would hash its individual "
+            "characters as separate components; pass a one-element list instead, "
+            f"e.g. hash_key([{components!r}])"
+        )
     if not components:
         raise ValueError(
             "hash_key() received zero components -- a business key must have at "
@@ -165,11 +204,22 @@ def zero_pad_cnpj(value: str, *, width: int) -> str:
     the same padded string and collide two different companies onto one hash
     key, the worst failure this module can produce.
 
-    `rjust`, not `zfill`: `zfill` special-cases a leading `+`/`-` and moves it
-    ahead of the padding, sign-handling that means nothing for a CNPJ and is
-    exactly the numeric-flavoured behaviour this function must not carry, now
-    that alphanumeric CNPJs (2026-07-31) can put a letter anywhere in the string.
-    `rjust` pads on the left with no such special case, on any string content."""
+    `rjust`, not `zfill`: THE ONLY DIFFERENCE BETWEEN THE TWO is a leading sign
+    character -- `zfill` special-cases a leading `+`/`-` and moves it ahead of the
+    padding (`"-1".zfill(8) == "-0000001"`), while `rjust` pads on the left with
+    no such special case (`"-1".rjust(8, "0") == "000000-1"`). No CNPJ, digit-only
+    or alphanumeric, carries a sign character, so no input this function is
+    called on can tell the two apart today -- `rjust` is the DEFENSIVE preference
+    (no numeric-flavoured behaviour to carry at all), not a fix for a case that
+    can currently occur, and is not proven by a test that only exercises
+    sign-free input.
+
+    REFUSES A NON-POSITIVE `width`, ON PURPOSE: a caller-supplied `width` of zero
+    or less is not a valid fixed-width column, so `zero_pad_cnpj("", width=0)`
+    silently returning `""` would hide the same class of caller bug the overlong-
+    value refusal above exists to catch."""
+    if width <= 0:
+        raise ValueError(f"width must be a positive integer, got {width!r}")
     if len(value) > width:
         raise ValueError(
             f"{value!r} is {len(value)} characters, over its width {width} -- "

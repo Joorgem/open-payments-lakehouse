@@ -21,6 +21,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import textwrap
+import unicodedata
 
 import pytest
 
@@ -143,6 +144,52 @@ def test_a_masked_cpf_does_not_collide_with_a_shorter_mask():
     assert short == "f7f35ca410f3aa2ab7796ae837419a55a125c3c82ce531ec8eb236319853fec8"
 
 
+def test_a_pinned_digest_for_an_accented_component():
+    """UTF-8, NOT ASCII, IS THE ENCODING THIS MODULE HASHES WITH -- the module
+    docstring names "RFB accented names" as the reason, and until this test no
+    accented input was ever hashed by this suite. `"JOSÉ"` normalises to
+    `S4:JOSÉ` (4 characters: J, O, S, É), independently hashed to the literal
+    below."""
+    assert hash_key(["JOSÉ"]) == (
+        "a58625e7c1552c96910382123d9f6fa8315a5e600c2b148fa2a0822461cd86c9"
+    )
+
+
+def test_hash_key_applies_no_unicode_normalisation_nfc_and_nfd_split():
+    """A DOCUMENTED GAP, NOT A SILENT ONE: `"JOSÉ"` spelled NFC (`É` as one code
+    point) and the same name spelled NFD (`E` plus a combining acute accent) look
+    identical and are the same business key semantically, but `_encode_component`
+    applies no `unicodedata.normalize` step -- so the two spellings encode to
+    different strings and `hash_key` returns two DIFFERENT digests for what a
+    human reader would call one name. This is the opposite failure from the
+    ss/ß case-folding collapse in the module docstring: a SPLIT, not a merge.
+    Every business key this module hashes today is ASCII, so this is not
+    load-bearing yet -- the module states this as a stance, not a promise, and
+    this test pins that the two forms currently disagree."""
+    nfc = unicodedata.normalize("NFC", "JOSÉ")
+    nfd = unicodedata.normalize("NFD", "JOSÉ")
+    assert nfc != nfd
+    assert hash_key([nfc]) != hash_key([nfd])
+    assert hash_key([nfc]) == (
+        "a58625e7c1552c96910382123d9f6fa8315a5e600c2b148fa2a0822461cd86c9"
+    )
+
+
+def test_hash_key_refuses_a_bare_str_instead_of_a_one_element_list():
+    """THE IMPORTANT GAP AN ADVERSARIAL REVIEW FOUND: `str` satisfies
+    `Sequence[str]` structurally, so `hash_key("AB")` type-checks and RUNS --
+    but iterating a `str` walks its characters, so it silently hashes the
+    two-component list `["A", "B"]`, not the one-component key `"AB"`. Before
+    this refusal existed, `hash_key("AB") == hash_key(["A", "B"])`, and a hub
+    loader that wrote `hash_key(row.cnpj_basico)` instead of
+    `hash_key([row.cnpj_basico])` would key every two-character component as
+    two single-character ones with no error anywhere. This is the BEFORE/AFTER
+    proof: the assertion below is exactly what would have failed to raise
+    before the `isinstance(components, str)` check was added."""
+    with pytest.raises(TypeError, match="bare str"):
+        hash_key("AB")
+
+
 def test_hash_key_refuses_an_empty_component_list():
     """THE GAP A REVIEW FOUND: `hash_key([])` joins to the empty string, which
     hashes to `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
@@ -172,11 +219,32 @@ def test_zero_padding_never_converts_through_a_number():
     """ALPHANUMERIC CNPJs TAKE EFFECT 2026-07-31: a future `cnpj_basico` may
     contain letters, and `int(value)` would raise on one today -- proving this
     passes is proof no numeric path is taken, not merely that letters "happen" to
-    survive. `rjust`, not `zfill`: `zfill` special-cases a leading sign character,
-    moving it before the padding, which is meaningless for a CNPJ and is exactly
-    the kind of numeric-flavoured behaviour this function must not carry."""
+    survive."""
     assert zero_pad_cnpj("1A34B678", width=8) == "1A34B678"
     assert zero_pad_cnpj("A1", width=8) == "000000A1"
+
+
+def test_zero_padding_diverges_from_zfill_only_on_a_leading_sign():
+    """THE ACTUAL, TESTED difference between `rjust` (chosen) and `zfill`
+    (rejected): `zfill` special-cases a leading `+`/`-` and moves it ahead of the
+    padding; `rjust` does not. No CNPJ carries a sign character, so this is the
+    one input shape where the two functions would ever disagree -- and this test
+    is what gives the `rjust`-not-`zfill` decision actual pressure, rather than
+    leaving it an assertion no test could fail on."""
+    assert "-1".zfill(8) == "-0000001"
+    assert zero_pad_cnpj("-1", width=8) == "000000-1"
+    assert zero_pad_cnpj("-1", width=8) != "-1".zfill(8)
+
+
+def test_zero_padding_refuses_a_non_positive_width():
+    """A `width` of zero or less is not a valid fixed-width column -- a caller
+    bug, per this module's stance everywhere else that a caller bug is refused
+    loudly rather than producing a boring-looking result. Without this check,
+    `zero_pad_cnpj("", width=0)` would silently return `""`."""
+    with pytest.raises(ValueError, match="positive integer"):
+        zero_pad_cnpj("", width=0)
+    with pytest.raises(ValueError, match="positive integer"):
+        zero_pad_cnpj("", width=-1)
 
 
 def test_zero_padding_refuses_rather_than_truncates_an_overlong_value():
