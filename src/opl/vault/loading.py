@@ -125,7 +125,17 @@ def link_hash_key_expression(hubs: Sequence[Hub]) -> Column:
     `link_empresa_estabelecimento` joins a hub keyed on `cnpj_basico` to one keyed on
     (`cnpj_basico`, `cnpj_ordem`, `cnpj_dv`), and the link's key is both hubs' keys --
     dropping the repeat would make the link's digest the establishment's own with a
-    prefix, which is a different claim about identity."""
+    prefix, which is a different claim about identity.
+
+    THE UNAMBIGUITY IS WITHIN A FIXED HUB LIST, NOT ACROSS LINKS, and the difference
+    matters before wave 2 adds a second link. The components are flattened with NO HUB
+    BOUNDARY in the encoding, so a link over hubs keyed [x] + [y, z] and one over
+    [x, y] + [z] produce the SAME digest for the same values. Unreachable today -- there
+    is one link, and a digest is only ever compared against others from the same
+    `Link` spec -- but it becomes reachable the moment two links share a key space, and
+    the repair then is to prefix the link's own name into the component list rather than
+    to change what a component means. Stated here so that decision is made deliberately
+    rather than discovered."""
     return hash_key_column([
         component for hub in hubs for component in _padded_components(hub)
     ])

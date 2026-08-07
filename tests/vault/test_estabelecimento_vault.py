@@ -1,13 +1,12 @@
 """`hub_estabelecimento`, its two satellites and `link_empresa_estabelecimento`, over a
 fixture shaped like real bronze.
 
-THIS FILE IS HALF OF THE EVIDENCE, DELIBERATELY, exactly as `test_cnpj_vault.py` is:
-CI runs local Spark with no Databricks credential, so the fixture guards the MECHANIC
-on every push and the measurement against 72.3M real rows lives in the task report.
-Neither stands in for the other.
+HALF OF THE EVIDENCE, DELIBERATELY, exactly as `test_cnpj_vault.py` is: CI runs local
+Spark with no credential, so this guards the MECHANIC and the measurement against
+72.3M real rows lives in the task report. Neither stands in for the other.
 
-WHAT THE FIXTURE MIRRORS. The measured estabelecimentos shape across 2026-06 and
-2026-07 (controller run `01f191f3-6c96-15d2-84db-514bfcff2ce5`) is:
+WHAT THE FIXTURE MIRRORS -- the measured shape, controller run
+`01f191f3-6c96-15d2-84db-514bfcff2ce5`:
 
 | month | observed | rejected_by_our_gate | absent_before_first | absent_after |
 |---|---|---|---|---|
@@ -15,28 +14,25 @@ WHAT THE FIXTURE MIRRORS. The measured estabelecimentos shape across 2026-06 and
 | 2026-07 | 72,318,964 | 4 | 0 | **0** |
 
 Every number that is not a volume is reproduced below: June's quarantine is EMPTY,
-July's holds exactly four keys, those four are absent from July's bronze, one key is
-born in July (the 444,520 in miniature), and **nothing is `absent_after_observation`
-in either month**.
+July's holds exactly four keys absent from July's bronze, one key is born in July (the
+444,520 in miniature), and nothing is `absent_after_observation` in either month.
 
-THE ACCEPTANCE TEST HERE IS ONE HALF OF TASK 2'S AND MUST NOT BE READ AS MORE. Those
-four keys are the `rejected` half: our own DQ gate widened between the runs and
-quarantined them (`encoding_replacement_char`), so their disappearance from bronze is
-OURS. Because estabelecimentos has ZERO true departures, this table alone cannot tell a
-correct ledger from one that labels every departure `rejected` -- it would pass both.
-The other half is socios in Task 5 (65,444 departures, not one of them quarantined),
-and the discrimination lives in
-`tests/vault/test_observation.py::test_a_departure_reads_as_our_gate_on_one_table_and_
-as_the_sources_on_the_other`, which carries both populations. What THIS file adds is
-that the two satellites and the link, loaded from that data, record no change and no
-departure for those four keys.
+THE ACCEPTANCE TEST IS ONE HALF OF TASK 2'S AND MUST NOT BE READ AS MORE. Those four
+are the `rejected` half -- our own gate widened between the runs
+(`encoding_replacement_char`), so their disappearance is OURS. Estabelecimentos has
+ZERO true departures, so this table alone cannot tell a correct ledger from one that
+labels every departure `rejected`; it passes on both. The other half is socios in Task
+5 (65,444 departures, none quarantined), and the discrimination lives in
+`test_observation.py::test_a_departure_reads_as_our_gate_on_one_table_and_as_the_
+sources_on_the_other`. What THIS file adds is that the satellites and the link, loaded
+from that data, record no change and no departure for the four.
 
-THE PADDING PAIR IS SYNTHETIC AND SAYS SO. `cnpj_basico`/`cnpj_ordem`/`cnpj_dv` are
-8/4/2 characters on every one of the 72.3M real rows in both months, with zero
-non-numeric values, so the zero-pads are defensive and the real data exercises none of
-them. `E_SHORT_ORDEM` and `E_SHORT_TWIN` are here because an unpadded key is the way
-this vault merges two establishments onto one hash key, and a fixture built strictly to
-the measurement would leave that branch untested."""
+THE PADDING PAIR IS SYNTHETIC AND SAYS SO. The three key columns are 8/4/2 characters
+on every one of the 72.3M real rows in both months with zero non-numeric values, so the
+pads are defensive and real data exercises none of them. `E_SHORT_ORDEM` and
+`E_SHORT_TWIN` exist because an unpadded key is how this vault would merge two
+establishments onto one hash key, and a fixture built strictly to the measurement would
+leave that branch untested."""
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -44,6 +40,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pyspark.sql import functions as F
 
 from opl.contracts.cnpj_schemas import columns_for
 from opl.vault import domains
@@ -145,16 +142,14 @@ _DEFAULTS = {
 
 
 def _padded(key: tuple[str, str, str]) -> tuple[str, str, str]:
-    """The canonical 8/4/2 spelling of a raw establishment key -- what the hub stores
-    and what the digest is taken over."""
+    """The canonical 8/4/2 spelling of a raw key: what the hub stores and hashes."""
     basico, ordem, dv = key
     return (basico.zfill(8), ordem.zfill(4), dv.zfill(2))
 
 
 def _row(key: tuple[str, str, str], month: str, **overrides) -> tuple:
     """One bronze estabelecimentos row: the whole contract plus every audit column the
-    ingest stamps, because this layer reads three of them and must not be handed a
-    shape bronze does not have."""
+    ingest stamps -- this layer reads three of them and must meet bronze's real shape."""
     values = dict(_DEFAULTS)
     values.update(zip(("cnpj_basico", "cnpj_ordem", "cnpj_dv"), key, strict=True))
     values.update(overrides)
@@ -171,8 +166,7 @@ def _row(key: tuple[str, str, str], month: str, **overrides) -> tuple:
 
 def _bronze_rows() -> list[tuple]:
     """The fixture's bronze rows, meant to be read top to bottom -- the shape IS the
-    argument. A function rather than a literal inside `source` only so that fixture
-    stays under the fifty-line cap."""
+    argument. A function only so `source` stays under the fifty-line cap."""
     rows = [
         _row(E_STATUS, JUN),
         _row(E_STATUS, JUL, situacao_cadastral="08",
@@ -193,8 +187,7 @@ def _bronze_rows() -> list[tuple]:
 
 
 def _quarantine_rows() -> list[tuple]:
-    """July's rejects, with the DQ gate's own reason string and the replacement
-    character that earned it."""
+    """July's rejects, with the gate's reason and the replacement char that earned it."""
     return [
         (*_row(key, JUL, nome_fantasia="PADARIA CENTR�L"), "encoding_replacement_char")
         for key in E_REJECTED
@@ -209,12 +202,9 @@ def _write(spark, table: str, schema: str, rows: list[tuple]) -> None:
 @pytest.fixture(scope="module")
 def source(spark, tmp_path_factory):
     """A throwaway Delta database holding one bronze estabelecimentos table and its
-    quarantine, in the two months real bronze has.
-
-    Delta rather than temp views, and module-scoped, for the reasons
-    `tests/vault/test_observation.py::tables` measured: a managed Delta table is a file
-    scan with a reusable plan, where a view over `createDataFrame` re-materialises from
-    the driver on every query and made every reading test ~3x slower."""
+    quarantine, in the two months real bronze has. Delta rather than temp views, and
+    module-scoped, for the reasons `test_observation.py::tables` MEASURED: a view over
+    `createDataFrame` re-materialises from the driver and made reads ~3x slower."""
     db = f"estab_vault_{uuid4().hex[:8]}"
     root = tmp_path_factory.mktemp("estab_vault")
     spark.sql(f"CREATE DATABASE {db} LOCATION '{root.as_uri()}'")
@@ -233,8 +223,8 @@ def source(spark, tmp_path_factory):
 
 @pytest.fixture
 def target(source):
-    """Fresh table names per test, for the tests that WRITE. Sharing one across tests
-    would make idempotence pass for the wrong reason."""
+    """Fresh table names per test, for the tests that WRITE -- sharing one would make
+    idempotence pass for the wrong reason."""
     suffix = uuid4().hex[:8]
     return SimpleNamespace(
         hub=f"{source.db}.hub_{suffix}",
@@ -248,9 +238,9 @@ def target(source):
 def _load_all(spark, source, names, *, load_date=LOADED_AT, months=None):
     """One load of each of the five tables, in dependency order, over `months`.
 
-    `hub_empresa` is loaded FROM ESTABELECIMENTOS here, and that is the real design
-    rather than a fixture shortcut: estabelecimentos carries `cnpj_basico`, so it is a
-    second feed for that hub and the hub's anti-join makes running both feeds free."""
+    `hub_empresa` is loaded FROM ESTABELECIMENTOS, which is the real design and not a
+    fixture shortcut: that table carries `cnpj_basico`, so it is a second feed for the
+    hub and the anti-join makes running both feeds free."""
     names.hub_result = load_hub(
         spark, HUB, source_table=source.bronze, target_table=names.hub,
         load_date=load_date, months=months,
@@ -275,9 +265,8 @@ def _load_all(spark, source, names, *, load_date=LOADED_AT, months=None):
 @pytest.fixture(scope="module")
 def loaded(spark, source):
     """One load of every table over both months, shared by every read-only assertion.
-
-    Module-scoped because a Delta `saveAsTable` costs seconds on this box and none of
-    the tests using it writes. Tests that load again take `target` instead."""
+    Module-scoped because `saveAsTable` costs seconds and none of these tests writes;
+    tests that load again take `target` instead."""
     names = SimpleNamespace(
         hub=f"{source.db}.hub_shared", empresa_hub=f"{source.db}.emp_shared",
         dados=f"{source.db}.dados_shared", endereco=f"{source.db}.end_shared",
@@ -288,10 +277,8 @@ def loaded(spark, source):
 
 def _sat_rows(spark, names, table: str) -> dict[tuple[tuple[str, str, str], date], dict]:
     """`{(padded key, applied_date): row}` for one satellite, joined back to the hub so
-    assertions read an establishment rather than a digest.
-
-    Keyed on (key, applied_date) so a duplicate row would overwrite its twin; callers
-    read per-key row LISTS, which is what makes a missing or extra row visible."""
+    assertions read an establishment rather than a digest. A duplicate row would
+    overwrite its twin here, so callers read per-key row LISTS instead."""
     joined = (
         spark.read.table(table).alias("s")
         .join(spark.read.table(names.hub).alias("h"), HUB.hash_key)
@@ -307,6 +294,18 @@ def _applied(rows: dict, key: tuple[str, str, str]) -> list[date]:
     return sorted(applied for stored, applied in rows if stored == _padded(key))
 
 
+def _states(spark, grain) -> dict[tuple[tuple[str, str, str], str], str]:
+    """`{(raw key, month): observation_state}` for the whole ledger.
+
+    Keyed on the RAW triple, not the padded one: the ledger reads bronze's own columns
+    and never hashes, because what it answers is "what did we SEE"."""
+    return {
+        ((row["cnpj_basico"], row["cnpj_ordem"], row["cnpj_dv"]), row[MONTH_COLUMN]):
+            row[STATE_COLUMN]
+        for row in observation_ledger(spark, grain).collect()
+    }
+
+
 # --------------------------------------------------------------------------- #
 # The acceptance test: the `rejected` half of Task 2's
 # --------------------------------------------------------------------------- #
@@ -319,19 +318,12 @@ def test_the_four_keys_our_gate_rejected_are_rejected_and_never_departures(
     `rejected_by_our_gate` -- an absence WE caused -- and the two satellites must
     record no change and no departure for them.
 
-    WHY BOTH HALVES ARE ASSERTED TOGETHER. The state alone would pass on a ledger that
-    never emits `absent_after_observation` at all; the departure count alone would pass
-    on a ledger that emits nothing. Together they pin the mapping in both directions
-    ON THIS DATA -- and on this data only, which is the limit the module docstring
-    states: estabelecimentos has zero true departures, so a ledger that blames our gate
-    for every disappearance passes this test in full. Task 5's socios half is what
-    tells the two apart; this is one of its two populations, not a proof on its own."""
-    ledger = observation_ledger(spark, source.grain)
-    states = {
-        ((row["cnpj_basico"], row["cnpj_ordem"], row["cnpj_dv"]), row[MONTH_COLUMN]):
-            row[STATE_COLUMN]
-        for row in ledger.collect()
-    }
+    WHY BOTH HALVES ARE ASSERTED TOGETHER. The state alone passes on a ledger that
+    never emits `absent_after_observation`; the count alone passes on one that emits
+    nothing. Together they pin the mapping ON THIS DATA -- and only there, per the
+    module docstring: a ledger blaming our gate for every disappearance passes in full,
+    and Task 5's socios half is what tells the two apart."""
+    states = _states(spark, source.grain)
     dados, endereco = _sat_rows(spark, loaded, loaded.dados), _sat_rows(
         spark, loaded, loaded.endereco
     )
@@ -352,12 +344,7 @@ def test_a_key_born_in_july_is_absent_before_its_first_observation_and_not_a_dep
     """The 444,520 in miniature. A key whose first appearance is July is absent in
     June, and calling that a candidate delete would have the ledger assert half a
     million false departures in the first month it covers."""
-    ledger = observation_ledger(spark, source.grain)
-    states = {
-        ((row["cnpj_basico"], row["cnpj_ordem"], row["cnpj_dv"]), row[MONTH_COLUMN]):
-            row[STATE_COLUMN]
-        for row in ledger.collect()
-    }
+    states = _states(spark, source.grain)
 
     assert states[(E_NEW_IN_JULY, JUN)] == BEFORE
     assert states[(E_NEW_IN_JULY, JUL)] == OBSERVED
@@ -395,14 +382,13 @@ def test_two_establishments_whose_raw_components_concatenate_alike_stay_apart(
     """`('40000004', '1', '23')` and `('40000004', '12', '3')` are the same eleven
     characters if you concatenate the raw columns, and two different establishments.
 
-    WHAT SEPARATES THEM IS THE LENGTH PREFIX, NOT THE PAD, and this test was measured
-    rather than assumed: mutating `_padded_components` to drop the zero-pad leaves it
-    GREEN, because `S1:1||S2:23` and `S2:12||S1:3` are distinct encodings whatever the
-    padding. So this covers a different mutation from the digest test above -- a
-    `concat_ws` or an `md5(a || b || c)` in place of the standard, which is the
-    "simplification" a multi-column key invites and which merges these two
-    establishments onto one hash key with no error attached. The pad's own coverage is
-    the digest test; the truncation guard's is below."""
+    WHAT SEPARATES THEM IS THE LENGTH PREFIX, NOT THE PAD -- measured, not assumed:
+    dropping the zero-pad from `_padded_components` leaves this GREEN, because
+    `S8:40000004||S1:1||S2:23` and `S8:40000004||S2:12||S1:3` are distinct encodings
+    either way. So it covers a different mutation from the digest test above: a
+    `concat_ws` or `md5(a || b || c)` in place of the standard, the "simplification" a
+    multi-column key invites, which merges these two onto one hash key with no error
+    attached. The pad's own coverage is the digest test; truncation's is below."""
     rows = {
         (row["cnpj_basico"], row["cnpj_ordem"], row["cnpj_dv"]): row[HUB.hash_key]
         for row in spark.read.table(loaded.hub).collect()
@@ -453,13 +439,11 @@ def _link_rows(spark, names) -> dict[tuple[str, str, str], dict]:
 def test_the_link_hash_key_is_the_digest_over_both_hubs_business_keys_in_order(
     spark, loaded
 ):
-    """The link's own key is the standard applied to hub_empresa's business key
-    followed by hub_estabelecimento's -- four components, `cnpj_basico` appearing in
-    both, which is correct: the link's identity is BOTH keys.
-
-    The two inequalities are the mutations that would leave every join working and the
-    table re-keyed: the hubs concatenated the other way round, and the link keyed on
-    the establishment alone (dropping the repeated `cnpj_basico`)."""
+    """The link's own key is the standard over hub_empresa's business key followed by
+    hub_estabelecimento's -- four components, `cnpj_basico` in both, which is correct:
+    the link's identity is BOTH keys. The two inequalities are the mutations that leave
+    every join working and the table re-keyed -- the hubs concatenated the other way
+    round, and the link keyed on the establishment alone."""
     rows = _link_rows(spark, loaded)
     basico, ordem, dv = _padded(E_STATUS)
     row = rows[(basico, ordem, dv)]
@@ -488,10 +472,9 @@ def test_the_links_hub_references_are_exactly_the_digests_the_two_hubs_hold(spar
 def test_two_establishments_of_one_company_are_two_links_onto_one_company_key(
     spark, loaded
 ):
-    """The hierarchy, which is the whole reason this link exists rather than a column
-    on the hub. `10000001` has two establishments and `40000004` has two; each pair is
-    two link rows sharing one `hub_empresa_hk` and carrying two distinct
-    `hub_estabelecimento_hk`."""
+    """The hierarchy, which is why this is a link and not a column on the hub. Each of
+    `10000001` and `40000004` has two establishments: two link rows sharing one
+    `hub_empresa_hk` and carrying two distinct `hub_estabelecimento_hk`."""
     rows = _link_rows(spark, loaded)
 
     for company, pair in (("10000001", (E_STATUS, E_ADDRESS)),
@@ -505,31 +488,45 @@ def test_two_establishments_of_one_company_are_two_links_onto_one_company_key(
 def test_the_link_carries_its_two_references_the_dv2_metadata_and_nothing_else(
     spark, loaded
 ):
-    """No payload, no `applied_date`, no end-date column -- a link row asserts that the
-    relationship was seen, and when it held is an effectivity satellite's statement to
-    make. Pinned as a list so any of those arriving is a deliberate edit, and in the
-    link's declared hub order."""
+    """No payload, no `applied_date`, no end-date -- a link row asserts the relationship
+    was seen, and when it HELD is an effectivity satellite's statement. Pinned as a list,
+    in the link's declared hub order, so any arrival is a deliberate edit."""
     assert spark.read.table(loaded.link).columns == [
         LINK.hash_key, EMPRESA_HUB.hash_key, HUB.hash_key, LOAD_DATE, RECORD_SOURCE
     ]
 
 
-def test_reloading_the_link_appends_nothing(spark, source, target):
-    """Idempotence, with a DIFFERENT `load_date` on the second run so a row silently
-    rewritten rather than skipped shows up as a changed stamp even if the count
-    happens to hold."""
-    _load_all(spark, source, target)
-    first = target.link_result
-    second = load_link(
-        spark, LINK, hubs=LINK_HUBS, source_table=source.bronze,
-        target_table=target.link, load_date=RELOADED_AT,
-    )
-    rows = spark.read.table(target.link).collect()
+_TABLES = ("hub", "empresa_hub", "dados", "endereco", "link")
 
-    assert (first.appended, second.appended) == (10, 0)
-    assert second.already_present == 10
-    assert len(rows) == 10
-    assert {row[LOAD_DATE] for row in rows} == {LOADED_AT}
+# What one load over both months writes to each of the five. Pinned so the re-run test
+# asserts the FIRST pass too: "appended nothing" is satisfied by a loader that appended
+# nothing the first time either.
+_FIRST_PASS = {"hub": 10, "empresa_hub": 8, "dados": 11, "endereco": 11, "link": 10}
+
+
+def test_reloading_the_hub_the_satellites_and_the_link_appends_nothing(
+    spark, source, target
+):
+    """Idempotence across ALL FIVE tables, with a different `load_date` on the second
+    run so a row silently rewritten rather than skipped shows up as a changed stamp even
+    where the count happens to hold.
+
+    NOT ONLY THE LINK. Each loader reaches idempotence by its own route -- the hubs and
+    the link by an anti-join on a hash key, the satellites by dropping candidates
+    already persisted BEFORE the change window -- and two satellites on one hub is a
+    configuration this vault did not have before."""
+    first = dict(_FIRST_PASS)
+    _load_all(spark, source, target)
+    appended = {name: getattr(target, f"{name}_result").appended for name in _TABLES}
+    _load_all(spark, source, target, load_date=RELOADED_AT)
+    again = {name: getattr(target, f"{name}_result").appended for name in _TABLES}
+
+    assert appended == first
+    assert again == dict.fromkeys(_TABLES, 0)
+    for name in _TABLES:
+        rows = spark.read.table(getattr(target, name)).collect()
+        assert len(rows) == first[name]
+        assert {row[LOAD_DATE] for row in rows} == {LOADED_AT}
 
 
 def test_loading_july_after_june_adds_only_the_relationship_born_in_july(
@@ -570,17 +567,14 @@ def test_an_overlong_key_component_fails_the_link_load_rather_than_merging_two_p
 ):
     """THE TASK 3 REVIEW'S I2, APPLIED TO THE NEW LOADER BEFORE IT COULD BE FOUND AGAIN.
 
-    That review's finding was that `hub_candidates` pads TWICE -- once for the digest
-    and once for the stored key -- so an overlong-key test that only exercised
-    `load_hub` stayed green when one call site was deleted, while `satellite_candidates`
-    (one call site) was left free to merge two companies onto one digest.
-    `link_candidates` is a THIRD single-call-site consumer, through
-    `link_hash_key_expression`, so it needs its own.
+    That finding was that `hub_candidates` pads TWICE, so an overlong-key test through
+    `load_hub` alone stayed green when one call site was deleted while
+    `satellite_candidates` (one site) was left free to merge two companies onto one
+    digest. `link_candidates` is a THIRD single-site consumer, so it needs its own.
 
-    Spark's `lpad` truncates: `lpad('00012', 4, '0')` is `'0001'`, which is
-    `E_SHORT_ORDEM`'s canonical ordem. Unguarded, a five-character `cnpj_ordem` would
-    not produce a bad row -- it would give two different establishments one link hash
-    key and one hub reference."""
+    Spark's `lpad` truncates: `lpad('00012', 4, '0')` is `'0001'`, `E_SHORT_ORDEM`'s
+    canonical ordem. Unguarded, a five-character `cnpj_ordem` gives two different
+    establishments one link hash key and one hub reference."""
     bad = f"{source.db}.overlong_{uuid4().hex[:8]}"
     _write(spark, bad, _SCHEMA, [
         _row(("40000004", "00012", "23"), JUN), _row(E_SHORT_ORDEM, JUN)
@@ -593,10 +587,70 @@ def test_an_overlong_key_component_fails_the_link_load_rather_than_merging_two_p
         )
 
 
+def _derived(spark, source, name: str, frame):
+    """`frame` written to a fresh Delta table in the fixture's database -- Delta rather
+    than a temp view, so the refusals below meet the read path production uses."""
+    table = f"{source.db}.{name}_{uuid4().hex[:8]}"
+    frame.write.format("delta").mode("append").saveAsTable(table)
+    return table
+
+
+def test_a_source_missing_one_hubs_key_column_is_refused_by_name(spark, source, target):
+    """`link_candidates` requires EVERY participating hub's business key to be a column
+    of the one source. The review found that guard untested while `links.py`'s docstring
+    claimed it ("an error naming the missing column rather than a NULL reference").
+
+    `cnpj_ordem` belongs to hub_estabelecimento alone, so this is red both if the check
+    is DELETED (Spark then fails in the `select`, naming neither link nor hub) and if it
+    is NARROWED to the first hub's columns -- the shape a two-hub loader invites.
+    **Task 5 copies this loader**, so the gap is closed here rather than noted."""
+    without = _derived(
+        spark, source, "without", spark.read.table(source.bronze).drop("cnpj_ordem")
+    )
+
+    with pytest.raises(ValueError, match="cnpj_ordem"):
+        load_link(
+            spark, LINK, hubs=LINK_HUBS, source_table=without,
+            target_table=target.link, load_date=LOADED_AT,
+        )
+
+    assert not spark.catalog.tableExists(target.link)
+
+
+def test_a_typed_key_column_is_refused_by_the_link_loader_before_it_hashes(
+    spark, source, target
+):
+    """The sibling of `test_cnpj_vault.py::test_a_source_column_that_is_not_a_string_is_
+    refused_by_name`, for the third consumer of the hash standard.
+
+    Spark casts a typed column silently and hashes the CAST, where `hash_key` raises on
+    a value with no `.strip()`: one spelling answers and the other refuses, which no
+    equivalence test over string corpora can see. `cnpj_dv` is again the second hub's
+    alone, so narrowing the check to the first hub's key leaves this red."""
+    typed = _derived(
+        spark, source, "typed",
+        spark.read.table(source.bronze).withColumn(
+            "cnpj_dv", F.col("cnpj_dv").cast("int")
+        ),
+    )
+
+    with pytest.raises(TypeError, match="cnpj_dv"):
+        load_link(
+            spark, LINK, hubs=LINK_HUBS, source_table=typed,
+            target_table=target.link, load_date=LOADED_AT,
+        )
+
+    assert not spark.catalog.tableExists(target.link)
+
+
 def test_a_link_handed_a_hub_it_does_not_name_is_refused(spark, source, target):
     """The loaders take their hubs as free arguments so they can be tested against
-    throwaway specs, which means nothing but this check stops them being mismatched."""
-    with pytest.raises(ValueError, match="link_empresa_estabelecimento"):
+    throwaway specs, which means nothing but this check stops them being mismatched.
+
+    Matched on "was handed" rather than on the link's name: every refusal this loader
+    raises names the link, so the name alone would also match a message about something
+    else entirely."""
+    with pytest.raises(ValueError, match="was handed"):
         load_link(
             spark, LINK, hubs=(EMPRESA_HUB, EMPRESA_HUB), source_table=source.bronze,
             target_table=target.link, load_date=LOADED_AT,
@@ -612,11 +666,10 @@ def test_the_two_satellites_and_the_key_partition_the_estabelecimentos_contract(
     EXACTLY ONE satellite, or a declared omission -- and the three sets are disjoint.
 
     THIS IS THE TEST THAT STOPS THE TWO SATELLITES DISAGREEING ABOUT WHAT THEY OWN. A
-    column in both payloads is recorded twice and its two `hash_diff` histories drift;
-    a column in neither is indistinguishable from a column someone forgot, which is why
-    the omissions are a declared tuple with a reason beside each group rather than an
-    absence. Pure -- no Spark, no fixture -- so it runs on every push in milliseconds
-    and a contract column added upstream turns it red here."""
+    column in both payloads has two `hash_diff` histories that drift; a column in
+    neither is indistinguishable from one someone forgot, which is why the omissions
+    are a declared tuple. Pure -- no Spark -- so a contract column added upstream turns
+    it red in milliseconds."""
     contract = set(_CONTRACT)
     key = set(HUB.business_key_columns)
     dados, endereco = set(DADOS.payload_columns), set(ENDERECO.payload_columns)
@@ -653,8 +706,7 @@ def test_an_address_change_writes_a_second_endereco_row_and_leaves_the_status_al
     spark, loaded
 ):
     """The mirror image: `E_ADDRESS` moves `logradouro` and `numero` and nothing else.
-    Both directions are asserted because one alone is satisfied by a satellite that
-    records everything."""
+    Both directions, because one alone passes on a satellite that records everything."""
     dados, endereco = _sat_rows(spark, loaded, loaded.dados), _sat_rows(
         spark, loaded, loaded.endereco
     )
@@ -714,9 +766,8 @@ def test_each_satellite_writes_exactly_its_own_payload_and_no_end_date(spark, lo
 
 
 def test_both_satellites_key_on_the_same_digest_as_the_hub(spark, loaded):
-    """Two satellites on one hub is the first time this can be wrong in two places.
-    Both derive the key from the same `Hub` spec; this says so at the value level,
-    where an empty join would otherwise be a silently empty history."""
+    """Two satellites on one hub is the first time this can be wrong in two places. Both
+    derive the key from one `Hub` spec; an empty join is a silently empty history."""
     hub_keys = {row[HUB.hash_key] for row in spark.read.table(loaded.hub).collect()}
 
     for table in (loaded.dados, loaded.endereco):
@@ -730,12 +781,10 @@ def test_a_grain_declaring_the_key_columns_in_another_order_is_refused(
 ):
     """THE FIRST MULTI-COLUMN KEY MAKES THIS REACHABLE, and the decision it forced is
     argued in `opl.vault.satellites._grain_key_mismatch`: the permuted grain would
-    ANSWER identically (groupBy does not care about order), and it is refused so that
-    the grain's column list and the hub's stay one list rather than two sets.
-
-    Distinguished from the coarser/finer refusal by its own message, because telling
-    someone whose columns are right that their grain is "coarser or finer" sends them
-    looking for a bug that is not there."""
+    ANSWER identically, and is refused so the grain's column list and the hub's stay one
+    list rather than two sets. It has its OWN message, because telling someone whose
+    columns are right that their grain is "coarser or finer" sends them after a bug
+    that is not there."""
     permuted = ObservationGrain(
         name="hub_estabelecimento", bronze_table=source.bronze,
         quarantine_table=source.quarantine,

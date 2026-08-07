@@ -55,14 +55,27 @@ THE TWO ESTABLISHMENT SATELLITES SPLIT ADDRESS FROM STATUS, and that is one cut 
 than the finest available one. An address change is a physical move; a situação
 cadastral change is a registry event; the two arrive on different rows of the RFB's
 history for the same establishment, so a single satellite would rewrite the whole
-seventeen-column payload every time either moved. What rides along in `_dados` with
-status is `nome_fantasia` and the two CNAE columns, which is a KNOWN cost rather than
-an oversight: a status change writes their unchanged values again. Splitting further
-later means rewriting `sat_estabelecimento_dados`; ADDING one of the unmodelled columns
-below is a new satellite and touches nothing. NO PER-COLUMN CHANGE-RATE MEASUREMENT
-EXISTS FOR THIS TABLE -- Task 3 had one for empresas and this task did not run one; the
-report names the query that would settle it, and until then the argument above is an
-argument.
+sixteen-column payload every time either moved. MEASURED across the 71,874,444
+establishments present in both 2026-06 and 2026-07
+(`01f192ac-d8be-1e59-99e5-05717e28efcc`):
+
+    `_dados`     (6 columns)   1,076,696 changed   1.50%
+    `_endereco`  (10 columns)    570,075 changed   0.79%
+
+    nome_fantasia 31,912 | cnae_fiscal_principal 84,588
+    situacao_cadastral 976,355 | motivo_situacao_cadastral 976,333
+
+THE SPLIT IS WORTH 1.9x AND THE RIDE-ALONG COSTS 30x, which is the honest reading of
+those numbers and the one that argues the known cost. `nome_fantasia` (31,912) sits in
+`_dados` beside `situacao_cadastral` (976,355), so a status change rewrites a name that
+moved thirty times less often -- a wider spread than the 1.50/0.79 the cut itself
+rests on. It is still one cut and not the finest: `situacao_cadastral` and
+`motivo_situacao_cadastral` move together almost exactly (976,355 against 976,333,
+because the motivo is what explains the situação), so those two genuinely belong in one
+payload, and the case for a third satellite is `nome_fantasia` plus the CNAEs rather
+than a general subdivision. Splitting `_dados` later means rewriting
+`sat_estabelecimento_dados`; ADDING one of the unmodelled columns below is a new
+satellite and touches nothing.
 
 `UNMODELLED_ESTABELECIMENTO_COLUMNS` IS DECLARED RATHER THAN LEFT AS A GAP. Eleven of
 the contract's thirty columns are in neither satellite, and a column that is simply
