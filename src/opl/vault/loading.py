@@ -1,15 +1,17 @@
 # src/opl/vault/loading.py
-"""What a hub load and a satellite load have in common: the hash-key expression, the
-month window, and the two bronze columns every vault table reads.
+"""What a hub load, a link load and a satellite load have in common: the hash-key
+expressions, the earliest-observation aggregate, the month window, and the two bronze
+columns every vault table reads.
 
-ONE SPELLING OF THE HASH KEY, SHARED BY BOTH LOADERS, and this is the reason the file
-exists rather than the two loaders each building their own. A satellite's hash key IS
-its hub's -- if the two are computed by two expressions, a divergence does not fail,
-it produces a satellite that joins to its hub and returns nothing. An empty join is
-the quietest wrong answer in this layer: no error, no row count anomaly on either
-side, and every downstream query simply reports that the company has no descriptive
-history. `hash_key_expression` is called by `load_hub` and by `load_satellite` and
-there is no second way to spell it.
+ONE SPELLING OF THE HASH KEY, SHARED BY ALL THREE LOADERS, and this is the reason the
+file exists rather than each loader building its own. A satellite's hash key IS its
+hub's, and a link's hub REFERENCE is that same hub's -- if those are computed by
+separate expressions, a divergence does not fail, it produces a satellite or a link
+that joins to its hub and returns nothing. An empty join is the quietest wrong answer
+in this layer: no error, no row count anomaly on either side, and every downstream
+query simply reports that the company has no descriptive history and no
+establishments. `hash_key_expression` is called by `load_hub`, `load_satellite` and
+`load_link`, and there is no second way to spell it.
 
 THE MONTH WINDOW IS VALIDATED FOR SHAPE HERE AND FOR EXISTENCE ELSEWHERE. `is_month`
 is the one spelling of "YYYY-MM naming a real month" in this repository -- the rule
@@ -26,6 +28,7 @@ from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN
+from opl.vault.columns import RECORD_SOURCE
 from opl.vault.hashing_spark import hash_key_column, zero_padded_column
 from opl.vault.months import validated_months
 from opl.vault.registry import Hub
@@ -48,10 +51,16 @@ __all__ = [
     "BRONZE_RECORD_SOURCE",
     "SNAPSHOT_MONTH_COLUMN",
     "SNAPSHOT_REF_DATE_COLUMN",
+    "earliest_record_source",
     "hash_key_expression",
+    "link_hash_key_expression",
     "read_snapshot_window",
     "rows_in",
 ]
+
+# Internal to `earliest_record_source`, and named because it is selected through by
+# field: a bare string at both ends is one typo from a column full of NULLs.
+_FIRST_SEEN = "_first_seen"
 
 
 def rows_in(spark: SparkSession, table: str) -> int:
@@ -71,8 +80,8 @@ def rows_in(spark: SparkSession, table: str) -> int:
     return spark.read.table(table).count()
 
 
-def hash_key_expression(hub: Hub) -> Column:
-    """The hub's hash key, as a Column over the source's business-key columns.
+def _padded_components(hub: Hub) -> list[Column]:
+    """The hub's business-key columns, each padded to its declared width.
 
     Zero-padding is applied per column and only where the spec declares a width, which
     is `BusinessKeyColumn`'s decision to carry: padding a name or a free-text
@@ -84,11 +93,66 @@ def hash_key_expression(hub: Hub) -> Column:
     joins components with `||` and length-prefixes each, so two orders give two
     different digests for the same business key. The spec is where that order is
     written down once."""
-    return hash_key_column([
+    return [
         F.col(key.name) if key.width is None
         else zero_padded_column(F.col(key.name), width=key.width)
         for key in hub.business_keys
+    ]
+
+
+def hash_key_expression(hub: Hub) -> Column:
+    """The hub's hash key, as a Column over the source's business-key columns."""
+    return hash_key_column(_padded_components(hub))
+
+
+def link_hash_key_expression(hubs: Sequence[Hub]) -> Column:
+    """A link's own hash key: the standard over EVERY participating hub's business key,
+    concatenated in the link's declared hub order.
+
+    THE SAME STANDARD, A LONGER COMPONENT LIST -- not a hash of the hub hash keys, and
+    the difference is worth stating because hashing the hashes is the commoner
+    implementation. Three reasons for the business keys:
+
+      - a hash of digests is a SECOND standard (an encoding over 64-character hex,
+        whose null and empty branches never fire), and this repository already pays for
+        one second spelling of the hash under an equivalence test;
+      - the link's key stays derivable from the source row alone, so it can be
+        reconciled by hand and computed without joining the hubs;
+      - the components carry their own length prefix and `||` delimiter either way, so
+        the concatenation is unambiguous without borrowing the hubs' digests for it.
+
+    ONE COLUMN MAY APPEAR TWICE and that is correct, not a duplicate to collapse:
+    `link_empresa_estabelecimento` joins a hub keyed on `cnpj_basico` to one keyed on
+    (`cnpj_basico`, `cnpj_ordem`, `cnpj_dv`), and the link's key is both hubs' keys --
+    dropping the repeat would make the link's digest the establishment's own with a
+    prefix, which is a different claim about identity."""
+    return hash_key_column([
+        component for hub in hubs for component in _padded_components(hub)
     ])
+
+
+def earliest_record_source(keyed: DataFrame, group_by: Sequence[str]) -> DataFrame:
+    """One row per group, carrying the `record_source` of the EARLIEST month the group
+    appeared in.
+
+    SHARED BY `load_hub` AND `load_link`, which is what the two insert-only loaders
+    have in common: a row is inserted once and never updated, so its `record_source`
+    describes the observation that CREATED it. EARLIEST, NOT ARBITRARY -- `first()` or
+    `any_value()` would make the stored value depend on partition order, and two runs
+    over the same data could disagree. `min` over a struct of (month, source) is a
+    partial aggregate, so it costs no shuffle beyond the grouping that is already
+    needed to collapse a key's many monthly rows into one.
+
+    `keyed` must carry `_snapshot_month` and `_record_source`; the result carries
+    `group_by` and `record_source` and nothing else."""
+    return (
+        keyed.groupBy(*group_by)
+        .agg(F.min(F.struct(SNAPSHOT_MONTH_COLUMN, BRONZE_RECORD_SOURCE)).alias(_FIRST_SEEN))
+        .select(
+            *group_by,
+            F.col(f"{_FIRST_SEEN}.{BRONZE_RECORD_SOURCE}").alias(RECORD_SOURCE),
+        )
+    )
 
 
 def _validated_months(months: Sequence[str] | None) -> tuple[str, ...] | None:

@@ -6,10 +6,11 @@ stakes DV2's extensibility claim on wave 2 adding `hub_account`, `hub_customer` 
 `link_payment` with a diff of "+N files, 0 modified". A registry holding its own
 table list would have to be edited to register them, and the demonstration would be
 false on the one file that matters -- and it cannot be demonstrated retroactively,
-because the git history is the evidence. `test_a_new_domain_is_discovered_without_
-editing_any_existing_file` builds a throwaway domain package in `tmp_path` and shows
-it registering through the same entry point `opl.vault.domains` uses, with nothing
-in `src/` touched.
+because the git history is the evidence. `test_a_new_domain_of_hubs_satellites_and_
+links_is_discovered_without_editing_any_file` builds a throwaway domain package in
+`tmp_path` -- carrying wave 2's three tables by name -- and shows it registering
+through the same entry point `opl.vault.domains` uses, with nothing in `src/`
+touched.
 
 DISCOVERY IS BY DIRECTORY SCAN, and the alternatives that would have failed the
 claim are worth naming because each looks tidier: a list of module names in
@@ -28,10 +29,12 @@ from opl.vault.columns import APPLIED_DATE, HASH_DIFF, LOAD_DATE, RECORD_SOURCE
 from opl.vault.registry import (
     BusinessKeyColumn,
     Hub,
+    Link,
     Satellite,
     VaultDomain,
     build_registry,
     discover_domains,
+    linked_hubs,
     parent_hub,
 )
 
@@ -41,47 +44,61 @@ _HUB = Hub(
     business_keys=(BusinessKeyColumn(name="thing_id", width=8),),
 )
 _SAT = Satellite(name="sat_thing_dados", parent="hub_thing", payload_columns=("colour",))
+_OTHER_HUB = Hub(
+    name="hub_other",
+    hash_key="hub_other_hk",
+    business_keys=(BusinessKeyColumn(name="other_id"),),
+)
+_LINK = Link(
+    name="link_thing_other", hash_key="link_thing_other_hk", hubs=("hub_thing", "hub_other")
+)
 
 
 def _domain(*tables, name="probe") -> VaultDomain:
     return VaultDomain(name=name, tables=tables)
 
 
-def test_a_new_domain_of_hubs_and_satellites_is_discovered_without_editing_any_file(
+# The throwaway domain the D5 proof drops into `tmp_path`: WAVE 2'S THREE TABLES BY
+# NAME, so the claim is exercised on the actual list the plan stakes it on.
+_PROBE_DOMAIN_SOURCE = """\
+from opl.vault.registry import BusinessKeyColumn, Hub, Link, Satellite, VaultDomain
+HUB = Hub(name='hub_account', hash_key='hub_account_hk',
+          business_keys=(BusinessKeyColumn(name='account_id'),))
+CUSTOMER = Hub(name='hub_customer', hash_key='hub_customer_hk',
+               business_keys=(BusinessKeyColumn(name='customer_id'),))
+SAT = Satellite(name='sat_account_dados', parent='hub_account',
+                payload_columns=('status',))
+LINK = Link(name='link_payment', hash_key='link_payment_hk',
+            hubs=('hub_account', 'hub_customer'))
+DOMAIN = VaultDomain(name='payments', tables=(HUB, CUSTOMER, SAT, LINK))
+"""
+
+
+def test_a_new_domain_of_hubs_satellites_and_links_is_discovered_without_editing_any_file(
     tmp_path,
 ):
     """THE D5 PROOF, AND EXACTLY AS MUCH OF IT AS IS TRUE. A package that did not
     exist when the mechanism was written, dropped in as one file, registers its tables
     through it.
 
-    WHAT THIS COVERS AND WHAT IT DOES NOT, stated because the claim in the plan is
-    broader than what holds today and the Task 3 review was right to say so. It covers
-    a domain made of HUBS AND SATELLITES -- which is `hub_account` and `hub_customer`,
-    two of wave 2's three. It does NOT cover a domain introducing a new table KIND:
-    `VaultTable = Hub | Satellite` and `VaultDomain` refuses anything else, so a
-    `Link` spec and its guards land in `registry.py`. **Task 4 adds
-    `link_empresa_estabelecimento` and is where the `Link` kind belongs** -- that is
-    inside wave 1, which is fine, and it is why wave 2's `link_payment` will find the
-    kind already there.
+    WHAT THIS COVERS AND WHAT IT DOES NOT. It covers a domain made of HUBS, SATELLITES
+    AND LINKS, and the throwaway module below is wave 2's list BY NAME --
+    `hub_account`, `hub_customer`, `link_payment` -- so the plan's claim is exercised
+    kind for kind rather than by analogy. Task 3 could only claim two of the three,
+    because `VaultTable` was `Hub | Satellite` then; Task 4 added the `Link` kind and
+    its guards to `registry.py`, an edit INSIDE wave 1 that the plan always expected.
+    It still does NOT cover a domain introducing a FOURTH kind: `VaultTable` and
+    `VaultDomain.__post_init__` refuse anything else, so a new kind lands in
+    `registry.py` exactly as `Link` did.
 
-    The throwaway package mirrors `opl/vault/domains/` exactly: an `__init__.py` and
-    one module exposing a module-level `DOMAIN`. Nothing registers by import SIDE
-    EFFECT -- `DOMAIN` is a value that `discover_domains` reads -- which is what lets
-    this test run without mutating the real registry, and what lets the whole-set
-    guards below run over every domain at once instead of incrementally in whatever
-    order the filesystem happened to yield."""
+    The throwaway package mirrors `opl/vault/domains/` exactly. Nothing registers by
+    import SIDE EFFECT -- `DOMAIN` is a value that `discover_domains` reads -- which is
+    what lets this run without mutating the real registry, and what lets the whole-set
+    guards run over every domain at once rather than in filesystem order."""
     package = tmp_path / "probe_domains"
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "payments.py").write_text(
-        "from opl.vault.registry import BusinessKeyColumn, Hub, Satellite, VaultDomain\n"
-        "HUB = Hub(name='hub_account', hash_key='hub_account_hk',\n"
-        "          business_keys=(BusinessKeyColumn(name='account_id'),))\n"
-        "SAT = Satellite(name='sat_account_dados', parent='hub_account',\n"
-        "                payload_columns=('status',))\n"
-        "DOMAIN = VaultDomain(name='payments', tables=(HUB, SAT))\n",
-        encoding="utf-8",
-    )
+    (package / "payments.py").write_text(_PROBE_DOMAIN_SOURCE, encoding="utf-8")
     sys.path.insert(0, str(tmp_path))
     try:
         discovered = discover_domains([str(package)], "probe_domains")
@@ -93,15 +110,30 @@ def test_a_new_domain_of_hubs_and_satellites_is_discovered_without_editing_any_f
     registry = build_registry(discovered)
 
     assert [domain.name for domain in discovered] == ["payments"]
-    assert sorted(registry) == ["hub_account", "sat_account_dados"]
+    assert sorted(registry) == [
+        "hub_account", "hub_customer", "link_payment", "sat_account_dados"
+    ]
+    assert [hub.name for hub in linked_hubs(registry, registry["link_payment"])] == [
+        "hub_account", "hub_customer"
+    ]
 
 
-def test_the_cnpj_domain_registers_its_two_wave_one_tables():
+def test_the_cnpj_domain_registers_its_wave_one_tables():
     """The real package, through the real entry point. Pinned as literals for the
     reason the bronze registry pins its four table names: a rename is a re-keying of
     everything downstream and should cost a deliberate edit here."""
-    assert sorted(domains.REGISTRY) == ["hub_empresa", "sat_empresa_dados"]
+    assert sorted(domains.REGISTRY) == [
+        "hub_empresa",
+        "hub_estabelecimento",
+        "link_empresa_estabelecimento",
+        "sat_empresa_dados",
+        "sat_estabelecimento_dados",
+        "sat_estabelecimento_endereco",
+    ]
     assert domains.table_spec("hub_empresa").hash_key == "hub_empresa_hk"
+    assert domains.table_spec("hub_estabelecimento").business_key_columns == (
+        "cnpj_basico", "cnpj_ordem", "cnpj_dv"
+    )
 
 
 def test_asking_for_a_table_that_is_not_registered_names_the_ones_that_are():
@@ -140,6 +172,114 @@ def test_a_satellite_whose_parent_is_another_satellite_is_refused():
 
     with pytest.raises(ValueError, match="not a hub"):
         build_registry([_domain(_HUB, _SAT, other)])
+
+
+# --------------------------------------------------------------------------- #
+# The link kind, added in Task 4 with `link_empresa_estabelecimento`
+# --------------------------------------------------------------------------- #
+
+def test_a_link_resolves_to_its_hubs_in_declaration_order():
+    """ORDER IS THE LINK'S IDENTITY, not a presentation detail: the link's own hash
+    key is the standard applied to the participating hubs' business keys CONCATENATED
+    IN THIS ORDER, so a resolver that returned them sorted, or in registry order,
+    would re-key every link whose hubs happen not to be alphabetical."""
+    registry = build_registry([_domain(_HUB, _OTHER_HUB, _LINK)])
+
+    resolved = linked_hubs(registry, registry["link_thing_other"])
+
+    assert [hub.name for hub in resolved] == ["hub_thing", "hub_other"]
+    assert resolved[0] is registry["hub_thing"]
+
+
+def test_a_link_naming_a_hub_no_domain_registers_is_refused():
+    """The sibling of `test_a_satellite_whose_parent_is_not_registered_is_refused`,
+    and it needs the whole set for the same reason: a link file and a hub file are
+    two modules, and neither author sees the other's."""
+    with pytest.raises(ValueError, match="hub_other"):
+        build_registry([_domain(_HUB, _LINK)])
+
+
+def test_a_link_naming_a_satellite_as_one_of_its_hubs_is_refused():
+    """A satellite has no business key of its own, so the link's hash key could not
+    be spelled -- but the lookup would SUCCEED, and the failure would arrive several
+    layers away as a missing column."""
+    bad = Link(name="link_x", hash_key="link_x_hk", hubs=("hub_thing", "sat_thing_dados"))
+
+    with pytest.raises(ValueError, match="not a hub"):
+        build_registry([_domain(_HUB, _SAT, bad)])
+
+
+def test_a_satellite_whose_parent_is_a_link_is_refused():
+    """DV2 allows a satellite on a link and this vault does not have one yet. The
+    boundary is asserted rather than left implicit: `parent_hub` returns a `Hub` and
+    `load_satellite` takes one, so registering a link-parented satellite would
+    register a table nothing in this package can write."""
+    on_link = Satellite(
+        name="sat_on_link", parent="link_thing_other", payload_columns=("x",)
+    )
+
+    with pytest.raises(ValueError, match="not a hub"):
+        build_registry([_domain(_HUB, _OTHER_HUB, _LINK, on_link)])
+
+
+def test_a_link_with_fewer_than_two_hubs_is_refused():
+    """A link is a RELATIONSHIP. One hub is a hub with extra steps, and its hash key
+    would be the hub's own business key hashed a second time under another name --
+    two tables that look independent and are the same key space."""
+    with pytest.raises(ValueError, match="two hubs"):
+        Link(name="link_x", hash_key="link_x_hk", hubs=("hub_thing",))
+
+
+def test_a_link_naming_one_hub_twice_is_refused():
+    """A same-hub hierarchical link (parent company to subsidiary) is real DV2, and
+    this spec cannot express it: it carries no ROLE name, so both references would be
+    written into one column called `hub_thing_hk` and one of the two ends would be
+    gone. Refused until a link that needs roles arrives with the shape for them."""
+    with pytest.raises(ValueError, match="twice"):
+        Link(name="link_x", hash_key="link_x_hk", hubs=("hub_thing", "hub_thing"))
+
+
+def test_a_bare_string_hub_list_is_refused():
+    """`hubs="hub_thing"` is a `Sequence[str]` structurally -- it would iterate to one
+    "hub" per character, and the first refusal it met would be about a hub called
+    `h`."""
+    with pytest.raises(TypeError, match="bare str"):
+        Link(name="link_x", hash_key="link_x_hk", hubs="hub_thing")
+
+
+def test_a_link_whose_own_hash_key_is_one_of_its_hubs_hash_keys_is_refused():
+    """The loader writes the link's digest and the hub reference into columns of the
+    names below. Sharing one name means the projection writes two values into one
+    column: the link keeps its right row count, and one of its two ends is silently
+    the link's own digest, which joins to nothing."""
+    bad = Link(name="link_x", hash_key="hub_thing_hk", hubs=("hub_thing", "hub_other"))
+
+    with pytest.raises(ValueError, match="hub_thing_hk"):
+        build_registry([_domain(_HUB, _OTHER_HUB, bad)])
+
+
+def test_two_hubs_of_one_link_spelling_the_same_hash_key_column_are_refused():
+    """The copy-paste shape: a second hub declared by pasting the first and renaming
+    the table but not the hash key. Each hub is individually valid, and the link
+    joining them would write both digests into one column."""
+    twin = Hub(
+        name="hub_twin",
+        hash_key="hub_thing_hk",
+        business_keys=(BusinessKeyColumn(name="twin_id"),),
+    )
+    bad = Link(name="link_x", hash_key="link_x_hk", hubs=("hub_thing", "hub_twin"))
+
+    with pytest.raises(ValueError, match="hub_thing_hk"):
+        build_registry([_domain(_HUB, twin, bad)])
+
+
+def test_a_domain_declaring_something_that_is_not_a_vault_table_is_refused():
+    """`VaultDomain` refuses anything outside `VaultTable`, which is what makes the
+    D5 claim's "these kinds need nothing added here" checkable: the set of kinds a
+    domain may declare is one union, and `isinstance` reads it rather than restating
+    it."""
+    with pytest.raises(TypeError, match="not a vault table"):
+        VaultDomain(name="probe", tables=(BusinessKeyColumn(name="thing_id"),))
 
 
 def test_two_domains_claiming_the_same_table_name_are_refused():

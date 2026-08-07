@@ -21,7 +21,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from opl.vault.registry import Hub, Satellite, VaultTable, build_registry, discover_domains
+from opl.vault.registry import (
+    Hub,
+    Link,
+    Satellite,
+    VaultTable,
+    build_registry,
+    discover_domains,
+)
+from opl.vault.registry import linked_hubs as _linked_hubs
 from opl.vault.registry import parent_hub as _parent_hub
 from opl.vault.registry import table_spec as _table_spec
 
@@ -37,3 +45,9 @@ def table_spec(name: str) -> VaultTable:
 def parent_hub(satellite: Satellite) -> Hub:
     """The hub a registered satellite hangs off."""
     return _parent_hub(REGISTRY, satellite)
+
+
+def linked_hubs(link: Link) -> tuple[Hub, ...]:
+    """The hubs a registered link joins, in its declaration order -- which is the order
+    its hash key is taken in, so it is the answer rather than a detail of it."""
+    return _linked_hubs(REGISTRY, link)

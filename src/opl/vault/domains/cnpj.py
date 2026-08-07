@@ -1,6 +1,7 @@
 # src/opl/vault/domains/cnpj.py
-"""The CNPJ domain's vault tables and grains. Wave 1, Task 3: `hub_empresa` and
-`sat_empresa_dados`.
+"""The CNPJ domain's vault tables and grains. Wave 1: `hub_empresa` and
+`sat_empresa_dados` (Task 3), then `hub_estabelecimento`, its two satellites and
+`link_empresa_estabelecimento` (Task 4).
 
 THIS FILE IS DATA. Every guard that could refuse what is below lives in
 `opl.vault.registry`, and every mechanism that reads it lives in `opl.vault.hubs`,
@@ -32,15 +33,53 @@ satellite whenever something needs them. The split is not cosmetic: a satellite 
 change, and lumping columns that change at different rates into one `hash_diff` writes
 a row for the whole payload every time the fastest-moving column twitches.
 `tests/vault/test_cnpj_vault.py::test_a_change_outside_the_payload_produces_no_second_
-row` is what keeps the two apart."""
+row` is what keeps the two apart.
+
+THE ESTABLISHMENT'S BUSINESS KEY IS THE CNPJ COMPLETO AND IS CARRIED AS ITS THREE
+COMPONENTS, not as a derived fourteen-character string. `cnpj_basico` (8) +
+`cnpj_ordem` (4) + `cnpj_dv` (2) is fourteen digits and those widths are EXACT across
+72.3M rows in both snapshots, with zero non-numeric values -- so the zero-pads below
+are defensive, like empresas'. Three columns rather than one derived column, for three
+reasons and not for convenience: bronze holds the three and holds no fourteen-character
+spelling, so a derived key would be a fourth spelling nothing else can join on; the
+hash standard length-prefixes and `||`-joins each component, which is a strictly
+stronger encoding than a bare concatenation (`ordem='1', dv='23'` and `ordem='12',
+dv='3'` concatenate to the same fourteen characters unpadded, and to different digests
+here); and a derived column would need a new field on `Hub` -- an expression, not a
+name -- which no other table in the vault wants. THE ORDER IS THE KEY: the standard
+concatenates in declaration order, so (basico, ordem, dv) and (dv, ordem, basico) are
+different digests for the same establishment, and this is the one place that order is
+written down.
+
+THE TWO ESTABLISHMENT SATELLITES SPLIT ADDRESS FROM STATUS, and that is one cut rather
+than the finest available one. An address change is a physical move; a situação
+cadastral change is a registry event; the two arrive on different rows of the RFB's
+history for the same establishment, so a single satellite would rewrite the whole
+seventeen-column payload every time either moved. What rides along in `_dados` with
+status is `nome_fantasia` and the two CNAE columns, which is a KNOWN cost rather than
+an oversight: a status change writes their unchanged values again. Splitting further
+later means rewriting `sat_estabelecimento_dados`; ADDING one of the unmodelled columns
+below is a new satellite and touches nothing. NO PER-COLUMN CHANGE-RATE MEASUREMENT
+EXISTS FOR THIS TABLE -- Task 3 had one for empresas and this task did not run one; the
+report names the query that would settle it, and until then the argument above is an
+argument.
+
+`UNMODELLED_ESTABELECIMENTO_COLUMNS` IS DECLARED RATHER THAN LEFT AS A GAP. Eleven of
+the contract's thirty columns are in neither satellite, and a column that is simply
+absent from both payload tuples is indistinguishable from a column someone forgot.
+Declaring them makes `test_the_two_satellites_and_the_key_partition_the_estabelecimentos
+_contract` total: every contract column is a business key, a payload of exactly one
+satellite, or a deliberate omission with a reason beside it, and a column added to the
+contract turns that test red."""
 from __future__ import annotations
 
 from opl.bronze.registry import table_spec as bronze_table_spec
 from opl.config import DEFAULT
 from opl.vault.observation import ObservationGrain
-from opl.vault.registry import BusinessKeyColumn, Hub, Satellite, VaultDomain
+from opl.vault.registry import BusinessKeyColumn, Hub, Link, Satellite, VaultDomain
 
 _EMPRESAS = bronze_table_spec("empresas")
+_ESTABELECIMENTOS = bronze_table_spec("estabelecimentos")
 
 # Eight characters, per the RFB's own layout and the `cnpj_basico_len8` CHECK
 # constraint bronze re-asserts after every promote.
@@ -73,4 +112,118 @@ EMPRESA_GRAIN = ObservationGrain.in_default_schema(
     key_columns=HUB_EMPRESA.business_key_columns,
 )
 
-DOMAIN = VaultDomain(name="cnpj", tables=(HUB_EMPRESA, SAT_EMPRESA_DADOS))
+# The other two components of the CNPJ completo, per the RFB layout. `cnpj_ordem`
+# distinguishes the company's establishments (0001 is the matriz) and `cnpj_dv` is the
+# two check digits; 8 + 4 + 2 = 14.
+CNPJ_ORDEM_WIDTH = 4
+CNPJ_DV_WIDTH = 2
+
+HUB_ESTABELECIMENTO = Hub(
+    name="hub_estabelecimento",
+    hash_key="hub_estabelecimento_hk",
+    business_keys=(
+        BusinessKeyColumn(name="cnpj_basico", width=CNPJ_BASICO_WIDTH),
+        BusinessKeyColumn(name="cnpj_ordem", width=CNPJ_ORDEM_WIDTH),
+        BusinessKeyColumn(name="cnpj_dv", width=CNPJ_DV_WIDTH),
+    ),
+)
+
+SAT_ESTABELECIMENTO_DADOS = Satellite(
+    name="sat_estabelecimento_dados",
+    parent=HUB_ESTABELECIMENTO.name,
+    payload_columns=(
+        "nome_fantasia",
+        "cnae_fiscal_principal",
+        "cnae_fiscal_secundaria",
+        "situacao_cadastral",
+        "data_situacao_cadastral",
+        "motivo_situacao_cadastral",
+    ),
+)
+
+SAT_ESTABELECIMENTO_ENDERECO = Satellite(
+    name="sat_estabelecimento_endereco",
+    parent=HUB_ESTABELECIMENTO.name,
+    payload_columns=(
+        "tipo_logradouro",
+        "logradouro",
+        "numero",
+        "complemento",
+        "bairro",
+        "cep",
+        "uf",
+        "municipio",
+        # The foreign-address pair. In `_endereco` and not in `_dados` because they
+        # ARE the address for an establishment outside Brazil -- the same fact the
+        # eight columns above carry for one inside it.
+        "nome_cidade_exterior",
+        "pais",
+    ),
+)
+
+# Every estabelecimentos column that is neither a business key nor in a payload above,
+# with the reason. See the module docstring for why this is a declared value.
+UNMODELLED_ESTABELECIMENTO_COLUMNS = (
+    # An attribute of the RELATIONSHIP -- "is this establishment the company's matriz?"
+    # -- not of the establishment alone, so it belongs on a satellite of
+    # `link_empresa_estabelecimento`, which this vault has no shape for yet.
+    "identificador_matriz_filial",
+    # Contact details. A third change rate: a phone number moves without an address or
+    # a status moving. `sat_estabelecimento_contato` whenever something needs them.
+    "ddd_1",
+    "telefone_1",
+    "ddd_2",
+    "telefone_2",
+    "ddd_fax",
+    "fax",
+    "correio_eletronico",
+    # Lifecycle dates and the special-situation pair, which is a SECOND status axis
+    # (recuperação judicial and the like) and would drag `_dados` between two rates.
+    "data_inicio_atividade",
+    "situacao_especial",
+    "data_situacao_especial",
+)
+
+LINK_EMPRESA_ESTABELECIMENTO = Link(
+    name="link_empresa_estabelecimento",
+    hash_key="link_empresa_estabelecimento_hk",
+    # HIERARCHICAL, AND THE ORDER IS PARENT THEN CHILD. Every establishment belongs to
+    # exactly one company and shares its `cnpj_basico`, so this link is a hierarchy
+    # rather than a many-to-many -- and it is still a link, not a foreign key on the
+    # hub, because a hub row asserts only that a key exists. The order is what the
+    # link's hash key concatenates in; reading parent-to-child is the only reason it is
+    # this way round rather than the other.
+    hubs=(HUB_EMPRESA.name, HUB_ESTABELECIMENTO.name),
+)
+
+# Estabelecimentos is a SECOND FEED FOR `hub_empresa` as well as the source of
+# everything above: it carries `cnpj_basico`, so `load_hub(HUB_EMPRESA, source_table=
+# ESTABELECIMENTOS_SOURCE)` is a legitimate load and the hub's anti-join makes running
+# both feeds free. That is DV2 working as advertised rather than a special case, and it
+# is why `HubLoadResult.already_present` is a whole-table count rather than a
+# window-scoped one.
+ESTABELECIMENTOS_SOURCE = DEFAULT.table(_ESTABELECIMENTOS.bronze)
+
+# Hub grain over estabelecimentos, shared by both satellites -- they record change at
+# the same grain and differ only in payload. Keyed on the RAW columns for
+# `EMPRESA_GRAIN`'s reason, and in the HUB'S ORDER because
+# `opl.vault.satellites._grain_key_mismatch` requires the two declarations to be the
+# same list rather than merely the same set; see that function for the argument.
+ESTABELECIMENTO_GRAIN = ObservationGrain.in_default_schema(
+    name=HUB_ESTABELECIMENTO.name,
+    bronze=_ESTABELECIMENTOS.bronze,
+    quarantine=_ESTABELECIMENTOS.quarantine,
+    key_columns=HUB_ESTABELECIMENTO.business_key_columns,
+)
+
+DOMAIN = VaultDomain(
+    name="cnpj",
+    tables=(
+        HUB_EMPRESA,
+        SAT_EMPRESA_DADOS,
+        HUB_ESTABELECIMENTO,
+        SAT_ESTABELECIMENTO_DADOS,
+        SAT_ESTABELECIMENTO_ENDERECO,
+        LINK_EMPRESA_ESTABELECIMENTO,
+    ),
+)

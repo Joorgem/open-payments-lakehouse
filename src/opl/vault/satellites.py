@@ -130,6 +130,53 @@ def _refuse_a_mismatched_hub(satellite: Satellite, hub: Hub) -> None:
         )
 
 
+def _grain_key_mismatch(hub: Hub, grain: ObservationGrain) -> str | None:
+    """Why `grain`'s key columns are not `hub`'s, or None if they are.
+
+    TWO DIFFERENT MISTAKES, TWO MESSAGES, which is the point of this function: one
+    comparison told the reordered case that its ledger was "coarser or finer", which is
+    FALSE and sends someone looking for a bug in their column list.
+
+    ORDER IS PART OF THE MATCH, AND THAT IS A DECISION TAKEN HERE. `hub_estabelecimento`
+    is the vault's first multi-column key, so "is (`cnpj_dv`, `cnpj_ordem`,
+    `cnpj_basico`) the same grain as (`cnpj_basico`, `cnpj_ordem`, `cnpj_dv`)?" stops
+    being theoretical. FOR THE LEDGER, YES -- and the argument has to concede that
+    first, because the tempting justification for refusing is wrong: `groupBy` is
+    order-insensitive, so a permuted grain returns the same states for the same keys and
+    miscounts nothing. This branch refuses something that would have answered correctly.
+
+    WHAT IT BUYS IS THAT THE TWO DECLARATIONS ARE ONE LIST, not merely one set. The
+    hub's order IS load-bearing (`hash_key_expression` concatenates in it, so a permuted
+    hub is a re-keyed hub), and a domain writes `key_columns=<hub>.business_key_columns`
+    so that there is one order in the file rather than two. This check keeps that the
+    only spelling that passes. Accept a permutation and anything that later pairs the
+    two POSITIONALLY -- a join built by zipping them, a message printing one against the
+    other -- pairs `cnpj_basico` with `cnpj_dv` with nothing failing. Set equality is
+    the weaker claim and buys only the right to write the columns in an order no domain
+    should want. The cost is a refusal of a correct configuration, so the message names
+    the one-line fix."""
+    declared, expected = tuple(grain.key_columns), hub.business_key_columns
+    if set(declared) != set(expected):
+        return (
+            f"the observation grain is keyed on {declared} and hub {hub.name!r} on "
+            f"{expected}. The ledger would count departures at a different grain than "
+            "the satellite records change at -- coarser and it misses departures, "
+            "finer and it invents them"
+        )
+    if declared != expected:
+        return (
+            f"the observation grain is keyed on {declared} and hub {hub.name!r} on "
+            f"{expected} -- the same columns in a different order. The LEDGER would "
+            "answer the same, because groupBy does not care; this is refused so that "
+            "the two declarations stay one list rather than two sets. The hub's order "
+            "IS load-bearing (the hash concatenates in it), and anything that later "
+            "pairs the grain's columns with the hub's positionally would pair the "
+            "wrong two. Build the grain with key_columns=<the hub spec>."
+            "business_key_columns rather than restating the columns"
+        )
+    return None
+
+
 def _refuse_a_mismatched_grain(
     hub: Hub, grain: ObservationGrain, source_table: str
 ) -> None:
@@ -152,8 +199,8 @@ def _refuse_a_mismatched_grain(
     are about. Checking what the ledger actually READS covers both, and covers them
     whether or not a future domain follows the naming convention.
 
-    Tasks 4 and 5 will have three grains in flight -- hub grain and link grain over
-    socios, plus estabelecimentos -- and will copy this signature."""
+    The key-space half is `_grain_key_mismatch`, which is where the order decision the
+    first multi-column key forced is argued."""
     if grain.bronze_table != source_table:
         raise ValueError(
             f"the observation grain reads {grain.bronze_table!r} and the satellite is "
@@ -162,13 +209,9 @@ def _refuse_a_mismatched_grain(
             "another key space, and its refusal of an unloaded month would be checked "
             "against another table's months. Pass the grain built for this source"
         )
-    if tuple(grain.key_columns) != hub.business_key_columns:
-        raise ValueError(
-            f"the observation grain is keyed on {tuple(grain.key_columns)} and hub "
-            f"{hub.name!r} on {hub.business_key_columns}. The ledger would count "
-            "departures at a different grain than the satellite records change at -- "
-            "coarser and it misses departures, finer and it invents them"
-        )
+    mismatch = _grain_key_mismatch(hub, grain)
+    if mismatch is not None:
+        raise ValueError(mismatch)
 
 
 def satellite_candidates(

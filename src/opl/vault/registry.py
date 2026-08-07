@@ -11,16 +11,16 @@ only the shape they must have, the guards they must pass, and the way they are f
 
 EXACTLY WHAT THE CLAIM COVERS TODAY, because it is narrower than "any domain" and
 overstating it would be the same defect in prose that it is in code. A domain built
-from HUBS AND SATELLITES is "+1 file, 0 modified": `VaultTable = Hub | Satellite` and
-`VaultDomain.__post_init__` refuses anything else, so those two kinds need nothing
-added here. A domain introducing a NEW TABLE KIND does not clear that bar -- the kind
-and its guards land in this file -- and there is one such kind still missing: LINK.
-**Task 4 adds `link_empresa_estabelecimento` and is where the `Link` type belongs.**
-That is inside wave 1 and is fine; the claim the plan stakes is about WAVE 2, whose
-`hub_account` and `hub_customer` are hubs with satellites and whose `link_payment`
-will use the kind Task 4 will already have added. `test_a_new_domain_is_discovered_
-without_editing_any_existing_file` exercises hub + satellite and says in its own
-docstring that it does not exercise a link.
+from HUBS, SATELLITES AND LINKS is "+1 file, 0 modified": `VaultTable =
+Hub | Satellite | Link` and `VaultDomain.__post_init__` refuses anything else, so
+those three kinds need nothing added here. That is wave 2's whole list -- its
+`hub_account` and `hub_customer` are hubs with satellites and its `link_payment` is a
+link -- so the claim the plan stakes is now covered kind for kind rather than by
+analogy. A domain introducing a FOURTH table kind still does not clear that bar: the
+kind and its guards land in this file, exactly as `Link` did in Task 4, which is an
+edit inside WAVE 1 and is what the plan always said would happen. `test_a_new_domain_
+of_hubs_satellites_and_links_is_discovered_without_editing_any_file` builds a
+throwaway domain carrying wave 2's three tables by name and registers it.
 
 HOW A DOMAIN IS FOUND, AND THE THREE TIDIER ALTERNATIVES THAT ALL FAIL THE CLAIM.
 `discover_domains` scans the `opl.vault.domains` package DIRECTORY and imports every
@@ -51,16 +51,25 @@ refused in `build_registry`, which `domains/__init__.py` calls at import so a
 malformed registry breaks the import of every module that reads it rather than the
 one job that touches that table.
 
-WHAT IS DELIBERATELY NOT HERE. No `Link` spec: Task 4 adds
-`link_empresa_estabelecimento` and Task 5 `link_company_partner`, and the kind belongs
-with the first of them, because a link's fields (a driving key; the dependent-child key
-the measured sócio grain forces, since a hub on the masked CPF would merge ~27 people
-per key) are not guessable from the two tables that exist today, and a wrong guess is a
-shape everyone then works around. See the paragraph above for what that costs the
-extensibility claim and why it costs it inside wave 1 rather than wave 2. No table
-QUALIFICATION either -- a spec carries an unqualified
-`name`, and the loaders take the qualified table as an argument, so `opl.config` is
-consulted in the domain module and in the job task and nowhere in this layer."""
+WHAT IS DELIBERATELY NOT HERE, NOW THAT `Link` IS. No SATELLITE ON A LINK. DV2 has
+them, and Task 5's effectivity satellite is the first candidate -- but `Satellite`
+resolves its hash key through `parent_hub`, which returns a `Hub`, and
+`opl.vault.satellites.load_satellite` takes a `Hub`. Registering one here without the
+loader to match would register a table nothing in this package can write, so
+`_assert_every_satellite_hangs_off_a_hub` refuses it and its message says the two have
+to move together.
+
+No DEPENDENT-CHILD KEY on a link either, and that is the same refusal to guess that
+kept `Link` out of Task 3. The measured sócio grain is (`cnpj_basico`,
+`identificador_socio`, `cpf_cnpj_socio`), whose last two components belong to NO hub --
+a hub on the masked CPF would merge ~27 people per key, which is why the plan removed
+`hub_socio`. So `link_company_partner` needs a key component that is not a hub
+reference, and Task 5 is where that shape is known. `Link` below joins hubs and nothing
+else; a link that needs more says so by not fitting.
+
+No table QUALIFICATION either -- a spec carries an unqualified `name`, and the loaders
+take the qualified table as an argument, so `opl.config` is consulted in the domain
+module and in the job task and nowhere in this layer."""
 from __future__ import annotations
 
 import importlib
@@ -213,7 +222,64 @@ class Satellite:
         )
 
 
-VaultTable = Hub | Satellite
+@dataclass(frozen=True, kw_only=True)
+class Link:
+    """A DV2 link: the hubs whose relationship it records, BY NAME, and its own hash
+    key.
+
+    HUBS BY NAME AND NOT BY VALUE, which is `Satellite.parent`'s decision for
+    `Satellite.parent`'s reason: a spec holding `Hub` objects could only name hubs its
+    own module had already constructed, and the whole point of the per-domain shape is
+    that `build_registry` sees every domain at once. `linked_hubs` resolves them and
+    the whole-set guard below refuses a name no domain declares, so the spec and the
+    hubs cannot disagree.
+
+    ORDER IS THE LINK'S IDENTITY, not a listing convention. The link's hash key is the
+    business-key standard applied to the participating hubs' business keys CONCATENATED
+    IN THIS ORDER (`opl.vault.loading.link_hash_key_expression`), so swapping two hubs
+    re-keys the whole table. `_refuse_mismatched_hubs` in the loader is what stops a
+    caller supplying them in another order.
+
+    NO PAYLOAD AND NO `applied_date`. A link row asserts "this relationship exists",
+    the same kind of statement a hub row makes about a key -- descriptive facts about
+    the relationship, and the window in which it held, belong to a satellite on the
+    link, which this vault does not have yet (see the module docstring)."""
+
+    name: str
+    hash_key: str
+    hubs: Sequence[str]
+
+    def __post_init__(self) -> None:
+        if not self.name or not self.hash_key:
+            raise ValueError(f"a link needs a name and a hash-key column ({self.name!r})")
+        if isinstance(self.hubs, str):
+            raise TypeError(
+                f"link {self.name!r} received a bare str {self.hubs!r} as its hubs -- a "
+                "str is a Sequence[str] structurally, so no type checker catches this "
+                "and it iterates to one hub name per CHARACTER; pass a tuple, e.g. "
+                f"({self.hubs!r},)"
+            )
+        hubs = tuple(self.hubs)
+        if len(hubs) < 2:
+            raise ValueError(
+                f"link {self.name!r} names {hubs} -- a link records a RELATIONSHIP and "
+                "needs at least two hubs. With one it is that hub's own business key "
+                "hashed a second time under another name: two tables that look "
+                "independent and are the same key space"
+            )
+        if len(set(hubs)) != len(hubs):
+            raise ValueError(
+                f"link {self.name!r} names the same hub twice ({hubs}). A same-hub "
+                "hierarchical link is real DV2 and this spec cannot express one: it "
+                "carries no ROLE name, so both references would be written into a "
+                "single column named after that hub's hash key and one end of the "
+                "relationship would silently be gone. Add roles when the first link "
+                "that needs them arrives"
+            )
+        object.__setattr__(self, "hubs", hubs)
+
+
+VaultTable = Hub | Satellite | Link
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -237,7 +303,10 @@ class VaultDomain:
                 "package that registers nothing is a module left half-written, not a "
                 "domain -- and it would be discovered and contribute silently"
             )
-        if any(not isinstance(table, Hub | Satellite) for table in tables):
+        # `isinstance` READS `VaultTable` rather than restating the union, so adding a
+        # kind to it extends this refusal in the same edit. A restated list is how a
+        # new kind gets registered by one line and refused by another.
+        if any(not isinstance(table, VaultTable) for table in tables):
             raise TypeError(f"domain {self.name!r} declares something that is not a vault table")
         object.__setattr__(self, "tables", tables)
 
@@ -296,8 +365,12 @@ def _assert_every_satellite_hangs_off_a_hub(tables: Mapping[str, VaultTable]) ->
         if not isinstance(parent, Hub):
             raise ValueError(
                 f"satellite {table.name!r} names parent {table.parent!r}, which is "
-                "not a hub. A satellite hangs off a hub or a link; off another "
-                "satellite it would key on a column its parent does not have"
+                "not a hub. A satellite in THIS vault hangs off a hub: `parent_hub` "
+                "returns a Hub and `load_satellite` takes one, so a satellite "
+                "parented on another satellite would key on a column its parent does "
+                "not have, and one parented on a LINK -- which DV2 does allow -- would "
+                "be a registered table nothing in this package can write. The guard "
+                "and that signature have to change together"
             )
         if parent.hash_key in table.payload_columns:
             raise ValueError(
@@ -306,6 +379,57 @@ def _assert_every_satellite_hangs_off_a_hub(tables: Mapping[str, VaultTable]) ->
                 "loader writes the digest into that column, so the payload value "
                 "would be replaced by it without anything failing"
             )
+
+
+def _link_hubs(tables: Mapping[str, VaultTable], link: Link) -> tuple[Hub, ...]:
+    """`link`'s hubs, resolved against `tables`, or refuse naming the one that failed.
+
+    Shared by the whole-set guard and by `linked_hubs` so the refusal and the lookup
+    are the same code: a resolver that repeated the guard's conditions in a weaker
+    form is how a registry that passed its guards still returns something wrong."""
+    resolved: list[Hub] = []
+    for name in link.hubs:
+        hub = tables.get(name)
+        if hub is None:
+            raise ValueError(
+                f"link {link.name!r} names hub {name!r}, which no domain registers. "
+                f"Registered: {', '.join(sorted(tables))}"
+            )
+        if not isinstance(hub, Hub):
+            raise ValueError(
+                f"link {link.name!r} names {name!r} as one of its hubs, and it is not "
+                "a hub. A link's hash key is taken over its hubs' BUSINESS KEYS, and "
+                "nothing else in this registry has one -- the lookup would succeed and "
+                "the failure would arrive layers away as a missing column"
+            )
+        resolved.append(hub)
+    return tuple(resolved)
+
+
+def _assert_every_link_joins_registered_hubs(tables: Mapping[str, VaultTable]) -> None:
+    """Refuse a link whose hubs are missing or are not hubs, or whose hash-key column
+    names collide with theirs.
+
+    The sibling of `_assert_every_satellite_hangs_off_a_hub`, and here for its reason:
+    every check needs the other tables. The COLLISION half is the quiet one. The loader
+    writes one column per participating hub plus the link's own digest, so two of those
+    names being equal means one projection writes two values into one column -- the
+    link keeps its right row count and one of its ends is silently the wrong digest,
+    joining to nothing."""
+    for table in tables.values():
+        if not isinstance(table, Link):
+            continue
+        hubs = _link_hubs(tables, table)
+        written: dict[str, str] = {table.hash_key: f"link {table.name!r}'s own hash key"}
+        for hub in hubs:
+            if hub.hash_key in written:
+                raise ValueError(
+                    f"link {table.name!r} would write {hub.hash_key!r} twice: it is "
+                    f"hub {hub.name!r}'s hash key and also {written[hub.hash_key]}. "
+                    "One column, two values -- the row count stays right and one end "
+                    "of the relationship points at the wrong digest"
+                )
+            written[hub.hash_key] = f"hub {hub.name!r}'s hash key"
 
 
 def build_registry(domains: Iterable[VaultDomain]) -> Mapping[str, VaultTable]:
@@ -317,6 +441,7 @@ def build_registry(domains: Iterable[VaultDomain]) -> Mapping[str, VaultTable]:
     _assert_domain_names_are_unique(collected)
     tables = _collected_tables(collected)
     _assert_every_satellite_hangs_off_a_hub(tables)
+    _assert_every_link_joins_registered_hubs(tables)
     return MappingProxyType(tables)
 
 
@@ -327,6 +452,18 @@ def parent_hub(registry: Mapping[str, VaultTable], satellite: Satellite) -> Hub:
     if not isinstance(parent, Hub):
         raise ValueError(f"{satellite.parent!r} is not a hub")
     return parent
+
+
+def linked_hubs(registry: Mapping[str, VaultTable], link: Link) -> tuple[Hub, ...]:
+    """The hubs a link joins, IN THE LINK'S DECLARATION ORDER.
+
+    The order is the answer, not a detail of it: the link's hash key concatenates the
+    hubs' business keys in this sequence, so a resolver returning them sorted or in
+    registry order would silently re-key every link whose hubs are not alphabetical.
+
+    `build_registry` has already refused every way this could be wrong, so on a
+    registry it produced the resolution cannot fail."""
+    return _link_hubs(registry, link)
 
 
 def table_spec(registry: Mapping[str, VaultTable], name: str) -> VaultTable:

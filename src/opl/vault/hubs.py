@@ -48,15 +48,12 @@ from opl.vault.hashing_spark import refuse_non_string_columns, zero_padded_colum
 from opl.vault.loading import (
     BRONZE_RECORD_SOURCE,
     SNAPSHOT_MONTH_COLUMN,
+    earliest_record_source,
     hash_key_expression,
     read_snapshot_window,
     rows_in,
 )
 from opl.vault.registry import Hub
-
-# The struct the earliest observation is picked with. Named because it is selected
-# through by field, and a bare string at both ends is one typo from an empty column.
-_FIRST_SEEN = "_first_seen"
 
 
 @dataclass(frozen=True)
@@ -81,12 +78,10 @@ def hub_candidates(
     """One row per business key in the window: the hash key, the padded business key,
     and the `record_source` of the EARLIEST month that key appeared in.
 
-    EARLIEST, NOT ARBITRARY. A hub row is inserted once and never updated, so its
-    `record_source` describes the observation that created it; taking `first()` or
-    `any_value()` would make the stored value depend on partition order, and two runs
-    over the same data could disagree. `min` over a struct of (month, source) is a
-    partial aggregate -- no extra shuffle beyond the grouping that is already needed
-    to collapse a key's many monthly rows into one."""
+    EARLIEST, NOT ARBITRARY, and the aggregate that says so lives in
+    `opl.vault.loading.earliest_record_source` -- shared with `load_link`, which is
+    insert-only for the same reason and would otherwise carry a second spelling of it.
+    See that function for why `min` and not `first`."""
     source = read_snapshot_window(spark, source_table, months)
     refuse_non_string_columns(source, hub.business_key_columns)
     keyed = source.select(
@@ -104,15 +99,7 @@ def hub_candidates(
         F.col(SNAPSHOT_MONTH_COLUMN),
         F.col(BRONZE_RECORD_SOURCE),
     )
-    return (
-        keyed.groupBy(hub.hash_key, *hub.business_key_columns)
-        .agg(F.min(F.struct(SNAPSHOT_MONTH_COLUMN, BRONZE_RECORD_SOURCE)).alias(_FIRST_SEEN))
-        .select(
-            hub.hash_key,
-            *hub.business_key_columns,
-            F.col(f"{_FIRST_SEEN}.{BRONZE_RECORD_SOURCE}").alias(RECORD_SOURCE),
-        )
-    )
+    return earliest_record_source(keyed, [hub.hash_key, *hub.business_key_columns])
 
 
 def load_hub(
