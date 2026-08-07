@@ -26,7 +26,7 @@ task report states plainly that the real data does not exercise it.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -47,20 +47,23 @@ from opl.vault.observation import ObservationGrain
 from opl.vault.registry import BusinessKeyColumn, Hub, Satellite
 from opl.vault.satellites import load_satellite
 
+from .conftest import (
+    JUL,
+    JUL_REF,
+    JUN,
+    JUN_REF,
+    LOADED_AT,
+    RECORD_SOURCE_VALUE,
+    RELOADED_AT,
+    audit_values,
+    bronze_schema,
+    quarantine_schema,
+    write_delta,
+)
+
 HUB = domains.table_spec("hub_empresa")
 SAT = domains.table_spec("sat_empresa_dados")
 
-JUN, JUL = "2026-06", "2026-07"
-JUN_REF, JUL_REF = date(2026, 6, 13), date(2026, 7, 11)
-
-# FAR FROM EITHER REF DATE, AND THAT IS THE POINT. `load_date` is when WE loaded and
-# `applied_date` is when the fact was true at the source; a loader that crossed them
-# would still produce two plausible-looking columns. A load stamped in 2027 cannot be
-# confused with a snapshot taken in 2026.
-LOADED_AT = datetime(2027, 3, 1, 9, 30, 0)
-RELOADED_AT = datetime(2027, 4, 2, 18, 15, 0)
-
-RECORD_SOURCE_VALUE = "rfb_cnpj_webdav"
 # A SECOND RSRC VALUE, and it is not a hypothetical: `add_audit_columns` takes
 # `record_source` as a parameter, so a month re-ingested under a different source label
 # carries a different value for the same business key. That is the only thing that can
@@ -68,14 +71,9 @@ RECORD_SOURCE_VALUE = "rfb_cnpj_webdav"
 # over (month, source) could be `first` or `max` with the suite still green.
 RECORD_SOURCE_REINGEST = "rfb_cnpj_webdav_reingest"
 
-_EMPRESAS = (
-    "cnpj_basico string, razao_social string, natureza_juridica string, "
-    "qualificacao_responsavel string, capital_social string, porte_empresa string, "
-    "ente_federativo_responsavel string, _rescued_data string, _source_file string, "
-    "_ingested_at timestamp, _record_source string, _batch_id string, "
-    "_snapshot_month string, _snapshot_ref_date date"
-)
-_REJECT_REASON = ", _dq_reject_reason string"
+# DERIVED FROM THE CONTRACT, like every other bronze fixture in this package: the seven
+# empresas columns as STRING plus the audit columns bronze stamps.
+_EMPRESAS = bronze_schema("empresas")
 
 C_NAME = "10000001"       # razão social changes -- the acceptance test's subject
 C_UNCHANGED = "10000002"  # nothing changes -- the acceptance test's control
@@ -91,7 +89,6 @@ C_QUARANTINED = "10000009"  # rejected in both months, never in bronze
 C_REINGESTED = "10000010"
 C_REINGESTED_REVERSED = "10000011"
 
-_REF_DATES = {JUN: JUN_REF, JUL: JUL_REF}
 
 
 def _row(
@@ -111,9 +108,10 @@ def _row(
     bronze does not have."""
     return (
         cnpj, razao, natureza, qualificacao, capital, porte, ente,
-        None, f"/Volumes/x/cnpj/{month}/empresas/K3241.K03200Y0.D60613.EMPRECSV",
-        datetime(2026, 8, 1, 0, 0, 0), source, "batch-1",
-        month, _REF_DATES[month],
+    ) + audit_values(
+        month,
+        source_file=f"/Volumes/x/cnpj/{month}/empresas/K3241.K03200Y0.D60613.EMPRECSV",
+        record_source=source,
     )
 
 
@@ -151,13 +149,8 @@ def _bronze_rows() -> list[tuple]:
     ]
 
 
-def _write(spark, table: str, schema: str, rows: list[tuple]) -> None:
-    (spark.createDataFrame(rows, schema)
-     .write.format("delta").mode("append").saveAsTable(table))
-
-
 @pytest.fixture(scope="module")
-def source(spark, tmp_path_factory):
+def source(spark, vault_database):
     """A throwaway Delta database holding one bronze empresas table and its
     quarantine, in the two months real bronze has.
 
@@ -165,13 +158,11 @@ def source(spark, tmp_path_factory):
     `tests/vault/test_observation.py::tables` measured: a managed Delta table is a
     file scan with a reusable plan, where a view over `createDataFrame`
     re-materialises from the driver on every query."""
-    db = f"cnpj_vault_{uuid4().hex[:8]}"
-    root = tmp_path_factory.mktemp("cnpj_vault")
-    spark.sql(f"CREATE DATABASE {db} LOCATION '{root.as_uri()}'")
+    db = vault_database("cnpj_vault")
     bronze, quarantine = f"{db}.empresas", f"{db}.empresas_q"
 
-    _write(spark, bronze, _EMPRESAS, _bronze_rows())
-    _write(spark, quarantine, _EMPRESAS + _REJECT_REASON, [
+    write_delta(spark, bronze, _EMPRESAS, _bronze_rows())
+    write_delta(spark, quarantine, quarantine_schema("empresas"), [
         (*_row(C_QUARANTINED, JUN, razao=""), "null_or_empty_razao_social"),
         (*_row(C_QUARANTINED, JUL, razao=""), "null_or_empty_razao_social"),
     ])
@@ -180,8 +171,7 @@ def source(spark, tmp_path_factory):
         name="hub_empresa", bronze_table=bronze, quarantine_table=quarantine,
         key_columns=("cnpj_basico",),
     )
-    yield SimpleNamespace(db=db, bronze=bronze, quarantine=quarantine, grain=grain)
-    spark.sql(f"DROP DATABASE {db} CASCADE")
+    return SimpleNamespace(db=db, bronze=bronze, quarantine=quarantine, grain=grain)
 
 
 @pytest.fixture
@@ -616,7 +606,7 @@ def test_a_grain_reading_a_different_table_than_the_satellite_is_refused(
     every satellite row written beside it was perfectly correct. Nothing about the
     output would look wrong."""
     elsewhere = f"{source.db}.other_{uuid4().hex[:8]}"
-    _write(spark, elsewhere, _EMPRESAS, [_row(C_NAME, JUN)])
+    write_delta(spark, elsewhere, _EMPRESAS, [_row(C_NAME, JUN)])
     stranger = ObservationGrain(
         name="hub_empresa", bronze_table=elsewhere, quarantine_table=source.quarantine,
         key_columns=("cnpj_basico",),
@@ -676,7 +666,7 @@ def test_an_overlong_business_key_fails_the_load_rather_than_merging_two_compani
     `load_satellite` free to merge two companies' histories onto one digest with
     nothing red. The satellite half below is what closes that."""
     bad = f"{source.db}.overlong_{uuid4().hex[:8]}"
-    _write(spark, bad, _EMPRESAS, [_row("100000012", JUN), _row(C_NAME, JUN)])
+    write_delta(spark, bad, _EMPRESAS, [_row("100000012", JUN), _row(C_NAME, JUN)])
     # The grain has to read the same table the satellite does -- see
     # `_refuse_a_mismatched_grain`, which is the check that says so.
     bad_grain = ObservationGrain(
