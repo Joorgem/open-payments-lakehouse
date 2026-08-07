@@ -104,6 +104,9 @@ C_KEPT, C_SIBLING, C_LEFT, C_FOREIGN, C_NEW, C_OTHER = (
 )
 P_MANY, P_SPLIT, P_NEW = "***111111**", "***222222**", "***333333**"
 
+# The three-month property fixture's keys.
+K_RETURNS, K_STAYS, K_REJECTED_FIRST = "30000001", "30000002", "30000003"
+
 
 def _link(cnpj: str, ident: str, socio: str | None) -> tuple[str, str, str | None]:
     return (cnpj, ident, socio)
@@ -240,15 +243,28 @@ def _build_empresas(spark, names) -> None:
 
 
 def _build_returning(spark, names) -> None:
-    """Three months, an EMPTY quarantine side, and a key that leaves and returns."""
+    """Three months, and the two things only three months can show.
+
+    `K_RETURNS` leaves in July and comes back in August -- the case that makes
+    "before first observation / after LAST observation" unstable and this module's
+    past-only split necessary.
+
+    `K_REJECTED_FIRST` is quarantined in June, absent in July, and in bronze in
+    August. It is the only fixture key whose answer depends on
+    `first_observed_month` being a `min` over bronze UNION quarantine rather than
+    over bronze alone, and it exists because that decision was previously credited to
+    `_state_column`'s branch order, which cannot provide it."""
     _write(spark, names.returning, _RETURNING, [
-        ("30000001", JUN, JUN_REF),
-        ("30000002", JUN, JUN_REF),
-        ("30000002", JUL, JUL_REF),
-        ("30000001", AUG, AUG_REF),
-        ("30000002", AUG, AUG_REF),
+        (K_RETURNS, JUN, JUN_REF),
+        (K_STAYS, JUN, JUN_REF),
+        (K_STAYS, JUL, JUL_REF),
+        (K_RETURNS, AUG, AUG_REF),
+        (K_STAYS, AUG, AUG_REF),
+        (K_REJECTED_FIRST, AUG, AUG_REF),
     ])
-    _write(spark, names.returning_q, _RETURNING + _REJECT_REASON, [])
+    _write(spark, names.returning_q, _RETURNING + _REJECT_REASON, [
+        (K_REJECTED_FIRST, JUN, JUN_REF, "null_or_empty_razao_social"),
+    ])
 
 
 # MEMOISED, and only because every table here is written once by a module-scoped
@@ -267,7 +283,16 @@ def _ledger(spark, grain, months=None) -> dict:
     equality assertion against a dict fails on a missing row, an extra row and a
     wrong state alike, so a test cannot pass by looking only where the answer is
     right."""
-    memo = (grain.bronze_table, grain.name, None if months is None else tuple(months))
+    # KEYED ON EVERYTHING THE ANSWER DEPENDS ON, which `(bronze_table, name, months)`
+    # was not: `test_a_key_column_missing_from_one_side_is_refused_by_name` builds a
+    # grain whose name and bronze table both equal `link_grain`'s and whose quarantine
+    # table and key columns do not. That collided. It is harmless today only because
+    # that test calls `observation_ledger` directly -- the next test routed through
+    # here would have silently read the wrong ledger and passed.
+    memo = (
+        grain.bronze_table, grain.quarantine_table, grain.key_columns, grain.name,
+        None if months is None else tuple(months),
+    )
     if memo not in _LEDGERS:
         rows = observation_ledger(spark, grain, months=months).collect()
         _LEDGERS[memo] = {
@@ -465,12 +490,18 @@ def test_a_key_rejected_in_every_month_is_never_reported_absent(spark, tables):
     """Empresas: one company fails `null_or_empty_razao_social` in both months and
     reaches bronze in neither.
 
-    It is `rejected_by_our_gate` twice, never `absent_before_first_observation` --
-    the quarantine is itself evidence that the source published the key, so a month
-    in which we rejected it is not a month before we had seen it. This pins the
-    order of the branches: quarantine is consulted before the absence split, and if
-    it were not, a key we reject on first sight would read as one that did not exist
-    yet."""
+    It is `rejected_by_our_gate` twice, never an absence -- the quarantine is itself
+    evidence that the source published the key.
+
+    WHAT THIS PINS IS THE BRANCH'S EXISTENCE, NOT ITS POSITION, and the distinction
+    was got wrong here first. This docstring used to claim it held the ORDER --
+    quarantine consulted before the absence split -- and no test can hold that,
+    because the order is inert: a quarantined month is inside the `min` behind
+    `first_observed_month`, so the pre-birth branch cannot fire on it whichever side
+    of it the quarantine branch sits. Probe 2 (deleting the quarantine branch
+    entirely) turns this red; swapping two branches never would. The property the old
+    claim was reaching for is pinned by
+    `test_a_month_we_rejected_counts_as_having_seen_the_key` instead."""
     assert _ledger(spark, tables.empresas_grain) == {
         (("20000001",), JUN): OBSERVED, (("20000001",), JUL): OBSERVED,
         (("20000002",), JUN): OBSERVED, (("20000002",), JUL): OBSERVED,
@@ -479,15 +510,42 @@ def test_a_key_rejected_in_every_month_is_never_reported_absent(spark, tables):
 
 
 def test_a_quarantine_table_with_no_rows_at_all_still_produces_a_ledger(spark, tables):
-    """Estabelecimentos' 2026-06 quarantine held nothing, and a table can hold
-    nothing for every month it has. An empty side must contribute no state rather
-    than emptying the result -- which is what an inner join would do here."""
+    """`K_RETURNS` and `K_STAYS` have no quarantine row at all, in any month: an
+    empty side must contribute no state rather than emptying the result, which is
+    what an inner join would do here. `K_REJECTED_FIRST`'s June quarantine row rides
+    in the same ledger and does contribute a state -- that is the other property
+    this fixture carries, pinned separately by
+    `test_a_month_we_rejected_counts_as_having_seen_the_key`."""
     ledger = _ledger(spark, tables.returning_grain, months=[JUN, JUL])
 
     assert ledger == {
         (("30000001",), JUN): OBSERVED, (("30000001",), JUL): AFTER,
         (("30000002",), JUN): OBSERVED, (("30000002",), JUL): OBSERVED,
+        (("30000003",), JUN): REJECTED, (("30000003",), JUL): AFTER,
     }
+
+
+def test_a_month_we_rejected_counts_as_having_seen_the_key(spark, tables):
+    """`K_REJECTED_FIRST`: quarantined in June, absent in July, in bronze in August.
+
+    `first_observed_month` is a `min` over bronze UNION quarantine (`_grid`), so
+    June -- a quarantine-only month for this key -- counts as having seen it.
+    Get that wrong (`first_observed_month` as "first observed IN BRONZE") and July
+    reads as `absent_before_first_observation`, as if the key did not exist until
+    August; get it right and July is `absent_after_observation`, because being
+    rejected in June is itself evidence the source published the key. Both
+    `_grid` and `_state_column` name this test as the one that pins the decision;
+    this is that test."""
+    ledger = _ledger(spark, tables.returning_grain, months=[JUN, JUL, AUG])
+
+    assert ledger[(("30000003",), JUN)] == REJECTED
+    assert ledger[(("30000003",), JUL)] == AFTER
+    assert ledger[(("30000003",), AUG)] == OBSERVED
+
+    row = (observation_ledger(spark, tables.returning_grain)
+           .filter(f"cnpj_basico = '30000003' and {MONTH_COLUMN} = '{JUL}'")
+           .collect())
+    assert row[0][FIRST_OBSERVED_COLUMN] == JUN
 
 
 def test_a_key_that_returns_keeps_the_label_it_had_before_the_later_month_arrived(
@@ -518,6 +576,9 @@ def test_a_key_that_returns_keeps_the_label_it_had_before_the_later_month_arrive
         (("30000002",), JUN): OBSERVED,
         (("30000002",), JUL): OBSERVED,
         (("30000002",), AUG): OBSERVED,
+        (("30000003",), JUN): REJECTED,
+        (("30000003",), JUL): AFTER,
+        (("30000003",), AUG): OBSERVED,
     }
 
 
@@ -528,7 +589,7 @@ def test_the_months_are_discovered_when_the_caller_names_none(spark, tables):
     discovered = _ledger(spark, tables.returning_grain)
 
     assert {month for _, month in discovered} == {JUN, JUL, AUG}
-    assert len(discovered) == 6
+    assert len(discovered) == 9
 
 
 def test_naming_one_month_scopes_both_the_rows_and_the_keys(spark, tables):
@@ -564,7 +625,7 @@ def test_the_ledger_holds_exactly_one_row_per_business_key_per_month(spark, tabl
         (tables.link_grain, 6, 2),
         (tables.hub_grain, 4, 2),
         (tables.estab_grain, 4, 2),
-        (tables.returning_grain, 2, 3),
+        (tables.returning_grain, 3, 3),
     ):
         pairs = [
             (tuple(row[column] for column in grain.key_columns), row[MONTH_COLUMN])
@@ -686,3 +747,42 @@ def test_a_value_that_is_not_a_month_is_refused(spark, tables):
     this repository -- `2026-13` has the shape and names no month."""
     with pytest.raises(ValueError, match="2026-13"):
         observation_ledger(spark, tables.estab_grain, months=[JUN, "2026-13"])
+
+
+def test_a_month_with_no_row_on_either_side_is_refused(spark, tables):
+    """`_window`'s guard, and the reason it is worth an eager Spark job: `2026-09`
+    is well-formed and names no month either table carries. Answering instead of
+    refusing would give every key in the window an `absent_after_observation` row
+    for it -- a candidate delete for the whole table, conjured out of a typo or an
+    ingest that never ran."""
+    with pytest.raises(ValueError, match="2026-09.*candidate delete"):
+        observation_ledger(spark, tables.estab_grain, months=[JUN, JUL, "2026-09"])
+
+
+def test_a_month_present_on_only_one_side_is_accepted(spark):
+    """The guard's own message calls this case out as accepted, so it needs a test
+    that cannot pass by accident: without it, the guard could tighten from "no row
+    on EITHER side" to "present in bronze" in a later edit and nothing here would
+    notice.
+
+    Two temp views stand in for bronze and quarantine -- no Delta write needed, and
+    none of the four module fixtures happens to have a month that is quarantine-only.
+    `quarantine` carries July on its own; `bronze` never does."""
+    bronze_view, quarantine_view = f"one_sided_bronze_{uuid4().hex[:8]}", (
+        f"one_sided_quarantine_{uuid4().hex[:8]}"
+    )
+    spark.createDataFrame(
+        [("A", JUN, JUN_REF)], _RETURNING
+    ).createOrReplaceTempView(bronze_view)
+    spark.createDataFrame(
+        [("A", JUN, JUN_REF, "reason"), ("B", JUL, JUL_REF, "reason")],
+        _RETURNING + _REJECT_REASON,
+    ).createOrReplaceTempView(quarantine_view)
+    grain = ObservationGrain(
+        name="one_sided", bronze_table=bronze_view, quarantine_table=quarantine_view,
+        key_columns=("cnpj_basico",),
+    )
+
+    ledger = observation_ledger(spark, grain, months=[JUN, JUL]).collect()
+
+    assert {row[MONTH_COLUMN] for row in ledger} == {JUN, JUL}

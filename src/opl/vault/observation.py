@@ -19,9 +19,11 @@ OURS IS NOT: bronze is append-only, carries `_snapshot_month` and
 `_snapshot_ref_date`, and is never dropped; the quarantine tables carry the rejects
 with the same keys and the same durability. Presence per month is therefore already
 recorded, and an RTS would re-record it at ~169M rows per month, forever, with no
-compression pattern published anywhere, on a Free Edition workspace. Measured against
-real bronze, the derivation runs in 93s over estabelecimentos (72.3M keys x 2 months)
-and 24s over socios at link grain -- both first-run, not cache-served. See ADR 0010.
+compression pattern anyone has published, on a Free Edition workspace. Measured
+against real bronze, THIS derivation -- five states, not the four-state draft -- runs
+in 93s over estabelecimentos (72.3M keys x 2 months) and 26s over socios at link
+grain, both first-run and not cache-served. See ADR 0010, whose cost table carries
+both versions: the absence split cost 0s and 2s, i.e. nothing measurable.
 
 THE FIVE STATES, and why the last two are two and not one:
 
@@ -62,13 +64,19 @@ load. (`_snapshot_month` is `YYYY-MM`, so a string comparison is a chronological
 -- that is a property of the format, and `opl.config.is_month` is what holds the
 format.)
 
-THE STATES ARE RELATIVE TO THE WINDOW, AND THE LEDGER CANNOT WARN YOU. A key observed
-in 2026-05 and asked about over `["2026-06", "2026-07"]` reads as
+THE STATES ARE RELATIVE TO THE WINDOW, AND FOR NARROWING THE LEDGER CANNOT WARN YOU. A
+key observed in 2026-05 and asked about over `["2026-06", "2026-07"]` reads as
 `absent_before_first_observation` in June, because the months it was not given are
 months it never read. `months=None` -- every month the two tables hold -- is the
 default for that reason. `first_observed_month` is an output column so the truncation
 is at least visible: a key whose first observation equals the window's first month
 may simply have been observed before it.
+
+WIDENING IS THE OTHER DIRECTION AND IT IS REFUSED, not warned about, because it fails
+far louder. A month with no row on either side -- a typo, an ingest that did not run --
+gives EVERY key in the window an absence row for it, i.e. a candidate delete for the
+whole table. `_window` refuses that; see it for why this one is worth an eager Spark
+job when the three refusals above are free.
 
 WHAT THIS MODULE DELIBERATELY DOES NOT DO:
 
@@ -284,6 +292,45 @@ def _side(
             .withColumn(IN_QUARANTINE_COLUMN, F.lit(not from_bronze)))
 
 
+def _window(
+    spark: SparkSession, presence: DataFrame, grain: ObservationGrain,
+    months: tuple[str, ...] | None
+) -> DataFrame:
+    """The months the ledger will report on, refusing one the data has never seen.
+
+    A MONTH WITH NO ROW ON EITHER SIDE IS REFUSED, and it is the most dangerous
+    argument this module takes. `_validated_months` checks the SHAPE of a month;
+    nothing there can know whether it was ever loaded. Name `2026-09` -- a typo, or a
+    month whose ingest failed -- and every key in the window gets a row for it with
+    nothing on either side, which is `absent_after_observation`: at real scale, 72
+    MILLION candidate deletes manufactured out of a load that never ran. Every other
+    argument mistake in this module is refused (an empty `months`, a bare `str`, a
+    malformed month, a grain with no key columns); this one has the largest blast
+    radius of the set and is the reason the check is worth an eager Spark job.
+
+    ONE-SIDED EVIDENCE IS STILL EVIDENCE. The test is presence in bronze OR in
+    quarantine, not both: estabelecimentos' 2026-06 has 71,874,448 bronze rows and
+    zero rejects, and a month with rejects and no bronze rows is equally real.
+
+    THE COST IS PAID ONLY BY A CALLER WHO NAMES MONTHS. With `months=None` the window
+    IS the distinct months of the data, so it cannot contain one the data has not
+    seen, and this returns that frame lazily without collecting anything."""
+    loaded = presence.select(MONTH_COLUMN).distinct()
+    if months is None:
+        return loaded
+    unloaded = sorted(set(months) - {row[MONTH_COLUMN] for row in loaded.collect()})
+    if unloaded:
+        raise ValueError(
+            f"months names {unloaded}, which no row of {grain.bronze_table!r} or "
+            f"{grain.quarantine_table!r} carries. Refusing rather than answering: "
+            "every key in the window would get a row for that month with nothing on "
+            "either side -- absent_after_observation, a candidate delete for the "
+            "whole table, conjured out of a typo or an ingest that did not run. A "
+            "month present on only ONE side is not this and is accepted"
+        )
+    return spark.createDataFrame([(month,) for month in months], f"{MONTH_COLUMN} string")
+
+
 def _grid(
     spark: SparkSession, presence: DataFrame, grain: ObservationGrain,
     months: tuple[str, ...] | None
@@ -293,29 +340,42 @@ def _grid(
 
     Each carries `first_observed_month`, the earliest month either table showed the
     key in: quarantine counts as showing it, because being rejected is itself
-    evidence that the source published the key. That column is what separates the
-    two absences, and it rides in on the grid so the fold below needs no second pass
+    evidence that the source published the key. THAT DECISION IS LOAD-BEARING and is
+    pinned by `test_a_month_we_rejected_counts_as_having_seen_the_key` -- see
+    `_state_column`, whose branch order is often credited with the property this line
+    actually provides. It rides in on the grid so the fold below needs no second pass
     over the data and no join back onto the business key."""
-    window = (
-        presence.select(MONTH_COLUMN).distinct() if months is None
-        else spark.createDataFrame([(month,) for month in months], f"{MONTH_COLUMN} string")
-    )
     universe = presence.groupBy(*grain.key_columns).agg(
         F.min(MONTH_COLUMN).alias(FIRST_OBSERVED_COLUMN)
     )
+    window = _window(spark, presence, grain, months)
     return (universe.crossJoin(window)
             .withColumn(IN_BRONZE_COLUMN, F.lit(False))
             .withColumn(IN_QUARANTINE_COLUMN, F.lit(False)))
 
 
 def _state_column() -> Column:
-    """The five states, in the one order that is correct.
+    """The five states. Read in this order, and the order is INERT -- see below.
 
-    QUARANTINE IS CONSULTED BEFORE THE ABSENCE SPLIT, and that ordering is a decision:
-    a key we reject on its first sight has never been in bronze, so an absence-first
-    reading would call it `absent_before_first_observation` -- "we had not seen it
-    yet" -- when we had seen it and thrown it away. Being in quarantine is itself
-    evidence the source published the key.
+    QUARANTINE IS CONSULTED BEFORE THE ABSENCE SPLIT, AND THAT BUYS NOTHING. An
+    earlier version of this docstring claimed it did: that a key we reject on its
+    first sight would otherwise read `absent_before_first_observation` -- "we had not
+    seen it yet" -- when we had seen it and thrown it away. **It could not.** For any
+    month in which a key is in quarantine, that month is inside the `min` that
+    produced `first_observed_month` (`_grid` takes it over bronze UNION quarantine),
+    so `month < first_observed_month` is false there whatever the order. Swapping
+    these two branches changes no answer on any input, no test can pin the order, and
+    the reading is kept in this order only because it reads in the order of the
+    evidence.
+
+    THE PROPERTY THAT DOCSTRING WAS DESCRIBING IS REAL, AND IT LIVES ONE FUNCTION
+    AWAY: `_grid` counting a quarantined month as having seen the key. Redefine
+    `first_observed_month` as "first observed IN BRONZE" -- a plausible-looking
+    cleanup -- and a key quarantined in June, absent in July and in bronze in August
+    reads July as `absent_before_first_observation` instead of
+    `absent_after_observation`. That is the failure this order LOOKS like it prevents
+    and does not; `test_a_month_we_rejected_counts_as_having_seen_the_key` is what
+    prevents it. Anyone tempted by that cleanup should start there, not here.
 
     The final branch is `otherwise`, not a fifth `when`: `first_observed_month` is
     never NULL (a key is in the universe only because some month observed it) and a

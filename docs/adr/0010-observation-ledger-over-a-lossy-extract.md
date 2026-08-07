@@ -126,9 +126,11 @@ companies + ~72M establishments + ~28M partners — growing linearly and forever
 carrying no payload, on a Free Edition workspace that peaked at 39.7 GB this
 phase and whose retention control does not run through the wired path.
 DataVault4dbt acknowledges the growth ("can lead to significant data growth over
-time") and offers no mitigation; **no compression pattern for an RTS exists in
-the literature at all**, and inventing one would break the insert-only property
-that is why the standard does not do it.
+time") and offers no mitigation; **the search behind this ADR looked for a
+compression pattern for an RTS and found none** (`.plans/f2-research-snapshot-dv2.md`,
+"What I looked for and could not find" #5 — a negative search result, not a claim
+that none exists), and inventing one would break the insert-only property that is
+why the standard does not do it.
 
 **3b. Derive the ledger from what is already stored.** *Chosen — see below.*
 
