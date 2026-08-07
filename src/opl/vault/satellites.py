@@ -44,14 +44,24 @@ real: the departure count above, and `_window`'s refusal of a month with no row 
 either side -- `months=['2026-09']` would otherwise select no bronze row, write
 nothing, and report success.
 
-THE DEDUPLICATION RULE IS STATED, because the source does not guarantee one row per
-key per month. Measured at link grain on socios, 27,990,592 rows cover 27,986,263
-distinct triples. Where two source rows share a hash key and an `applied_date`, the one
-with the LOWEST `hash_diff` wins -- deterministic, so two runs over the same data agree,
-and free, because `min` over a struct is a partial aggregate inside the grouping this
-loader already needs. Identical duplicates collapse silently, which is the common case.
-Whether empresas has any such duplicate at all is a question for the real-bronze
-measurement in the task report, not for this comment."""
+THE DEDUPLICATION RULE IS STATED, AND ON EMPRESAS IT NEVER FIRES. The source does not
+guarantee one row per key per month -- at link grain on socios, 27,990,592 rows cover
+27,986,263 distinct triples. Where two source rows share a hash key and an
+`applied_date`, the one with the LOWEST `hash_diff` wins: deterministic, so two runs
+over the same data agree, and free, because `min` over a struct is a partial aggregate
+inside the grouping this loader already needs. Identical duplicates collapse silently.
+On empresas the question was measured after the Task 3 review and the answer is ZERO
+duplicate `(cnpj_basico, _snapshot_month)` rows across both months
+(`01f19274-c1e0-1f3a-998a-ee0234483f5c`), so the tie-break is unexercised there today.
+
+WHAT THE RULE COSTS WHERE IT DOES FIRE, since "deterministic" is not "correct". Bronze
+is append-only and a corrected batch can be promoted for the same month, so two rows
+for one key-month with DIFFERENT payloads are reachable. This loader picks one of them
+silently -- there is no refusal and no count -- and **a later re-load cannot correct
+the choice**, because the anti-join drops a candidate on `(hash key, applied_date)`
+alone and never looks at the payload. Repairing such a row means deleting it from the
+satellite by hand. Task 5, whose link grain has 4,329 measured collisions, should treat
+that as a decision to make rather than a rule to inherit."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -117,6 +127,47 @@ def _refuse_a_mismatched_hub(satellite: Satellite, hub: Hub) -> None:
             f"handed hub {hub.name!r}. Its hash key would be the wrong hub's digest, so "
             "the satellite would join to nothing without failing -- resolve the parent "
             "with opl.vault.domains.parent_hub rather than passing a hub by hand"
+        )
+
+
+def _refuse_a_mismatched_grain(
+    hub: Hub, grain: ObservationGrain, source_table: str
+) -> None:
+    """The grain arrives as a third free argument and must describe the SAME rows the
+    satellite is loading.
+
+    `_refuse_a_mismatched_hub` exists because two independently-passed arguments can
+    disagree; the grain has that hazard twice over, and worse, because it is the one
+    argument whose mistakes are invisible in the output. It drives two things: the
+    departure count, and `_window`'s refusal of a month with no row on either side --
+    and `_window` reads `grain.bronze_table`, NOT `source_table`. A grain pointing at
+    estabelecimentos would let `months=['2026-09']` pass or fail against the wrong
+    table, and would report a departure count for a different key space, with the
+    satellite's own rows perfectly correct beside it.
+
+    TWO CHECKS, AND THE NAME IS DELIBERATELY NOT ONE OF THEM. The review suggested
+    `grain.name == hub.name`, which `domains/cnpj.py` does satisfy. It is the weaker
+    claim: a name is a label, so two grains can share one while reading different
+    tables, and it is precisely the table and the key space that the two failures above
+    are about. Checking what the ledger actually READS covers both, and covers them
+    whether or not a future domain follows the naming convention.
+
+    Tasks 4 and 5 will have three grains in flight -- hub grain and link grain over
+    socios, plus estabelecimentos -- and will copy this signature."""
+    if grain.bronze_table != source_table:
+        raise ValueError(
+            f"the observation grain reads {grain.bronze_table!r} and the satellite is "
+            f"being loaded from {source_table!r}. The ledger would describe a "
+            "different table than the one written: its departure count would be about "
+            "another key space, and its refusal of an unloaded month would be checked "
+            "against another table's months. Pass the grain built for this source"
+        )
+    if tuple(grain.key_columns) != hub.business_key_columns:
+        raise ValueError(
+            f"the observation grain is keyed on {tuple(grain.key_columns)} and hub "
+            f"{hub.name!r} on {hub.business_key_columns}. The ledger would count "
+            "departures at a different grain than the satellite records change at -- "
+            "coarser and it misses departures, finer and it invents them"
         )
 
 
@@ -250,6 +301,7 @@ def load_satellite(
     Delta append, so there is no partial state between the refusals above and the
     committed rows."""
     _refuse_a_mismatched_hub(satellite, hub)
+    _refuse_a_mismatched_grain(hub, grain, source_table)
     candidates = satellite_candidates(
         spark, satellite, hub, source_table=source_table, months=months
     )

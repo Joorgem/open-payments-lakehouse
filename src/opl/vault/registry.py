@@ -9,6 +9,19 @@ that matters -- and it cannot be repaired later, because the git history IS the
 evidence. So the tables live in `opl/vault/domains/<domain>.py` and this module is
 only the shape they must have, the guards they must pass, and the way they are found.
 
+EXACTLY WHAT THE CLAIM COVERS TODAY, because it is narrower than "any domain" and
+overstating it would be the same defect in prose that it is in code. A domain built
+from HUBS AND SATELLITES is "+1 file, 0 modified": `VaultTable = Hub | Satellite` and
+`VaultDomain.__post_init__` refuses anything else, so those two kinds need nothing
+added here. A domain introducing a NEW TABLE KIND does not clear that bar -- the kind
+and its guards land in this file -- and there is one such kind still missing: LINK.
+**Task 4 adds `link_empresa_estabelecimento` and is where the `Link` type belongs.**
+That is inside wave 1 and is fine; the claim the plan stakes is about WAVE 2, whose
+`hub_account` and `hub_customer` are hubs with satellites and whose `link_payment`
+will use the kind Task 4 will already have added. `test_a_new_domain_is_discovered_
+without_editing_any_existing_file` exercises hub + satellite and says in its own
+docstring that it does not exercise a link.
+
 HOW A DOMAIN IS FOUND, AND THE THREE TIDIER ALTERNATIVES THAT ALL FAIL THE CLAIM.
 `discover_domains` scans the `opl.vault.domains` package DIRECTORY and imports every
 module in it, reading a module-level `DOMAIN` from each. Wave 2 adds one file and
@@ -38,11 +51,14 @@ refused in `build_registry`, which `domains/__init__.py` calls at import so a
 malformed registry breaks the import of every module that reads it rather than the
 one job that touches that table.
 
-WHAT IS DELIBERATELY NOT HERE. No link spec: wave 1 Task 5 adds
-`link_company_partner` and will add the spec with it, because a link's fields
-(`driving key`, the dependent-child key that the measured sócio grain forces) are not
-guessable from the two tables that exist today and a wrong guess is a shape everyone
-then works around. No table QUALIFICATION either -- a spec carries an unqualified
+WHAT IS DELIBERATELY NOT HERE. No `Link` spec: Task 4 adds
+`link_empresa_estabelecimento` and Task 5 `link_company_partner`, and the kind belongs
+with the first of them, because a link's fields (a driving key; the dependent-child key
+the measured sócio grain forces, since a hub on the masked CPF would merge ~27 people
+per key) are not guessable from the two tables that exist today, and a wrong guess is a
+shape everyone then works around. See the paragraph above for what that costs the
+extensibility claim and why it costs it inside wave 1 rather than wave 2. No table
+QUALIFICATION either -- a spec carries an unqualified
 `name`, and the loaders take the qualified table as an argument, so `opl.config` is
 consulted in the domain module and in the job task and nowhere in this layer."""
 from __future__ import annotations

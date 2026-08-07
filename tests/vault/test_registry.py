@@ -47,9 +47,22 @@ def _domain(*tables, name="probe") -> VaultDomain:
     return VaultDomain(name=name, tables=tables)
 
 
-def test_a_new_domain_is_discovered_without_editing_any_existing_file(tmp_path):
-    """THE D5 PROOF. A package that did not exist when the mechanism was written,
-    dropped in as one file, registers its tables through it.
+def test_a_new_domain_of_hubs_and_satellites_is_discovered_without_editing_any_file(
+    tmp_path,
+):
+    """THE D5 PROOF, AND EXACTLY AS MUCH OF IT AS IS TRUE. A package that did not
+    exist when the mechanism was written, dropped in as one file, registers its tables
+    through it.
+
+    WHAT THIS COVERS AND WHAT IT DOES NOT, stated because the claim in the plan is
+    broader than what holds today and the Task 3 review was right to say so. It covers
+    a domain made of HUBS AND SATELLITES -- which is `hub_account` and `hub_customer`,
+    two of wave 2's three. It does NOT cover a domain introducing a new table KIND:
+    `VaultTable = Hub | Satellite` and `VaultDomain` refuses anything else, so a
+    `Link` spec and its guards land in `registry.py`. **Task 4 adds
+    `link_empresa_estabelecimento` and is where the `Link` kind belongs** -- that is
+    inside wave 1, which is fine, and it is why wave 2's `link_payment` will find the
+    kind already there.
 
     The throwaway package mirrors `opl/vault/domains/` exactly: an `__init__.py` and
     one module exposing a module-level `DOMAIN`. Nothing registers by import SIDE

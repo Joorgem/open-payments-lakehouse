@@ -9,9 +9,19 @@ overwritten by a metadata column of the same name is not a crash; it is a column
 of plausible values with the source's own value gone, which is why the collision is
 refused rather than resolved.
 
-PURE, AND IMPORTED BY MODULES THAT MUST STAY SPARK-FREE. Nothing here imports
-anything, on purpose: `opl.vault.registry`'s guards run at import in the extraction
-environment too, where pyspark is deliberately an optional extra (see ADR 0004).
+PURE: NOTHING HERE IMPORTS ANYTHING, so this module and `opl.vault.registry` -- whose
+per-table `__post_init__` guards are the only thing that reads `METADATA_COLUMNS` --
+both import where pyspark is not installed, and a spec can be declared and refused
+without a session.
+
+THAT DOES NOT MAKE THE REGISTRY AS A WHOLE SPARK-FREE, and an earlier version of this
+paragraph claimed it did. `opl.vault.domains.__init__` runs the whole-set guards at
+import, and it imports `domains/cnpj.py`, which declares an `ObservationGrain` and so
+pulls in `opl.vault.observation` and pyspark behind it. `import opl.vault.domains`
+therefore fails in the extraction environment, where pyspark is deliberately an
+optional extra (ADR 0004). Nothing needs it to succeed there -- the extraction scripts
+never touch the vault -- but the claim is stated correctly rather than borrowed from
+`opl.bronze.registry`, which really does hold it and is tested for it.
 
 WHY `applied_date` IS THE ONE WORTH READING TWICE. DV2 gives a satellite exactly one
 timestamp, `load_date`, and everything downstream reconstructs history from it -- which

@@ -61,6 +61,12 @@ LOADED_AT = datetime(2027, 3, 1, 9, 30, 0)
 RELOADED_AT = datetime(2027, 4, 2, 18, 15, 0)
 
 RECORD_SOURCE_VALUE = "rfb_cnpj_webdav"
+# A SECOND RSRC VALUE, and it is not a hypothetical: `add_audit_columns` takes
+# `record_source` as a parameter, so a month re-ingested under a different source label
+# carries a different value for the same business key. That is the only thing that can
+# tell "earliest" apart from "arbitrary" in the hub, and without it the hub's `min`
+# over (month, source) could be `first` or `max` with the suite still green.
+RECORD_SOURCE_REINGEST = "rfb_cnpj_webdav_reingest"
 
 _EMPRESAS = (
     "cnpj_basico string, razao_social string, natureza_juridica string, "
@@ -80,6 +86,10 @@ C_NEW_IN_JULY = "10000006"
 C_DEPARTED = "10000007"   # June only. Synthetic -- see the module docstring.
 C_OFF_PAYLOAD = "10000008"  # only non-payload columns change
 C_QUARANTINED = "10000009"  # rejected in both months, never in bronze
+# The two that pin the hub's "earliest, not arbitrary" record_source. Same data, but
+# written to the fixture in OPPOSITE month order -- see `_build_bronze`.
+C_REINGESTED = "10000010"
+C_REINGESTED_REVERSED = "10000011"
 
 _REF_DATES = {JUN: JUN_REF, JUL: JUL_REF}
 
@@ -94,6 +104,7 @@ def _row(
     porte: str = "05",
     qualificacao: str = "49",
     ente: str | None = None,
+    source: str = RECORD_SOURCE_VALUE,
 ) -> tuple:
     """One bronze empresas row. Every audit column populated as the ingest stamps
     them, because the loaders read three of them and must not be handed a shape
@@ -101,9 +112,43 @@ def _row(
     return (
         cnpj, razao, natureza, qualificacao, capital, porte, ente,
         None, f"/Volumes/x/cnpj/{month}/empresas/K3241.K03200Y0.D60613.EMPRECSV",
-        datetime(2026, 8, 1, 0, 0, 0), RECORD_SOURCE_VALUE, "batch-1",
+        datetime(2026, 8, 1, 0, 0, 0), source, "batch-1",
         month, _REF_DATES[month],
     )
+
+
+def _bronze_rows() -> list[tuple]:
+    """The fixture's bronze rows. A function rather than a literal inside the `source`
+    fixture only so that fixture stays under the 50-line cap; the shape is the argument
+    and it is meant to be read top to bottom."""
+    return [
+        _row(C_NAME, JUN, razao="ACME LTDA"),
+        _row(C_NAME, JUL, razao="ACME PARTICIPACOES SA"),
+        _row(C_UNCHANGED, JUN, razao="BETA SA"),
+        _row(C_UNCHANGED, JUL, razao="BETA SA"),
+        _row(C_CAPITAL, JUN, capital="1000,00"),
+        _row(C_CAPITAL, JUL, capital="5000,00"),
+        _row(C_NATUREZA, JUN, natureza="2062"),
+        _row(C_NATUREZA, JUL, natureza="2038"),
+        _row(C_PORTE, JUN, porte="01"),
+        _row(C_PORTE, JUL, porte="05"),
+        _row(C_NEW_IN_JULY, JUL, razao="GAMMA ME"),
+        _row(C_DEPARTED, JUN, razao="DELTA EIRELI"),
+        # Two columns that are NOT in the satellite's payload move between the
+        # months. The satellite must not notice.
+        _row(C_OFF_PAYLOAD, JUN, qualificacao="49", ente=None),
+        _row(C_OFF_PAYLOAD, JUL, qualificacao="16", ente="UNIAO"),
+        # THE `min` PIN. Both companies have an unchanged payload and a `_record_source`
+        # that differs between the months, so the hub must store JUNE's. They are
+        # written in OPPOSITE month order on purpose, which is what kills the two
+        # plausible substitutions at once: `F.max` picks July for both, and `F.first`
+        # -- whose answer depends on nothing anyone can see -- picks a different month
+        # for each, so whichever it lands on, one of the two assertions is red.
+        _row(C_REINGESTED, JUN, source=RECORD_SOURCE_VALUE),
+        _row(C_REINGESTED, JUL, source=RECORD_SOURCE_REINGEST),
+        _row(C_REINGESTED_REVERSED, JUL, source=RECORD_SOURCE_REINGEST),
+        _row(C_REINGESTED_REVERSED, JUN, source=RECORD_SOURCE_VALUE),
+    ]
 
 
 def _write(spark, table: str, schema: str, rows: list[tuple]) -> None:
@@ -125,24 +170,7 @@ def source(spark, tmp_path_factory):
     spark.sql(f"CREATE DATABASE {db} LOCATION '{root.as_uri()}'")
     bronze, quarantine = f"{db}.empresas", f"{db}.empresas_q"
 
-    _write(spark, bronze, _EMPRESAS, [
-        _row(C_NAME, JUN, razao="ACME LTDA"),
-        _row(C_NAME, JUL, razao="ACME PARTICIPACOES SA"),
-        _row(C_UNCHANGED, JUN, razao="BETA SA"),
-        _row(C_UNCHANGED, JUL, razao="BETA SA"),
-        _row(C_CAPITAL, JUN, capital="1000,00"),
-        _row(C_CAPITAL, JUL, capital="5000,00"),
-        _row(C_NATUREZA, JUN, natureza="2062"),
-        _row(C_NATUREZA, JUL, natureza="2038"),
-        _row(C_PORTE, JUN, porte="01"),
-        _row(C_PORTE, JUL, porte="05"),
-        _row(C_NEW_IN_JULY, JUL, razao="GAMMA ME"),
-        _row(C_DEPARTED, JUN, razao="DELTA EIRELI"),
-        # Two columns that are NOT in the satellite's payload move between the
-        # months. The satellite must not notice.
-        _row(C_OFF_PAYLOAD, JUN, qualificacao="49", ente=None),
-        _row(C_OFF_PAYLOAD, JUL, qualificacao="16", ente="UNIAO"),
-    ])
+    _write(spark, bronze, _EMPRESAS, _bronze_rows())
     _write(spark, quarantine, _EMPRESAS + _REJECT_REASON, [
         (*_row(C_QUARANTINED, JUN, razao=""), "null_or_empty_razao_social"),
         (*_row(C_QUARANTINED, JUL, razao=""), "null_or_empty_razao_social"),
@@ -183,8 +211,14 @@ def _sat_rows(spark, target) -> dict[tuple[str, date], dict]:
     """`{(cnpj_basico, applied_date): row}` for the whole satellite, joined back to
     the hub's business key so the assertions can read a company rather than a digest.
 
-    The WHOLE satellite, not the rows a test cares about: an equality assertion
-    against this dict fails on a missing row, an extra row and a wrong value alike."""
+    KEYED ON (company, applied_date) SO A DUPLICATE ROW WOULD OVERWRITE ITS TWIN, and
+    no caller compares the whole dict for equality -- an earlier version of this
+    docstring claimed the whole-dict property that `tests/vault/test_observation.py`'s
+    `_ledger` really does have, and this helper does not. The callers below read
+    per-company row LISTS instead (`sorted(applied for cnpj, applied in rows ...)`),
+    which is what makes a missing or extra row visible; the satellite's total row
+    count is pinned separately by the `appended` numbers in the re-run and incremental
+    tests."""
     joined = (
         spark.read.table(target.sat).alias("s")
         .join(spark.read.table(target.hub).alias("h"), HUB.hash_key)
@@ -324,16 +358,16 @@ def test_the_load_date_is_the_one_the_caller_passed_and_not_a_clock(spark, sourc
 # --------------------------------------------------------------------------- #
 
 def test_the_hub_holds_exactly_one_row_per_business_key(spark, loaded):
-    """Eight bronze keys, eight hub rows, eight distinct hash keys.
+    """Ten bronze keys, ten hub rows, ten distinct hash keys.
 
     The distinctness half is the one that matters: a hub with the right ROW COUNT and
     two companies sharing a digest is the worst failure this layer can produce, and it
     is invisible to a count."""
     rows = spark.read.table(loaded.hub).collect()
 
-    assert len(rows) == 8
-    assert len({row["cnpj_basico"] for row in rows}) == 8
-    assert len({row[HUB.hash_key] for row in rows}) == 8
+    assert len(rows) == 10
+    assert len({row["cnpj_basico"] for row in rows}) == 10
+    assert len({row[HUB.hash_key] for row in rows}) == 10
     assert C_QUARANTINED not in {row["cnpj_basico"] for row in rows}
 
 
@@ -347,16 +381,16 @@ def test_reloading_the_hub_appends_nothing(spark, source, target):
 
     rows = spark.read.table(target.hub).collect()
 
-    assert (first.appended, second.appended) == (8, 0)
-    assert second.already_present == 8
-    assert len(rows) == 8
+    assert (first.appended, second.appended) == (10, 0)
+    assert second.already_present == 10
+    assert len(rows) == 10
     assert {row[LOAD_DATE] for row in rows} == {LOADED_AT}
 
 
 def test_a_key_first_seen_in_the_later_month_enters_the_hub_when_that_month_loads(
     spark, source, target
 ):
-    """The incremental path: June alone gives seven keys, and July adds the one born
+    """The incremental path: June alone gives nine keys, and July adds the one born
     in it. `C_DEPARTED` is in June and stays in the hub afterwards -- a hub is
     insert-only and a departure is not a delete."""
     june = _load_hub(spark, source, target, months=[JUN])
@@ -364,7 +398,7 @@ def test_a_key_first_seen_in_the_later_month_enters_the_hub_when_that_month_load
 
     keys = {row["cnpj_basico"] for row in spark.read.table(target.hub).collect()}
 
-    assert (june.appended, both.appended) == (7, 1)
+    assert (june.appended, both.appended) == (9, 1)
     assert C_NEW_IN_JULY in keys
     assert C_DEPARTED in keys
 
@@ -394,6 +428,35 @@ def test_the_satellite_keys_on_the_same_digest_as_the_hub(spark, loaded):
 
     assert sat_keys
     assert sat_keys <= hub_keys
+
+
+def test_the_hub_keeps_the_record_source_of_the_month_the_key_first_appeared_in(
+    spark, loaded
+):
+    """A hub row is inserted once and never updated, so its `record_source` describes
+    the observation that CREATED it -- the earliest, not whichever month an aggregate
+    happened to reach first.
+
+    THIS TEST EXISTS BECAUSE THE CLAIM WAS UNPINNED, which the Task 3 review caught:
+    every other fixture row shares one `_record_source`, so `F.min` could have been
+    `F.first` or `F.max` with the suite entirely green. `C_REINGESTED` and
+    `C_REINGESTED_REVERSED` are re-ingested in July under a different source label and
+    are written to the fixture in opposite month order, which is what makes both
+    substitutions red: `max` picks July for both, and `first` -- whose answer depends
+    on partition order, i.e. on nothing anyone can see -- picks a different month for
+    each, so one of the two assertions fails whichever way it lands.
+
+    A second RSRC value for one key is not contrived: `add_audit_columns` takes
+    `record_source` as a parameter, so a re-ingest under a different label produces
+    exactly this."""
+    sources = {
+        row["cnpj_basico"]: row[RECORD_SOURCE]
+        for row in spark.read.table(loaded.hub).collect()
+    }
+
+    assert sources[C_REINGESTED] == RECORD_SOURCE_VALUE
+    assert sources[C_REINGESTED_REVERSED] == RECORD_SOURCE_VALUE
+    assert RECORD_SOURCE_REINGEST not in sources.values()
 
 
 def test_the_hub_carries_exactly_the_dv2_metadata_and_its_business_key(spark, loaded):
@@ -485,7 +548,7 @@ def test_loading_july_after_june_appends_only_what_changed(spark, source, target
     arrives, so the comparison has to be against the PERSISTED row rather than against
     another row in the same batch.
 
-    June writes one row per company present in June (seven). July then writes only the
+    June writes one row per company present in June (nine). July then writes only the
     four whose payload moved plus the one born in July -- and writes nothing for
     `C_UNCHANGED` or `C_OFF_PAYLOAD`, whose payloads did not."""
     _load_hub(spark, source, target, months=[JUN, JUL])
@@ -494,7 +557,7 @@ def test_loading_july_after_june_appends_only_what_changed(spark, source, target
 
     rows = _sat_rows(spark, target)
 
-    assert (june.appended, july.appended) == (7, 5)
+    assert (june.appended, july.appended) == (9, 5)
     assert sorted(applied for cnpj, applied in rows if cnpj == C_UNCHANGED) == [JUN_REF]
     assert sorted(applied for cnpj, applied in rows if cnpj == C_NAME) == [JUN_REF, JUL_REF]
     assert sorted(applied for cnpj, applied in rows if cnpj == C_NEW_IN_JULY) == [JUL_REF]
@@ -541,6 +604,56 @@ def test_a_satellite_loaded_against_a_hub_that_is_not_its_parent_is_refused(
         )
 
 
+def test_a_grain_reading_a_different_table_than_the_satellite_is_refused(
+    spark, source, target
+):
+    """The grain is a third free argument and drives the two things the satellite's own
+    rows cannot show are wrong: the departure count, and `_window`'s refusal of a month
+    nothing ever loaded -- which reads `grain.bronze_table`, not `source_table`.
+
+    A grain over estabelecimentos would let `months=['2026-09']` be checked against the
+    wrong table's months and report a departure count for a different key space, while
+    every satellite row written beside it was perfectly correct. Nothing about the
+    output would look wrong."""
+    elsewhere = f"{source.db}.other_{uuid4().hex[:8]}"
+    _write(spark, elsewhere, _EMPRESAS, [_row(C_NAME, JUN)])
+    stranger = ObservationGrain(
+        name="hub_empresa", bronze_table=elsewhere, quarantine_table=source.quarantine,
+        key_columns=("cnpj_basico",),
+    )
+
+    with pytest.raises(ValueError, match="ledger would describe a different table"):
+        load_satellite(
+            spark, SAT, hub=HUB, source_table=source.bronze, target_table=target.sat,
+            load_date=LOADED_AT, grain=stranger,
+        )
+
+    assert not spark.catalog.tableExists(target.sat)
+
+
+def test_a_grain_keyed_at_a_different_grain_than_the_hub_is_refused(
+    spark, source, target
+):
+    """The other half: right table, wrong key space. A ledger keyed more finely than
+    the hub invents departures and one keyed more coarsely misses them, and either way
+    the number the satellite reports is about something other than what it wrote.
+
+    Not checked by comparing `grain.name` to `hub.name` -- the review suggested that
+    and it is the weaker claim, because a name is a label that two grains over
+    different key columns can share. `domains/cnpj.py` happens to satisfy both."""
+    finer = ObservationGrain(
+        name="hub_empresa", bronze_table=source.bronze,
+        quarantine_table=source.quarantine,
+        key_columns=("cnpj_basico", "natureza_juridica"),
+    )
+
+    with pytest.raises(ValueError, match="different grain"):
+        load_satellite(
+            spark, SAT, hub=HUB, source_table=source.bronze, target_table=target.sat,
+            load_date=LOADED_AT, grain=finer,
+        )
+
+
 def test_an_overlong_business_key_fails_the_load_rather_than_merging_two_companies(
     spark, source, target
 ):
@@ -552,13 +665,33 @@ def test_an_overlong_business_key_fails_the_load_rather_than_merging_two_compani
     Bronze refuses this upstream (`cnpj_basico_len8` is a Delta CHECK constraint on
     the empresas table, and the DQ gate rejects the rows before the promote), so this
     is defence in depth over a table those two already cover. It is here because the
-    consequence is unrecoverable and the guard is one branch."""
+    consequence is unrecoverable and the guard is one branch.
+
+    BOTH LOADERS, AND THAT IS THE TASK 3 REVIEW'S FINDING RATHER THAN SYMMETRY. The
+    first version of this test called `load_hub` only, and mutating
+    `hash_key_expression` to a bare `lpad` left the suite green -- because
+    `hub_candidates` pads TWICE (once for the digest, once for the stored key) and the
+    second call still refused. `satellite_candidates` has no second call: it goes
+    through `hash_key_expression` and nothing else. So the hub-only version left
+    `load_satellite` free to merge two companies' histories onto one digest with
+    nothing red. The satellite half below is what closes that."""
     bad = f"{source.db}.overlong_{uuid4().hex[:8]}"
     _write(spark, bad, _EMPRESAS, [_row("100000012", JUN), _row(C_NAME, JUN)])
+    # The grain has to read the same table the satellite does -- see
+    # `_refuse_a_mismatched_grain`, which is the check that says so.
+    bad_grain = ObservationGrain(
+        name="hub_empresa", bronze_table=bad, quarantine_table=source.quarantine,
+        key_columns=("cnpj_basico",),
+    )
 
     with pytest.raises(Exception, match="refusing to truncate"):
         load_hub(
             spark, HUB, source_table=bad, target_table=target.hub, load_date=LOADED_AT
+        )
+    with pytest.raises(Exception, match="refusing to truncate"):
+        load_satellite(
+            spark, SAT, hub=HUB, source_table=bad, target_table=target.sat,
+            load_date=LOADED_AT, grain=bad_grain,
         )
 
 
@@ -575,12 +708,19 @@ def test_a_source_column_that_is_not_a_string_is_refused_by_name(spark, source, 
     (spark.read.table(source.bronze)
      .withColumn("capital_social", F.col("capital_social").cast("double"))
      .write.format("delta").mode("append").saveAsTable(typed))
+    # The grain must read the table being loaded -- `_refuse_a_mismatched_grain` says
+    # so, and said so about this test first: passing `source.grain` here made the grain
+    # guard fire before the type guard, which is the grain guard doing its job.
+    typed_grain = ObservationGrain(
+        name="hub_empresa", bronze_table=typed, quarantine_table=source.quarantine,
+        key_columns=("cnpj_basico",),
+    )
     _load_hub(spark, source, target)
 
     with pytest.raises(TypeError, match="capital_social"):
         load_satellite(
             spark, SAT, hub=HUB, source_table=typed, target_table=target.sat,
-            load_date=LOADED_AT, grain=source.grain,
+            load_date=LOADED_AT, grain=typed_grain,
         )
 
 

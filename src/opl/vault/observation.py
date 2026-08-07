@@ -116,7 +116,8 @@ from enum import Enum
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-from opl.config import DEFAULT, is_month
+from opl.config import DEFAULT
+from opl.vault.months import validated_months
 
 # Carried through from bronze verbatim, not renamed, because the ledger has to join
 # back to the rows it describes.
@@ -239,29 +240,20 @@ class ObservationGrain:
 def _validated_months(months: Sequence[str] | None) -> tuple[str, ...] | None:
     """The window, or `None` for "every month the tables hold".
 
-    Both refusals below produce an EMPTY ledger rather than an error if they are let
-    through, and an empty ledger reads as "nothing departed"."""
-    if months is None:
-        return None
-    if isinstance(months, str):
-        raise TypeError(
-            f"months received a bare str {months!r} -- it would iterate to its "
-            f"individual characters; pass a sequence, e.g. [{months!r}]"
-        )
-    window = tuple(months)
-    if not window:
-        raise ValueError(
-            "months is empty -- name at least one month, or pass None for every "
-            "month the tables hold. An empty window yields an empty ledger, which "
-            "reads as 'nothing was rejected and nothing departed'"
-        )
-    not_months = [value for value in window if not is_month(value)]
-    if not_months:
-        raise ValueError(
-            f"months contains {not_months} -- every value must be YYYY-MM with MM in "
-            "01-12, matching _snapshot_month exactly, or it selects no rows at all"
-        )
-    return window
+    DELEGATED TO `opl.vault.months` since the F2 Task 3 review, and the delegation is
+    the point: the loaders need the identical three refusals, and the copy that grew
+    there was a second spelling of one rule -- the shape `opl.config` records having
+    been bitten by. What stays here is the CONSEQUENCE, because it is the ledger's own
+    and is not the loaders': every refusal below would otherwise produce an empty
+    ledger rather than an error, and an empty ledger reads as "nothing departed"."""
+    return validated_months(
+        months,
+        column=MONTH_COLUMN,
+        consequence=(
+            "An empty or unmatched window yields an empty ledger, which reads as "
+            "'nothing was rejected and nothing departed'"
+        ),
+    )
 
 
 def _side(

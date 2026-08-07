@@ -33,9 +33,13 @@ THE ADVERSARIAL SHAPES, and why each one is in the corpus:
 """
 from __future__ import annotations
 
+import sys
+import unicodedata
+
 import pytest
 from pyspark.sql import functions as F
 
+from opl.contracts.cnpj_schemas import CSV_DIALECT
 from opl.vault.hashing import hash_key, zero_pad_cnpj
 from opl.vault.hashing_spark import (
     TRIMMED_CHARACTERS,
@@ -53,6 +57,44 @@ CORPUS = (
     "N", "E", "W", "n", "e", "w",
     "JOSÉ", "josé", "JOSé", "ß", "ﬁ", "ç",
     "***111111**", "12345678", "0", "00000001",
+)
+
+# EVERY CHARACTER WHOSE UPPER CASE DIFFERS FROM ITSELF, swept out of the whole code
+# space rather than hand-picked. This is the Task 3 review's Critical finding and its
+# repair: a curated corpus structurally CANNOT detect a case-table difference between
+# the two spellings, because a case table is not a shape anyone thinks to write down.
+# The corpus above caught the trim divergence only because trim was tested
+# deliberately. 1,525 rows, about a second of Spark.
+#
+# Surrogates are excluded because they are not characters: `chr(0xD800)` cannot be
+# encoded to UTF-8 at all, so neither spelling can be handed one.
+CASED_CHARACTERS = tuple(
+    chr(code)
+    for code in range(0x110000)
+    if not (0xD800 <= code <= 0xDFFF) and chr(code).upper() != chr(code)
+)
+
+# THE FORTY CHARACTERS THE TWO SPELLINGS DISAGREE ABOUT TODAY, pinned exactly.
+#
+# THE CAUSE IS A UNICODE VERSION SKEW AND NEITHER SIDE IS PINNED ANYWHERE. `F.upper`
+# bottoms out in Java's `String.toUpperCase`, whose case table is the JDK's Unicode
+# version -- JDK 17 ships Unicode 13.0. `str.upper()` uses CPython's, which for 3.12
+# is Unicode 15.0. All forty below gained a case mapping in Unicode 14.0, so Java
+# leaves them unchanged and Python upper-cases them, and the digests differ. Measured
+# on java.version 17.0.19 against CPython 3.12.13 / unicodedata 15.0.0; CI pins
+# `temurin` `17` (`.github/workflows/ci.yml`), which is the same case table.
+#
+# ASSERTED AS AN EQUALITY, NOT AS AN ALLOW-LIST, and that is deliberate. A JDK bump
+# onto Java 21 (Unicode 15) would make these forty AGREE -- which changes their
+# digests, which re-keys any vault row containing one. A change in EITHER direction is
+# a re-keying and must be a decision, so both turn this test red. That is the whole
+# safety property: the alternative is a DBR upgrade silently re-keying the vault.
+UNICODE_VERSION_DIVERGENCE = frozenset(
+    {0x2C5F, 0xA7C1, 0xA7D1, 0xA7D7, 0xA7D9}
+    | set(range(0x10597, 0x105A2))
+    | set(range(0x105A3, 0x105B2))
+    | set(range(0x105B3, 0x105BA))
+    | {0x105BB, 0x105BC}
 )
 
 
@@ -102,6 +144,72 @@ def test_the_spark_spelling_agrees_with_the_python_standard_on_every_pair(spark)
     digests = _spark_digests(spark, rows, "a string, b string", ["a", "b"])
 
     assert digests == [hash_key([left, right]) for left, right in rows]
+
+
+def test_the_two_spellings_upper_case_every_cased_character_the_same_way(spark):
+    """THE CASE-TABLE SWEEP. Every one of the 1,525 characters whose upper case
+    differs from itself, hashed by both spellings, with the currently-divergent set
+    pinned exactly.
+
+    WHY A SWEEP AND NOT MORE CORPUS ENTRIES. The Task 3 review found forty characters
+    the two spellings disagree about, and the curated corpus above could not have
+    caught any of them at any size a human would write: they are a Unicode VERSION
+    skew between the JDK's case table and CPython's, and nothing about them is a
+    "shape" you would think to include. A sweep is the only form of this test that
+    can fail for a reason nobody anticipated, which is the only reason to have it.
+
+    WHAT THE PIN BUYS. `UNICODE_VERSION_DIVERGENCE` is asserted as an EQUALITY, so
+    both a JDK bump that introduces new divergences and one that removes these forty
+    turn this red -- because both re-key any vault row containing an affected
+    character, and a re-keying must be a decision. See the constant for the measured
+    versions.
+
+    IT ALSO REPAIRS A CLAIM THE MODULE DOCSTRING WAS MAKING FALSELY. That docstring
+    said a locale divergence in `String.toUpperCase` -- the Turkish dotted/dotless i --
+    "would make the equivalence test go red on such a machine". The curated corpus
+    contains no `i` at all, so it would not have. This sweep does contain `i`
+    (`'i'.upper() != 'i'`), so the claim is now true, and it is true because of this
+    test rather than in spite of it."""
+    rows = [(character,) for character in CASED_CHARACTERS]
+
+    digests = _spark_digests(spark, rows, "a string", ["a"])
+    diverged = frozenset(
+        ord(character)
+        for character, digest in zip(CASED_CHARACTERS, digests, strict=True)
+        if digest != hash_key([character])
+    )
+
+    assert diverged == UNICODE_VERSION_DIVERGENCE, (
+        "the Spark and Python spellings of the hash standard now disagree about a "
+        f"different set of characters. Java case table: "
+        f"{spark.sparkContext._jvm.System.getProperty('java.version')}; CPython "
+        f"{sys.version.split()[0]} / unicodedata {unicodedata.unidata_version}. "
+        f"Newly disagreeing: {sorted(diverged - UNICODE_VERSION_DIVERGENCE)}; newly "
+        f"agreeing: {sorted(UNICODE_VERSION_DIVERGENCE - diverged)}. EITHER "
+        "direction re-keys every vault row containing one of those characters, so "
+        "this is a decision and not a test to update: re-read "
+        "opl.vault.hashing_spark's docstring on the version skew, decide whether the "
+        "vault is re-keyed or the runtime is pinned, and only then move this set."
+    )
+    assert 0x69 not in diverged, "the Turkish-locale claim in hashing_spark's docstring"
+
+
+def test_no_character_the_two_spellings_disagree_about_can_reach_cnpj_bronze():
+    """The reachability half, and the reason the forty are pinned rather than fixed.
+
+    Bronze is parsed with `CSV_DIALECT["encoding"]`, which is `cp1252` -- imported
+    here rather than restated, so this test follows a change to the dialect instead of
+    going stale against one. A cp1252 byte stream cannot produce any character outside
+    the 256 that codec decodes to, and not one of the forty is among them. So no CNPJ
+    bronze row can currently hold a character the two spellings disagree about.
+
+    THAT IS A STATEMENT ABOUT TODAY'S FEEDS AND NOT ABOUT THE STANDARD. A wave-2
+    source that is not cp1252-bound -- a UTF-8 payment feed, say -- reaches them
+    immediately, and so does a JDK bump. Pure Python: no session needed to check what
+    an encoding can produce."""
+    for code in sorted(UNICODE_VERSION_DIVERGENCE):
+        with pytest.raises(UnicodeEncodeError):
+            chr(code).encode(CSV_DIALECT["encoding"])
 
 
 def test_the_trim_class_names_exactly_the_characters_python_strips():

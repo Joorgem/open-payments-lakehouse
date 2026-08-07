@@ -42,33 +42,61 @@ prefix), which is what the second instalment covers.
 
 SECOND, AN EQUIVALENCE TEST IS MANDATORY AND IS THE ONLY THING THIS MODULE'S TESTS
 ASSERT. `tests/vault/test_hashing_spark.py` pins no digest of its own: it evaluates
-this expression and `hash_key` over the same corpus and requires them equal, over
-every ordered PAIR of a corpus that includes NULL, `""`, whitespace-only, a component
-containing `||`, one containing `:`, one that already looks like an encoded segment,
-the token spellings `N`/`E`/`W`, accented text, an upper-casing that changes length,
-and the masked-CPF shape `***NNNNNN**`. Without that test this module is an unguarded
-re-keying waiting to happen.
+this expression and `hash_key` over the same inputs and requires them equal. It has
+two halves, and the second exists because the first is not enough.
 
-THE ONE PLACE THE TWO SPELLINGS CANNOT SIMPLY AGREE, AND WHAT WAS DONE ABOUT IT.
-Python's `str.strip()` removes 29 different characters -- tab, NBSP, the Unicode
-spaces, and four ASCII separators. Spark SQL's `trim(str)` removes ASCII SPACE
-(U+0020) and nothing else. Bronze is parsed from Latin-1 RFB CSVs where a NBSP inside
-a razão social is an ordinary thing, so `trim` would encode `"\\xa0"` as `W` in Python
-and as `S1:\\xa0` in Spark: two digests, one business key, forever. `TRIMMED_CHARACTERS`
-below names Python's set explicitly and `_TRIM_PATTERN` is BUILT from it, so the
-regex cannot drift from the tuple -- and
-`test_the_trim_class_names_exactly_the_characters_python_strips` asserts the tuple
-against `str.isspace()` over all 1,114,112 code points, in both directions, so the
-tuple cannot drift from Python.
+  - A CURATED CORPUS, over every ordered PAIR of it, covering NULL, `""`,
+    whitespace-only, a component containing `||`, one containing `:`, one that already
+    looks like an encoded segment, the token spellings `N`/`E`/`W`, accented text, an
+    upper-casing that changes length, and the masked-CPF shape `***NNNNNN**`. This is
+    the half that covers the JOIN, which a single-component test cannot reach at all.
+  - A SWEEP OF EVERY CASED CHARACTER IN UNICODE, single-component, ~1,525 rows. A
+    curated list STRUCTURALLY CANNOT catch a case-table difference -- see the version
+    skew below, which the F2 Task 3 review found and the corpus above had missed
+    entirely. A hand-picked corpus only ever fails for a reason someone anticipated.
+
+Without both, this module is an unguarded re-keying waiting to happen.
+
+THE FIRST PLACE THE TWO SPELLINGS CANNOT SIMPLY AGREE: TRIM. Python's `str.strip()`
+removes 29 different characters -- tab, NBSP, the Unicode spaces, and four ASCII
+separators. Spark SQL's `trim(str)` removes ASCII SPACE (U+0020) and nothing else.
+Bronze is parsed from cp1252 RFB CSVs where a NBSP inside a razão social is an ordinary
+thing, so `trim` would encode `"\\xa0"` as `W` in Python and as `S1:\\xa0` in Spark: two
+digests, one business key, forever. `TRIMMED_CHARACTERS` below names Python's set
+explicitly and `_TRIM_PATTERN` is BUILT from it, so the regex cannot drift from the
+tuple -- and `test_the_trim_class_names_exactly_the_characters_python_strips` asserts
+the tuple against `str.isspace()` over all 1,114,112 code points, in both directions,
+so the tuple cannot drift from Python.
+
+THE SECOND PLACE, AND IT IS NOT CLOSED, ONLY PINNED: THE UNICODE VERSION SKEW.
+`F.upper` bottoms out in Java's `String.toUpperCase`, whose case table is the JDK's
+UNICODE VERSION -- JDK 17 ships Unicode 13.0. `str.upper()` uses CPython's, which for
+3.12 is Unicode 15.0. **Neither is pinned anywhere in this repository.** Measured over
+every cased character (java.version 17.0.19, CPython 3.12.13): the two spellings
+produce different digests for exactly FORTY characters, all of which gained a case
+mapping in Unicode 14.0 -- U+2C5F, U+A7C1, U+A7D1, U+A7D7, U+A7D9 and
+U+10597-U+105BC. A DBR upgrade onto Java 21 would re-key any vault row containing one.
+
+WHAT IS DONE ABOUT IT, since it cannot be fixed from here. The forty are pinned as an
+EQUALITY in `test_the_two_spellings_upper_case_every_cased_character_the_same_way`, so
+a JDK bump in either direction -- introducing new divergences, or removing these --
+turns the suite red rather than re-keying the vault quietly. No CNPJ bronze row can
+currently hold one: the CSV dialect is cp1252 and none of the forty is encodable in
+it, which `test_no_character_the_two_spellings_disagree_about_can_reach_cnpj_bronze`
+asserts against the imported dialect rather than a restated encoding name. A wave-2
+feed that is not cp1252-bound reaches them immediately, and should read this paragraph
+first.
 
 THE GAPS THAT REMAIN, STATED RATHER THAN LEFT TO BE FOUND:
 
-  - `F.upper` bottoms out in `UTF8String.toUpperCase`, which for non-ASCII input falls
-    back to Java's `String.toUpperCase()` in the DEFAULT LOCALE, where Python's
-    `str.upper()` is locale-independent. The two disagree only in a Turkish or
-    Azerbaijani locale (dotted/dotless i); the equivalence test would go red on such a
-    machine rather than the vault silently re-keying, which is the behaviour we want
-    from a gap we cannot close from here.
+  - `UTF8String.toUpperCase` falls back for non-ASCII input to Java's
+    `String.toUpperCase()` in the DEFAULT LOCALE, where Python's `str.upper()` is
+    locale-independent. The two disagree in a Turkish or Azerbaijani locale (dotted and
+    dotless i). The cased sweep contains `i`, so that divergence turns the suite red on
+    such a machine rather than re-keying silently -- which is the behaviour we want
+    from a gap we cannot close from here. THE CURATED CORPUS DOES NOT CONTAIN `i` AND
+    NEVER DID: this paragraph credited it with that safety before the Task 3 review,
+    and the sweep is what makes the claim true.
   - `NULL` is passed through by `zero_padded_column` where `zero_pad_cnpj` would raise
     on a value with no `len()`. A Spark expression cannot refuse one row without
     failing the query, and a NULL business key is already refused upstream by bronze's

@@ -26,8 +26,8 @@ from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN
-from opl.config import is_month
 from opl.vault.hashing_spark import hash_key_column, zero_padded_column
+from opl.vault.months import validated_months
 from opl.vault.registry import Hub
 
 # Bronze's own RSRC column, carried into the vault verbatim rather than re-derived.
@@ -94,30 +94,17 @@ def hash_key_expression(hub: Hub) -> Column:
 def _validated_months(months: Sequence[str] | None) -> tuple[str, ...] | None:
     """The window, or `None` for "every month the source holds".
 
-    Both refusals produce a load that writes NOTHING and reports success if they are
-    let through, which is the failure shape this whole layer is least able to notice:
-    a vault table that gained no rows looks exactly like a vault table that had
-    nothing to gain."""
-    if months is None:
-        return None
-    if isinstance(months, str):
-        raise TypeError(
-            f"months received a bare str {months!r} -- it would iterate to its "
-            f"individual characters; pass a sequence, e.g. [{months!r}]"
-        )
-    window = tuple(months)
-    if not window:
-        raise ValueError(
-            "months is empty -- name at least one month, or pass None for every month "
-            "the source holds. An empty window loads nothing and reports success"
-        )
-    not_months = [value for value in window if not is_month(value)]
-    if not_months:
-        raise ValueError(
-            f"months contains {not_months} -- every value must be YYYY-MM with MM in "
-            f"01-12, matching {SNAPSHOT_MONTH_COLUMN} exactly, or it selects no rows"
-        )
-    return window
+    Shares `opl.vault.months.validated_months` with the observation ledger rather than
+    restating its three refusals; only the CONSEQUENCE differs, and it differs for a
+    reason worth keeping. Every refusal there produces a load that writes NOTHING and
+    reports success, which is the failure shape this layer is least able to notice: a
+    vault table that gained no rows looks exactly like a vault table that had nothing
+    to gain."""
+    return validated_months(
+        months,
+        column=SNAPSHOT_MONTH_COLUMN,
+        consequence="An empty or unmatched window loads nothing and reports success",
+    )
 
 
 def read_snapshot_window(
