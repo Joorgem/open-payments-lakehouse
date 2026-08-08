@@ -26,12 +26,13 @@ from collections.abc import Sequence
 
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
 from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN
-from opl.vault.columns import RECORD_SOURCE
+from opl.vault.columns import APPLIED_DATE, HASH_DIFF, RECORD_SOURCE
 from opl.vault.hashing_spark import hash_key_column, zero_padded_column
 from opl.vault.months import validated_months
-from opl.vault.registry import Hub
+from opl.vault.registry import BusinessKeyColumn, Hub, Link
 
 # Bronze's own RSRC column, carried into the vault verbatim rather than re-derived.
 #
@@ -51,8 +52,10 @@ __all__ = [
     "BRONZE_RECORD_SOURCE",
     "SNAPSHOT_MONTH_COLUMN",
     "SNAPSHOT_REF_DATE_COLUMN",
+    "changed_rows",
     "earliest_record_source",
     "hash_key_expression",
+    "hash_key_over",
     "link_hash_key_expression",
     "read_snapshot_window",
     "rows_in",
@@ -61,6 +64,12 @@ __all__ = [
 # Internal to `earliest_record_source`, and named because it is selected through by
 # field: a bare string at both ends is one typo from a column full of NULLs.
 _FIRST_SEEN = "_first_seen"
+
+# Internal to `changed_rows`. Named rather than inlined because both are selected
+# through by string and a typo in one of the two spellings would silently make every
+# row look new (`_PERSISTED` never true) or every row look old.
+_PERSISTED = "_persisted"
+_PREVIOUS = "_previous_value"
 
 
 def rows_in(spark: SparkSession, table: str) -> int:
@@ -80,8 +89,8 @@ def rows_in(spark: SparkSession, table: str) -> int:
     return spark.read.table(table).count()
 
 
-def _padded_components(hub: Hub) -> list[Column]:
-    """The hub's business-key columns, each padded to its declared width.
+def _padded(keys: Sequence[BusinessKeyColumn], sources: Sequence[Column]) -> list[Column]:
+    """`sources`, positionally matched to `keys` and padded to their declared widths.
 
     Zero-padding is applied per column and only where the spec declares a width, which
     is `BusinessKeyColumn`'s decision to carry: padding a name or a free-text
@@ -93,11 +102,21 @@ def _padded_components(hub: Hub) -> list[Column]:
     joins components with `||` and length-prefixes each, so two orders give two
     different digests for the same business key. The spec is where that order is
     written down once."""
+    if len(keys) != len(sources):
+        raise ValueError(
+            f"{len(sources)} source columns were supplied for a key of {len(keys)} "
+            "components. They are matched POSITIONALLY, so a shorter or longer list "
+            "would pad and hash the wrong column"
+        )
     return [
-        F.col(key.name) if key.width is None
-        else zero_padded_column(F.col(key.name), width=key.width)
-        for key in hub.business_keys
+        source if key.width is None else zero_padded_column(source, width=key.width)
+        for key, source in zip(keys, sources, strict=True)
     ]
+
+
+def _padded_components(hub: Hub) -> list[Column]:
+    """The hub's business-key columns, read from the columns named after them."""
+    return _padded(hub.business_keys, [F.col(key.name) for key in hub.business_keys])
 
 
 def hash_key_expression(hub: Hub) -> Column:
@@ -105,9 +124,28 @@ def hash_key_expression(hub: Hub) -> Column:
     return hash_key_column(_padded_components(hub))
 
 
-def link_hash_key_expression(hubs: Sequence[Hub]) -> Column:
-    """A link's own hash key: the standard over EVERY participating hub's business key,
-    concatenated in the link's declared hub order.
+def hash_key_over(hub: Hub, sources: Sequence[Column]) -> Column:
+    """The hub's hash key, taken over columns that are NOT named after its business
+    key -- the same standard, the same widths, the same order, read somewhere else.
+
+    THE SELF-REFERENCE IS WHAT THIS EXISTS FOR. `link_company_partner` references
+    `hub_empresa` twice: once for the company, whose `cnpj_basico` socios carries under
+    that name, and once for the PARTNER company, whose `cnpj_basico` socios carries
+    only as the first eight characters of `cpf_cnpj_socio`. Both references must be the
+    digest `load_hub` wrote or the link joins to nothing, so the second one cannot be a
+    second spelling of the standard -- it is this one, handed a different column."""
+    return hash_key_column(_padded(hub.business_keys, list(sources)))
+
+
+def link_hash_key_expression(link: Link, hubs: Sequence[Hub]) -> Column:
+    """A link's own hash key: the standard over every IDENTIFYING end's hub business
+    key, concatenated in the link's declared order, then its dependent-child keys.
+
+    `hubs` IS THE IDENTIFYING ENDS' HUBS AND NOT EVERY END'S. A non-identifying end is
+    a reference the link RESOLVES rather than one it is identified by -- the partner
+    company's `cnpj_basico`, which is a function of `cpf_cnpj_socio` and is already in
+    the digest through it. Hashing it as well would make the link's identity depend on
+    a value we derived instead of only on values the source delivered.
 
     THE SAME STANDARD, A LONGER COMPONENT LIST -- not a hash of the hub hash keys, and
     the difference is worth stating because hashing the hashes is the commoner
@@ -135,10 +173,17 @@ def link_hash_key_expression(hubs: Sequence[Hub]) -> Column:
     `Link` spec -- but it becomes reachable the moment two links share a key space, and
     the repair then is to prefix the link's own name into the component list rather than
     to change what a component means. Stated here so that decision is made deliberately
-    rather than discovered."""
-    return hash_key_column([
-        component for hub in hubs for component in _padded_components(hub)
-    ])
+    rather than discovered.
+
+    DEPENDENT-CHILD KEYS COME LAST, after every hub, and that order is load-bearing for
+    the same reason the hub order is -- the components are flattened with no boundary
+    marker, so moving one re-keys the whole table."""
+    components = [component for hub in hubs for component in _padded_components(hub)]
+    components += _padded(
+        link.dependent_child_keys,
+        [F.col(key.name) for key in link.dependent_child_keys],
+    )
+    return hash_key_column(components)
 
 
 def earliest_record_source(keyed: DataFrame, group_by: Sequence[str]) -> DataFrame:
@@ -163,6 +208,58 @@ def earliest_record_source(keyed: DataFrame, group_by: Sequence[str]) -> DataFra
             F.col(f"{_FIRST_SEEN}.{BRONZE_RECORD_SOURCE}").alias(RECORD_SOURCE),
         )
     )
+
+
+def changed_rows(
+    candidates: DataFrame,
+    existing: DataFrame | None,
+    key: str,
+    *,
+    change_column: str = HASH_DIFF,
+) -> DataFrame:
+    """The candidates whose `change_column` differs from the one that preceded it for
+    the same key, in `applied_date` order.
+
+    SHARED BY THE DESCRIPTIVE SATELLITE AND THE EFFECTIVITY SATELLITE, which differ only
+    in what they watch: `hash_diff` over a payload, or `is_active` over a relationship.
+    Everything below is subtle enough that a second copy would be a second thing to keep
+    correct, and the divergence would show up as duplicate rows rather than as an error.
+
+    THE PERSISTED ROWS SEED THE WINDOW, which is what makes an incremental load
+    correct. June is already in the satellite when July's snapshot arrives, so July's
+    comparison has to be against the row on disk rather than against another row in the
+    same batch; a `lag` over the candidates alone would call July's value new because
+    nothing precedes it in that batch.
+
+    A CANDIDATE WHOSE (key, applied_date) IS ALREADY PERSISTED IS DROPPED FIRST, before
+    the union, and that ordering is load-bearing rather than tidy: leaving it in would
+    put two rows at the same position in the window, and whichever of the identical
+    pair `lag` happened to place second would be marked unchanged while the first was
+    marked changed -- so a re-run would append a duplicate roughly half the time,
+    depending on nothing anyone can see.
+
+    ORDERED BY `applied_date`, so a snapshot loaded out of order still lands in its
+    true position in the key's history. What that cannot repair is a row already
+    written: backfilling June after July has been loaded leaves July's row in place
+    even though it is now redundant. Redundant, not wrong -- it still says the value
+    was V on 2026-07-11 -- so the correction is to load in order, not to rewrite."""
+    lineage = candidates.select(key, APPLIED_DATE, change_column).withColumn(
+        _PERSISTED, F.lit(False)
+    )
+    if existing is not None:
+        lineage = lineage.unionByName(
+            existing.select(key, APPLIED_DATE, change_column).withColumn(
+                _PERSISTED, F.lit(True)
+            )
+        )
+    ordered = Window.partitionBy(key).orderBy(APPLIED_DATE)
+    changed = (
+        lineage.withColumn(_PREVIOUS, F.lag(change_column).over(ordered))
+        .filter(F.col(_PREVIOUS).isNull() | (F.col(_PREVIOUS) != F.col(change_column)))
+        .filter(~F.col(_PERSISTED))
+        .select(key, APPLIED_DATE)
+    )
+    return candidates.join(changed, on=[key, APPLIED_DATE], how="left_semi")
 
 
 def _validated_months(months: Sequence[str] | None) -> tuple[str, ...] | None:

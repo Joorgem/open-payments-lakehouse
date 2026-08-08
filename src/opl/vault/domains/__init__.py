@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from opl.vault.registry import (
+    EffectivitySatellite,
     Hub,
     Link,
     Satellite,
@@ -29,8 +30,10 @@ from opl.vault.registry import (
     build_registry,
     discover_domains,
 )
+from opl.vault.registry import link_identity_columns as _link_identity_columns
 from opl.vault.registry import linked_hubs as _linked_hubs
 from opl.vault.registry import parent_hub as _parent_hub
+from opl.vault.registry import parent_link as _parent_link
 from opl.vault.registry import table_spec as _table_spec
 
 DOMAINS = discover_domains(__path__, __name__)
@@ -49,5 +52,18 @@ def parent_hub(satellite: Satellite) -> Hub:
 
 def linked_hubs(link: Link) -> tuple[Hub, ...]:
     """The hubs a registered link joins, in its declaration order -- which is the order
-    its hash key is taken in, so it is the answer rather than a detail of it."""
+    its hash key is taken in, so it is the answer rather than a detail of it. One entry
+    per END, so a self-referencing link yields the same hub twice."""
     return _linked_hubs(REGISTRY, link)
+
+
+def parent_link(satellite: EffectivitySatellite) -> Link:
+    """The link a registered effectivity satellite hangs off."""
+    return _parent_link(REGISTRY, satellite)
+
+
+def link_identity_columns(link: Link) -> tuple[str, ...]:
+    """The source columns a registered link's own hash key is taken over, in hash
+    order -- the link's grain, which is the grain its effectivity satellite's
+    observation ledger must be keyed on."""
+    return _link_identity_columns(REGISTRY, link)

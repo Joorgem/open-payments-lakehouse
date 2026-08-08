@@ -89,10 +89,19 @@ from __future__ import annotations
 from opl.bronze.registry import table_spec as bronze_table_spec
 from opl.config import DEFAULT
 from opl.vault.observation import ObservationGrain
-from opl.vault.registry import BusinessKeyColumn, Hub, Link, Satellite, VaultDomain
+from opl.vault.registry import (
+    BusinessKeyColumn,
+    EffectivitySatellite,
+    Hub,
+    Link,
+    LinkEnd,
+    Satellite,
+    VaultDomain,
+)
 
 _EMPRESAS = bronze_table_spec("empresas")
 _ESTABELECIMENTOS = bronze_table_spec("estabelecimentos")
+_SOCIOS = bronze_table_spec("socios")
 
 # Eight characters, per the RFB's own layout and the `cnpj_basico_len8` CHECK
 # constraint bronze re-asserts after every promote.
@@ -229,6 +238,85 @@ ESTABELECIMENTO_GRAIN = ObservationGrain.in_default_schema(
     key_columns=HUB_ESTABELECIMENTO.business_key_columns,
 )
 
+# --------------------------------------------------------------------------- #
+# Socios: the partnership relationship, and no `hub_socio`. See ADR 0011.
+# --------------------------------------------------------------------------- #
+
+LINK_COMPANY_PARTNER = Link(
+    name="link_company_partner",
+    hash_key="link_company_partner_hk",
+    # SELF-REFERENCING, AND THAT IS THE FINDING THAT REMOVED `hub_socio`. All 310,374
+    # of 310,374 distinct PJ partner CNPJs have their eight-digit root present in
+    # empresas, zero unresolved (`01f19063-44ef-132a-8aa7-9068b624b370`) -- a corporate
+    # partner is not a new business object, it is an empresa already in the hub. The
+    # PARTNER end is `identifying=False`: its `cnpj_basico` is the first eight
+    # characters of `cpf_cnpj_socio`, which is a dependent-child key below, so the
+    # reference is a FUNCTION of the identity rather than a part of it.
+    hubs=(
+        LinkEnd(hub=HUB_EMPRESA.name, role="company"),
+        LinkEnd(hub=HUB_EMPRESA.name, role="partner", identifying=False),
+    ),
+    # THE MEASURED BUSINESS KEY OF A PARTNERSHIP ROW, and neither component belongs to
+    # a hub. `cpf_cnpj_socio` is masked at SOURCE by the RFB to six middle digits for a
+    # PF partner: the key space is 10^6 and 999,853 of it is occupied, so a
+    # `hub_socio` on it would merge ~27 unrelated people onto every key. The
+    # relationship carries the grain instead. See ADR 0011.
+    dependent_child_keys=(
+        BusinessKeyColumn(name="identificador_socio"),
+        BusinessKeyColumn(name="cpf_cnpj_socio"),
+    ),
+)
+
+SAT_EFF_COMPANY_PARTNER = EffectivitySatellite(
+    name="sat_eff_company_partner",
+    parent=LINK_COMPANY_PARTNER.name,
+    # THE WINDOW'S OPEN, DELIVERED, UNDER THE SOURCE'S OWN NAME. Populated on 100% of
+    # 2026-07's rows with no `00000000` sentinel (`01f19063-53c0-1f06-89f1-6aade0691af8`),
+    # so the entry date is the RFB's own fact. The close is ours and is named in our
+    # vocabulary (`last_observed_on`, `closed_by`) precisely so the two are not read as
+    # claims of the same strength.
+    entry_column="data_entrada_sociedade",
+)
+
+SOCIOS_SOURCE = DEFAULT.table(_SOCIOS.bronze)
+
+# THE OBSERVATION LEDGER AT LINK GRAIN, which is the grain the effectivity satellite
+# must gate on and NOT the hub grain: a partner who loses one of two partnerships is
+# `absent_after_observation` at link grain and plainly `observed` at hub grain. Keyed
+# on the link's identity columns, in hash order -- `opl.vault.effectivity` refuses a
+# grain that is not exactly `domains.link_identity_columns(LINK_COMPANY_PARTNER)`.
+COMPANY_PARTNER_GRAIN = ObservationGrain.in_default_schema(
+    name=LINK_COMPANY_PARTNER.name,
+    bronze=_SOCIOS.bronze,
+    quarantine=_SOCIOS.quarantine,
+    key_columns=(
+        *HUB_EMPRESA.business_key_columns,
+        *LINK_COMPANY_PARTNER.dependent_child_key_columns,
+    ),
+)
+
+# Every socios column that is neither a key nor the effectivity window's open, with the
+# reason -- declared for `UNMODELLED_ESTABELECIMENTO_COLUMNS`' reason, and here the
+# first two are a HARD refusal rather than a deferral.
+UNMODELLED_SOCIOS_COLUMNS = (
+    # MASKED BY UNITY CATALOG, AND THE MASK APPLIES ON READ TO THE TABLE OWNER TOO --
+    # measured against live bronze (`01f192b4-a6f8-1849-9955-f321d9742180`): both come
+    # back as the literal three-character string `***`. A satellite payload containing
+    # either would store `***` on every row and its `hash_diff` would be constant. This
+    # is also why the PF key cannot be disambiguated by name, which is the obvious
+    # repair for the collision above: it would hash `***`. See ADR 0008 and ADR 0011.
+    "nome_socio_razao_social",
+    "nome_do_representante",
+    # Descriptive facts about the RELATIONSHIP, which belong to a descriptive satellite
+    # on the link -- a table this vault has no loader for yet (`opl.vault.satellites`
+    # takes a Hub). Adding one touches nothing that exists.
+    "qualificacao_socio",
+    "faixa_etaria",
+    "pais",
+    "representante_legal",
+    "qualificacao_representante_legal",
+)
+
 DOMAIN = VaultDomain(
     name="cnpj",
     tables=(
@@ -238,5 +326,7 @@ DOMAIN = VaultDomain(
         SAT_ESTABELECIMENTO_DADOS,
         SAT_ESTABELECIMENTO_ENDERECO,
         LINK_EMPRESA_ESTABELECIMENTO,
+        LINK_COMPANY_PARTNER,
+        SAT_EFF_COMPANY_PARTNER,
     ),
 )

@@ -72,7 +72,7 @@ class LinkLoadResult:
     already_present: int
 
 
-def _refuse_mismatched_hubs(link: Link, hubs: Sequence[Hub]) -> None:
+def refuse_mismatched_hubs(link: Link, hubs: Sequence[Hub]) -> None:
     """The link and its hubs arrive as two arguments, so something has to check they
     belong together -- AND THAT THEY ARRIVED IN THE RIGHT ORDER.
 
@@ -86,13 +86,40 @@ def _refuse_mismatched_hubs(link: Link, hubs: Sequence[Hub]) -> None:
     backwards -- so every row is present, every join works, and the table's identity
     column disagrees with the one a re-load computes."""
     supplied = tuple(hub.name for hub in hubs)
-    if supplied != tuple(link.hubs):
+    if supplied != link.hub_names:
         raise ValueError(
-            f"link {link.name!r} joins {tuple(link.hubs)} and was handed {supplied}. "
+            f"link {link.name!r} joins {link.hub_names} and was handed {supplied}. "
             "The link's own hash key is the standard over these hubs' business keys "
             "CONCATENATED IN ORDER, so a reordered pair re-keys the whole table while "
             "every reference column stays correct and every join keeps working -- "
             "resolve them with opl.vault.domains.linked_hubs rather than by hand"
+        )
+
+
+def _refuse_a_link_this_loader_cannot_write(link: Link) -> None:
+    """This loader writes one hub reference per end and nothing else.
+
+    NOT IN `refuse_mismatched_hubs`, WHICH IS SHARED. That function answers "do these
+    hubs belong to this link", which `opl.vault.partners` asks too; this one answers
+    "can THIS loader write it", which is a statement about this module. Putting the two
+    together made the partner loader refuse the very link it exists for.
+
+    WHAT IT PREVENTS IS NOT A CRASH. A link whose partner end is derived would still
+    load here: `link_candidates` computes every end's reference from the columns its
+    hub is NAMED after, so both ends of `link_company_partner` would be hashed from
+    `cnpj_basico` and every relationship would read as a company partnered with
+    itself -- right row count, working joins, nonsense. And its dependent-child keys
+    would be hashed into the link's key by `link_hash_key_expression` and then not
+    written, so the table's identity column would describe columns it does not have."""
+    if link.dependent_child_keys or any(not end.identifying for end in link.ends):
+        raise ValueError(
+            f"link {link.name!r} declares dependent-child keys or a non-identifying "
+            "end, and this loader writes hub references and nothing else. A "
+            "non-identifying end's business key is not a column of the source under "
+            "the hub's own name -- it is derived -- so both ends would be hashed from "
+            "the same column and every relationship would read as a company partnered "
+            "with itself. `opl.vault.partners.load_partner_link` is the loader that "
+            "knows the derivation; see its module docstring for why it is separate"
         )
 
 
@@ -124,7 +151,7 @@ def link_candidates(
     components = [name for hub in hubs for name in hub.business_key_columns]
     refuse_non_string_columns(source, components)
     keyed = source.select(
-        link_hash_key_expression(hubs).alias(link.hash_key),
+        link_hash_key_expression(link, hubs).alias(link.hash_key),
         *(hash_key_expression(hub).alias(hub.hash_key) for hub in hubs),
         F.col(SNAPSHOT_MONTH_COLUMN),
         F.col(BRONZE_RECORD_SOURCE),
@@ -154,7 +181,8 @@ def load_link(
     `load_hub` weighed apply unchanged (not a MERGE, not delete-then-append, and NOT
     concurrency-safe), and `load_date` has no default for `load_hub`'s reason: a loader
     that stamps its own clock cannot be asserted against."""
-    _refuse_mismatched_hubs(link, hubs)
+    _refuse_a_link_this_loader_cannot_write(link)
+    refuse_mismatched_hubs(link, hubs)
     before = rows_in(spark, target_table)
     candidates = link_candidates(
         spark, link, hubs, source_table=source_table, months=months

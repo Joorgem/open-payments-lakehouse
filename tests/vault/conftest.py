@@ -45,7 +45,16 @@ from opl.vault.satellites import load_satellite
 # `_snapshot_month` (see `opl.vault.columns`).
 JUN, JUL = "2026-06", "2026-07"
 JUN_REF, JUL_REF = date(2026, 6, 13), date(2026, 7, 11)
-REF_DATES = {JUN: JUN_REF, JUL: JUL_REF}
+
+# A THIRD MONTH THAT IS REAL IN THE SOURCE AND NOT IN OUR BRONZE. The RFB publishes a
+# gapless monthly snapshot from 2023-05 onward; F1 loaded two of them. Every fixture
+# that mirrors the measurement uses JUN and JUL only -- MAY exists so the branches that
+# need THREE observations of one key can be exercised at all, above all a relationship
+# that departs and returns, which two months structurally cannot show. A test using it
+# is testing a mechanism, never a measurement, and says so.
+MAY, MAY_REF = "2026-05", date(2026, 5, 9)
+
+REF_DATES = {MAY: MAY_REF, JUN: JUN_REF, JUL: JUL_REF}
 
 # FAR FROM EITHER REF DATE, AND THAT IS THE POINT. `load_date` is when WE loaded and
 # `applied_date` is when the fact was true at the source; a loader that crossed them

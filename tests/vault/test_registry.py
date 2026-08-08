@@ -25,15 +25,27 @@ import sys
 import pytest
 
 from opl.vault import domains
-from opl.vault.columns import APPLIED_DATE, HASH_DIFF, LOAD_DATE, RECORD_SOURCE
+from opl.vault.columns import (
+    APPLIED_DATE,
+    CLOSED_BY,
+    HASH_DIFF,
+    IS_ACTIVE,
+    LAST_OBSERVED_ON,
+    LOAD_DATE,
+    RECORD_SOURCE,
+)
+from opl.vault.domains.cnpj import COMPANY_PARTNER_GRAIN
 from opl.vault.registry import (
     BusinessKeyColumn,
+    EffectivitySatellite,
     Hub,
     Link,
+    LinkEnd,
     Satellite,
     VaultDomain,
     build_registry,
     discover_domains,
+    link_identity_columns,
     linked_hubs,
     parent_hub,
 )
@@ -125,7 +137,9 @@ def test_the_cnpj_domain_registers_its_wave_one_tables():
     assert sorted(domains.REGISTRY) == [
         "hub_empresa",
         "hub_estabelecimento",
+        "link_company_partner",
         "link_empresa_estabelecimento",
+        "sat_eff_company_partner",
         "sat_empresa_dados",
         "sat_estabelecimento_dados",
         "sat_estabelecimento_endereco",
@@ -209,11 +223,12 @@ def test_a_link_naming_a_satellite_as_one_of_its_hubs_is_refused():
         build_registry([_domain(_HUB, _SAT, bad)])
 
 
-def test_a_satellite_whose_parent_is_a_link_is_refused():
-    """DV2 allows a satellite on a link and this vault does not have one yet. The
-    boundary is asserted rather than left implicit: `parent_hub` returns a `Hub` and
-    `load_satellite` takes one, so registering a link-parented satellite would
-    register a table nothing in this package can write."""
+def test_a_descriptive_satellite_whose_parent_is_a_link_is_refused():
+    """DV2 allows a DESCRIPTIVE satellite on a link and this vault still does not have
+    one. The boundary stands after Task 5 added `EffectivitySatellite`, and the reason
+    is unchanged: `parent_hub` returns a `Hub` and `load_satellite` takes one, so a
+    link-parented `Satellite` would be a table nothing in this package can write. The
+    effectivity satellite is a separate KIND precisely because it is not this."""
     on_link = Satellite(
         name="sat_on_link", parent="link_thing_other", payload_columns=("x",)
     )
@@ -222,21 +237,146 @@ def test_a_satellite_whose_parent_is_a_link_is_refused():
         build_registry([_domain(_HUB, _OTHER_HUB, _LINK, on_link)])
 
 
-def test_a_link_with_fewer_than_two_hubs_is_refused():
-    """A link is a RELATIONSHIP. One hub is a hub with extra steps, and its hash key
-    would be the hub's own business key hashed a second time under another name --
-    two tables that look independent and are the same key space."""
-    with pytest.raises(ValueError, match="two hubs"):
+def test_a_link_with_fewer_than_two_identity_components_is_refused():
+    """A link is a RELATIONSHIP and needs at least two things to relate. One hub and no
+    dependent-child key is a hub with extra steps: its hash key would be the hub's own
+    business key hashed a second time under another name.
+
+    THE RULE COUNTS COMPONENTS AND NOT HUBS, which is the Task 5 widening. One hub plus
+    a dependent-child key IS a relationship -- `link_company_partner` is exactly that --
+    and the old "at least two hubs" would have refused it while refusing nothing this
+    does not."""
+    with pytest.raises(ValueError, match="needs at least two"):
         Link(name="link_x", hash_key="link_x_hk", hubs=("hub_thing",))
 
 
-def test_a_link_naming_one_hub_twice_is_refused():
-    """A same-hub hierarchical link (parent company to subsidiary) is real DV2, and
-    this spec cannot express it: it carries no ROLE name, so both references would be
-    written into one column called `hub_thing_hk` and one of the two ends would be
-    gone. Refused until a link that needs roles arrives with the shape for them."""
+def test_a_link_with_one_hub_and_a_dependent_child_key_is_accepted():
+    """The shape the rule above was widened for, asserted so the widening is not
+    silently over-permissive: the identity is the hub's business key followed by the
+    dependent-child key, in that order, which is the order the hash concatenates in."""
+    link = Link(
+        name="link_x", hash_key="link_x_hk", hubs=("hub_thing",),
+        dependent_child_keys=(BusinessKeyColumn(name="line_no"),),
+    )
+    registry = build_registry([_domain(_HUB, _SAT, link)])
+
+    assert link_identity_columns(registry, link) == ("thing_id", "line_no")
+
+
+def test_a_link_naming_one_hub_twice_without_roles_is_refused():
+    """A same-hub link is real DV2 and Task 5 built one. What is still refused is a
+    same-hub link WITHOUT ROLES: both references would be written into one column
+    called `hub_thing_hk` and one end of the relationship would silently be gone.
+
+    The refusal moved from the spec to `build_registry` when roles arrived, because
+    whether two ends collide depends on the HUB's hash-key name, which the spec does
+    not have -- it names hubs, and the registry is what resolves them."""
+    link = Link(
+        name="link_x", hash_key="link_x_hk", hubs=("hub_thing", "hub_thing"),
+        dependent_child_keys=(BusinessKeyColumn(name="line_no"),),
+    )
+
     with pytest.raises(ValueError, match="twice"):
-        Link(name="link_x", hash_key="link_x_hk", hubs=("hub_thing", "hub_thing"))
+        build_registry([_domain(_HUB, _SAT, link)])
+
+
+def test_a_self_referencing_link_with_roles_is_accepted_and_names_two_columns():
+    """`link_company_partner` in miniature. Two ends on one hub, distinguished by role,
+    so the references are two columns rather than one -- and the NON-IDENTIFYING end is
+    absent from the identity, because its key is a function of the dependent-child key
+    rather than a part of the link's own."""
+    link = Link(
+        name="link_x",
+        hash_key="link_x_hk",
+        hubs=(
+            LinkEnd(hub="hub_thing", role="left"),
+            LinkEnd(hub="hub_thing", role="right", identifying=False),
+        ),
+        dependent_child_keys=(BusinessKeyColumn(name="line_no"),),
+    )
+    registry = build_registry([_domain(_HUB, _SAT, link)])
+    hubs = linked_hubs(registry, link)
+
+    assert [end.reference_column(hub) for end, hub in zip(link.ends, hubs, strict=True)] == [
+        "left_hub_thing_hk", "right_hub_thing_hk"
+    ]
+    assert link_identity_columns(registry, link) == ("thing_id", "line_no")
+    assert [hub.name for hub in hubs] == ["hub_thing", "hub_thing"]
+
+
+def test_a_link_whose_every_end_is_non_identifying_is_refused():
+    """A link keyed on its dependent-child keys alone is anchored to no hub -- it is a
+    hub wearing a link's name, and every reference it carries would be one it resolved
+    rather than one it is keyed on."""
+    with pytest.raises(ValueError, match="no identifying end"):
+        Link(
+            name="link_x", hash_key="link_x_hk",
+            hubs=(LinkEnd(hub="hub_thing", role="left", identifying=False),),
+            dependent_child_keys=(BusinessKeyColumn(name="line_no"),
+                                  BusinessKeyColumn(name="part_no")),
+        )
+
+
+def test_a_dependent_child_key_colliding_with_a_reference_column_is_refused():
+    """The quiet collision, at link grain. The loader writes one column per reference
+    and one per dependent-child key; two of those sharing a name means one projection
+    writes two values into one column, and the row count stays right."""
+    link = Link(
+        name="link_x", hash_key="link_x_hk", hubs=("hub_thing", "hub_other"),
+        dependent_child_keys=(BusinessKeyColumn(name="hub_other_hk"),),
+    )
+
+    with pytest.raises(ValueError, match="twice"):
+        build_registry([_domain(_HUB, _OTHER_HUB, link)])
+
+
+def test_an_effectivity_satellite_on_a_hub_is_refused():
+    """An effectivity satellite records when a RELATIONSHIP held, so it hangs off the
+    table that asserts the relationship. Pointed at a hub it would key on a hash key
+    the hub really has, which is what makes this worth refusing rather than leaving to
+    fail: the table would build and would answer about the wrong thing."""
+    on_hub = EffectivitySatellite(name="eff_x", parent="hub_thing", entry_column="opened")
+
+    with pytest.raises(ValueError, match="not a link"):
+        build_registry([_domain(_HUB, _SAT, on_hub)])
+
+
+def test_an_effectivity_satellites_entry_column_may_not_be_one_the_loader_writes():
+    """The window's OPEN is the source's own delivered value and the loader writes
+    three columns of its own beside it. A collision would replace the delivered fact
+    with something we inferred, keeping the column and losing the value -- which is the
+    exact confusion the naming convention exists to prevent."""
+    for column in (IS_ACTIVE, LAST_OBSERVED_ON, CLOSED_BY, LOAD_DATE):
+        with pytest.raises(ValueError, match="loader writes that itself"):
+            EffectivitySatellite(name="eff_x", parent="link_x", entry_column=column)
+
+
+def test_an_effectivity_satellites_entry_column_may_not_be_a_key_of_its_link():
+    """The other half, which needs the parent and so runs over the whole set: the open
+    would be written into a key column, so the row would keep its shape and lose both
+    values."""
+    link = Link(
+        name="link_x", hash_key="link_x_hk", hubs=("hub_thing", "hub_other"),
+        dependent_child_keys=(BusinessKeyColumn(name="line_no"),),
+    )
+    on_key = EffectivitySatellite(name="eff_x", parent="link_x", entry_column="line_no")
+
+    with pytest.raises(ValueError, match="dependent-child key of the parent link"):
+        build_registry([_domain(_HUB, _OTHER_HUB, link, on_key)])
+
+
+def test_the_cnpj_effectivity_satellite_resolves_to_the_partner_link():
+    """The real package, through the real entry point -- and the grain the domain
+    declares for it IS the link's own identity, which is the equality
+    `opl.vault.effectivity` refuses a load on."""
+    satellite = domains.table_spec("sat_eff_company_partner")
+    link = domains.parent_link(satellite)
+
+    assert link.name == "link_company_partner"
+    assert domains.link_identity_columns(link) == (
+        "cnpj_basico", "identificador_socio", "cpf_cnpj_socio"
+    )
+    assert tuple(COMPANY_PARTNER_GRAIN.key_columns) == domains.link_identity_columns(link)
 
 
 def test_a_bare_string_hub_list_is_refused():

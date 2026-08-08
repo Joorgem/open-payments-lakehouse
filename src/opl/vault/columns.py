@@ -56,3 +56,28 @@ HASH_DIFF = "hash_diff"
 # Refused as a business-key or payload column name by the registry's guards. A frozen
 # set rather than a list so no caller can extend it in place.
 METADATA_COLUMNS = frozenset({LOAD_DATE, RECORD_SOURCE, APPLIED_DATE, HASH_DIFF})
+
+# The effectivity satellite's three columns, and THE ONLY PLACE IN THIS VAULT WHERE A
+# DERIVED CLAIM IS WRITTEN DOWN. They are named apart from `METADATA_COLUMNS` because
+# only one table kind carries them, and they are named in OUR vocabulary on purpose:
+# the window's open keeps the source's own column name (`data_entrada_sociedade`,
+# delivered on 100% of rows), and these three are ours. A reader who cannot tell a
+# delivered fact from an inferred one is the failure ADR 0011 exists to prevent, and
+# the naming is the cheapest part of preventing it.
+
+# Whether the relationship was effective as at this row's `applied_date`. DataVault4dbt's
+# own column name for the pattern this table implements (research §3b).
+IS_ACTIVE = "is_active"
+
+# DERIVED. On a closing row, the `applied_date` of the last month we OBSERVED the
+# relationship -- not the date it ended, which the source never tells us. NULL while
+# active.
+LAST_OBSERVED_ON = "last_observed_on"
+
+# DERIVED. The `ObservationState` that authorised the close, so the gate is a property
+# of the DATA and not only of the loader: a window closed because our own DQ gate
+# quarantined the row would say so here instead of being indistinguishable from a
+# departure. NULL while active.
+CLOSED_BY = "closed_by"
+
+EFFECTIVITY_COLUMNS = frozenset({IS_ACTIVE, LAST_OBSERVED_ON, CLOSED_BY})

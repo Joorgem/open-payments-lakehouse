@@ -70,13 +70,13 @@ from datetime import datetime
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.window import Window
 
 from opl.vault.columns import APPLIED_DATE, HASH_DIFF, LOAD_DATE, RECORD_SOURCE
 from opl.vault.hashing_spark import hash_key_column, refuse_non_string_columns
 from opl.vault.loading import (
     BRONZE_RECORD_SOURCE,
     SNAPSHOT_REF_DATE_COLUMN,
+    changed_rows,
     hash_key_expression,
     read_snapshot_window,
     rows_in,
@@ -89,11 +89,8 @@ from opl.vault.observation import (
 )
 from opl.vault.registry import Hub, Satellite
 
-# Internal to the change detection below. Named rather than inlined because both are
-# selected through by string and a typo in one of the two spellings would silently
-# make every row look new (`_PERSISTED` never true) or every row look old.
-_PERSISTED = "_persisted"
-_PREVIOUS = "_previous_hash_diff"
+# Internal to `satellite_candidates`' tie-break, and named because it is selected
+# through by field: a bare string at both ends is one typo from a column of NULLs.
 _CHOSEN = "_chosen"
 
 
@@ -247,44 +244,6 @@ def satellite_candidates(
     )
 
 
-def _changed_rows(candidates: DataFrame, existing: DataFrame | None, key: str) -> DataFrame:
-    """The candidates whose payload differs from the one that preceded it.
-
-    THE PERSISTED ROWS SEED THE WINDOW, which is what makes an incremental load
-    correct. June is already in the satellite when July's snapshot arrives, so July's
-    comparison has to be against the row on disk rather than against another row in the
-    same batch; a `lag` over the candidates alone would call July's payload new because
-    nothing precedes it in that batch.
-
-    A CANDIDATE WHOSE (key, applied_date) IS ALREADY PERSISTED IS DROPPED FIRST, before
-    the union, and that ordering is load-bearing rather than tidy: leaving it in would
-    put two rows at the same position in the window, and whichever of the identical
-    pair `lag` happened to place second would be marked unchanged while the first was
-    marked changed -- so a re-run would append a duplicate roughly half the time,
-    depending on nothing anyone can see.
-
-    ORDERED BY `applied_date`, so a snapshot loaded out of order still lands in its
-    true position in the key's history. What that cannot repair is a row already
-    written: backfilling June after July has been loaded leaves July's row in place
-    even though it is now redundant. Redundant, not wrong -- it still says the payload
-    was P on 2026-07-11 -- so the correction is to load in order, not to rewrite."""
-    lineage = candidates.select(key, APPLIED_DATE, HASH_DIFF).withColumn(
-        _PERSISTED, F.lit(False)
-    )
-    if existing is not None:
-        lineage = lineage.unionByName(
-            existing.select(key, APPLIED_DATE, HASH_DIFF).withColumn(_PERSISTED, F.lit(True))
-        )
-    ordered = Window.partitionBy(key).orderBy(APPLIED_DATE)
-    changed = (
-        lineage.withColumn(_PREVIOUS, F.lag(HASH_DIFF).over(ordered))
-        .filter(F.col(_PREVIOUS).isNull() | (F.col(_PREVIOUS) != F.col(HASH_DIFF)))
-        .filter(~F.col(_PERSISTED))
-        .select(key, APPLIED_DATE)
-    )
-    return candidates.join(changed, on=[key, APPLIED_DATE], how="left_semi")
-
-
 def _candidate_departures(
     spark: SparkSession, grain: ObservationGrain, months: Sequence[str] | None
 ) -> int:
@@ -358,7 +317,7 @@ def load_satellite(
             on=[hub.hash_key, APPLIED_DATE],
             how="left_anti",
         )
-    changed = _changed_rows(candidates, existing, hub.hash_key)
+    changed = changed_rows(candidates, existing, hub.hash_key)
     (
         _in_column_order(changed, satellite, hub, load_date)
         .write.format("delta").mode("append").saveAsTable(target_table)
