@@ -57,32 +57,38 @@ than the finest available one. An address change is a physical move; a situaçã
 cadastral change is a registry event; the two arrive on different rows of the RFB's
 history for the same establishment, so a single satellite would rewrite the whole
 sixteen-column payload every time either moved. MEASURED across the 71,874,444
-establishments present in both 2026-06 and 2026-07
-(`01f192ac-d8be-1e59-99e5-05717e28efcc`):
+establishments present in both 2026-06 and 2026-07, over the FULL payloads exactly as
+declared below (`01f192de-b784-1e33-a64b-625fad698c1a`):
 
-    `_dados`     1,076,696 changed   1.50%
-    `_endereco`    570,075 changed   0.79%
+    `_dados`     (6 columns)   1,211,834 changed   1.69%
+    `_endereco`  (10 columns)    570,075 changed   0.79%
 
     nome_fantasia 31,912 | cnae_fiscal_principal 84,588
     situacao_cadastral 976,355 | motivo_situacao_cadastral 976,333
+    (per-column, `01f192ac-d8be-1e59-99e5-05717e28efcc`, four of `_dados`' six)
 
-THE MEASURED COLUMN SCOPE IS NARROWER THAN THE PAYLOAD, AND THESE TWO RATES ARE
-THEREFORE LOWER BOUNDS. This block read "(6 columns)" and "(10 columns)" until Task 7's
-correction pass, which is the payload width; the controller's record of the run scopes
-the aggregates to FOUR columns for `_dados` (the four named per-column below) and EIGHT
-for `_endereco` (the domestic-address eight, without the `nome_cidade_exterior`/`pais`
-pair). The two readings were never reconciled against the query text and cannot be from
-here -- this file has no workspace access -- so the weaker one is stated. A payload's
-true rate can only be HIGHER than a rate measured over a subset of it, so the DIRECTION
-of the argument below survives either reading; what does not survive is quoting 1.9x as
-a rate ratio between the two PAYLOADS. Settling it needs one re-run of the change-rate
-query over all sixteen modelled columns, named in the Task 7 report.
+RE-MEASURED AFTER TASK 7's CORRECTION PASS, AND THE FIRST FIGURE WAS A LOWER BOUND.
+This block originally quoted 1,076,696 / 1.50% for `_dados` against a run that covered
+only FOUR of its six columns, omitting `cnae_fiscal_secundaria` and
+`data_situacao_cadastral`. The correction pass caught the mismatch between the run's
+scope and the payload it was attributed to; the re-run above closes it. `_dados` was
+UNDERSTATED -- 1,076,696 -> 1,211,834 -- so the ratio between the payloads goes from
+~1.9x to ~2.13x and the split's justification is STRONGER than first claimed, not
+weaker. Worth keeping visible: a scope error is not automatically an overclaim, and
+this one ran the other way.
 
-THE SPLIT IS WORTH ~1.9x ON THE MEASURED SUBSET AND THE RIDE-ALONG COSTS 30x, which is
-the honest reading of
+`_endereco` NEEDED NO CORRECTION -- 570,075 EITHER WAY -- AND THAT IS ITS OWN FINDING.
+The two columns the earlier run omitted are `nome_cidade_exterior` and `pais`, the
+foreign-address pair, and they changed on ZERO rows across all 71.8M establishments.
+So the placement argued below ("they ARE the address for an establishment outside
+Brazil") is supported from the other direction as well: they belong with the address,
+and over this pair of snapshots they cost nothing to carry there. Measured after the
+fact, and stated as such rather than as a reason the placement was chosen.
+
+THE SPLIT IS WORTH ~2.13x AND THE RIDE-ALONG COSTS 30x, which is the honest reading of
 those numbers and the one that argues the known cost. `nome_fantasia` (31,912) sits in
 `_dados` beside `situacao_cadastral` (976,355), so a status change rewrites a name that
-moved thirty times less often -- a wider spread than the 1.50/0.79 the cut itself
+moved thirty times less often -- a wider spread than the 1.69/0.79 the cut itself
 rests on. It is still one cut and not the finest: `situacao_cadastral` and
 `motivo_situacao_cadastral` have near-identical change counts (976,355 against 976,333)
 and the motivo is what explains the situação, so those two almost certainly belong in

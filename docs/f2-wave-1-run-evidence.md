@@ -31,10 +31,12 @@ for the other kind.
    uses a SQL stand-in, not `opl.vault.hashing`'s encoding.** It demonstrates the
    premise and the mechanic. It is not the module's output and its digests are
    not the vault's digests.
-3. **The estabelecimentos change-rate measurement covers fewer columns than the
-   payloads it was quoted against**, so the 1.50% / 0.79% rates are lower bounds
-   and the "1.9×" is not a ratio between the two payloads.
-   [§23.2](#232-the-measurement-that-was-quoted-wider-than-it-was-taken).
+3. **The estabelecimentos change rates were first quoted over fewer columns than
+   the payloads they described.** Found by the correction pass, **re-measured by
+   the controller, and now closed**: `_dados` is **1,211,834 / 1.69%** over its
+   full six columns, not 1,076,696 / 1.50% over four. The split's justification is
+   **stronger** than first claimed — ~2.13×, not ~1.9×.
+   [§23.2](#232-the-measurement-that-was-quoted-wider-than-it-was-taken--found-re-run-and-closed).
 4. **The Unicode-skew pin is a strict equality over 40 known divergences**, so a
    JDK upgrade in **either** direction turns the suite red rather than silently
    re-keying the vault. [§19](#19-the-unicode-pin-is-an-equality-and-that-is-the-whole-safety-property).
@@ -730,24 +732,29 @@ Commits `6b3c502` → `d7bc920`. `--collect-only` **859 selected / 865 collected
 `_RUNTIME_SOURCES`.
 
 **Controller measurement settling the implementer's own open question**, over the
-71,874,444 establishments present in both months
-(`01f192ac-d8be-1e59-99e5-05717e28efcc`):
+71,874,444 establishments present in both months, taken over the **full payloads**
+as `domains/cnpj.py` declares them (`01f192de-b784-1e33-a64b-625fad698c1a`):
 
-| payload | changed | rate |
-|---|---|---|
-| `_dados` | **1,076,696** | 1.50% |
-| `_endereco` | **570,075** | 0.79% |
+| payload | columns | changed | rate |
+|---|---|---|---|
+| `_dados` | 6 | **1,211,834** | **1.69%** |
+| `_endereco` | 10 | **570,075** | **0.79%** |
 
-Per column: `nome_fantasia` 31,912 · `cnae_fiscal_principal` 84,588 ·
-`situacao_cadastral` 976,355 · `motivo_situacao_cadastral` 976,333.
+**≈ 2.13×.** Per column — **controller-measured**, from the earlier run
+(`01f192ac-d8be-1e59-99e5-05717e28efcc`) and covering **four of `_dados`' six**:
+`nome_fantasia` 31,912 · `cnae_fiscal_principal` 84,588 · `situacao_cadastral`
+976,355 · `motivo_situacao_cadastral` 976,333.
 
 **But the sharpest rate boundary in this data is not the one the split was drawn
 on**: inside `_dados`, `nome_fantasia` (31,912) against `situacao_cadastral`
-(976,355) is a **30× spread** versus the 1.9× the split rests on. ADR 0013 records
+(976,355) is a **30× spread** versus the 2.13× the split rests on. ADR 0013 records
 the decision, the rejected finer cut, and the reason the cost asymmetry settles it.
 
-**⚠️ The measured column scope is narrower than the payloads** — see
-[§23.2](#232-the-measurement-that-was-quoted-wider-than-it-was-taken).
+**These are the RE-MEASURED figures.** The first ones quoted here were
+1,076,696 / 1.50% for `_dados` over four of its six columns; the correction pass
+found the scope mismatch and the controller re-ran it, which **raised** `_dados`
+and took the ratio from ~1.9× to ~2.13× —
+[§23.2](#232-the-measurement-that-was-quoted-wider-than-it-was-taken--found-re-run-and-closed).
 
 **A probe that over-predicted, reported as such.** Probe B predicted 4 killed
 assertions and killed **1**: dropping the shared zero-pad left three green because
@@ -1058,8 +1065,11 @@ and is what actually guards the property, is the committed sweep in
    distinction. A vacuum policy dropping `bronze_cnpj_socios_quarantine` would
    turn 1,781 `rejected_by_our_gate` keys per month into `absent_after_observation`
    and the satellite would end-date them.
-8. **The estabelecimentos change-rate re-run is outstanding** —
-   [§23.2](#232-the-measurement-that-was-quoted-wider-than-it-was-taken).
+8. **The estabelecimentos rates are one month-pair, and only one.** The column
+   scope is now closed ([§23.2](#232-the-measurement-that-was-quoted-wider-than-it-was-taken--found-re-run-and-closed)),
+   but 1.69% / 0.79% is a single observation. The **zero** change on
+   `nome_cidade_exterior` and `pais` is likewise a fact about these two snapshots,
+   not a property of the columns.
 9. **`situacao_cadastral` and `motivo_situacao_cadastral` "belong together" is
    inferred, not jointly measured.** 976,355 against 976,333 is consistent with it
    and domain-plausible; no cross-tab was run, and two columns can share a marginal
@@ -1150,7 +1160,10 @@ socios at link grain carries `rejected_by_our_gate` **and** an absence state in 
   reader of the acceptance test meets the argument.
 - This document, which would otherwise have inherited it.
 
-### 23.2 The measurement that was quoted wider than it was taken
+### 23.2 The measurement that was quoted wider than it was taken — found, re-run, and closed
+
+**This is the pass's one hit on a controller measurement rather than on an
+implementer's prose, and it is the only one that produced a new number.**
 
 `src/opl/vault/domains/cnpj.py:63-64` read:
 
@@ -1161,25 +1174,51 @@ socios at link grain carries `rejected_by_our_gate` **and** an absence state in 
 
 Six and ten are the **payload** widths — verified by counting
 `SAT_ESTABELECIMENTO_DADOS.payload_columns` (6) and
-`SAT_ESTABELECIMENTO_ENDERECO.payload_columns` (10). The controller's record of
-the run scopes the aggregates to **four** columns for `_dados` (the four named
+`SAT_ESTABELECIMENTO_ENDERECO.payload_columns` (10). The controller's record of the
+run scoped the aggregates to **four** columns for `_dados` (the four named
 per-column beside them) and **eight** for `_endereco` (the domestic-address eight,
-without the `nome_cidade_exterior` / `pais` pair). The task's proposed query text
-covers seven columns in total.
+without the `nome_cidade_exterior` / `pais` pair); the task's proposed query text
+covers seven columns in total. Task 7 has no workspace access, so it could not
+settle which reading was right — it stated the rates as **lower bounds** and named
+the query that would settle them.
 
-**The two readings were never reconciled against the query, and cannot be from
-here** — Task 7 has no workspace access. So the weaker statement is the one that
-now stands in the file: the rates are **lower bounds**, because a payload's true
-rate can only be higher than a rate measured over a subset of it.
+**The controller re-ran it over the full payloads**
+(`01f192de-b784-1e33-a64b-625fad698c1a`, the same 71,874,444 establishments):
 
-**What survives and what does not.** The *direction* of the argument survives
-either reading — `_dados` churns faster than `_endereco`, and the 30× intra-`_dados`
-spread between `nome_fantasia` and `situacao_cadastral` is a per-column
-measurement unaffected by the aggregate's scope. **What does not survive is
-quoting 1.9× as a ratio between the two payloads.**
+| payload | columns | changed | rate | previously quoted |
+|---|---|---|---|---|
+| `_dados` | 6 | **1,211,834** | **1.69%** | 1,076,696 over 4 columns |
+| `_endereco` | 10 | **570,075** | **0.79%** | 570,075 over 8 columns |
 
-**This needs one controller re-run**, named precisely in the Task 7 report and in
-ADR 0013. It is the only outstanding measurement in this phase.
+**`_dados` was understated, so the correction runs in the direction nobody
+predicted.** The omitted `cnae_fiscal_secundaria` and `data_situacao_cadastral`
+lift it from 1,076,696 to 1,211,834, taking the ratio between the payloads from
+~1.9× to **~2.13×**. **ADR 0013's decision is better supported than it claimed**,
+not worse. A measurement whose scope has drifted from the thing it is quoted
+against is not automatically an overclaim — this one was an underclaim, and a pass
+that only went looking for overclaims would have had no reason to find it.
+
+**`_endereco` needed no correction at all — 570,075 either way — and that is its
+own finding.** The two omitted columns are `nome_cidade_exterior` and `pais`, and
+they changed on **zero rows across all 71,874,444 establishments**. ADR 0013 places
+them in `_endereco` on the argument that they *are* the address for an
+establishment outside Brazil; this supports the placement from a second direction —
+they belong with the address **and** they cost nothing to carry there — while
+being, plainly, a fact measured after the placement was chosen rather than a reason
+it was.
+
+**What was unaffected:** the per-column figures (`nome_fantasia` 31,912,
+`cnae_fiscal_principal` 84,588, `situacao_cadastral` 976,355,
+`motivo_situacao_cadastral` 976,333) come from the earlier run
+`01f192ac-d8be-1e59-99e5-05717e28efcc` and cover **four of `_dados`' six**. They
+are per-column and the aggregate's scope does not touch them, so the **30×**
+intra-`_dados` spread stands exactly as argued; only the number it is contrasted
+against moved, 1.9× → 2.13×.
+
+**Updated everywhere the old figures appeared**: `domains/cnpj.py`, ADR 0013 and
+this document. Both figures are kept side by side rather than the old one deleted,
+because which one a reader is looking at determines whether the ratio they quote is
+right.
 
 ### 23.3 The Latin-1 claim that outlived its own correction
 
@@ -1399,7 +1438,10 @@ early.
    `717,650 + 27,260,118 + 12,824 = 27,990,592`; `27,260,118 / 999,853 ≈ 27`;
    `8,266,470 / 16,644,534 = 49.7%`; `27,990,592 / 16,644,534 = 1.681`;
    `74,201 − 65,444 = 8,757`; `71,874,448 − 4 = 71,874,444`; the socios five-state
-   table sums to 28,053,488 distinct keys in **both** months.
+   table sums to 28,053,488 distinct keys in **both** months. The re-measured
+   estabelecimentos rates check out the same way: `1,211,834 / 71,874,444 = 1.686%`
+   → 1.69%, `570,075 / 71,874,444 = 0.793%` → 0.79%, and
+   `1,211,834 / 570,075 = 2.126` → ~2.13×.
 8. **`TRIMMED_CHARACTERS` really is 29 characters and
    `UNICODE_VERSION_DIVERGENCE` really is 40 elements** — counted from the
    frozensets, not from the prose describing them.
@@ -1417,7 +1459,7 @@ The question this task is required to answer, and the honest list is not short.
 
 1. **In reading a source measurement as a code measurement.** This is the biggest
    one and it is structural. Every large number here — 69,062,849, 65,444, 4,329,
-   1,076,696 — measures **RFB bronze**, taken to justify or refute a modelling
+   1,211,834 — measures **RFB bronze**, taken to justify or refute a modelling
    decision. **None of them is an output of the code in this branch.** A reader who
    remembers "the vault loaded 69M companies" has the wrong model; the vault has
    loaded nothing.
@@ -1429,14 +1471,16 @@ The question this task is required to answer, and the honest list is not short.
    value is, as of this writing, argued rather than demonstrated at full scale.
 3. **In §11.2's digests.** They are a SQL stand-in and are labelled as such in two
    places, which is two more than the number of places a reader is likely to check.
-4. **In the estabelecimentos rates.** 1.50% and 0.79% are lower bounds over a
-   column set narrower than the payloads they describe, and the discrepancy was
-   found by Task 7 rather than by the measurement or the review
-   ([§23.2](#232-the-measurement-that-was-quoted-wider-than-it-was-taken)). **If one
-   quoted measurement's scope drifted from its query, others may have.** Nothing
-   else in this document rests on an aggregate whose column set is stated
-   separately from its query — but that is an assertion about this document, not a
-   proof.
+4. **In an aggregate whose column scope drifted from its query.** The
+   estabelecimentos rates did exactly that, and it was found by Task 7 rather than
+   by the measurement or by either review — then re-run and closed
+   ([§23.2](#232-the-measurement-that-was-quoted-wider-than-it-was-taken--found-re-run-and-closed)). **If
+   one quoted measurement's scope drifted, others may have.** The re-run makes the
+   risk concrete rather than hypothetical: this document now carries **two**
+   statement ids for the same table because the first answered a narrower question
+   than the sentence around it claimed. Nothing else here rests on an aggregate
+   whose column set is stated separately from its query — but that is an assertion
+   about this document, not a proof.
 5. **In the mutation probes.** Each is a claim that a *specific* wrong
    implementation goes red. Two of them ([§16](#16-what-the-mutation-probes-prove-and-the-two-that-did-not))
    came back weaker than predicted. A probe set is a lower bound on the tests'

@@ -1,14 +1,18 @@
 # ADR 0013 — two satellites on `hub_estabelecimento`, split on measured change rate, and the sharper boundary that was not taken
 
 ## Status
-Accepted, with one measurement left open and named below. Implemented as
+Accepted. Implemented as
 `SAT_ESTABELECIMENTO_DADOS` and `SAT_ESTABELECIMENTO_ENDERECO` in
 `src/opl/vault/domains/cnpj.py`; the partition is locked by
 `tests/vault/test_estabelecimento_vault.py::test_the_two_satellites_and_the_key_partition_the_estabelecimentos_contract`.
 Written in Task 7 of F2 wave 1, after the fact: the split was argued in Task 4
 before any measurement existed, measured by the controller after the commit, and
 the numbers were then quoted into a module comment. This is the one modelling
-decision of the phase whose justification arrived **after** the artifact.
+decision of the phase whose justification arrived **after** the artifact — and,
+having arrived late, it arrived **twice**: the first measurement's column scope
+was narrower than the payloads it was quoted against, Task 7's correction pass
+caught it, and the controller re-ran it over the full payloads. Both figures are
+below, because which one you are reading matters.
 
 ## Context
 
@@ -28,30 +32,43 @@ satellites (six and ten), and **eleven deliberately unmodelled** — declared in
 missing from both payloads is distinguishable from a column somebody forgot, and
 so that adding a column to the contract turns the partition test red.
 
-### The measurement, and what it does and does not cover
+### The measurement
 
-Controller-run against real bronze over the **71,874,444** establishments present
-in both 2026-06 and 2026-07 (`01f192ac-d8be-1e59-99e5-05717e28efcc`):
+**Controller-measured** against real bronze over the **71,874,444** establishments
+present in both 2026-06 and 2026-07, over the **full payloads** exactly as
+`domains/cnpj.py` declares them (`01f192de-b784-1e33-a64b-625fad698c1a`):
 
-| payload | changed | rate |
-|---|---|---|
-| `_dados` | 1,076,696 | 1.50% |
-| `_endereco` | 570,075 | 0.79% |
+| payload | columns | changed | rate |
+|---|---|---|---|
+| `_dados` | 6 | **1,211,834** | **1.69%** |
+| `_endereco` | 10 | **570,075** | **0.79%** |
 
-Per column: `nome_fantasia` **31,912** · `cnae_fiscal_principal` **84,588** ·
+**≈ 2.13×.** Per column — **controller-measured**, from the earlier run
+(`01f192ac-d8be-1e59-99e5-05717e28efcc`), covering **four of `_dados`' six**:
+`nome_fantasia` **31,912** · `cnae_fiscal_principal` **84,588** ·
 `situacao_cadastral` **976,355** · `motivo_situacao_cadastral` **976,333**.
 
-> **⚠️ The measured column scope is narrower than the payloads, and these two
-> aggregates are lower bounds.** The controller's record of the run scopes
-> `_dados` to **four** columns (the four named above) and `_endereco` to **eight**
-> (the domestic-address eight, without the `nome_cidade_exterior` / `pais` pair),
-> against payloads of six and ten. The module comment attributed the rates to the
-> full payloads until Task 7's correction pass. A payload's true rate can only be
-> **higher** than a rate measured over a subset of it, so the direction of the
-> argument survives; what does not survive is quoting **1.9×** as a ratio between
-> the two payloads. Settling it needs one re-run over all sixteen modelled
-> columns — the query is named in the F2 wave-1 Task 7 report and this ADR should
-> be updated with its answer.
+> **The first figures quoted here were a lower bound, and Task 7's correction pass
+> found it.** `_dados` was originally quoted as **1,076,696 / 1.50%** against a run
+> covering only four of its six columns — `cnae_fiscal_secundaria` and
+> `data_situacao_cadastral` were omitted — while the module comment attributed the
+> rate to the full six-column payload. The re-run above closes the gap, and
+> **`_dados` was understated**: 1,076,696 → **1,211,834**, taking the ratio between
+> the payloads from ~1.9× to **~2.13×**. **The split's justification is therefore
+> stronger than this ADR first claimed, not weaker.** Worth recording in the
+> Context rather than in a footnote: a measurement whose scope has drifted from the
+> thing it is quoted against is not automatically an overclaim, and this one ran
+> the other way.
+
+> **`_endereco` needed no correction — 570,075 either way — and that is a finding
+> in its own right.** The two columns the earlier run omitted are
+> `nome_cidade_exterior` and `pais`, the foreign-address pair, and they changed on
+> **zero rows across all 71,874,444 establishments**. The Decision below places
+> them in `_endereco` on the argument that they *are* the address for an
+> establishment outside Brazil; this supports that placement from a second
+> direction — they belong with the address **and**, over this pair of snapshots,
+> they cost nothing to carry there. **Measured after the fact**, and stated as such
+> rather than as a reason the placement was chosen.
 
 ## Options considered
 
@@ -76,8 +93,11 @@ data supports it better than it supports the cut that was taken.**
 
 The sharpest rate boundary in this table is **not** the one the split rests on.
 Inside `_dados`, `nome_fantasia` (31,912) sits beside `situacao_cadastral`
-(976,355): a **30×** spread, against the ~1.9× the cut itself rests on. Every
-status change rewrites a trading name that moved thirty times less often.
+(976,355): a **30×** spread, against the ~2.13× the cut itself rests on. Every
+status change rewrites a trading name that moved thirty times less often. The
+re-measurement narrowed that gap — 30× against 2.13× rather than against 1.9× —
+but nowhere near enough to change the argument, and the per-column figures behind
+the 30× are unaffected by it.
 
 Rejected for three reasons, in ascending force:
 
@@ -103,7 +123,7 @@ carrying six and ten columns; eleven contract columns declared unmodelled; the
 partition asserted as a total by test.**
 
 The 30× ride-along inside `_dados` is **accepted, named in the code beside the
-numbers, and not hidden behind the 1.9× the cut rests on.** The candidate third
+numbers, and not hidden behind the 2.13× the cut rests on.** The candidate third
 satellite, if one is ever taken, is `nome_fantasia` plus the CNAEs — not a general
 subdivision.
 
@@ -126,6 +146,11 @@ subdivision.
   a factor of up to thirty. A consumer that reads only trading names pays for
   status churn. That is the accepted cost, and it is the first thing to point at
   if a third satellite is ever proposed.
+- **The foreign-address pair is free, over these two months.**
+  `nome_cidade_exterior` and `pais` changed on **zero** rows, so their presence in
+  `_endereco` adds no satellite row at all today. That is a fact about this
+  month-pair, not a property — a wave of RFB address revisions abroad would make
+  them ordinary `_endereco` columns, which is exactly where they already are.
 - **A second month-pair could reverse this.** The rates are one observation. If
   `_endereco` ever churns at `_dados`' rate, the cut buys nothing and the argument
   for it disappears — the split would still be harmless, but it would no longer be
@@ -134,8 +159,9 @@ subdivision.
 
 ### What would change this decision
 
-- The re-run over all sixteen modelled columns coming back with `_dados` and
-  `_endereco` close together. The cut would then be legible but not economic.
+- A later month-pair bringing `_dados` and `_endereco` close together. The cut
+  would then be legible but not economic. (The re-run that closed the original
+  scope gap moved them **further apart**, 1.9× → 2.13×, not closer.)
 - A cross-tab showing `situacao_cadastral` and `motivo_situacao_cadastral` change
   on substantially disjoint rows. That breaks the argument bounding where a third
   cut could go.
