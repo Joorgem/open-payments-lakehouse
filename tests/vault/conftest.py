@@ -21,10 +21,11 @@ called that.
 
 WHAT IS SHARED AND WHAT IS NOT. Everything above the estabelecimentos section is
 generic: the months, the two dates the RFB itself stamps, the audit columns bronze adds
-to every contract, and the two helpers that write and derive Delta tables. Below it is
-one table's fixture, kept whole rather than parameterised, because its rows ARE its
-argument -- the module docstring of `test_estabelecimento_vault.py` reads them against
-the measurement they mirror."""
+to every contract, and the two helpers that write and derive Delta tables. Below it are
+the two table fixtures, each kept whole rather than parameterised, because their rows
+ARE their argument -- each module's docstring reads them against the measurement they
+mirror. Both moved here for the same reason: their modules hit the 800-line cap and
+their materialisations cost seconds that a second file must not pay twice."""
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -340,3 +341,133 @@ def estab_loaded(spark, estab_source):
         link=f"{db}.link_shared",
     )
     return load_estabelecimento_vault(spark, estab_source, names)
+
+
+# --------------------------------------------------------------------------- #
+# The socios fixture (Task 5), shared rather than rebuilt
+# --------------------------------------------------------------------------- #
+
+SOCIOS_LINK = domains.table_spec("link_company_partner")
+SOCIOS_EFF = domains.table_spec("sat_eff_company_partner")
+SOCIOS_IDENTITY = domains.link_identity_columns(SOCIOS_LINK)
+
+# What a UC-masked column returns to every reader the mask function does not admit --
+# the table owner included. Not a placeholder for a real name: this IS the read.
+MASKED_READ = "***"
+
+# Relationships as (cnpj_basico, identificador_socio, cpf_cnpj_socio), RAW as bronze
+# holds them, which is also the ledger's key and the link's identity.
+R_STAYS = ("10000001", "2", "***111111**")
+R_DEPARTS = ("10000001", "2", "***222222**")      # June only, and NOT quarantined
+R_REJECTED = ("10000001", "2", "***333333**")     # June's bronze, July's quarantine
+R_NEW_IN_JULY = ("10000002", "2", "***444444**")
+R_PJ = ("10000004", "1", "90000001000199")        # a partner that IS a company
+R_PJ_PARENT = ("90000001", "2", "***666666**")    # ...and that company's own partner
+R_FOREIGN_A = ("10000005", "3", None)             # no business key at all
+R_FOREIGN_B = ("10000005", "3", None)             # ...and neither has this one
+R_TWINNED = ("10000006", "2", "***777777**")      # two people, one masked CPF, one firm
+R_ELSEWHERE = ("10000007", "2", "***777777**")    # the SAME masked CPF, another firm
+
+PARTNER_ROOT = "90000001"
+
+SOCIOS_CONTRACT = tuple(columns_for("socios"))
+SOCIOS_SCHEMA = bronze_schema("socios")
+
+_SOCIOS_DEFAULTS = {
+    "nome_socio_razao_social": MASKED_READ,
+    "qualificacao_socio": "49",
+    "pais": None,
+    "representante_legal": "***000000**",
+    "nome_do_representante": MASKED_READ,
+    "qualificacao_representante_legal": "00",
+    "faixa_etaria": "5",
+}
+
+
+def socios_row(relationship: tuple[str, str, str | None], month: str, *, entrada: str,
+         record_source: str = RECORD_SOURCE_VALUE, **overrides) -> tuple:
+    """One bronze socios row: the whole contract plus every audit column the ingest
+    stamps. `entrada` is `data_entrada_sociedade`, the window's DELIVERED open.
+
+    `record_source` is a parameter because `add_audit_columns` takes one -- a month
+    re-ingested under another label carries a different value for the same key -- and
+    because it is what breaks a tie on the entry date in the dedup rule."""
+    values = dict(_SOCIOS_DEFAULTS)
+    values.update(zip(SOCIOS_IDENTITY, relationship, strict=True))
+    values["data_entrada_sociedade"] = entrada
+    values.update(overrides)
+    return tuple(values[column] for column in SOCIOS_CONTRACT) + audit_values(
+        month,
+        source_file=f"/Volumes/x/cnpj/{month}/socios/K3241.K03200Y2.D60613.SOCIOCSV",
+        record_source=record_source,
+    )
+
+
+def _socios_bronze_rows() -> list[tuple]:
+    """The fixture's bronze rows, meant to be read top to bottom -- the shape IS the
+    argument."""
+    return [
+        socios_row(R_STAYS, JUN, entrada="20100101"),
+        socios_row(R_STAYS, JUL, entrada="20100101"),
+        # The 65,444 in miniature: gone from July's bronze and NOT in its quarantine.
+        socios_row(R_DEPARTS, JUN, entrada="20110202"),
+        # The 1,781 in miniature: gone from July's bronze because WE removed it.
+        socios_row(R_REJECTED, JUN, entrada="20120303"),
+        socios_row(R_NEW_IN_JULY, JUL, entrada="20260701"),
+        socios_row(R_PJ, JUN, entrada="20140505"),
+        socios_row(R_PJ, JUL, entrada="20140505"),
+        # The PJ partner's own row, which is what puts `90000001` in hub_empresa --
+        # measured: all 310,374 PJ partner roots are present in empresas, zero
+        # unresolved (`01f19063-44ef-132a-8aa7-9068b624b370`).
+        socios_row(R_PJ_PARENT, JUN, entrada="20130404"),
+        socios_row(R_PJ_PARENT, JUL, entrada="20130404"),
+        # Two foreign partners of one company. Same key -- (company, '3', NULL) -- in
+        # both months, because neither carries one.
+        socios_row(R_FOREIGN_A, JUN, entrada="20150606"),
+        socios_row(R_FOREIGN_B, JUN, entrada="20160707"),
+        socios_row(R_FOREIGN_A, JUL, entrada="20150606"),
+        socios_row(R_FOREIGN_B, JUL, entrada="20160707"),
+        # THE DEDUP CASE. Two June rows on one link key with two delivered entry dates;
+        # the EARLIEST must win, and the fold must be counted.
+        socios_row(R_TWINNED, JUN, entrada="20200101"),
+        socios_row(R_TWINNED, JUN, entrada="20150301"),
+        socios_row(R_TWINNED, JUL, entrada="20200101"),
+        # The same masked CPF at ANOTHER company: a different relationship.
+        socios_row(R_ELSEWHERE, JUN, entrada="20170808"),
+        socios_row(R_ELSEWHERE, JUL, entrada="20170808"),
+    ]
+
+
+def _socios_quarantine_rows() -> list[tuple]:
+    """July's reject, with the gate's reason. Absent from July's bronze because of us."""
+    return [(*socios_row(R_REJECTED, JUL, entrada="20120303", qualificacao_socio=""),
+             "null_or_empty_qualificacao_socio")]
+
+
+@pytest.fixture(scope="module")
+def socios_source(spark, vault_database):
+    """A throwaway Delta database holding one bronze socios table and its quarantine,
+    in the two months real bronze has."""
+    db = vault_database("socios_vault")
+    bronze, quarantine = f"{db}.socios", f"{db}.socios_q"
+
+    write_delta(spark, bronze, SOCIOS_SCHEMA, _socios_bronze_rows())
+    write_delta(spark, quarantine, quarantine_schema("socios"), _socios_quarantine_rows())
+
+    grain = ObservationGrain(
+        name=SOCIOS_LINK.name, bronze_table=bronze, quarantine_table=quarantine,
+        key_columns=SOCIOS_IDENTITY,
+    )
+    return SimpleNamespace(db=db, bronze=bronze, quarantine=quarantine, grain=grain)
+
+
+@pytest.fixture
+def socios_target(socios_source):
+    """Fresh table names per test, for the tests that WRITE -- sharing one would make
+    idempotence pass for the wrong reason."""
+    db, suffix = socios_source.db, uuid4().hex[:8]
+    return SimpleNamespace(
+        hub=f"{db}.hub_{suffix}",
+        link=f"{db}.link_{suffix}",
+        eff=f"{db}.eff_{suffix}",
+    )

@@ -191,6 +191,18 @@ duplicate rows** (`01f19063-53c0-1f06-89f1-6aade0691af8`).
   layout), and — unlike `opl.vault.satellites`' lowest-`hash_diff` tie-break —
   **not arbitrary**: the open of a window is the earliest moment the source claims
   the relationship began.
+- **Two edges of that rule, because `F.min` over a struct is quieter than it
+  looks.** The implementation is `F.min(F.struct(entry_column, record_source))`.
+  (a) **A genuine tie on the entry date is still deterministic**: a struct
+  comparison goes field by field, so equal entry dates fall to the
+  lexicographically smaller `record_source` — which is a real second value, since
+  `add_audit_columns` takes `record_source` as a parameter and a re-ingested month
+  carries a different one.
+  `test_two_rows_delivering_the_same_entry_date_are_broken_on_record_source` pins
+  it. (b) **A NULL entry date would sort first** in Spark's ascending ordering and
+  beat a delivered date on its twin. Unreachable on this source —
+  `data_entrada_sociedade` is populated on 100% of 2026-07's rows — and stated
+  because a wave-2 feed reusing this loader with a nullable open would hit it.
 
 ### The effectivity satellite is §3b, and every close is gated on one ledger state
 
@@ -244,9 +256,19 @@ is our own gate's. So the two are not presented alike:
 | column | whose claim | named by |
 |---|---|---|
 | `data_entrada_sociedade` | the RFB's | **the RFB** — the source's own column name, value carried verbatim |
+| `record_source` | the RFB's — **with a caveat, below** | bronze |
 | `is_active` | ours | us |
 | `last_observed_on` | ours | us |
 | `closed_by` | ours | us |
+
+**`record_source` is the caveat in that table and not an omission from it.** A
+closing row has no source row, so its `record_source` is **carried forward
+verbatim** from the last month we observed the relationship. The value is
+therefore genuine and the row it describes is not: read alone, that column cannot
+tell a delivered row from an inferred one, and it would be wrong to use it as the
+discriminator. `is_active` and `closed_by` are what carry that distinction, and
+they are on every row precisely so no reader has to infer it from a lineage
+column.
 
 **`last_observed_on` is not an end date.** It is the `applied_date` of the last
 month in which we *observed* the relationship. The date the partnership actually
@@ -261,18 +283,42 @@ which **zero** are in 2026-07's quarantine (`01f19061-e234-1617-bc9a-19f854e7b20
 Estabelecimentos supplies **four** departures, **all four** of them our own gate's,
 and **zero** true departures.
 
-**Neither table proves the ledger discriminates.** A ledger that blamed the source
-for every disappearance passes `tests/vault/test_socios_vault.py` in full; one that
-blamed our gate for every disappearance passes
-`tests/vault/test_estabelecimento_vault.py` in full. The discrimination lives in
-the cross-table probe
+**Measured against real bronze after this task**
+(`01f192c0-a8da-159e-81b6-0ed2cd6f1758`): the satellite should close exactly
+**65,444** windows, **4 of them carrying a NULL `cpf_cnpj_socio`**, with **zero**
+overlap against July's 1,781 quarantine-only keys.
+
+That measurement came with a warning worth keeping. The controller's *first*
+verification query used `LEFT ANTI JOIN ... USING`, which is plain equality, and
+every NULL-keyed foreign partner read as departed: **74,201, i.e. 8,757 phantom
+departures**. The load itself does not have that defect — NULL is absorbed into
+the digest by the hash standard's `N` token before anything compares it, and the
+one place raw keys meet is the ledger's `groupBy`, which treats NULL as a value
+equal to itself. The lesson is not about the loader; it is that **anyone
+reconciling this table by hand will reach for an equality join and get 8,757 extra
+departures**, and this paragraph is where they should find out why.
+
+**What each file proves, stated exactly, because an earlier draft of this section
+under-claimed it.** That draft said "a ledger that blamed the source for every
+disappearance passes `tests/vault/test_socios_vault.py` in full". **It does not.**
+That fixture carries both classes — `R_DEPARTS` (gone from July's bronze, not
+quarantined) and `R_REJECTED` (gone from July's bronze because it is in July's
+quarantine) — and asserts they receive *different* states in the same assertion
+block, so a ledger blaming the source for everything turns
+`assert states[(R_REJECTED, JUL)] == REJECTED` red along with the two satellite
+assertions beside it. **The socios file discriminates on its own.**
+
+What it cannot do alone is the *cross-table* half: show that a table whose
+**every** departure is our own gate's is handled correctly too. That is
+estabelecimentos, where all four departures are the gate's and there are no true
+ones, and the property that needs both tables at once lives in
 `test_observation.py::test_a_departure_reads_as_our_gate_on_one_table_and_as_the_sources_on_the_other`,
 which Task 2 already built and against which two deliberately degenerate
 implementations were run.
 
-What Task 5 adds is that a satellite now **acts** on the distinction rather than
-reporting it: one window closes and the other does not, in the same load, over the
-same table.
+What Task 5 adds beyond either is that a satellite now **acts** on the distinction
+rather than reporting it: one window closes and the other does not, in the same
+load, over the same table.
 
 ## Consequences
 
@@ -301,14 +347,33 @@ same table.
   columns its hub is *named* after, so both ends would be hashed from
   `cnpj_basico` and every relationship would read as a company partnered with
   itself.
-- **The extensibility claim is unchanged in substance and narrower in wording.**
-  Task 5 edited `registry.py` to add a fourth table kind, which is what the file's
-  own docstring said a new kind would cost and what Task 4 did for `Link`. Wave
-  2's `link_payment` needs a dependent-child key for `transaction_id`, and that
-  now exists — so wave 2 remains "+1 file, 0 modified" for hubs, satellites and
-  links. What is *not* covered is a link whose hub reference must be derived from
-  another column: that is `opl.vault.partners`, the one domain-specific loader in
-  the package, and it says so in its first paragraph.
+- **The extensibility claim is narrower than an earlier draft of this section
+  said, and the narrowing is the honest version.** That draft read: *"wave 2's
+  `link_payment` needs a dependent-child key for `transaction_id`, and that now
+  exists — so wave 2 remains '+1 file, 0 modified' for hubs, satellites and
+  links."* **The second half is false and the code contradicts it.**
+  `links._refuse_a_link_this_loader_cannot_write` refuses *every* link carrying a
+  dependent-child key, and `link_candidates` does not project one, so
+  `link_payment` as §4.2 describes it cannot be loaded without editing `links.py`
+  or adding a domain loader beside it. `registry.py`'s own wording — "wave 2 does
+  not need **this file**" — is correct and is the claim that stands. What is
+  true, precisely:
+
+  | wave-2 table | "+1 file, 0 modified"? |
+  |---|---|
+  | `hub_account`, `hub_customer` | yes — registry and `load_hub` unchanged |
+  | their satellites | yes — registry and `load_satellite` unchanged |
+  | `link_payment` **without** `transaction_id` | yes |
+  | `link_payment` **with** `transaction_id` as a dependent-child key | **no** — the *spec* registers, the *loader* refuses it |
+
+  Implementing dependent-child-key projection in `load_link` was considered in
+  this round and deferred deliberately: it would be a generic path with no
+  consumer in the repository and no exercise against real data, which is the
+  shape this package has refused since Task 3 (`Link` itself was kept out of Task
+  3 for exactly that reason). It is a small change — `link_hash_key_expression`
+  already hashes them — and it should be made by the wave-2 task that has a table
+  to point at it. Recording it here so the cost is visible before the claim is
+  read as covering it.
 - **The window closes are only as good as the quarantine's retention.** ADR 0010
   already made the quarantine a vault input; this ADR makes it a vault input whose
   loss would cause **false closes** rather than merely a lost distinction. A

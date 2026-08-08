@@ -228,21 +228,19 @@ def changed_rows(
     THE PERSISTED ROWS SEED THE WINDOW, which is what makes an incremental load
     correct. June is already in the satellite when July's snapshot arrives, so July's
     comparison has to be against the row on disk rather than against another row in the
-    same batch; a `lag` over the candidates alone would call July's value new because
-    nothing precedes it in that batch.
+    same batch; a `lag` over the candidates alone would call July's value new.
 
     A CANDIDATE WHOSE (key, applied_date) IS ALREADY PERSISTED IS DROPPED FIRST, before
     the union, and that ordering is load-bearing rather than tidy: leaving it in would
     put two rows at the same position in the window, and whichever of the identical
     pair `lag` happened to place second would be marked unchanged while the first was
-    marked changed -- so a re-run would append a duplicate roughly half the time,
-    depending on nothing anyone can see.
+    marked changed -- so a re-run would append a duplicate roughly half the time.
 
     ORDERED BY `applied_date`, so a snapshot loaded out of order still lands in its
-    true position in the key's history. What that cannot repair is a row already
-    written: backfilling June after July has been loaded leaves July's row in place
-    even though it is now redundant. Redundant, not wrong -- it still says the value
-    was V on 2026-07-11 -- so the correction is to load in order, not to rewrite."""
+    true position. What that cannot repair is a row already written: backfilling June
+    after July leaves July's row in place even though it is now redundant. Redundant,
+    not wrong -- it still says the value was V on 2026-07-11 -- so the correction is to
+    load in order, not to rewrite."""
     lineage = candidates.select(key, APPLIED_DATE, change_column).withColumn(
         _PERSISTED, F.lit(False)
     )

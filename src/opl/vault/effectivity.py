@@ -57,7 +57,16 @@ same data agree; it is order-independent, so it does not depend on partition lay
 unlike `opl.vault.satellites`' lowest-`hash_diff` tie-break it is not arbitrary -- the
 open of a window is the earliest moment the source claims the relationship began.
 `EffectivityLoadResult.collapsed_duplicates` counts what was folded, so the choice is
-visible in the run log rather than only in this docstring."""
+visible in the run log rather than only in this docstring.
+
+TWO EDGES OF THAT RULE, BOTH SPELLED OUT BECAUSE `F.min` OVER A STRUCT IS QUIETER THAN
+IT LOOKS. First, a genuine TIE on the entry date is still deterministic: `min` over
+`struct(entry_column, record_source)` compares field by field, so equal entry dates are
+broken lexicographically on `record_source` -- there is no state in which two runs over
+the same data disagree. Second, a NULL entry date sorts FIRST in Spark's ascending
+ordering, so a NULL would beat a delivered date on its twin. Unreachable on this source
+-- `data_entrada_sociedade` is populated on 100% of 2026-07's rows -- and worth knowing
+before a wave-2 feed reuses this loader with a nullable open."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -94,7 +103,13 @@ from opl.vault.observation import (
     ObservationState,
     observation_ledger,
 )
-from opl.vault.registry import EffectivitySatellite, Hub, Link, identity_columns_of
+from opl.vault.registry import (
+    EffectivitySatellite,
+    Hub,
+    Link,
+    identifying_hubs,
+    identity_columns_of,
+)
 
 # THE ONE STATE THIS VAULT CLOSES A WINDOW ON. Named here, once, and written into every
 # closing row's `closed_by`, so widening the gate means changing a value that is
@@ -127,7 +142,8 @@ def _refuse_a_mismatched_grain(
     satellite: EffectivitySatellite, link: Link, hubs: Sequence[Hub],
     grain: ObservationGrain, source_table: str,
 ) -> None:
-    """The link, its hubs, the grain and the source must all describe one table.
+    """The satellite, its link, the link's hubs, the grain and the source must all
+    describe one table.
 
     THE GRAIN IS THE ARGUMENT WHOSE MISTAKES ARE INVISIBLE IN THE OUTPUT, exactly as it
     is for `load_satellite`, and here it decides which windows close. A grain keyed one
@@ -135,6 +151,17 @@ def _refuse_a_mismatched_grain(
     a partner leaves EVERY company, so a relationship that really ended stays open with
     nothing failing. `identity_columns_of` derives the comparison from the link's own
     spec, so the two cannot drift."""
+    if satellite.parent != link.name:
+        raise ValueError(
+            f"effectivity satellite {satellite.name!r} declares parent "
+            f"{satellite.parent!r} and was handed link {link.name!r}. The satellite and "
+            "the link are free arguments so both can be tested against throwaway specs, "
+            "and nothing but this check stops them being mismatched -- the load would "
+            "SUCCEED, keying every row on the wrong link's hash key, and produce a "
+            "plausible, fully populated table about a different relationship. Resolve "
+            "the parent with opl.vault.domains.parent_link rather than passing a link "
+            "by hand"
+        )
     refuse_mismatched_hubs(link, hubs)
     if grain.bronze_table != source_table:
         raise ValueError(
@@ -163,13 +190,12 @@ def _observed(
     many source rows were folded into each -- see the module docstring for the rule and
     for why this table's fold is the one that costs something."""
     source = read_snapshot_window(spark, source_table, months)
-    company = hubs[0]
     refuse_non_string_columns(
         source,
         [*identity_columns_of(link, hubs), satellite.entry_column],
     )
     keyed = source.select(
-        link_hash_key_expression(link, [company]).alias(link.hash_key),
+        link_hash_key_expression(link, identifying_hubs(link, hubs)).alias(link.hash_key),
         F.col(SNAPSHOT_MONTH_COLUMN),
         F.col(SNAPSHOT_REF_DATE_COLUMN).alias(APPLIED_DATE),
         F.col(satellite.entry_column),
@@ -214,12 +240,20 @@ def _departures(
     function and is filtered out, rather than never being asked about. The ledger is
     keyed on the link's RAW identity columns, so the same
     `link_hash_key_expression` that keyed bronze keys the ledger: one spelling, and the
-    two sides cannot disagree about which relationship a departure belongs to."""
+    two sides cannot disagree about which relationship a departure belongs to.
+
+    THE JOIN IS ON THE MONTH AND NEVER ON A BUSINESS KEY, which is what keeps the 4
+    measured departures whose `cpf_cnpj_socio` is NULL from being lost or invented. The
+    controller's own first verification of this load used `LEFT ANTI JOIN ... USING`,
+    plain equality, and read every NULL-keyed foreign partner as departed -- 74,201
+    instead of 65,444, i.e. 8,757 phantom departures. NULL is absorbed into the digest
+    by `_encoded` before anything compares it, so by the time a key reaches this join
+    it is a 64-character string."""
     ledger = observation_ledger(spark, grain, months=months)
     closing = ledger.filter(F.col(STATE_COLUMN) == F.lit(CLOSING_STATE.value))
     return (
         closing.select(
-            link_hash_key_expression(link, [hubs[0]]).alias(link.hash_key),
+            link_hash_key_expression(link, identifying_hubs(link, hubs)).alias(link.hash_key),
             F.col(MONTH_COLUMN),
         )
         .join(_reference_dates(spark, grain), on=MONTH_COLUMN)
@@ -330,15 +364,21 @@ def load_effectivity_satellite(
             on=[link.hash_key, APPLIED_DATE], how="left_anti",
         )
     changed = changed_rows(candidates, existing, link.hash_key, change_column=IS_ACTIVE)
-    (
-        _in_column_order(changed, satellite, link, load_date)
-        .write.format("delta").mode("append").saveAsTable(target_table)
-    )
-    written = spark.read.table(target_table).filter(F.col(LOAD_DATE) == F.lit(load_date))
+    rows = _in_column_order(changed, satellite, link, load_date).persist()
+    # COUNTED FROM THE FRAME THAT IS WRITTEN, NOT FROM `load_date` ON THE TARGET, and
+    # the earlier spelling is the bug this replaces: filtering the target on
+    # `load_date` made a re-run under the SAME stamp report `appended=0` beside the
+    # PREVIOUS run's `closed`, two numbers on two bases in one result object. This is
+    # a breakdown of `appended`, on `appended`'s own basis -- the write is a single
+    # atomic Delta append of exactly these rows, so the only way the two can disagree
+    # is a failed write, which raises.
+    closed = rows.filter(~F.col(IS_ACTIVE)).count()
+    rows.write.format("delta").mode("append").saveAsTable(target_table)
+    rows.unpersist()
     return EffectivityLoadResult(
         table=target_table,
         appended=rows_in(spark, target_table) - before,
         already_present=before,
-        closed=written.filter(~F.col(IS_ACTIVE)).count(),
+        closed=closed,
         collapsed_duplicates=int(collapsed),
     )

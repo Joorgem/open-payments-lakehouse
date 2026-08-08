@@ -74,7 +74,7 @@ from opl.vault.loading import (
     read_snapshot_window,
     rows_in,
 )
-from opl.vault.registry import Hub, Link
+from opl.vault.registry import Hub, Link, identifying_hubs
 
 # `identificador_socio`, per the RFB's layout. Measured over 2026-07's 27,990,592 rows
 # (`01f19061-9328-1159-a4e8-63a8b433237e`): 717,650 PJ over 310,374 distinct CNPJs,
@@ -125,6 +125,14 @@ def _refuse_a_link_this_loader_cannot_write(link: Link, hubs: Sequence[Hub]) -> 
     things that must agree are checked rather than assumed, including the width, which
     is a literal here and a spec value there."""
     refuse_mismatched_hubs(link, hubs)
+    if [end.identifying for end in link.ends] != [True, False]:
+        raise ValueError(
+            f"link {link.name!r} declares ends "
+            f"{[(end.role, end.identifying) for end in link.ends]} and this loader "
+            "writes exactly two: an identifying COMPANY end read from the source's own "
+            "`cnpj_basico`, then a non-identifying PARTNER end it derives. It indexes "
+            "them positionally, so any other shape would hash and label the wrong one"
+        )
     company = hubs[0]
     if link.dependent_child_key_columns != (PARTNER_KIND_COLUMN, PARTNER_KEY_COLUMN):
         raise ValueError(
@@ -181,12 +189,13 @@ def partner_link_candidates(
     doing it, which is the quietest wrong answer this layer can give."""
     source = read_snapshot_window(spark, source_table, months)
     company, partner = hubs
+    identity = identifying_hubs(link, hubs)
     refuse_non_string_columns(
         source, [*company.business_key_columns, *link.dependent_child_key_columns]
     )
     root = partner_company_root()
     keyed = source.select(
-        link_hash_key_expression(link, [company]).alias(link.hash_key),
+        link_hash_key_expression(link, identity).alias(link.hash_key),
         hash_key_expression(company).alias(link.ends[0].reference_column(company)),
         # THE `when` AROUND THE DIGEST IS THE POINT, not the one inside `root`.
         # `hash_key_column` encodes NULL to the token `N` and hashes it, so without this
@@ -223,9 +232,8 @@ def _collapsed_duplicates(
     argument for folding duplicates rests on them being few and payload-free, so the
     load that folds them should be the load that says how many."""
     source = read_snapshot_window(spark, source_table, months)
-    company, _ = hubs
     keyed = source.select(
-        link_hash_key_expression(link, [company]).alias(link.hash_key),
+        link_hash_key_expression(link, identifying_hubs(link, hubs)).alias(link.hash_key),
         F.col(SNAPSHOT_MONTH_COLUMN),
     )
     return keyed.count() - keyed.distinct().count()

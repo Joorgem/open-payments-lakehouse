@@ -21,7 +21,7 @@ other end), and the rest are present in both.
 THIS IS THE OTHER HALF OF TASK 2'S ACCEPTANCE PROOF AND IT DOES NOT PROVE THE
 DISTINCTION ON ITS OWN. Socios supplies 65,444 true departures and NOT ONE departure
 caused by our own gate; estabelecimentos supplies four departures that are ALL our
-gate's and zero true ones. So a ledger that blamed the source for every disappearance
+gate's and zero true ones. So a ledger that blamed the socios_source for every disappearance
 passes this file in full, and one that blamed our gate for every disappearance passes
 `test_estabelecimento_vault.py` in full. The discrimination lives in
 `test_observation.py::test_a_departure_reads_as_our_gate_on_one_table_and_as_the_sources_
@@ -46,7 +46,6 @@ import pytest
 from pyspark.sql import functions as F
 
 from opl.bronze.masking import MASKED_COLUMNS
-from opl.contracts.cnpj_schemas import columns_for
 from opl.vault import domains
 from opl.vault.columns import (
     APPLIED_DATE,
@@ -69,6 +68,7 @@ from opl.vault.observation import (
     observation_ledger,
 )
 from opl.vault.partners import load_partner_link
+from opl.vault.registry import BusinessKeyColumn, Link
 
 from .conftest import (
     JUL,
@@ -76,13 +76,25 @@ from .conftest import (
     JUN,
     JUN_REF,
     LOADED_AT,
+    MASKED_READ,
     MAY,
     MAY_REF,
+    PARTNER_ROOT,
+    R_DEPARTS,
+    R_ELSEWHERE,
+    R_FOREIGN_A,
+    R_FOREIGN_B,
+    R_NEW_IN_JULY,
+    R_PJ,
+    R_PJ_PARENT,
+    R_REJECTED,
+    R_STAYS,
+    R_TWINNED,
     RELOADED_AT,
-    audit_values,
-    bronze_schema,
+    SOCIOS_CONTRACT,
+    SOCIOS_SCHEMA,
     derived_table,
-    quarantine_schema,
+    socios_row,
     write_delta,
 )
 
@@ -100,123 +112,7 @@ REJECTED = ObservationState.REJECTED_BY_OUR_GATE.value
 BEFORE = ObservationState.ABSENT_BEFORE_FIRST_OBSERVATION.value
 AFTER = ObservationState.ABSENT_AFTER_OBSERVATION.value
 
-# What a UC-masked column returns to every reader the mask function does not admit --
-# the table owner included. Not a placeholder for a real name: this IS the read.
-MASKED = "***"
-
-# Relationships as (cnpj_basico, identificador_socio, cpf_cnpj_socio), RAW as bronze
-# holds them, which is also the ledger's key and the link's identity.
-R_STAYS = ("10000001", "2", "***111111**")
-R_DEPARTS = ("10000001", "2", "***222222**")      # June only, and NOT quarantined
-R_REJECTED = ("10000001", "2", "***333333**")     # June's bronze, July's quarantine
-R_NEW_IN_JULY = ("10000002", "2", "***444444**")
-R_PJ = ("10000004", "1", "90000001000199")        # a partner that IS a company
-R_PJ_PARENT = ("90000001", "2", "***666666**")    # ...and that company's own partner
-R_FOREIGN_A = ("10000005", "3", None)             # no business key at all
-R_FOREIGN_B = ("10000005", "3", None)             # ...and neither has this one
-R_TWINNED = ("10000006", "2", "***777777**")      # two people, one masked CPF, one firm
-R_ELSEWHERE = ("10000007", "2", "***777777**")    # the SAME masked CPF, another firm
-
-PARTNER_ROOT = "90000001"
-
-_CONTRACT = tuple(columns_for("socios"))
-_SCHEMA = bronze_schema("socios")
-
-_DEFAULTS = {
-    "nome_socio_razao_social": MASKED,
-    "qualificacao_socio": "49",
-    "pais": None,
-    "representante_legal": "***000000**",
-    "nome_do_representante": MASKED,
-    "qualificacao_representante_legal": "00",
-    "faixa_etaria": "5",
-}
-
-
-def _row(relationship: tuple[str, str, str | None], month: str, *, entrada: str,
-         **overrides) -> tuple:
-    """One bronze socios row: the whole contract plus every audit column the ingest
-    stamps. `entrada` is `data_entrada_sociedade`, the window's DELIVERED open."""
-    values = dict(_DEFAULTS)
-    values.update(zip(IDENTITY, relationship, strict=True))
-    values["data_entrada_sociedade"] = entrada
-    values.update(overrides)
-    return tuple(values[column] for column in _CONTRACT) + audit_values(
-        month, source_file=f"/Volumes/x/cnpj/{month}/socios/K3241.K03200Y2.D60613.SOCIOCSV"
-    )
-
-
-def _bronze_rows() -> list[tuple]:
-    """The fixture's bronze rows, meant to be read top to bottom -- the shape IS the
-    argument."""
-    return [
-        _row(R_STAYS, JUN, entrada="20100101"),
-        _row(R_STAYS, JUL, entrada="20100101"),
-        # The 65,444 in miniature: gone from July's bronze and NOT in its quarantine.
-        _row(R_DEPARTS, JUN, entrada="20110202"),
-        # The 1,781 in miniature: gone from July's bronze because WE removed it.
-        _row(R_REJECTED, JUN, entrada="20120303"),
-        _row(R_NEW_IN_JULY, JUL, entrada="20260701"),
-        _row(R_PJ, JUN, entrada="20140505"),
-        _row(R_PJ, JUL, entrada="20140505"),
-        # The PJ partner's own row, which is what puts `90000001` in hub_empresa --
-        # measured: all 310,374 PJ partner roots are present in empresas, zero
-        # unresolved (`01f19063-44ef-132a-8aa7-9068b624b370`).
-        _row(R_PJ_PARENT, JUN, entrada="20130404"),
-        _row(R_PJ_PARENT, JUL, entrada="20130404"),
-        # Two foreign partners of one company. Same key -- (company, '3', NULL) -- in
-        # both months, because neither carries one.
-        _row(R_FOREIGN_A, JUN, entrada="20150606"),
-        _row(R_FOREIGN_B, JUN, entrada="20160707"),
-        _row(R_FOREIGN_A, JUL, entrada="20150606"),
-        _row(R_FOREIGN_B, JUL, entrada="20160707"),
-        # THE DEDUP CASE. Two June rows on one link key with two delivered entry dates;
-        # the EARLIEST must win, and the fold must be counted.
-        _row(R_TWINNED, JUN, entrada="20200101"),
-        _row(R_TWINNED, JUN, entrada="20150301"),
-        _row(R_TWINNED, JUL, entrada="20200101"),
-        # The same masked CPF at ANOTHER company: a different relationship.
-        _row(R_ELSEWHERE, JUN, entrada="20170808"),
-        _row(R_ELSEWHERE, JUL, entrada="20170808"),
-    ]
-
-
-def _quarantine_rows() -> list[tuple]:
-    """July's reject, with the gate's reason. Absent from July's bronze because of us."""
-    return [(*_row(R_REJECTED, JUL, entrada="20120303", qualificacao_socio=""),
-             "null_or_empty_qualificacao_socio")]
-
-
-@pytest.fixture(scope="module")
-def source(spark, vault_database):
-    """A throwaway Delta database holding one bronze socios table and its quarantine,
-    in the two months real bronze has."""
-    db = vault_database("socios_vault")
-    bronze, quarantine = f"{db}.socios", f"{db}.socios_q"
-
-    write_delta(spark, bronze, _SCHEMA, _bronze_rows())
-    write_delta(spark, quarantine, quarantine_schema("socios"), _quarantine_rows())
-
-    grain = ObservationGrain(
-        name=LINK.name, bronze_table=bronze, quarantine_table=quarantine,
-        key_columns=IDENTITY,
-    )
-    return SimpleNamespace(db=db, bronze=bronze, quarantine=quarantine, grain=grain)
-
-
-@pytest.fixture
-def target(source):
-    """Fresh table names per test, for the tests that WRITE -- sharing one would make
-    idempotence pass for the wrong reason."""
-    suffix = uuid4().hex[:8]
-    return SimpleNamespace(
-        hub=f"{source.db}.hub_{suffix}",
-        link=f"{source.db}.link_{suffix}",
-        eff=f"{source.db}.eff_{suffix}",
-    )
-
-
-def _load_all(spark, source, names, *, load_date=LOADED_AT, months=None, grain=None):
+def _load_all(spark, socios_source, names, *, load_date=LOADED_AT, months=None, grain=None):
     """One load of the three tables, in dependency order, over `months`.
 
     `hub_empresa` is loaded FROM SOCIOS, which is the real design: socios carries
@@ -224,29 +120,29 @@ def _load_all(spark, source, names, *, load_date=LOADED_AT, months=None, grain=N
     every feed free. It is also what makes the PJ partner's reference assertable --
     `90000001` is in the hub because it appears as a company in its own right."""
     names.hub_result = load_hub(
-        spark, EMPRESA_HUB, source_table=source.bronze, target_table=names.hub,
+        spark, EMPRESA_HUB, source_table=socios_source.bronze, target_table=names.hub,
         load_date=load_date, months=months,
     )
     names.link_result = load_partner_link(
-        spark, LINK, hubs=LINK_HUBS, source_table=source.bronze,
+        spark, LINK, hubs=LINK_HUBS, source_table=socios_source.bronze,
         target_table=names.link, load_date=load_date, months=months,
     )
     names.eff_result = load_effectivity_satellite(
-        spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=source.bronze,
+        spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=socios_source.bronze,
         target_table=names.eff, load_date=load_date,
-        grain=grain or source.grain, months=months,
+        grain=grain or socios_source.grain, months=months,
     )
     return names
 
 
 @pytest.fixture(scope="module")
-def loaded(spark, source):
+def loaded(spark, socios_source):
     """One load of every table over both months, shared by every read-only assertion."""
     names = SimpleNamespace(
-        hub=f"{source.db}.hub_shared", link=f"{source.db}.link_shared",
-        eff=f"{source.db}.eff_shared",
+        hub=f"{socios_source.db}.hub_shared", link=f"{socios_source.db}.link_shared",
+        eff=f"{socios_source.db}.eff_shared",
     )
-    return _load_all(spark, source, names)
+    return _load_all(spark, socios_source, names)
 
 
 def _link_key(relationship: tuple[str, str, str | None]) -> str:
@@ -288,13 +184,13 @@ def _states(spark, grain) -> dict[tuple[tuple, str], str]:
 # --------------------------------------------------------------------------- #
 
 def test_a_departure_closes_a_window_and_a_key_our_own_gate_removed_does_not(
-    spark, source, loaded
+    spark, socios_source, loaded
 ):
     """THE ACCEPTANCE TEST, and the one that makes the ledger load-bearing rather than
     reported. Two relationships leave July's bronze for two different reasons. One is
-    `absent_after_observation` -- the source stopped publishing it -- and its window
+    `absent_after_observation` -- the socios_source stopped publishing it -- and its window
     closes. The other is `rejected_by_our_gate` -- it is in July's quarantine, so WE
-    removed it -- and its window must stay open, because the source never said it ended.
+    removed it -- and its window must stay open, because the socios_source never said it ended.
 
     THE TWO HALVES ARE ASSERTED TOGETHER FOR THE SAME REASON TASK 4's ARE. The close
     alone passes on a satellite that closes on any absence; the non-close alone passes
@@ -305,7 +201,7 @@ def test_a_departure_closes_a_window_and_a_key_our_own_gate_removed_does_not(
 
     `last_observed_on` IS NOT AN END DATE and the assertion says so: it is June's ref
     date, the last month we SAW the relationship, not a date the RFB ever published."""
-    states = _states(spark, source.grain)
+    states = _states(spark, socios_source.grain)
     rows = _eff_rows(spark, loaded)
 
     assert states[(R_DEPARTS, JUL)] == AFTER
@@ -321,11 +217,11 @@ def test_a_departure_closes_a_window_and_a_key_our_own_gate_removed_does_not(
     assert loaded.eff_result.closed == 1
 
 
-def test_a_relationship_born_in_july_is_absent_before_its_first_observation(spark, source):
+def test_a_relationship_born_in_july_is_absent_before_its_first_observation(spark, socios_source):
     """The 219,370 in miniature. A key whose first appearance is July is absent in June,
     and calling that a candidate delete would have the ledger assert two hundred
     thousand false departures in the first month it covers."""
-    states = _states(spark, source.grain)
+    states = _states(spark, socios_source.grain)
 
     assert states[(R_NEW_IN_JULY, JUN)] == BEFORE
     assert states[(R_NEW_IN_JULY, JUL)] == OBSERVED
@@ -346,7 +242,7 @@ def test_a_relationship_present_in_both_months_writes_one_row_and_stays_active(
     assert rows[(_link_key(R_STAYS), JUN_REF)][CLOSED_BY] is None
 
 
-def test_a_relationship_that_returns_opens_a_second_window(spark, source, target):
+def test_a_relationship_that_returns_opens_a_second_window(spark, socios_source, socios_target):
     """Three observations of one key: present, gone, back. The second window is what a
     close-only implementation cannot produce, and what "defined on the past only" is for
     -- the June row keeps saying `absent_after_observation` once August-shaped data
@@ -360,20 +256,21 @@ def test_a_relationship_that_returns_opens_a_second_window(spark, source, target
     all -- and that is correct, not a gap to work around: a month whose snapshot was
     never loaded is not evidence that anything departed in it. The second relationship
     is what makes June a loaded month, and therefore what makes the absence real."""
-    table = f"{source.db}.returns_{uuid4().hex[:8]}"
-    write_delta(spark, table, _SCHEMA, [
-        _row(R_STAYS, MAY, entrada="20100101"), _row(R_STAYS, JUL, entrada="20100101"),
-        *(_row(R_ELSEWHERE, month, entrada="20170808") for month in (MAY, JUN, JUL)),
+    table = f"{socios_source.db}.returns_{uuid4().hex[:8]}"
+    write_delta(spark, table, SOCIOS_SCHEMA, [
+        socios_row(R_STAYS, MAY, entrada="20100101"),
+        socios_row(R_STAYS, JUL, entrada="20100101"),
+        *(socios_row(R_ELSEWHERE, month, entrada="20170808") for month in (MAY, JUN, JUL)),
     ])
     grain = ObservationGrain(
-        name=LINK.name, bronze_table=table, quarantine_table=source.quarantine,
+        name=LINK.name, bronze_table=table, quarantine_table=socios_source.quarantine,
         key_columns=IDENTITY,
     )
     load_effectivity_satellite(
         spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=table,
-        target_table=target.eff, load_date=LOADED_AT, grain=grain,
+        target_table=socios_target.eff, load_date=LOADED_AT, grain=grain,
     )
-    rows = _eff_rows(spark, target)
+    rows = _eff_rows(spark, socios_target)
 
     assert _applied(rows, R_STAYS) == [MAY_REF, JUN_REF, JUL_REF]
     assert [rows[(_link_key(R_STAYS), day)][IS_ACTIVE]
@@ -518,7 +415,7 @@ def test_the_satellite_keeps_the_delivered_open_under_the_sources_own_name(spark
     the inferred close for the delivered open without ignoring both.
 
     Pinned as a list for `_in_column_order`'s reason: `mode("append")` matches by
-    position, so a reordering would write our inference into the source's column."""
+    position, so a reordering would write our inference into the socios_source's column."""
     assert spark.read.table(loaded.eff).columns == [
         LINK.hash_key, LOAD_DATE, APPLIED_DATE, RECORD_SOURCE, IS_ACTIVE,
         EFF.entry_column, LAST_OBSERVED_ON, CLOSED_BY,
@@ -529,7 +426,7 @@ def test_the_satellite_keeps_the_delivered_open_under_the_sources_own_name(spark
 
 
 def test_the_closing_row_carries_the_open_the_last_observed_month_delivered(spark, loaded):
-    """A closing row has no source row -- that is what makes it a close -- so its
+    """A closing row has no socios_source row -- that is what makes it a close -- so its
     delivered open and its `record_source` are carried forward from the last month we
     DID observe. Leaving them NULL would blank the window's open on the one row where a
     reader most needs both ends of it."""
@@ -543,7 +440,7 @@ def test_the_dedup_rule_keeps_the_earliest_delivered_entry_date(spark, loaded):
     """THE RULE, ASSERTED ON THE VALUE. Two June rows for one link key deliver
     `20200101` and `20150301`; the satellite must carry the EARLIER one. Deterministic,
     order-independent, and -- unlike a lowest-`hash_diff` tie-break -- not arbitrary:
-    the open of a window is the earliest moment the source claims it began.
+    the open of a window is the earliest moment the socios_source claims it began.
 
     The inequality is what a `first()` or a `max` would produce, either of which
     satisfies "one row per key per month" perfectly."""
@@ -553,31 +450,33 @@ def test_the_dedup_rule_keeps_the_earliest_delivered_entry_date(spark, loaded):
     assert row[EFF.entry_column] != "20200101"
 
 
-def test_reloading_the_hub_the_link_and_the_satellite_appends_nothing(spark, source, target):
+def test_reloading_the_hub_the_link_and_the_satellite_appends_nothing(
+    spark, socios_source, socios_target
+):
     """Idempotence across all three, with a different `load_date` on the second run so a
     row silently rewritten rather than skipped shows up as a changed stamp even where
     the count happens to hold."""
     first = {"hub": 7, "link": 9, "eff": 10}
-    _load_all(spark, source, target)
-    appended = {name: getattr(target, f"{name}_result").appended for name in first}
-    _load_all(spark, source, target, load_date=RELOADED_AT)
-    again = {name: getattr(target, f"{name}_result").appended for name in first}
+    _load_all(spark, socios_source, socios_target)
+    appended = {name: getattr(socios_target, f"{name}_result").appended for name in first}
+    _load_all(spark, socios_source, socios_target, load_date=RELOADED_AT)
+    again = {name: getattr(socios_target, f"{name}_result").appended for name in first}
 
     assert appended == first
     assert again == dict.fromkeys(first, 0)
     for name, count in first.items():
-        rows = spark.read.table(getattr(target, name)).collect()
+        rows = spark.read.table(getattr(socios_target, name)).collect()
         assert len(rows) == count
         assert {row[LOAD_DATE] for row in rows} == {LOADED_AT}
 
 
-def test_loading_july_after_june_adds_only_what_july_changed(spark, source, target):
+def test_loading_july_after_june_adds_only_what_july_changed(spark, socios_source, socios_target):
     """The incremental path, which is where a satellite seeded only by its own batch
     goes wrong. June writes eight active rows; July adds the relationship born in it and
     the close for the one that departed, and rewrites nothing that persisted."""
-    june = _load_all(spark, source, target, months=[JUN])
+    june = _load_all(spark, socios_source, socios_target, months=[JUN])
     counts = (june.link_result.appended, june.eff_result.appended, june.eff_result.closed)
-    both = _load_all(spark, source, target, load_date=RELOADED_AT, months=[JUN, JUL])
+    both = _load_all(spark, socios_source, socios_target, load_date=RELOADED_AT, months=[JUN, JUL])
 
     assert counts == (8, 8, 0)
     assert (both.link_result.appended, both.eff_result.appended) == (1, 2)
@@ -608,7 +507,7 @@ def test_no_column_unity_catalog_masks_is_read_into_the_vault(spark, loaded):
         frame = spark.read.table(table)
         strings = [name for name, kind in frame.dtypes if kind == "string"]
         found = frame.filter(
-            F.greatest(*(F.col(name) == F.lit(MASKED) for name in strings))
+            F.greatest(*(F.col(name) == F.lit(MASKED_READ) for name in strings))
         )
         assert found.count() == 0
 
@@ -621,17 +520,19 @@ def test_the_link_the_satellite_and_the_declared_omissions_partition_the_contrac
     A column absent from all three is indistinguishable from one someone forgot, which
     is why the omissions are a declared tuple with a reason beside each. Pure -- no
     Spark -- so a contract column added upstream turns it red in milliseconds."""
-    contract = set(_CONTRACT)
+    contract = set(SOCIOS_CONTRACT)
     identity, omitted = set(IDENTITY), set(UNMODELLED_SOCIOS_COLUMNS)
     entry = {EFF.entry_column}
 
     assert identity & omitted == set()
     assert entry & (identity | omitted) == set()
     assert identity | entry | omitted == contract
-    assert len(identity) + len(entry) + len(omitted) == len(_CONTRACT)
+    assert len(identity) + len(entry) + len(omitted) == len(SOCIOS_CONTRACT)
 
 
-def test_the_generic_link_loader_refuses_the_link_it_cannot_write(spark, source, target):
+def test_the_generic_link_loader_refuses_the_link_it_cannot_write(
+    spark, socios_source, socios_target
+):
     """`load_link` writes one reference per hub from the columns that hub is named
     after, and this link's partner end is derived. Left unrefused it would not crash --
     `link_candidates` would compute a partner reference from `cnpj_basico`, giving every
@@ -639,21 +540,19 @@ def test_the_generic_link_loader_refuses_the_link_it_cannot_write(spark, source,
     partnered with itself."""
     with pytest.raises(ValueError, match="dependent-child keys or a non-identifying"):
         load_link(
-            spark, LINK, hubs=LINK_HUBS, source_table=source.bronze,
-            target_table=target.link, load_date=LOADED_AT,
+            spark, LINK, hubs=LINK_HUBS, source_table=socios_source.bronze,
+            target_table=socios_target.link, load_date=LOADED_AT,
         )
 
-    assert not spark.catalog.tableExists(target.link)
+    assert not spark.catalog.tableExists(socios_target.link)
 
 
 def test_the_partner_loader_refuses_a_link_whose_dependent_child_keys_it_cannot_read(
-    spark, source, target
+    spark, socios_source, socios_target
 ):
     """The loader derives the partner root from `cpf_cnpj_socio` BY NAME, so a link
     declaring other dependent-child keys would load, be idempotent, join -- and leave
     every partner reference NULL. The refusal is what makes the coupling visible."""
-    from opl.vault.registry import BusinessKeyColumn, Link
-
     renamed = Link(
         name=LINK.name, hash_key=LINK.hash_key, hubs=LINK.hubs,
         dependent_child_keys=(BusinessKeyColumn(name="qualificacao_socio"),
@@ -662,55 +561,176 @@ def test_the_partner_loader_refuses_a_link_whose_dependent_child_keys_it_cannot_
 
     with pytest.raises(ValueError, match="derives the partner"):
         load_partner_link(
-            spark, renamed, hubs=LINK_HUBS, source_table=source.bronze,
-            target_table=target.link, load_date=LOADED_AT,
+            spark, renamed, hubs=LINK_HUBS, source_table=socios_source.bronze,
+            target_table=socios_target.link, load_date=LOADED_AT,
         )
 
 
-def test_a_grain_at_hub_grain_is_refused_by_the_effectivity_loader(spark, source, target):
+def test_a_grain_at_hub_grain_is_refused_by_the_effectivity_loader(
+    spark, socios_source, socios_target
+):
     """THE MISTAKE THAT WOULD FAIL SILENTLY AND FOREVER. A partner who loses one of two
     partnerships is `absent_after_observation` at LINK grain and plainly `observed` at
     hub grain, so a hub-grain ledger reports no departure and every window stays open --
     a satellite that answers, writes rows, and never closes anything."""
     coarser = ObservationGrain(
-        name="hub_empresa", bronze_table=source.bronze,
-        quarantine_table=source.quarantine, key_columns=("cnpj_basico",),
+        name="hub_empresa", bronze_table=socios_source.bronze,
+        quarantine_table=socios_source.quarantine, key_columns=("cnpj_basico",),
     )
 
     with pytest.raises(ValueError, match="keyed on the LINK's identity"):
         load_effectivity_satellite(
-            spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=source.bronze,
-            target_table=target.eff, load_date=LOADED_AT, grain=coarser,
+            spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=socios_source.bronze,
+            target_table=socios_target.eff, load_date=LOADED_AT, grain=coarser,
         )
 
-    assert not spark.catalog.tableExists(target.eff)
+    assert not spark.catalog.tableExists(socios_target.eff)
 
 
 def test_a_typed_key_column_is_refused_by_both_loaders_before_they_hash(
-    spark, source, target
+    spark, socios_source, socios_target
 ):
     """Spark casts a typed column silently and hashes the CAST, where `hash_key` raises
     on a value with no `.strip()`: one spelling answers and the other refuses, which no
     equivalence test over string corpora can see. Both loaders are checked, because each
-    projects the source itself."""
+    projects the socios_source itself."""
     typed = derived_table(
-        spark, source.db, "typed",
-        spark.read.table(source.bronze).withColumn(
+        spark, socios_source.db, "typed",
+        spark.read.table(socios_source.bronze).withColumn(
             "identificador_socio", F.col("identificador_socio").cast("int")
         ),
     )
     grain = ObservationGrain(
-        name=LINK.name, bronze_table=typed, quarantine_table=source.quarantine,
+        name=LINK.name, bronze_table=typed, quarantine_table=socios_source.quarantine,
         key_columns=IDENTITY,
     )
 
     for load in (
         lambda: load_partner_link(
-            spark, LINK, hubs=LINK_HUBS, source_table=typed, target_table=target.link,
+            spark, LINK, hubs=LINK_HUBS, source_table=typed, target_table=socios_target.link,
             load_date=LOADED_AT),
         lambda: load_effectivity_satellite(
             spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=typed,
-            target_table=target.eff, load_date=LOADED_AT, grain=grain),
+            target_table=socios_target.eff, load_date=LOADED_AT, grain=grain),
     ):
         with pytest.raises(TypeError, match="identificador_socio"):
             load()
+
+
+def test_an_effectivity_satellite_handed_a_link_it_does_not_name_is_refused(
+    spark, socios_source, socios_target
+):
+    """The pairing that decides WHICH RELATIONSHIP the table records, and the loader
+    took it as a free argument without checking it.
+
+    A mismatch does not fail: the load succeeds, keys every row on the other link's
+    hash key, and produces a plausible, fully populated table about a different
+    relationship. `load_satellite` guards exactly this for its own kind, for the reason
+    `links.py` already states -- the specs are free arguments so they can be tested
+    against throwaway values, and nothing but the check stops them being mismatched."""
+    other = domains.table_spec("link_empresa_estabelecimento")
+
+    with pytest.raises(ValueError, match="was handed link"):
+        load_effectivity_satellite(
+            spark, EFF, link=other, hubs=domains.linked_hubs(other),
+            source_table=socios_source.bronze, target_table=socios_target.eff,
+            load_date=LOADED_AT, grain=socios_source.grain,
+        )
+
+    assert not spark.catalog.tableExists(socios_target.eff)
+
+
+def test_a_grain_reading_another_table_than_the_source_is_refused(
+    spark, socios_source, socios_target
+):
+    """The grain's OTHER half, and the sibling of `load_satellite`'s. `_window`'s
+    refusal of an unloaded month is checked against `grain.bronze_table`, and the
+    departures come from there too -- so a grain pointing elsewhere would decide which
+    windows close from a different table's absences, with the observed rows perfectly
+    correct beside them."""
+    elsewhere = derived_table(
+        spark, socios_source.db, "elsewhere", spark.read.table(socios_source.bronze)
+    )
+    mispointed = ObservationGrain(
+        name=LINK.name, bronze_table=elsewhere, quarantine_table=socios_source.quarantine,
+        key_columns=IDENTITY,
+    )
+
+    with pytest.raises(ValueError, match="is being loaded from"):
+        load_effectivity_satellite(
+            spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=socios_source.bronze,
+            target_table=socios_target.eff, load_date=LOADED_AT, grain=mispointed,
+        )
+
+    assert not spark.catalog.tableExists(socios_target.eff)
+
+
+def test_a_relationship_with_no_business_key_at_all_can_depart(spark, socios_source, socios_target):
+    """THE NULL TRAP'S BLAST RADIUS, ASSERTED IN THE POSITIVE. The controller measured
+    **4 of the 65,444 real departures carrying a NULL `cpf_cnpj_socio`**
+    (`01f192c0-a8da-159e-81b6-0ed2cd6f1758`), and its first verification query -- a
+    `LEFT ANTI JOIN ... USING`, which is plain equality -- read every NULL-keyed foreign
+    partner as departed: 74,201 instead of 65,444, i.e. 8,757 phantom departures.
+
+    This vault avoids that by construction rather than by guarding each join: NULL is
+    absorbed into the digest by the hash standard's `N` token before anything compares
+    it, and the one place raw keys meet is the ledger's `groupBy`, which treats NULL as
+    a value equal to itself. The main fixture's foreign pair is present in BOTH months,
+    so until this test the property was only ever asserted in the negative.
+
+    `R_STAYS` is here to make July a loaded month; without it the ledger's window would
+    hold June alone and there would be no month for the absence to be in."""
+    table = f"{socios_source.db}.foreign_departs_{uuid4().hex[:8]}"
+    write_delta(spark, table, SOCIOS_SCHEMA, [
+        socios_row(R_FOREIGN_A, JUN, entrada="20150606"),
+        *(socios_row(R_STAYS, month, entrada="20100101") for month in (JUN, JUL)),
+    ])
+    grain = ObservationGrain(
+        name=LINK.name, bronze_table=table, quarantine_table=socios_source.quarantine,
+        key_columns=IDENTITY,
+    )
+    result = load_effectivity_satellite(
+        spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=table,
+        target_table=socios_target.eff, load_date=LOADED_AT, grain=grain,
+    )
+    rows = _eff_rows(spark, socios_target)
+    closing = rows[(_link_key(R_FOREIGN_A), JUL_REF)]
+
+    assert result.closed == 1
+    assert _applied(rows, R_FOREIGN_A) == [JUN_REF, JUL_REF]
+    assert closing[IS_ACTIVE] is False
+    assert closing[CLOSED_BY] == CLOSING_STATE.value
+    assert closing[LAST_OBSERVED_ON] == JUN_REF
+    assert _applied(rows, R_STAYS) == [JUN_REF]
+
+
+def test_two_rows_delivering_the_same_entry_date_are_broken_on_record_source(
+    spark, socios_source, socios_target
+):
+    """THE TIE, WHICH `F.min` OVER A STRUCT DECIDES QUIETLY. The rule is "the earliest
+    delivered entry date wins"; when two rows deliver the SAME date that is not a rule
+    at all until something breaks the tie. `min(struct(entry, record_source))` compares
+    field by field, so the tie falls to the lexicographically smaller `record_source` --
+    which is the difference between two runs agreeing and two runs agreeing by luck.
+
+    A second `record_source` value is not hypothetical: `add_audit_columns` takes one,
+    so a month re-ingested under another label carries a different value for the same
+    key."""
+    table = f"{socios_source.db}.tie_{uuid4().hex[:8]}"
+    write_delta(spark, table, SOCIOS_SCHEMA, [
+        socios_row(R_STAYS, JUN, entrada="20100101", record_source="zzz_reingest"),
+        socios_row(R_STAYS, JUN, entrada="20100101", record_source="aaa_first"),
+    ])
+    grain = ObservationGrain(
+        name=LINK.name, bronze_table=table, quarantine_table=socios_source.quarantine,
+        key_columns=IDENTITY,
+    )
+    result = load_effectivity_satellite(
+        spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=table,
+        target_table=socios_target.eff, load_date=LOADED_AT, grain=grain,
+    )
+    written = _eff_rows(spark, socios_target)[(_link_key(R_STAYS), JUN_REF)]
+
+    assert result.collapsed_duplicates == 1
+    assert written[EFF.entry_column] == "20100101"
+    assert written[RECORD_SOURCE] == "aaa_first"

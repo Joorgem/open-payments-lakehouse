@@ -55,6 +55,7 @@ from opl.vault.observation import (
     ObservationState,
     observation_ledger,
 )
+from opl.vault.registry import Link, LinkEnd
 from opl.vault.satellites import load_satellite
 
 from .conftest import (
@@ -621,3 +622,40 @@ def test_a_grain_declaring_the_key_columns_in_another_order_is_refused(
         )
 
     assert not spark.catalog.tableExists(estab_target.dados)
+
+
+def test_a_link_with_roled_ends_writes_its_references_under_the_role_prefixed_names(
+    spark, estab_source, estab_target
+):
+    """THE REGISTRY VALIDATES A LINK'S COLUMNS UNDER `LinkEnd.reference_column` AND THIS
+    LOADER USED TO WRITE THEM UNDER `hub.hash_key`. The two agree whenever no end has a
+    role, which is every link this domain declares -- so the divergence was invisible,
+    and it would have surfaced on the first roled link `load_link` was asked to write as
+    two validated columns collapsing into one, which is the exact collision the registry
+    guard exists to prevent.
+
+    `link_company_partner` cannot reach it: it has a derived end and this loader refuses
+    it. So the property is asserted against a throwaway roled link over the two hubs
+    this fixture already loads. The hash-key equality is what pins that roles name
+    COLUMNS and not keys -- a roled link and an unroled one over the same hubs are the
+    same relationship and must key identically."""
+    roled = Link(
+        name="link_roled", hash_key="link_roled_hk",
+        hubs=(LinkEnd(hub=EMPRESA_HUB.name, role="parent"),
+              LinkEnd(hub=HUB.name, role="child")),
+    )
+    load_link(
+        spark, roled, hubs=LINK_HUBS, source_table=estab_source.bronze,
+        target_table=estab_target.link, load_date=LOADED_AT,
+    )
+    written = spark.read.table(estab_target.link)
+    basico, ordem, dv = _padded(E_STATUS)
+
+    assert written.columns == [
+        "link_roled_hk", "parent_hub_empresa_hk", "child_hub_estabelecimento_hk",
+        LOAD_DATE, RECORD_SOURCE,
+    ]
+    assert written.count() == 10
+    assert hash_key([basico, basico, ordem, dv]) in {
+        row["link_roled_hk"] for row in written.collect()
+    }

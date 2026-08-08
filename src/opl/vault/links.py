@@ -53,7 +53,7 @@ from opl.vault.loading import (
     read_snapshot_window,
     rows_in,
 )
-from opl.vault.registry import Hub, Link
+from opl.vault.registry import Hub, Link, identifying_hubs
 
 
 @dataclass(frozen=True)
@@ -123,6 +123,17 @@ def _refuse_a_link_this_loader_cannot_write(link: Link) -> None:
         )
 
 
+def reference_columns(link: Link, hubs: Sequence[Hub]) -> list[str]:
+    """The link's hash key followed by one reference column per end, in write order.
+
+    Spelled once and read by the projection, the aggregate and the final `select`, so
+    the three cannot disagree about a role."""
+    return [
+        link.hash_key,
+        *(end.reference_column(hub) for end, hub in zip(link.ends, hubs, strict=True)),
+    ]
+
+
 def link_candidates(
     spark: SparkSession,
     link: Link,
@@ -146,19 +157,27 @@ def link_candidates(
     digests would make this load depend on the hubs having been loaded first and would
     silently drop a relationship whose hub row is missing. `hash_key_expression` is the
     same function `load_hub` keys with, so the digests agree by construction rather
-    than by ordering."""
+    than by ordering.
+
+    THE REFERENCE COLUMN NAME COMES FROM THE END, NOT FROM THE HUB, and that is a
+    correction rather than a nicety. `build_registry` validates a link's columns under
+    `LinkEnd.reference_column`, which prefixes the role; this loader used to write them
+    under `hub.hash_key`, which ignores it. A link with two roled ends on one hub was
+    therefore validated as two distinct columns and written as one -- the exact
+    collision the registry guard exists to prevent, reached by passing it."""
     source = read_snapshot_window(spark, source_table, months)
     components = [name for hub in hubs for name in hub.business_key_columns]
     refuse_non_string_columns(source, components)
     keyed = source.select(
-        link_hash_key_expression(link, hubs).alias(link.hash_key),
-        *(hash_key_expression(hub).alias(hub.hash_key) for hub in hubs),
+        link_hash_key_expression(link, identifying_hubs(link, hubs)).alias(link.hash_key),
+        *(
+            hash_key_expression(hub).alias(end.reference_column(hub))
+            for end, hub in zip(link.ends, hubs, strict=True)
+        ),
         F.col(SNAPSHOT_MONTH_COLUMN),
         F.col(BRONZE_RECORD_SOURCE),
     )
-    return earliest_record_source(
-        keyed, [link.hash_key, *(hub.hash_key for hub in hubs)]
-    )
+    return earliest_record_source(keyed, reference_columns(link, hubs))
 
 
 def load_link(
@@ -195,8 +214,7 @@ def load_link(
         )
     (
         candidates.select(
-            link.hash_key,
-            *(hub.hash_key for hub in hubs),
+            *reference_columns(link, hubs),
             F.lit(load_date).alias(LOAD_DATE),
             F.col(RECORD_SOURCE),
         )

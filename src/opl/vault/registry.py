@@ -92,6 +92,7 @@ import pkgutil
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import cast
 
 from opl.vault.columns import EFFECTIVITY_COLUMNS, METADATA_COLUMNS
 
@@ -378,8 +379,12 @@ class Link:
 
     @property
     def ends(self) -> tuple[LinkEnd, ...]:
-        """Every end, in declaration order, normalised to `LinkEnd`."""
-        return tuple(self.hubs)  # type: ignore[arg-type]
+        """Every end, in declaration order, normalised to `LinkEnd`.
+
+        `hubs` is DECLARED as what a caller may write and HOLDS what `__post_init__`
+        normalised it to; the cast says so once, here, rather than leaving every reader
+        of `link.hubs` to work out which of the two they have."""
+        return cast("tuple[LinkEnd, ...]", self.hubs)
 
     @property
     def identifying_ends(self) -> tuple[LinkEnd, ...]:
@@ -689,6 +694,20 @@ def parent_link(registry: Mapping[str, VaultTable], satellite: EffectivitySatell
     return parent
 
 
+def identifying_hubs(link: Link, hubs: Sequence[Hub]) -> tuple[Hub, ...]:
+    """The hubs of `link`'s IDENTIFYING ends, in declaration order.
+
+    ONE SPELLING OF THE FILTER, because two of them diverged. The first cut of
+    `opl.vault.effectivity` keyed on `hubs[0]` while its own grain guard compared
+    against `identity_columns_of`, which filters properly -- so a link with TWO
+    identifying ends (wave 2's `link_payment` is exactly that shape) would pass the
+    guard and then key the satellite on a digest that is not the link's hash key. Every
+    join from satellite to link would return nothing, silently. `hubs` is EVERY end's
+    hub, in the link's declaration order -- the list `linked_hubs` returns and the
+    loaders take -- so the filtering happens here rather than at each call site."""
+    return tuple(hub for end, hub in zip(link.ends, hubs, strict=True) if end.identifying)
+
+
 def identity_columns_of(link: Link, hubs: Sequence[Hub]) -> tuple[str, ...]:
     """The SOURCE columns a link's own hash key is taken over, in hash order: each
     identifying end's hub business key, then the dependent-child keys.
@@ -702,11 +721,8 @@ def identity_columns_of(link: Link, hubs: Sequence[Hub]) -> tuple[str, ...]:
     `hubs` is EVERY end's hub, in the link's declaration order -- the same list
     `linked_hubs` returns and the loaders take -- so the non-identifying ends are
     dropped here rather than by each caller."""
-    identifying = [
-        hub for end, hub in zip(link.ends, hubs, strict=True) if end.identifying
-    ]
     return tuple(
-        [name for hub in identifying for name in hub.business_key_columns]
+        [name for hub in identifying_hubs(link, hubs) for name in hub.business_key_columns]
         + list(link.dependent_child_key_columns)
     )
 
