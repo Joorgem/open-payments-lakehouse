@@ -116,6 +116,22 @@ The reconciliation is in the script's output, not in prose around it:
   land there, each with its own banner, so neither can be pasted as evidence
   that the suite passes.
 
+**It cannot report success while broken, and that guard was earned.** The first
+end-to-end run printed `VERDICT: RECONCILED` and then emitted
+`line 231: $'\n    fi\n    printf ': command not found` and
+`line 241: $1: unbound variable` — **at line numbers past the end of the
+228-line file that was running** — and exited **0**. Cause: bash reads a script
+**incrementally, by byte offset, while executing it**, so a ~1,470 s run holds
+the file open for twenty-five minutes, and the fix wave's own edit to it landed
+inside that window; bash resumed at an offset that now pointed into different
+text. Reproduced deliberately with a three-line probe, then fixed by ending the
+file with `{ main "$@"; exit $?; }` — a compound command bash parses in full
+before executing, so the `exit` is already in hand and nothing is read after it.
+**The weaker `main "$@"` followed by `exit $?` was tested and does not work**:
+that `exit` is read after `main` returns, from the offset that has already moved.
+A tool whose purpose is to be quotable must not be able to print a green verdict
+and then fail silently.
+
 **Its log directory is repo-relative and git-ignored, and that is a privacy
 decision.** The script prints its `logs:` line unconditionally and this document
 tells an operator to paste that output verbatim; an earlier version rooted the
@@ -150,49 +166,89 @@ EXIT=2
 ```
 
 710 + 59 + 51 + 102 = **922**, and the four chunks' node-id sets union to exactly
-the suite's — no test in no chunk, no test in two chunks.
+the suite's — no test in no chunk, no test in two chunks. (This is the
+**collect-only** reconciliation, which runs no test and exits 2; the full run that
+does is [§3.3](#33-the-suite-from-one-command-end-to-end--the-final-fix-wave-verbatim),
+where the same four chunks collect 932 after the fix wave's ten new tests.)
 
-### 3.3 The run path, proved on two chunks — Task 7, verbatim
+### 3.3 The suite, from one command, end to end — the final fix wave, verbatim
 
-**This task could not run the script end to end**: the same 600 s cap that forced
-the partition also forbids the ~1,460 s the four chunks take together, and
-background runs were being killed in this session. Two chunks were run through
-the script to prove the run path and the arithmetic. **The controller must run
-`bash scripts/run_suite.sh` end to end**; that is the command this document's
-central claim should ultimately quote.
+**This is the run the whole script exists to make quotable, and it is the first
+time anyone has had it.** Task 7 could only run two chunks through the script (the
+600 s cap forbids the ~1,500 s the four take together); §3.4 below is the
+four-hand-stitched measurement it had to fall back on. The command, its full
+output, and its exit code:
 
 ```
-$ bash scripts/run_suite.sh 2
-...
+$ bash scripts/run_suite.sh
+
+opl test suite, run as a reconciled partition of 4 chunks
+logs: .run-suite-logs/20260808-022948-502938
+
+COLLECTING (no tests run yet)
+  non-vault                 710 selected
+  vault-cnpj-hashing         59 selected
+  vault-estab-socios         54 selected
+  vault-ledger-registry     109 selected
+  (bare suite)              932 selected, 6 deselected
+
+PARTITION
+  partition vs suite      0 in no chunk, 0 in no suite run, 0 in two chunks
+
 RUNNING
-  vault-cnpj-hashing        59 passed    0 failed    214s  rc=0
+  non-vault                710 passed    0 failed    376s  rc=0
+  vault-cnpj-hashing        59 passed    0 failed    244s  rc=0
+  vault-estab-socios        54 passed    0 failed    555s  rc=0  !  within 2 min of the cap
+  vault-ledger-registry    109 passed    0 failed    327s  rc=0
 
 RECONCILIATION
-  chunk passes summed         59
-  --collect-only selected    922   (928 collected, 6 deselected)
+  chunk passes summed        932
+  --collect-only selected    932   (938 collected, 6 deselected)
+  logs                    .run-suite-logs/20260808-022948-502938
 
-VERDICT: PARTIAL -- 1 of 4 chunks. This run is NOT evidence that the
-  suite passes, and exits non-zero so it cannot be quoted as though it were.
+VERDICT: RECONCILED -- 932 passed, 932 selected, agreed by two derivations
 
-EXIT=2
+EXIT=0
 ```
 
-```
-$ bash scripts/run_suite.sh 4
-...
-RUNNING
-  vault-ledger-registry    102 passed    0 failed    291s  rc=0
+**What this establishes that four stitched invocations could not.** 710 + 59 + 54
++ 109 = **932**, matched against the bare suite's own `--collect-only` count by a
+second, independent derivation; and the node-id **sets** union to exactly the
+suite's — `0 in no chunk, 0 in no suite run, 0 in two chunks` — which is what
+proves the partition total *and* non-overlapping. One command, one timestamp, one
+exit code. **Nothing trails the verdict**, which is the [§3.1](#31-why-this-needed-a-script)
+guard doing its job.
 
-VERDICT: PARTIAL -- 1 of 4 chunks. ...
+**932, not 922**, because the final fix wave added ten tests: 3 on `changed_rows`'
+own precondition, 4 on `discover_domains`' refusals, 2 on the satellite's newly
+counted fold, and 1 on the link-grain refusal message. No new
+`src/opl/**/*.py` file, so `test_revision_stamp` is unchanged.
 
-EXIT=2
-```
+### 3.3.1 ⚠️ The partition is one task away from needing a re-split
 
-### 3.4 The last full-suite measurement, and its provenance
+**`vault-estab-socios` ran 555 s against a 600 s cap** and tripped the script's own
+warning — measured, not predicted. It was **519 s** on the controller's run
+immediately before; the ten new tests put ~36 s into that chunk and moved it into
+the warn band.
 
-**Controller-verified at `f71355b`**, four foreground chunks, because background
-runs had stopped surviving in that session (three consecutive kills) and the
-suite no longer fits one 600 s call:
+That is an operational fact for whoever adds wave 2's tables, and it is why the
+script **fails loudly rather than warns** at the cap: the partition is a property
+of today's runtimes, not a design. The thresholds are `!  within 2 min of the cap`
+at 480 s and `!! OVER THE 600s CAP -- SPLIT THIS CHUNK` at 600 s, both overridable
+via `SUITE_CHUNK_WARN` / `SUITE_CHUNK_CAP`.
+
+**The next task that adds a socios or estabelecimentos test should expect to split
+that chunk**, which is a two-line edit to `CHUNKS` in `scripts/run_suite.sh` — the
+reconciliation then proves the new partition is still total and non-overlapping,
+which is precisely the case it was built for.
+
+### 3.4 The previous measurement, kept for provenance
+
+**Controller-verified at `f71355b`**, four foreground chunks, before the script
+could be run end to end — background runs had stopped surviving in that session
+(three consecutive kills) and the suite no longer fits one 600 s call. Superseded
+by §3.3 and kept because it is what the 922 figure elsewhere in this document
+refers to:
 
 | chunk | command | result |
 |---|---|---|
@@ -201,11 +257,6 @@ suite no longer fits one 600 s call:
 | vault: estab + socios | `uv run pytest tests/vault/test_estabelecimento_vault.py tests/vault/test_socios_vault.py -q` | **51 passed** (567.55 s) |
 | vault: ledger, registry, loading, reference | `uv run pytest tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_registry.py tests/vault/test_reference_vault.py -q` | **102 passed** (330.38 s) |
 | — | `uv run ruff check .` | All checks passed |
-
-**The third chunk is at 567 s against a 600 s cap.** That is the reason
-`run_suite.sh` fails loudly rather than warns: the partition is a property of
-today's runtimes, and it will need re-splitting. The script prints `!  within 2
-min of the cap` at 480 s and `!! OVER THE 600s CAP -- SPLIT THIS CHUNK` at 600 s.
 
 ### 3.5 Task 7's own verification, after the correction pass
 
@@ -1556,7 +1607,9 @@ early.
 7. **The domain arithmetic is internally consistent.** Spot-verified across
    `domains/cnpj.py`, `partners.py`, `effectivity.py`, ADR 0011 and the socios test
    fixtures: `27,990,592 − 27,986,263 = 4,329`; `5 + 1,781 = 1,786`;
-   `717,650 + 27,260,118 + 12,824 = 27,990,592`; `27,260,118 / 999,853 ≈ 27`;
+   `717,650 + 27,260,118 + 12,824 = 27,990,592`; `27,260,118 / 999,853 ≈ 27`
+   **partnership rows per key — an upper bound on people per key, not an estimate
+   of it** ([§6](#d1--the-prescribed-hub_socio-business-key-does-not-identify));
    `8,266,470 / 16,644,534 = 49.7%`; `27,990,592 / 16,644,534 = 1.681`;
    `74,201 − 65,444 = 8,757`; `71,874,448 − 4 = 71,874,444`; the socios five-state
    table sums to 28,053,488 distinct keys in **both** months. The re-measured
@@ -1587,12 +1640,17 @@ The question this task is required to answer, and the honest list is not short.
    decision. **None of them is an output of the code in this branch.** A reader who
    remembers "the vault loaded 69M companies" has the wrong model; the vault has
    loaded nothing.
-2. **In the suite total.** 922 is a `--collect-only` count and a sum of four chunk
-   runs from a **single controller session at `f71355b`**. Task 7 ran two of those
-   four chunks through the new script and the other two are quoted from that
-   session. **Nobody has yet run `scripts/run_suite.sh` end to end**, which is
-   precisely the ambiguity the script was written to remove — so the script's own
-   value is, as of this writing, argued rather than demonstrated at full scale.
+2. **In the suite total — and this one is now CLOSED.** It read: "922 is a
+   `--collect-only` count and a sum of four chunk runs from a single controller
+   session at `f71355b` … **nobody has yet run `scripts/run_suite.sh` end to
+   end**, so the script's own value is argued rather than demonstrated." It has
+   since been run end to end twice, and the second run is quoted in full at
+   [§3.3](#33-the-suite-from-one-command-end-to-end--the-final-fix-wave-verbatim):
+   **932 passed, 932 selected, agreed by two derivations, exit 0**, one command
+   and one timestamp. The residual risk is smaller and different: it is a single
+   run on a single machine, and [§3.6](#36-timing-is-contention-not-a-code-property--a-correction-to-this-phases-own-record)'s
+   contention warning applies to its four timings even though the pass counts are
+   contention-free.
 3. **In §11.2's digests.** They are a SQL stand-in and are labelled as such in two
    places, which is two more than the number of places a reader is likely to check.
 4. **In an aggregate whose column scope drifted from its query.** The
