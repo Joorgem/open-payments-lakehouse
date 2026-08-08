@@ -18,15 +18,31 @@ departs and is NOT in July's quarantine (the 65,444), one is in July's quarantin
 absent from July's bronze (the 1,781), one is born in July (the 219,370 seen from the
 other end), and the rest are present in both.
 
-THIS IS THE OTHER HALF OF TASK 2'S ACCEPTANCE PROOF AND IT DOES NOT PROVE THE
-DISTINCTION ON ITS OWN. Socios supplies 65,444 true departures and NOT ONE departure
-caused by our own gate; estabelecimentos supplies four departures that are ALL our
-gate's and zero true ones. So a ledger that blamed the socios_source for every disappearance
-passes this file in full, and one that blamed our gate for every disappearance passes
-`test_estabelecimento_vault.py` in full. The discrimination lives in
+THIS IS THE OTHER HALF OF TASK 2'S ACCEPTANCE PROOF -- AND, UNLIKE THE ESTABELECIMENTOS
+HALF, THIS FILE DOES DISCRIMINATE ON ITS OWN. The distinction is worth stating exactly,
+because an earlier version of this paragraph got it backwards and ADR 0011 retracted it:
+
+  - ON REAL DATA the asymmetry is total. Socios supplies 65,444 true departures and NOT
+    ONE departure caused by our own gate; estabelecimentos supplies four departures that
+    are ALL our gate's and zero true ones. That is why Task 2's acceptance test has to
+    be cross-table: neither REAL population carries both causes.
+  - IN THIS FIXTURE it is not, and deliberately so. `R_REJECTED` is in June's bronze and
+    July's QUARANTINE -- a gate-caused departure that real socios does not have -- put
+    there precisely so the satellite's two branches can be asserted side by side. So a
+    ledger blaming the source for every disappearance turns
+    `test_a_departure_closes_a_window_and_a_key_our_own_gate_removed_does_not` red at
+    `states[(R_REJECTED, JUL)] == REJECTED`, at `_applied(rows, R_REJECTED)`, and at
+    `eff_result.closed == 1`, and takes three further tests with it.
+
+THE RETRACTED CLAIM, KEPT VISIBLE: this paragraph read "a ledger that blamed the source
+for every disappearance passes this file in full". IT DOES NOT. The sentence was true of
+the real TABLE and false of this FIXTURE, and it conflated the two. See ADR 0011's
+"What this task carries of Task 2's acceptance proof, and what it does not".
+
+The cross-table probe still exists and is still the one that pins the ledger itself:
 `test_observation.py::test_a_departure_reads_as_our_gate_on_one_table_and_as_the_sources_
-on_the_other`, which is cross-table and already exists. What THIS file adds is that the
-effectivity satellite ACTS on the distinction: one window closes and the other does not.
+on_the_other`. What THIS file adds is that the effectivity satellite ACTS on the
+distinction: one window closes and the other does not.
 
 THE MASKED COLUMNS ARE `***` IN THE FIXTURE BECAUSE THEY ARE `***` ON A REAL READ.
 Measured against live bronze (`01f192b4-a6f8-1849-9955-f321d9742180`): the Unity Catalog
@@ -188,16 +204,18 @@ def test_a_departure_closes_a_window_and_a_key_our_own_gate_removed_does_not(
 ):
     """THE ACCEPTANCE TEST, and the one that makes the ledger load-bearing rather than
     reported. Two relationships leave July's bronze for two different reasons. One is
-    `absent_after_observation` -- the socios_source stopped publishing it -- and its window
+    `absent_after_observation` -- the SOURCE stopped publishing it -- and its window
     closes. The other is `rejected_by_our_gate` -- it is in July's quarantine, so WE
-    removed it -- and its window must stay open, because the socios_source never said it ended.
+    removed it -- and its window must stay open, because the SOURCE never said it ended.
 
     THE TWO HALVES ARE ASSERTED TOGETHER FOR THE SAME REASON TASK 4's ARE. The close
     alone passes on a satellite that closes on any absence; the non-close alone passes
-    on one that never closes anything. Together they pin the gate ON THIS DATA -- and
-    only there: this table has no departure caused by our gate and estabelecimentos has
-    no true departure, so neither file alone can tell a correct ledger from one that
-    blames every disappearance on the same cause. See the module docstring.
+    on one that never closes anything. Together they pin the gate, and this test is
+    where the module docstring's correction bites: BECAUSE the fixture carries a
+    gate-caused departure the real table does not have, THIS test discriminates both
+    degenerate ledgers by itself. What no single-table fixture can do is prove the
+    LEDGER right at real scale -- there the causes are segregated by table, which is why
+    `test_observation.py`'s cross-table probe exists. See the module docstring.
 
     `last_observed_on` IS NOT AN END DATE and the assertion says so: it is June's ref
     date, the last month we SAW the relationship, not a date the RFB ever published."""
@@ -415,7 +433,7 @@ def test_the_satellite_keeps_the_delivered_open_under_the_sources_own_name(spark
     the inferred close for the delivered open without ignoring both.
 
     Pinned as a list for `_in_column_order`'s reason: `mode("append")` matches by
-    position, so a reordering would write our inference into the socios_source's column."""
+    position, so a reordering would write our inference into the SOURCE's own column."""
     assert spark.read.table(loaded.eff).columns == [
         LINK.hash_key, LOAD_DATE, APPLIED_DATE, RECORD_SOURCE, IS_ACTIVE,
         EFF.entry_column, LAST_OBSERVED_ON, CLOSED_BY,
@@ -426,7 +444,7 @@ def test_the_satellite_keeps_the_delivered_open_under_the_sources_own_name(spark
 
 
 def test_the_closing_row_carries_the_open_the_last_observed_month_delivered(spark, loaded):
-    """A closing row has no socios_source row -- that is what makes it a close -- so its
+    """A closing row has no SOURCE row -- that is what makes it a close -- so its
     delivered open and its `record_source` are carried forward from the last month we
     DID observe. Leaving them NULL would blank the window's open on the one row where a
     reader most needs both ends of it."""
@@ -440,7 +458,7 @@ def test_the_dedup_rule_keeps_the_earliest_delivered_entry_date(spark, loaded):
     """THE RULE, ASSERTED ON THE VALUE. Two June rows for one link key deliver
     `20200101` and `20150301`; the satellite must carry the EARLIER one. Deterministic,
     order-independent, and -- unlike a lowest-`hash_diff` tie-break -- not arbitrary:
-    the open of a window is the earliest moment the socios_source claims it began.
+    the open of a window is the earliest moment the SOURCE claims it began.
 
     The inequality is what a `first()` or a `max` would produce, either of which
     satisfies "one row per key per month" perfectly."""
@@ -593,7 +611,7 @@ def test_a_typed_key_column_is_refused_by_both_loaders_before_they_hash(
     """Spark casts a typed column silently and hashes the CAST, where `hash_key` raises
     on a value with no `.strip()`: one spelling answers and the other refuses, which no
     equivalence test over string corpora can see. Both loaders are checked, because each
-    projects the socios_source itself."""
+    projects the source TABLE itself rather than a frame derived from it."""
     typed = derived_table(
         spark, socios_source.db, "typed",
         spark.read.table(socios_source.bronze).withColumn(

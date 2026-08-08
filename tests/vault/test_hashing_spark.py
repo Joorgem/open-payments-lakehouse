@@ -2,7 +2,7 @@
 equivalence against the pure-Python one.
 
 WHY THAT IS THE WHOLE SHAPE OF THIS FILE. `opl.vault.hashing` is the standard, and
-its nine pinned digests are what make a change to it deliberate. `hashing_spark` is
+its ten pinned digests are what make a change to it deliberate. `hashing_spark` is
 a SECOND SPELLING of that standard -- the thing `opl.config`'s month rule was bitten
 by, where `2026-13` ended up refused at two of four entry points because one rule
 had two implementations. A second spelling of the HASH is worse: a drift re-keys the
@@ -220,8 +220,14 @@ def test_the_trim_class_names_exactly_the_characters_python_strips():
     THE DIVERGENCE THIS EXISTS FOR IS NOT HYPOTHETICAL, and it is why the module
     does not simply use Spark's `trim`. Spark SQL's `trim(str)` removes ASCII SPACE
     only (U+0020); Python's `str.strip()` removes 29 different characters, tab and
-    NBSP among them. Bronze is parsed from Latin-1 RFB CSVs, where a NBSP inside a
-    razão social is an ordinary thing. Left as `trim`, `"\\xa0"` would encode `W` in
+    NBSP among them. Bronze is parsed from cp1252 RFB CSVs, where a NBSP inside a
+    razão social is an ordinary thing. (This line said "Latin-1" until Task 7's
+    correction pass -- the reader is cp1252, `src/opl/bronze/reader.py:47`, and the
+    same file already says so correctly in three other places. It matters beyond
+    pedantry: cp1252 CAN produce characters above U+00FF -- `Š Œ Ž Ÿ š œ ž` and
+    assorted punctuation -- so any argument resting on a U+00FF ceiling is false, and
+    this file deliberately asserts encodability against the imported dialect instead of
+    restating a bound.) Left as `trim`, `"\\xa0"` would encode `W` in
     Python and `S1:\\xa0` in Spark -- two digests for one business key, silently, for
     the lifetime of the vault.
 

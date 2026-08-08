@@ -6,9 +6,16 @@ locked by `tests/vault/test_observation.py`, whose closing probe was run against
 two deliberately degenerate implementations and goes red against each (recorded
 in the F2 wave-1 task report). **The five-state model was then replicated in SQL
 against real bronze, independently of the implementation, and reproduces exactly**
-— cost and state distribution both, below. **What has not happened yet is a
-satellite consuming this ledger** — Tasks 3, 4 and 5 do that, and until then the
-ledger is a correct answer nobody has asked in anger.
+— cost and state distribution both, below. **A satellite now consumes it.** This
+sentence read *"what has not happened yet is a satellite consuming this ledger —
+Tasks 3, 4 and 5 do that, and until then the ledger is a correct answer nobody
+has asked in anger"*, which was true when the ADR was written at Task 2 and false
+from Task 5 onward. Task 5's `sat_eff_company_partner` is the first table whose
+CONTENT depends on which state the ledger returns; the last bullet of
+[Consequences](#consequences) records what each of Tasks 3, 4 and 5 actually
+wired. Corrected in Task 7's pass — a Status section asserting that something has
+not happened yet is the first thing a reader trusts and the last thing anyone
+revisits.
 
 ## Context
 
@@ -301,11 +308,21 @@ source passes a socios-only test in full. Both degenerate implementations were
 written and run; each turns the cross-table probe red while leaving the
 single-table test for the other shape green.
 
-> **A weaker claim was made first and is corrected here rather than deleted.** An
-> earlier statement of this argument read "no single table carries both absence
-> states". That is false: socios at link grain carries all five states in one
-> month (27,986,258 / 5 / 1,781 / 65,444 in 2026-07). The true statement is about
-> the **cause of a departure**, not about which states appear.
+> **A weaker claim was made first, corrected here rather than deleted — and the
+> correction itself overshot, which Task 7's pass fixes in place.** An earlier
+> statement of this argument read "no single table carries both absence states".
+> That is false. The correction then read *"socios at link grain carries all five
+> states in one month (27,986,258 / 5 / 1,781 / 65,444 in 2026-07)"* — **also
+> false, and contradicted by this ADR's own table above**, which lists exactly
+> four states for socios 2026-07. What the measurement supports is narrower and
+> is what the original claim actually needed: socios at link grain carries
+> `rejected_by_our_gate` **and** an absence state in the **same month**, and
+> carries **both** absence states across the two months (219,370
+> `absent_before_first_observation` in 2026-06, 65,444 `absent_after_observation`
+> in 2026-07). **No month of any table can carry five**: a key is either before
+> its first observation or after its last, never both, so the two absence states
+> are mutually exclusive within a month by construction. The true statement is
+> about the **cause of a departure**, not about which states appear.
 
 ## Consequences
 
@@ -323,9 +340,19 @@ single-table test for the other shape green.
 - **This ledger is deliberately weaker than an STS.** It records what we saw and
   will not tell anyone what happened. The research notes that a derived delete is
   understood in the DV community as a weaker claim than a delivered one; here it
-  is weaker still, because a third of the absence signal is our own doing. Any
-  satellite that wants to end-date has to say, in its own code, which state it is
-  acting on.
+  is weaker still, because **some** of the silence is our own doing rather than
+  the source's, and the ledger is what tells the two apart. Any satellite that
+  wants to end-date has to say, in its own code, which state it is acting on.
+
+  > **This bullet read "because a third of the absence signal is our own doing",
+  > corrected in Task 7's pass. No reading of the table above yields a third.**
+  > Over the two months measured, the gate-caused states total 4 + 1,792 + 1,781
+  > = **3,577** against **732,921** non-`observed` rows — **0.49%**. Restricted to
+  > DEPARTURES, which is what an end-dating satellite acts on, it is **4 of
+  > 65,448 — 0.006%**. The argument does not need a fraction and is stronger
+  > without one: what makes the derived delete weak is that **any** of the silence
+  > can be ours, not how much, because the four estabelecimentos rejects are
+  > **100%** of that table's departures.
 - **The deviation is now two-sided and documented.** ADR 0006 admits row-level
   quarantine; this ADR admits that doing so leaves the raw vault unable to
   distinguish two very different silences, and builds the missing distinction

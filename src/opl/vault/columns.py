@@ -1,18 +1,27 @@
 # src/opl/vault/columns.py
 """The DV2 metadata column names every hub, link and satellite in this vault carries.
 
-FOUR NAMES, IN ONE PLACE, AND NOTHING ELSE IN THIS MODULE. They are spelled by the
-registry's guards (which refuse a payload column that would collide with one), by the
-two loaders (which write them), and by every test that reads a vault table -- three
-groups that would otherwise each carry their own literal. A payload column silently
+SEVEN NAMES AND THE TWO FROZEN SETS OVER THEM, IN ONE PLACE, AND NOTHING ELSE IN THIS
+MODULE -- four DV2 metadata names, and three effectivity-window names that arrived with
+Task 5. (This paragraph read "FOUR NAMES ... the two loaders" until Task 7's correction
+pass; it was written when both were true and was not revisited when the kinds and the
+loaders multiplied.) They are spelled by the spec guards (which refuse a payload column
+that would collide with one), by the SIX loaders (which write them) -- `load_hub`,
+`load_satellite`, `load_link`, `load_partner_link`, `load_effectivity_satellite`,
+`load_reference_table` -- and by every test that reads a vault table: three groups that
+would otherwise each carry their own literal. A payload column silently
 overwritten by a metadata column of the same name is not a crash; it is a column full
 of plausible values with the source's own value gone, which is why the collision is
 refused rather than resolved.
 
-PURE: NOTHING HERE IMPORTS ANYTHING, so this module and `opl.vault.registry` -- whose
-per-table `__post_init__` guards are the only thing that reads `METADATA_COLUMNS` --
-both import where pyspark is not installed, and a spec can be declared and refused
-without a session.
+PURE: NOTHING HERE IMPORTS ANYTHING, so this module and `opl.vault.specs` -- whose
+per-table `__post_init__` guards are the only thing in this package that reads
+`METADATA_COLUMNS` -- both import where pyspark is not installed, and a spec can be
+declared and refused without a session. (Those guards lived in `opl.vault.registry`,
+which this paragraph named, until Task 6's fix round moved the five kind specs into
+`opl.vault.specs`; `registry.py` now reaches them through that import and does not
+read the frozen set itself. `opl.bronze.masking` has an unrelated `METADATA_COLUMNS`
+of its own, which is why the sentence says "in this package".)
 
 THAT DOES NOT MAKE THE REGISTRY AS A WHOLE SPARK-FREE, and an earlier version of this
 paragraph claimed it did. `opl.vault.domains.__init__` runs the whole-set guards at

@@ -4,7 +4,9 @@
 
 THE DECISION THIS MODULE IS, AND THE ALTERNATIVE IT REJECTS.
 
-`hash_key` is pure Python and its correctness is pinned by nine hard-coded digests.
+`hash_key` is pure Python and its correctness is pinned by TEN hard-coded digests
+(nine when this paragraph was written at Task 3; the accented one arrived with
+`test_a_pinned_digest_for_an_accented_component` in the same task's fix round).
 This layer has to key 69,062,849 companies per month, and 144M establishment rows
 behind them. Those two facts pull in opposite directions and there were two ways out:
 
@@ -21,7 +23,7 @@ behind them. Those two facts pull in opposite directions and there were two ways
      - AVAILABILITY. `opl.vault.hashing` is deliberately importable where pyspark is
        not installed, because the extraction scripts run off-Databricks. A UDF is the
        one shape that cannot be tested without a session, which puts the standard's
-       nine pinned digests behind a Spark dependency they currently do not have.
+       ten pinned digests behind a Spark dependency they currently do not have.
   2. A SPARK-NATIVE EXPRESSION -- `sha2` over a `concat_ws` of the same encoding.
      CHOSEN, and it is a SECOND SPELLING of the standard, which is the exact defect
      this repository has already been bitten by: `opl.config` records how two spellings
@@ -74,8 +76,13 @@ UNICODE VERSION -- JDK 17 ships Unicode 13.0. `str.upper()` uses CPython's, whic
 3.12 is Unicode 15.0. **Neither is pinned anywhere in this repository.** Measured over
 every cased character (java.version 17.0.19, CPython 3.12.13): the two spellings
 produce different digests for exactly FORTY characters, all of which gained a case
-mapping in Unicode 14.0 -- U+2C5F, U+A7C1, U+A7D1, U+A7D7, U+A7D9 and
-U+10597-U+105BC. A DBR upgrade onto Java 21 would re-key any vault row containing one.
+mapping in Unicode 14.0 -- U+2C5F, U+A7C1, U+A7D1, U+A7D7, U+A7D9, and the
+U+10597-U+105BC span MINUS U+105A2, U+105B2 and U+105BA, which do not diverge. (The
+three exclusions were missing from this sentence until Task 7's correction pass, which
+made the enumeration beside "exactly FORTY" name forty-three. `UNICODE_VERSION_DIVERGENCE`
+in `tests/vault/test_hashing_spark.py` is the authority; this prose is a reading of it
+and the test is what runs.) A DBR upgrade onto Java 21 would re-key any vault row
+containing one.
 
 WHAT IS DONE ABOUT IT, since it cannot be fixed from here. The forty are pinned as an
 EQUALITY in `test_the_two_spellings_upper_case_every_cased_character_the_same_way`, so

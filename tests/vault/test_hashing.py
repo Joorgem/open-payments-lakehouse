@@ -14,8 +14,13 @@ that mirrors the documented format in `opl.vault.hashing`'s module docstring. A
 change to the delimiter, the tag characters, or the trim/case rule turns these red
 without touching this file, which is the point.
 
-WHAT THIS FILE DOES NOT TEST: the WIRING of a satellite's business key to
-`hash_key` -- there is no satellite yet. Task 1 is the standard alone."""
+WHAT THIS FILE DOES NOT TEST: the WIRING of a satellite's business key to `hash_key`.
+Task 1 built the standard alone, when no satellite existed; four now do, and their
+wiring is pinned where they live -- `test_cnpj_vault.py::
+test_the_satellite_keys_on_the_same_digest_as_the_hub` and
+`test_estabelecimento_vault.py::test_both_satellites_key_on_the_same_digest_as_the_hub`.
+This file's scope is unchanged; the reason given for it ("there is no satellite yet")
+was true at Task 1 and was corrected in Task 7's pass."""
 from __future__ import annotations
 
 import subprocess

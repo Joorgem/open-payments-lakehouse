@@ -60,20 +60,35 @@ sixteen-column payload every time either moved. MEASURED across the 71,874,444
 establishments present in both 2026-06 and 2026-07
 (`01f192ac-d8be-1e59-99e5-05717e28efcc`):
 
-    `_dados`     (6 columns)   1,076,696 changed   1.50%
-    `_endereco`  (10 columns)    570,075 changed   0.79%
+    `_dados`     1,076,696 changed   1.50%
+    `_endereco`    570,075 changed   0.79%
 
     nome_fantasia 31,912 | cnae_fiscal_principal 84,588
     situacao_cadastral 976,355 | motivo_situacao_cadastral 976,333
 
-THE SPLIT IS WORTH 1.9x AND THE RIDE-ALONG COSTS 30x, which is the honest reading of
+THE MEASURED COLUMN SCOPE IS NARROWER THAN THE PAYLOAD, AND THESE TWO RATES ARE
+THEREFORE LOWER BOUNDS. This block read "(6 columns)" and "(10 columns)" until Task 7's
+correction pass, which is the payload width; the controller's record of the run scopes
+the aggregates to FOUR columns for `_dados` (the four named per-column below) and EIGHT
+for `_endereco` (the domestic-address eight, without the `nome_cidade_exterior`/`pais`
+pair). The two readings were never reconciled against the query text and cannot be from
+here -- this file has no workspace access -- so the weaker one is stated. A payload's
+true rate can only be HIGHER than a rate measured over a subset of it, so the DIRECTION
+of the argument below survives either reading; what does not survive is quoting 1.9x as
+a rate ratio between the two PAYLOADS. Settling it needs one re-run of the change-rate
+query over all sixteen modelled columns, named in the Task 7 report.
+
+THE SPLIT IS WORTH ~1.9x ON THE MEASURED SUBSET AND THE RIDE-ALONG COSTS 30x, which is
+the honest reading of
 those numbers and the one that argues the known cost. `nome_fantasia` (31,912) sits in
 `_dados` beside `situacao_cadastral` (976,355), so a status change rewrites a name that
 moved thirty times less often -- a wider spread than the 1.50/0.79 the cut itself
 rests on. It is still one cut and not the finest: `situacao_cadastral` and
-`motivo_situacao_cadastral` move together almost exactly (976,355 against 976,333,
-because the motivo is what explains the situação), so those two genuinely belong in one
-payload, and the case for a third satellite is `nome_fantasia` plus the CNAEs rather
+`motivo_situacao_cadastral` have near-identical change counts (976,355 against 976,333)
+and the motivo is what explains the situação, so those two almost certainly belong in
+one payload -- INFERRED, not measured, and the distinction is worth keeping because two
+columns can share a marginal count while changing on disjoint rows. No cross-tab was
+run. The case for a third satellite is `nome_fantasia` plus the CNAEs rather
 than a general subdivision. Splitting `_dados` later means rewriting
 `sat_estabelecimento_dados`; ADDING one of the unmodelled columns below is a new
 satellite and touches nothing.

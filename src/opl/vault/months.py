@@ -1,6 +1,10 @@
 # src/opl/vault/months.py
 """ONE spelling of "which months was I asked for", shared by the observation ledger
-and by both loaders.
+and by `opl.vault.loading`, through which every loader in this package reaches it.
+
+(This line read "by both loaders" until Task 7's correction pass. It was written when
+the package had two; it now has six, and `opl.vault.loading` is not a loader but the
+layer they share -- which is exactly the two importers the next paragraph names.)
 
 WHY THIS MODULE EXISTS AT ALL, since it is thirty lines. `opl.vault.observation` and
 `opl.vault.loading` each grew their own copy of the same three refusals -- a bare

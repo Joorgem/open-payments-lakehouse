@@ -10,8 +10,15 @@ separate expressions, a divergence does not fail, it produces a satellite or a l
 that joins to its hub and returns nothing. An empty join is the quietest wrong answer
 in this layer: no error, no row count anomaly on either side, and every downstream
 query simply reports that the company has no descriptive history and no
-establishments. `hash_key_expression` is called by `load_hub`, `load_satellite` and
-`load_link`, and there is no second way to spell it.
+establishments. `hash_key_expression` is called by `load_hub`, `load_satellite`,
+`load_link` and `load_partner_link`; `load_effectivity_satellite` keys through
+`link_hash_key_expression`, which is in this file beside it. `load_reference_table` is
+the one loader that calls neither, and deliberately: a reference table has no hash key
+at all (`opl.vault.specs.ReferenceTable` states that as its own decision). So every
+digest this vault writes is built here, and there is no second way to spell it. (This
+sentence named exactly three loaders until Task 7's correction pass -- true when it was
+written at Task 3, left behind by Tasks 5 and 6. The property it asserts is unchanged:
+one spelling, in this module.)
 
 THE MONTH WINDOW IS VALIDATED FOR SHAPE HERE AND FOR EXISTENCE ELSEWHERE. `is_month`
 is the one spelling of "YYYY-MM naming a real month" in this repository -- the rule
@@ -168,9 +175,13 @@ def link_hash_key_expression(link: Link, hubs: Sequence[Hub]) -> Column:
     THE UNAMBIGUITY IS WITHIN A FIXED HUB LIST, NOT ACROSS LINKS, and the difference
     matters before wave 2 adds a second link. The components are flattened with NO HUB
     BOUNDARY in the encoding, so a link over hubs keyed [x] + [y, z] and one over
-    [x, y] + [z] produce the SAME digest for the same values. Unreachable today -- there
-    is one link, and a digest is only ever compared against others from the same
-    `Link` spec -- but it becomes reachable the moment two links share a key space, and
+    [x, y] + [z] produce the SAME digest for the same values. Unreachable today, and the
+    reason has changed since this paragraph was written: there are now TWO links, not
+    one (`link_empresa_estabelecimento` flattens to four components,
+    `link_company_partner` to three), and the encoding is injective over component
+    lists, so two lists of different lengths cannot collide. A digest is also only ever
+    compared against others from the same `Link` spec. It becomes reachable the moment
+    two links share a key space of the same width, and
     the repair then is to prefix the link's own name into the component list rather than
     to change what a component means. Stated here so that decision is made deliberately
     rather than discovered.

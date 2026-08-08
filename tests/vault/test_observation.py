@@ -2,12 +2,16 @@
 shapes bronze actually has -- because the property this module exists to prove is
 one that NO SINGLE TABLE can demonstrate.
 
-WHY THE ACCEPTANCE TEST SPANS TWO TABLES, stated precisely (an earlier version of
-this reasoning said "no single table carries both absence states", which is FALSE
-and was corrected by measurement: socios at link grain carries all five states in
-one month -- 27,986,258 observed / 5 with rejected siblings / 1,781 rejected /
-65,444 absent, 2026-07). The true statement is about the CAUSE OF A DEPARTURE, and
-it is what a satellite and an effectivity window actually consult:
+WHY THE ACCEPTANCE TEST SPANS TWO TABLES, stated precisely. An earlier version of this
+reasoning said "no single table carries both absence states", which is FALSE and was
+corrected by measurement -- but the correction OVERSHOT and is itself corrected here
+(Task 7's pass). What the measurement shows is that socios at link grain carries
+`rejected_by_our_gate` AND an absence state IN THE SAME MONTH, and both absence states
+across the two months: 2026-06 is 27,832,321 observed / 5 siblings / 1,792 rejected /
+219,370 absent_BEFORE / 0 after, and 2026-07 is 27,986,258 / 5 / 1,781 / 0 before /
+65,444 absent_AFTER. FOUR of five in either month -- no month of any table can carry
+five, since a key is either before its first observation or after its last, never both.
+The true statement is about the CAUSE OF A DEPARTURE, what a satellite actually reads:
 
   - estabelecimentos 2026-06 -> 2026-07 has exactly **4** departures (keys in June's
     bronze, gone from July's) and **all 4** are our own DQ gate's doing -- the
@@ -118,8 +122,10 @@ def tables(spark, tmp_path_factory):
 
     DELTA FOR ALL FOUR, AND THAT WAS MEASURED RATHER THAN ASSUMED -- twice, in both
     directions. A Delta `saveAsTable` costs ~22 s on this box against ~0 for a temp
-    view, so ten of them put ~137 s of setup in front of 25 tests that only ever
-    read, and converting the two property fixtures (`empresas`, `returning`) to temp
+    view, so the EIGHT of them here put ~137 s of setup in front of tests that only ever
+    read (25 of them when this was measured at Task 2, 28 now; the counts read "ten" and
+    "25" until Task 7's pass, and every TIMING below is a Task-2 measurement rather than
+    a current one). Converting the two property fixtures (`empresas`, `returning`) to temp
     views did cut setup to 92 s exactly as predicted. It also made every test that
     reads them roughly THREE TIMES slower -- `empresas` 9.2 s -> 26.0 s, `returning`
     8.9 s -> 27.4 s -- because a view over `createDataFrame` is a local relation that
@@ -509,13 +515,19 @@ def test_a_key_rejected_in_every_month_is_never_reported_absent(spark, tables):
     }
 
 
-def test_a_quarantine_table_with_no_rows_at_all_still_produces_a_ledger(spark, tables):
+def test_a_key_with_no_quarantine_row_at_all_still_gets_a_state(spark, tables):
     """`K_RETURNS` and `K_STAYS` have no quarantine row at all, in any month: an
     empty side must contribute no state rather than emptying the result, which is
     what an inner join would do here. `K_REJECTED_FIRST`'s June quarantine row rides
     in the same ledger and does contribute a state -- that is the other property
     this fixture carries, pinned separately by
-    `test_a_month_we_rejected_counts_as_having_seen_the_key`."""
+    `test_a_month_we_rejected_counts_as_having_seen_the_key`.
+
+    RENAMED IN TASK 7's PASS from `test_a_quarantine_table_with_no_rows_at_all_still_
+    produces_a_ledger` -- accurate at `f347b5d` where `returning_q` was written empty,
+    falsified by `e1951b0` adding `K_REJECTED_FIRST`'s June row to it, which updated
+    this docstring and not the name. Assertions unchanged: the property was always
+    about a KEY with no quarantine row. Nothing else referenced the old name."""
     ledger = _ledger(spark, tables.returning_grain, months=[JUN, JUL])
 
     assert ledger == {

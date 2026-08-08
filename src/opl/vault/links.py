@@ -5,8 +5,15 @@ WHAT A LINK ROW ASSERTS, because everything below follows from it: "these hub ke
 were seen together". Not when the relationship started, not when it ended, not what it
 looked like -- a link carries its own hash key, one reference per participating hub,
 and the two pieces of DV2 metadata saying when WE first saw the pair and where it came
-from. Descriptive facts and effectivity windows belong to a satellite on the link,
-which this vault does not have yet (`opl.vault.registry` says why, and refuses one).
+from. Descriptive facts and effectivity windows belong to a satellite on the link --
+and since Task 5 the vault has one of those two: `sat_eff_company_partner`, an
+`EffectivitySatellite` loaded by `opl.vault.effectivity` and admitted by
+`registry._assert_every_effectivity_satellite_hangs_off_a_link`. A DESCRIPTIVE
+satellite on a link still does not exist and is still refused
+(`registry._assert_every_satellite_hangs_off_a_hub`); `registry.py`'s "WHAT IS STILL
+DELIBERATELY NOT HERE" says why. (This paragraph read "which this vault does not have
+yet" until Task 7's correction pass -- true at Task 4, falsified by Task 5 one commit
+range later, in the module the reader meets first.)
 
 SO THIS IS `load_hub` AT LINK GRAIN, AND IT IS DELIBERATELY THE SAME SHAPE. The
 anti-join-then-append, the earliest-`record_source` aggregate, the injected
