@@ -698,17 +698,33 @@ via `01f1926d-0b67-1186-9c93-0643761d6ac4`):
 
 | `cnpj_basico` | `applied_date` | razão social | payload hash (12) | satellite rows |
 |---|---|---|---|---|
-| 00000000 | 2026-06-13 | BANCO DO BRASIL SA | `7b5be2ebc84d` | **1** |
-| 00000000 | 2026-07-11 | BANCO DO BRASIL SA | `7b5be2ebc84d` | |
-| 00006290 | 2026-06-13 | DROGARIA CAMPEA POPULAR XA… | `eae9293b1e21` | **2** |
-| 00006290 | 2026-07-11 | XAVIER TOLEDO APOIO ADMINI… | `11ccd931ac6e` | |
-| 00012453 | 2026-06-13 | ELISIO SOARES OLIMPIO 0400… | `4d5d82fca3e3` | **2** |
-| 00012453 | 2026-07-11 | ELISIO SOARES OLIMPIO LTDA | `a3d6b665cc11` | |
+| 00000000 | 2026-06-13 | *(masked)* | `7b5be2ebc84d` | **1** |
+| 00000000 | 2026-07-11 | *(masked)* — same value | `7b5be2ebc84d` | |
+| 00006290 | 2026-06-13 | *(masked)* | `eae9293b1e21` | **2** |
+| 00006290 | 2026-07-11 | *(masked)* — a different value | `11ccd931ac6e` | |
+| 00012453 | 2026-06-13 | *(masked)* | `4d5d82fca3e3` | **2** |
+| 00012453 | 2026-07-11 | *(masked)* — a different value | `a3d6b665cc11` | |
 
 Two satellite rows for a company whose razão social changed, one for a company
 that did not, with `applied_date` taken from `_snapshot_ref_date` — the RFB's own
 declared dates, **not month-end**. That is `hash_diff` and a separated
-`applied_date` working on real data, and it is the answer to D6.
+`applied_date` working on real data, and it is the answer to D6. **The digests
+carry the whole demonstration**: equal across both dates on `00000000`, different
+on the other two. Nothing in the argument needs the strings.
+
+> **⚠️ THE RAZÃO SOCIAL VALUES ARE MASKED HERE AND WERE NOT ALWAYS.** This
+> document quoted all six verbatim until the final whole-branch review, and one
+> of them was a **natural person's full name followed by their CPF digits** —
+> the RFB's own razão social convention for an MEI, where the "company name" *is*
+> the individual. Publishing it in a repository intended to be public puts a
+> named private individual into the record, which is the exact class of exposure
+> [ADR 0008](adr/0008-pii-masking-socios.md)'s column
+> mask exists to prevent one layer down, and the same class as the operator
+> username this document redacts above. No other evidence document in `docs/`
+> quotes a razão social value; F1.4b names the column and its null counts only.
+> The `cnpj_basico` values stay, because they are the public identifiers the
+> statement ids are checkable against, and because a CNPJ root is a company
+> registration rather than a person.
 
 > **⚠️ CAVEAT, and it must not be dropped.** The hash above is a **SQL stand-in** —
 > plain `sha2(concat_ws('||', upper(trim(...)), …))` — and is **not**
