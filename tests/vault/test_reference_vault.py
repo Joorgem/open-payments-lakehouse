@@ -28,6 +28,7 @@ from uuid import uuid4
 
 import pytest
 
+from opl.vault.columns import LOAD_DATE, RECORD_SOURCE
 from opl.vault.domains.cnpj import (
     REF_CNAE,
     REF_MOTIVO,
@@ -36,7 +37,7 @@ from opl.vault.domains.cnpj import (
     REF_PAIS,
     REF_QUALIFICACAO,
 )
-from opl.vault.reference import load_reference_table, reference_candidates
+from opl.vault.reference import load_reference_table
 
 from .conftest import (
     JUL,
@@ -150,6 +151,20 @@ def _rows(spark, table: str) -> dict[str, str]:
     }
 
 
+def _full_rows(spark, table: str) -> list[tuple]:
+    """Every row's (`codigo`, `descricao`, `load_date`, `record_source`), sorted.
+
+    UNLIKE `_rows`, THIS DOES NOT COLLAPSE A DUPLICATE `codigo` INTO ONE DICT ENTRY --
+    a broken anti-join leaving two rows for one code is an extra tuple here, not a
+    coin-flip winner a dict comprehension would silently pick for you."""
+    return sorted(
+        (row["codigo"], row["descricao"], row[LOAD_DATE], row[RECORD_SOURCE])
+        for row in spark.read.table(table)
+        .select("codigo", "descricao", LOAD_DATE, RECORD_SOURCE)
+        .collect()
+    )
+
+
 # --------------------------------------------------------------------------- #
 # THE TRAP: two types sharing a codigo must not merge.
 # --------------------------------------------------------------------------- #
@@ -161,7 +176,7 @@ def test_two_colliding_codes_land_in_separate_tables_with_their_own_descriptions
     that grouped on `codigo` alone -- across types -- would produce ONE row for
     `'05'` in EITHER table, with one of the two descriptions silently gone. This
     fails on that mistake and passes only when both tables carry their own,
-    disjoint six rows."""
+    disjoint two rows."""
     motivo_table, _ = _load(spark, lookup_source, REF_MOTIVO)
     qualificacao_table, _ = _load(spark, lookup_source, REF_QUALIFICACAO)
 
@@ -207,12 +222,19 @@ def test_a_source_file_lookup_type_from_filename_cannot_classify_raises_before_a
     spark, vault_database
 ):
     """A lookup CSV whose suffix is not one of the six routes to nothing this
-    repository recognises. `lookup_type_from_filename` raises on it, and that
-    raise happens INSIDE `reference_candidates` -- before any candidate is built,
-    for ANY reference table's load -- rather than the row being silently excluded
-    from every type's filter."""
+    repository recognises. `lookup_type_from_filename` raises on it, and that raise
+    happens before any candidate is built, for ANY reference table's load, rather
+    than the row being silently excluded from every type's filter.
+
+    THROUGH `load_reference_table`, THE WRITER, NOT ONLY `reference_candidates`:
+    the earlier version of this test called the read-only helper directly, so "before
+    any write" was true only because `load_reference_table` happens to call
+    `_collapsed_duplicates` and `reference_candidates` before the append -- a fact
+    nothing pinned. Asserting through the writer, plus that the target table was
+    never created, is what actually closes the claim the test's name makes."""
     db = vault_database("lookup_naming_probe")
     bronze = f"{db}.lookup"
+    target = f"{db}.ref_probe"
     write_delta(spark, bronze, _LOOKUP_SCHEMA, [
         ("99", "MISTERIOSO", *audit_values(
             JUN, source_file=f"/Volumes/x/cnpj/{JUN}/lookups/F.K99999$Z.D60613.XPTOCSV",
@@ -220,7 +242,11 @@ def test_a_source_file_lookup_type_from_filename_cannot_classify_raises_before_a
     ])
 
     with pytest.raises(ValueError, match="unknown lookup suffix"):
-        reference_candidates(spark, REF_CNAE, source_table=bronze, months=None)
+        load_reference_table(
+            spark, REF_CNAE, source_table=bronze, target_table=target, load_date=LOADED_AT,
+        )
+
+    assert not spark.catalog.tableExists(target)
 
 
 # --------------------------------------------------------------------------- #
@@ -233,7 +259,12 @@ def test_a_later_months_changed_description_is_not_reflected(spark, lookup_sourc
     revised in a later snapshot for a `codigo` already loaded is NOT picked up,
     because the anti-join drops the candidate on `codigo` alone. This is the
     mechanism `opl.vault.reference`'s docstring states as a limitation; this test
-    is what makes that statement checked rather than asserted."""
+    is what makes that statement checked rather than asserted.
+
+    ROW COUNT FIRST, THEN VALUE: `_rows` collapses a duplicate `codigo` into one
+    dict entry, so a broken anti-join that left BOTH June's and July's row for
+    `'0111301'` in the target would still make the value assertion pass or fail on
+    a coin flip depending on collection order. Asserting exactly one row closes that."""
     db = lookup_source.db
     revised_bronze = f"{db}.lookup_revised_{uuid4().hex[:8]}"
     write_delta(spark, revised_bronze, _LOOKUP_SCHEMA, [
@@ -246,12 +277,18 @@ def test_a_later_months_changed_description_is_not_reflected(spark, lookup_sourc
         spark, REF_CNAE, source_table=revised_bronze, target_table=target,
         load_date=LOADED_AT, months=[JUN],
     )
-    load_reference_table(
+    second = load_reference_table(
         spark, REF_CNAE, source_table=revised_bronze, target_table=target,
         load_date=RELOADED_AT, months=[JUN, JUL],
     )
 
+    assert spark.read.table(target).count() == 1
     assert _rows(spark, target)["0111301"] == "CULTIVO DE ARROZ"
+    # THE MULTI-MONTH WINDOW THAT PINS THE I1 FIX: '0111301' recurs in BOTH June
+    # and July here, which is the ordinary shape of a republished reference list,
+    # not a same-month source duplicate -- `collapsed_duplicates` must read 0, not
+    # 1. Projecting `codigo` alone (the pre-fix shape) would have reported 1.
+    assert second.collapsed_duplicates == 0
 
 
 def test_a_second_load_is_idempotent(spark, lookup_source):
@@ -264,6 +301,43 @@ def test_a_second_load_is_idempotent(spark, lookup_source):
     assert first.appended == 1
     assert second.appended == 0
     assert second.already_present == 1
+
+
+def test_reloading_one_of_the_colliding_pair_stays_idempotent_and_still_separate(
+    spark, lookup_source
+):
+    """`REF_PAIS` above shares no `codigo` with anything else, so a broken anti-join
+    OR a broken routing filter could each pass it by accident. `REF_MOTIVO` is one
+    half of the measured `codigo='05'` collision: re-loading it must not duplicate
+    its own two rows AND must not pick up `REF_QUALIFICACAO`'s row for the same code
+    on the second pass -- idempotence and routing, exercised together, on the type
+    that actually collides."""
+    target, first = _load(spark, lookup_source, REF_MOTIVO)
+    second = load_reference_table(
+        spark, REF_MOTIVO, source_table=lookup_source.bronze, target_table=target,
+        load_date=RELOADED_AT,
+    )
+
+    assert first.appended == 2
+    assert second.appended == 0
+    assert _rows(spark, target) == {"05": "MOTIVO CINCO", "00": "SEM MOTIVO"}
+
+
+def test_the_target_carries_the_injected_load_date_and_the_earliest_record_source(
+    spark, lookup_source
+):
+    """Every loader in this package refuses to stamp its own clock -- `load_date`
+    has no default, per `load_hub`'s reason: a loader that stamped `current_
+    timestamp()` internally could not be asserted against at all. Nothing in this
+    file had asserted `load_date` or `record_source` on a written row before this
+    fix round, which is precisely the gap that reason describes: the no-default
+    parameter existed and nothing checked it landed. `_full_rows` closes it, in the
+    shape `test_cnpj_vault.py` holds every hub and satellite to."""
+    target, _ = _load(spark, lookup_source, REF_PAIS, load_date=LOADED_AT)
+
+    assert _full_rows(spark, target) == [
+        ("232", "ESTADOS UNIDOS", LOADED_AT, RECORD_SOURCE_VALUE)
+    ]
 
 
 # --------------------------------------------------------------------------- #

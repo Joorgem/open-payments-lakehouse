@@ -321,8 +321,8 @@ UNMODELLED_SOCIOS_COLUMNS = (
 )
 
 # --------------------------------------------------------------------------- #
-# The six reference tables: natural key, no hub, no hash key. `opl.vault.
-# registry_reference` argues the kind; `opl.vault.reference` is the loader and
+# The six reference tables: natural key, no hub, no hash key. `opl.vault.specs`
+# argues the kind (see `ReferenceTable` there); `opl.vault.reference` is the loader and
 # argues why these six tables cannot have a change-detection or end-dating path
 # exercised on them -- `bronze_cnpj_lookup` is 2026-06 ONLY, because the 2026-07
 # lookup zips were never published in that month's set. There is no second

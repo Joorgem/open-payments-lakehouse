@@ -90,10 +90,22 @@ class ReferenceLoadResult:
 
     table: str
     appended: int
+    # What the target already held before this load, per `HubLoadResult.
+    # already_present`'s reason: not "how many of this window's codes were already
+    # there" -- the target may hold codes from months outside the window, and
+    # reporting a narrower number than the one that was measured would be a claim
+    # the count cannot support.
     already_present: int
-    # (codigo, month) pairs that shared a group and were folded to one -- see the
-    # module docstring: zero in every measured 2026-06 count, reported because the
-    # dedup argument rests on this number staying small.
+    # Rows sharing a (`codigo`, month) pair -- WITHIN one month, like
+    # `opl.vault.partners._collapsed_duplicates` -- folded to one. NOT a count of
+    # `codigo` recurring ACROSS months in a multi-month window: that recurrence is
+    # the ordinary shape of a reference list the RFB republishes whole every time,
+    # `reference_candidates` folds it the same way (earliest month wins) without it
+    # being a data-quality defect, and counting it here would report thousands on
+    # the first multi-month load for a table that folded nothing wrong. See
+    # `_collapsed_duplicates` and the module docstring: zero in every measured
+    # 2026-06 count, reported because the dedup argument rests on this number
+    # staying small.
     collapsed_duplicates: int
 
 
@@ -159,12 +171,20 @@ def reference_candidates(
 def _collapsed_duplicates(
     spark: SparkSession, ref: ReferenceTable, source_table: str, months: Sequence[str] | None
 ) -> int:
-    """Routed rows in the window, minus distinct `codigo` values among them -- the
-    same second-pass shape `opl.vault.partners._collapsed_duplicates` uses, for its
-    reason: the dedup argument rests on this number being small, so the load that
-    folds duplicates is the load that says how many."""
+    """Routed rows in the window, minus distinct (`codigo`, month) pairs among them --
+    the same second-pass shape `opl.vault.partners._collapsed_duplicates` uses, and
+    projecting the SAME two columns it does (`partners.py` selects `(link key,
+    SNAPSHOT_MONTH_COLUMN)`), for the same reason: this counts a genuine data-quality
+    duplicate -- two source rows for one `codigo` in ONE month -- not a `codigo`
+    recurring in a LATER month, which `reference_candidates`'s own fold treats as the
+    normal shape of a republished reference list rather than something to warn about.
+    Projecting `ref.natural_key` alone here would count every such recurrence too, and
+    on the first multi-month load would report thousands where nothing was actually
+    wrong; `test_a_later_months_changed_description_is_not_reflected` pins the zero."""
     source = read_snapshot_window(spark, source_table, months)
-    keyed = _routed_to_type(source, ref.lookup_type).select(ref.natural_key)
+    keyed = _routed_to_type(source, ref.lookup_type).select(
+        ref.natural_key, SNAPSHOT_MONTH_COLUMN
+    )
     return keyed.count() - keyed.distinct().count()
 
 
@@ -185,7 +205,13 @@ def load_reference_table(
     load that should be a no-op), not delete-then-append (two Delta commits, a
     failure window between them), an anti-join on the natural key is one commit and a
     free re-run. `load_date` has no default for `load_hub`'s reason: a loader that
-    stamps its own clock cannot be asserted against."""
+    stamps its own clock cannot be asserted against.
+
+    NOTED, NOT RESTRUCTURED: `_collapsed_duplicates` and `reference_candidates` each
+    re-read and re-route the source, so one load costs two Spark reads and two
+    driver-side collects -- twelve across all six tables. Nothing at 7,408 rows;
+    sharing one pre-routed frame between the two is the cleanup once this table
+    stops being tiny."""
     before = rows_in(spark, target_table)
     collapsed = _collapsed_duplicates(spark, ref, source_table, months)
     candidates = reference_candidates(spark, ref, source_table=source_table, months=months)

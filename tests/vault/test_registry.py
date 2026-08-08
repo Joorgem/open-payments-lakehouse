@@ -526,7 +526,7 @@ def test_the_specs_are_frozen():
 # --------------------------------------------------------------------------- #
 
 def test_a_reference_table_registers_with_no_relationship_to_resolve():
-    """The whole finding `opl.vault.registry_reference` argues: a reference table
+    """The whole finding `opl.vault.specs` argues for `ReferenceTable`: a reference table
     names no other table, so it needs no whole-set guard -- only the per-table
     `__post_init__` below, which already ran before `build_registry` was called.
     A domain of a reference table ALONE builds clean, unlike a satellite or a link,
@@ -622,3 +622,28 @@ def test_the_cnpj_domain_models_all_six_reference_types_including_pais():
     }
     for ref in REFERENCE_TABLES:
         assert (ref.natural_key, ref.payload) == ("codigo", "descricao")
+
+
+# --------------------------------------------------------------------------- #
+# The specs.py split (fix round 1) and the re-export contract it depends on
+# --------------------------------------------------------------------------- #
+
+def test_every_kind_specs_declares_is_re_exported_by_registry():
+    """`registry.py`'s `__all__` is HAND-MAINTAINED -- unlike every whole-set guard
+    in this file, which reads `VaultTable` rather than restating it, nothing derives
+    the re-export list from `opl.vault.specs` automatically. Every caller in this
+    repository writes `from opl.vault.registry import Hub` (and `Satellite`, `Link`,
+    `LinkEnd`, `EffectivitySatellite`, `ReferenceTable`, `BusinessKeyColumn`,
+    `VaultTable`) and none writes `from opl.vault.specs import ...` directly, so a
+    future edit to `registry.py` that dropped one of these silently would break
+    every one of those imports -- loudly, at collection time, but only for the
+    files that happen to import the dropped name. This test is the one place that
+    checks the WHOLE list against its source in a single assertion."""
+    import opl.vault.registry as registry_module
+    import opl.vault.specs as specs_module
+
+    for name in (
+        "BusinessKeyColumn", "EffectivitySatellite", "Hub", "Link", "LinkEnd",
+        "ReferenceTable", "Satellite", "VaultTable",
+    ):
+        assert getattr(registry_module, name) is getattr(specs_module, name), name

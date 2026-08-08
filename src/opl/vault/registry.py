@@ -18,9 +18,10 @@ satellites and its `link_payment` is a link -- so the claim the plan stakes is c
 kind for kind rather than by analogy. Note that `link_payment`'s `transaction_id` is a
 DEPENDENT-CHILD KEY, which `Link` now carries, so wave 2 does not need this file for
 that either. A domain introducing a NEW table kind still does not clear the bar: the
-kind and its guards land in this file, exactly as `Link` did in Task 4 and
-`EffectivitySatellite` in Task 5, which is an edit inside WAVE 1 and is what the plan
-always said would happen. `test_a_new_domain_of_hubs_satellites_and_links_is_
+kind and its own `__post_init__` land in `opl.vault.specs`, and its whole-set guard (if
+it needs one) and its word in the `VaultTable` union land here, exactly as `Link` did in
+Task 4 and `EffectivitySatellite` in Task 5, which is an edit inside WAVE 1 and is what
+the plan always said would happen. `test_a_new_domain_of_hubs_satellites_and_links_is_
 discovered_without_editing_any_file` builds a throwaway domain carrying wave 2's three
 tables by name and registers it.
 
@@ -47,11 +48,11 @@ touching the real registry, which is how the "+N files, 0 modified" property is
 asserted rather than asserted about (`tests/vault/test_registry.py`).
 
 THE GUARDS RUN WHERE THE MISTAKE IS, in the house style of `opl.bronze.registry`:
-everything checkable about one table is refused in its `__post_init__`, before Spark
-and before any registry exists; everything that needs to see the other tables is
-refused in `build_registry`, which `domains/__init__.py` calls at import so a
-malformed registry breaks the import of every module that reads it rather than the
-one job that touches that table.
+everything checkable about one table is refused in its `__post_init__` (in
+`opl.vault.specs`), before Spark and before any registry exists; everything that
+needs to see the other tables is refused in `build_registry`, which
+`domains/__init__.py` calls at import so a malformed registry breaks the import of
+every module that reads it rather than the one job that touches that table.
 
 WHAT TASK 5 ADDED, AND WHY EACH OF THE THREE WAS WORTH A NEW CONCEPT RATHER THAN A
 WORKAROUND. All three were predicted here by name in Task 4 and left out until the data
@@ -86,14 +87,16 @@ No table QUALIFICATION either -- a spec carries an unqualified `name`, and the l
 take the qualified table as an argument, so `opl.config` is consulted in the domain
 module and in the job task and nowhere in this layer.
 
-TASK 6'S KIND LIVES IN A SEPARATE FILE, `opl.vault.registry_reference`, and the
-decision is argued there rather than restated here: a DV2 reference table (CNAE,
-município, natureza jurídica, motivo, qualificação de sócio, país) has a natural key
-and a payload and joins to nothing here through a digest, so it carries neither a
-hash key nor a `parent` this module's whole-set guards would need to resolve.
-`VaultTable` and the `isinstance` guards below read the union rather than restating
-it, so this file's only change for a table kind with nothing to resolve is the
-import and the word added to `VaultTable`."""
+THE FIVE KIND SPECS MOVED TO `opl.vault.specs` IN TASK 6'S FIX ROUND, and this module
+imports every one of them back -- `from opl.vault.registry import Hub` and the like
+keep working unchanged for every caller in this repository, because the names below
+ARE those imports, not a restatement of them. Why the move, and the rule for the next
+kind, are argued in full in `opl.vault.specs`'s own module docstring rather than here:
+in short, this file reached 799 of its 800-line cap adding `ReferenceTable`'s own module
+in Task 6, one line of headroom was not enough room for review's own corrections to
+land, and the fix is to keep every kind's SHAPE in one module built to hold several of
+them, while this file keeps the MECHANISM -- discovery, the whole-set guards, and
+resolution -- which is what it was always for."""
 from __future__ import annotations
 
 import importlib
@@ -101,10 +104,44 @@ import pkgutil
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import cast
 
-from opl.vault.columns import EFFECTIVITY_COLUMNS, METADATA_COLUMNS
-from opl.vault.registry_reference import ReferenceTable
+from opl.vault.specs import (
+    BusinessKeyColumn,
+    EffectivitySatellite,
+    Hub,
+    Link,
+    LinkEnd,
+    ReferenceTable,
+    Satellite,
+    VaultTable,
+)
+
+# Re-exported so `from opl.vault.registry import BusinessKeyColumn` (and every other
+# kind name) keeps resolving for callers written before the Task 6 fix-round split --
+# `opl.vault.specs` is where they are DEFINED, this module is where every caller in
+# this repository already imports them FROM. `ruff` would flag these as unused
+# without `__all__` naming them; the list is the re-export contract, spelled once.
+__all__ = [
+    "BusinessKeyColumn",
+    "EffectivitySatellite",
+    "Hub",
+    "Link",
+    "LinkEnd",
+    "ReferenceTable",
+    "Satellite",
+    "UnknownVaultTable",
+    "VaultDomain",
+    "VaultTable",
+    "build_registry",
+    "discover_domains",
+    "identifying_hubs",
+    "identity_columns_of",
+    "link_identity_columns",
+    "linked_hubs",
+    "parent_hub",
+    "parent_link",
+    "table_spec",
+]
 
 # The name a domain module must bind at module level. One attribute, spelled once,
 # because `discover_domains` reads it by name and a module that spells it differently
@@ -120,340 +157,6 @@ class UnknownVaultTable(ValueError):
     argument, so prose written for an operator's run log arrives quoted and escaped;
     and an `except KeyError` several frames up in a job entry point would swallow a
     mistyped table name and replace this message with a generic one."""
-
-
-@dataclass(frozen=True, kw_only=True)
-class BusinessKeyColumn:
-    """One column of a business key, and the fixed width it is padded to.
-
-    `width=None` MEANS "TAKE THE VALUE AS IT IS", not "width unknown". Zero-padding is
-    a claim about a column's canonical form -- `cnpj_basico` is eight characters, so a
-    seven-character value read from a source that dropped a leading zero is the SAME
-    key -- and that claim is false for a name or a free-text identifier, where padding
-    would invent characters. Only a caller who knows the width may assert one.
-
-    `kw_only`, like `opl.bronze.registry.BronzeTable`: `name` and `width` are adjacent
-    and a positional construction that swapped them would be a type error today and a
-    silent mis-padding the day a width becomes a string."""
-
-    name: str
-    width: int | None = None
-
-    def __post_init__(self) -> None:
-        if not self.name or not self.name.strip():
-            raise ValueError("a business-key column needs a name")
-        if self.width is not None and self.width <= 0:
-            raise ValueError(
-                f"business-key column {self.name!r} declares width {self.width!r}. It "
-                "must be a positive integer: a width of zero pads every value to the "
-                "empty string, which collapses the whole hub onto one hash key"
-            )
-
-
-def _validated_columns(columns: Sequence[str], *, owner: str, role: str) -> tuple[str, ...]:
-    """`columns` as a frozen tuple, or refuse -- the three mistakes a column list makes.
-
-    Shared by the hub's business key and the satellite's payload because the three are
-    the same mistakes in both places, and a second copy would be a second thing to keep
-    in step with `METADATA_COLUMNS`."""
-    if isinstance(columns, str):
-        raise TypeError(
-            f"{owner} received a bare str {columns!r} as its {role} -- a str is a "
-            "Sequence[str] structurally, so no type checker catches this and it "
-            f"iterates to one column per CHARACTER; pass a tuple, e.g. ({columns!r},)"
-        )
-    frozen = tuple(columns)
-    if not frozen:
-        raise ValueError(f"{owner} names no {role} column -- it needs at least one")
-    if len(set(frozen)) != len(frozen):
-        raise ValueError(f"{owner} names a {role} column more than once ({frozen})")
-    reserved = sorted(set(frozen) & METADATA_COLUMNS)
-    if reserved:
-        raise ValueError(
-            f"{owner} names {reserved} as a {role} column, and the loaders write "
-            f"those themselves ({', '.join(sorted(METADATA_COLUMNS))}). The collision "
-            "does not crash: the metadata value wins on the write, so the source's "
-            "own value disappears and the column is still there, full of plausible "
-            "numbers. Rename the column in the spec"
-        )
-    return frozen
-
-
-@dataclass(frozen=True, kw_only=True)
-class Hub:
-    """A DV2 hub: a business key, its hash key, and nothing else.
-
-    Per master spec section 4.2 the loaded table also carries `load_date` (LDTS) and
-    `record_source` (RSRC); those are not fields here because they are not
-    per-table decisions -- every hub carries them, and `opl.vault.columns` names them
-    once."""
-
-    name: str
-    hash_key: str
-    business_keys: Sequence[BusinessKeyColumn]
-
-    def __post_init__(self) -> None:
-        if not self.name or not self.hash_key:
-            raise ValueError(f"a hub needs a name and a hash-key column ({self.name!r})")
-        keys = tuple(self.business_keys)
-        if any(not isinstance(key, BusinessKeyColumn) for key in keys):
-            raise TypeError(
-                f"hub {self.name!r} must declare its business key as "
-                "BusinessKeyColumn values -- a bare column name cannot carry the "
-                "zero-pad width, and a hub whose key is not padded to its canonical "
-                "width matches nothing"
-            )
-        names = _validated_columns(
-            [key.name for key in keys], owner=f"hub {self.name!r}", role="business-key"
-        )
-        if self.hash_key in names:
-            raise ValueError(
-                f"hub {self.name!r} names {self.hash_key!r} as both its hash key and a "
-                "business-key column. The write would put the digest where the "
-                "business key belongs: right row count, right column names, and the "
-                "key it was derived from gone"
-            )
-        object.__setattr__(self, "business_keys", keys)
-
-    @property
-    def business_key_columns(self) -> tuple[str, ...]:
-        """Just the column names, in declaration order -- the order the hash is taken
-        in, so it is not incidental."""
-        return tuple(key.name for key in self.business_keys)
-
-
-@dataclass(frozen=True, kw_only=True)
-class Satellite:
-    """A DV2 satellite: a parent hub, and the payload whose change it records.
-
-    NO HASH-KEY FIELD, DELIBERATELY. A satellite's hash key IS its parent's, and a
-    satellite free to spell it independently is a satellite a typo can point at
-    nothing -- silently, as an empty join rather than an error. `parent_hub` resolves
-    it, and `build_registry` refuses a parent that is not a registered hub, so the two
-    cannot disagree."""
-
-    name: str
-    parent: str
-    payload_columns: Sequence[str]
-
-    def __post_init__(self) -> None:
-        if not self.name or not self.parent:
-            raise ValueError(f"a satellite needs a name and a parent ({self.name!r})")
-        object.__setattr__(
-            self,
-            "payload_columns",
-            _validated_columns(
-                self.payload_columns, owner=f"satellite {self.name!r}", role="payload"
-            ),
-        )
-
-
-@dataclass(frozen=True, kw_only=True)
-class LinkEnd:
-    """One end of a link: the hub it references, the ROLE it plays in the relationship,
-    and whether that reference is part of the link's identity.
-
-    THE ROLE IS WHAT MAKES A SELF-REFERENCING LINK EXPRESSIBLE, and Task 4 predicted
-    needing it: `link_company_partner` references `hub_empresa` at both ends -- a
-    company and a partner that is itself a company -- and without a role both would be
-    written into one column named after that hub's hash key, so one end of the
-    relationship would silently be gone. `reference_column` prefixes the role, so the
-    two ends are `company_hub_empresa_hk` and `partner_hub_empresa_hk`. A role of
-    `None` keeps the hub's own hash-key name, which is what every single-role link
-    wants and what `link_empresa_estabelecimento` has always had.
-
-    `identifying=False` MARKS A REFERENCE THE LINK RESOLVES RATHER THAN ONE IT IS
-    IDENTIFIED BY, and this is a real distinction rather than a flag. The partner
-    company's `cnpj_basico` is the first eight characters of `cpf_cnpj_socio`, which is
-    already a dependent-child key of the link -- so the reference is a FUNCTION of the
-    identity, not a part of it. Hashing it as well would make the link's own key depend
-    on a value we derived where every other component is one the source delivered, and
-    would change that key the day the derivation changed."""
-
-    hub: str
-    role: str | None = None
-    identifying: bool = True
-
-    def __post_init__(self) -> None:
-        if not self.hub or not self.hub.strip():
-            raise ValueError("a link end needs a hub name")
-        if self.role is not None and not self.role.strip():
-            raise ValueError(
-                f"the link end on hub {self.hub!r} declares an empty role. A role names "
-                "the part this hub plays and prefixes its reference column; pass None "
-                "for an end that has no role rather than a blank one"
-            )
-
-    def reference_column(self, hub: Hub) -> str:
-        """The column this end's hash-key reference is written into."""
-        return hub.hash_key if self.role is None else f"{self.role}_{hub.hash_key}"
-
-
-@dataclass(frozen=True, kw_only=True)
-class Link:
-    """A DV2 link: the hubs whose relationship it records, BY NAME, its dependent-child
-    keys, and its own hash key.
-
-    HUBS BY NAME AND NOT BY VALUE, which is `Satellite.parent`'s decision for
-    `Satellite.parent`'s reason: a spec holding `Hub` objects could only name hubs its
-    own module had already constructed, and the whole point of the per-domain shape is
-    that `build_registry` sees every domain at once. `linked_hubs` resolves them and
-    the whole-set guard below refuses a name no domain declares, so the spec and the
-    hubs cannot disagree. An entry may be a bare hub name or a `LinkEnd`; the bare name
-    is normalised to `LinkEnd(hub=name)`, so the simple case stays one word.
-
-    ORDER IS THE LINK'S IDENTITY, not a listing convention. The link's hash key is the
-    business-key standard applied to the identifying ends' business keys CONCATENATED
-    IN THIS ORDER, then the dependent-child keys
-    (`opl.vault.loading.link_hash_key_expression`), so swapping two ends re-keys the
-    whole table. `_refuse_mismatched_hubs` in the loader is what stops a caller
-    supplying them in another order.
-
-    DEPENDENT-CHILD KEYS ARE KEY COMPONENTS THAT BELONG TO NO HUB, and Task 5 is where
-    the shape was known well enough to add them. The measured sócio grain is
-    (`cnpj_basico`, `identificador_socio`, `cpf_cnpj_socio`), whose last two components
-    identify no business object this vault has a hub for: the RFB masks a partner's CPF
-    to six middle digits, so its key space is 10^6 and 99.99% occupied and a hub on it
-    would merge ~27 unrelated people per key. They are stored on the link and hashed
-    into its key, which is the idiom the master spec itself chooses for `transaction_id`
-    on `link_payment`. See ADR 0011.
-
-    NO PAYLOAD AND NO `applied_date`. A link row asserts "this relationship exists",
-    the same kind of statement a hub row makes about a key -- descriptive facts about
-    the relationship, and the window in which it held, belong to a satellite on the
-    link, which is now `EffectivitySatellite` below."""
-
-    name: str
-    hash_key: str
-    hubs: Sequence[str | LinkEnd]
-    dependent_child_keys: Sequence[BusinessKeyColumn] = ()
-
-    def __post_init__(self) -> None:
-        if not self.name or not self.hash_key:
-            raise ValueError(f"a link needs a name and a hash-key column ({self.name!r})")
-        if isinstance(self.hubs, str):
-            raise TypeError(
-                f"link {self.name!r} received a bare str {self.hubs!r} as its hubs -- a "
-                "str is a Sequence[str] structurally, so no type checker catches this "
-                "and it iterates to one hub name per CHARACTER; pass a tuple, e.g. "
-                f"({self.hubs!r},)"
-            )
-        ends = tuple(
-            end if isinstance(end, LinkEnd) else LinkEnd(hub=end) for end in self.hubs
-        )
-        self._refuse_too_few_identity_components(ends)
-        if len(self.dependent_child_keys) and any(
-            not isinstance(key, BusinessKeyColumn) for key in self.dependent_child_keys
-        ):
-            raise TypeError(
-                f"link {self.name!r} must declare its dependent-child keys as "
-                "BusinessKeyColumn values -- a bare column name cannot carry the "
-                "zero-pad width, and an unpadded key component matches nothing"
-            )
-        if self.dependent_child_keys:
-            _validated_columns(
-                [key.name for key in self.dependent_child_keys],
-                owner=f"link {self.name!r}",
-                role="dependent-child key",
-            )
-        object.__setattr__(self, "hubs", ends)
-        object.__setattr__(self, "dependent_child_keys", tuple(self.dependent_child_keys))
-
-    def _refuse_too_few_identity_components(self, ends: tuple[LinkEnd, ...]) -> None:
-        """A link records a RELATIONSHIP, so it needs at least two things to relate.
-
-        THE OLD RULE WAS "AT LEAST TWO HUBS" AND IT WAS TOO NARROW, not merely stricter.
-        Its argument was that a one-hub link is that hub's own business key hashed a
-        second time under another name -- true when a link had nothing but hubs, and
-        false the moment dependent-child keys exist: `link_company_partner` has one hub
-        and two dependent-child keys, and its key space is the partnership, not the
-        company. What still has to hold is that SOMETHING is being related, and that at
-        least one hub anchors it -- a link of dependent-child keys alone would be a hub
-        wearing a link's name."""
-        identifying = [end for end in ends if end.identifying]
-        if not identifying:
-            raise ValueError(
-                f"link {self.name!r} has no identifying end. Every reference it carries "
-                "would be one it resolves rather than one it is keyed on, so its hash "
-                "key would be taken over the dependent-child keys alone and the link "
-                "would not be anchored to any hub"
-            )
-        components = len(identifying) + len(self.dependent_child_keys)
-        if components < 2:
-            raise ValueError(
-                f"link {self.name!r} is keyed on {components} component -- a link "
-                "records a RELATIONSHIP and needs at least two. With one it is that "
-                "hub's own business key hashed a second time under another name: two "
-                "tables that look independent and are the same key space"
-            )
-
-    @property
-    def ends(self) -> tuple[LinkEnd, ...]:
-        """Every end, in declaration order, normalised to `LinkEnd`.
-
-        `hubs` is DECLARED as what a caller may write and HOLDS what `__post_init__`
-        normalised it to; the cast says so once, here, rather than leaving every reader
-        of `link.hubs` to work out which of the two they have."""
-        return cast("tuple[LinkEnd, ...]", self.hubs)
-
-    @property
-    def identifying_ends(self) -> tuple[LinkEnd, ...]:
-        """The ends whose hub business key is part of the link's own hash key."""
-        return tuple(end for end in self.ends if end.identifying)
-
-    @property
-    def hub_names(self) -> tuple[str, ...]:
-        """Every end's hub name, in declaration order. A hub may appear twice."""
-        return tuple(end.hub for end in self.ends)
-
-    @property
-    def dependent_child_key_columns(self) -> tuple[str, ...]:
-        """Just the dependent-child key column names, in declaration order -- the order
-        they are hashed in, so it is not incidental."""
-        return tuple(key.name for key in self.dependent_child_keys)
-
-
-@dataclass(frozen=True, kw_only=True)
-class EffectivitySatellite:
-    """A satellite on a LINK, recording when the relationship it hangs off was
-    effective: one row per link hash key per change of `is_active`.
-
-    A FOURTH TABLE KIND RATHER THAN A `Satellite` WITH A LINK PARENT, and the two
-    reasons are the same ones `_assert_every_satellite_hangs_off_a_hub` gives for
-    refusing that shape. A `Satellite` is delta-driven on a `hash_diff` over a payload
-    and `load_satellite` takes a `Hub`; this table has no payload, no `hash_diff`, and
-    is driven by the observation ledger instead. Registering it as a `Satellite` would
-    make it a table `load_satellite` would key on a column its parent does not have.
-
-    `entry_column` IS THE WINDOW'S OPEN AND IT KEEPS THE SOURCE'S OWN NAME, which is
-    the one piece of epistemics this spec carries. The open is DELIVERED --
-    `data_entrada_sociedade` is populated on 100% of 2026-07's rows with no `00000000`
-    sentinel -- and the close is DERIVED by us from an absence. Carrying the delivered
-    value under the column name the RFB gave it, beside `last_observed_on` and
-    `closed_by` which are ours and are named in our vocabulary, is what stops a reader
-    taking the two for claims of the same strength. See ADR 0011."""
-
-    name: str
-    parent: str
-    entry_column: str
-
-    def __post_init__(self) -> None:
-        if not self.name or not self.parent or not self.entry_column:
-            raise ValueError(
-                f"an effectivity satellite needs a name, a parent link and an entry "
-                f"column ({self.name!r})"
-            )
-        reserved = METADATA_COLUMNS | EFFECTIVITY_COLUMNS
-        if self.entry_column in reserved:
-            raise ValueError(
-                f"effectivity satellite {self.name!r} names {self.entry_column!r} as "
-                f"its entry column, and the loader writes that itself "
-                f"({', '.join(sorted(reserved))}). The source's delivered window open "
-                "would be replaced by our own value without anything failing"
-            )
-
-
-VaultTable = Hub | Satellite | Link | EffectivitySatellite | ReferenceTable
 
 
 @dataclass(frozen=True, kw_only=True)
