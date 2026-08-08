@@ -138,10 +138,22 @@ subdivision.
   omission with a reason beside it. Adding a column to the bronze contract turns
   the partition test red rather than silently landing it in neither satellite.
 - **The row-count consequence is the point of the split and is not yet observed
-  at scale.** Both satellites' first two-month load will write ~1.6M rows between
-  them against ~71.9M keys. Nothing in this phase has run either loader against
-  real bronze, so the predicted advantage over a single satellite is arithmetic
-  from the measured rates, not an observed row count.
+  at scale.** Loading both months writes, in the FIRST month, one row per
+  establishment per satellite — ~71.9M keys × 2 satellites ≈ **143.7M rows** —
+  and in the SECOND only what changed: **1,211,834 + 570,075 = 1,781,909**, so
+  **≈ 1.8M**. The 1.8M is the second month's **delta**, not the total; a reader
+  sizing these tables adds the two and gets ~145.6M. Nothing in this phase has
+  run either loader against real bronze, so both figures are arithmetic from the
+  measured rates above rather than observed row counts.
+
+  > **This bullet read "~1.6M rows between them", which was the arithmetic of the
+  > retracted measurement** — `1,076,696 + 570,075`, the pre-correction `_dados`
+  > figure. The correction pass updated the tables, the retraction blocks, the
+  > module comment and the run-evidence document, and missed the one number
+  > *derived* from the old one, inside the ADR whose Status advertises the
+  > correction. With this ADR's own figures it is 1,781,909. The sentence was
+  > also ambiguous between the delta and the total, which is an ~80× difference
+  > for anyone sizing the tables, so it now states both.
 - **`nome_fantasia` history is over-written relative to its own change rate**, by
   a factor of up to thirty. A consumer that reads only trading names pays for
   status churn. That is the accepted cost, and it is the first thing to point at

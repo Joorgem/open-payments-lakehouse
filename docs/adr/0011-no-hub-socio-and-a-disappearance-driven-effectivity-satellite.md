@@ -33,9 +33,18 @@ Measured over 2026-07's 27,990,592 socios rows
 
 The RFB masks a natural person's CPF to its six middle digits **at source**. The
 key space is therefore 10⁶ = 1,000,000, and **999,853 of it is occupied — 99.99%
-saturation**. A hub on that column does not have collisions; it is made of them.
-27,260,118 partnership rows spread over 999,853 keys means roughly **27 unrelated
-people share every key**, by construction and forever.
+saturation**. A hub on that column does not have collisions; it is made of them:
+with the key space essentially full, a key cannot identify a person, and the next
+PF partner the RFB publishes lands on a key some other person already holds.
+
+> **This paragraph used to close with "roughly 27 unrelated people share every
+> key", and that number is a ROW count.** 27,260,118 ÷ 999,853 ≈ 27.3 is
+> partnership **rows** per key, and one person holding several partnerships
+> contributes several rows — so 27.3 is an **upper bound** on people per key, not
+> an estimate of it. **Distinct people per key is unmeasured and unmeasurable
+> from this data**, because telling two people apart on this key is precisely
+> what the mask prevents. The decision does not rest on it: 99.99% saturation is
+> measured, is one line above, and is sufficient on its own.
 
 Building `hub_socio` as written would ship a hub whose every row merges people
 who have nothing to do with each other, and every satellite hanging off it would
@@ -58,8 +67,8 @@ future reader think the link's business key could change if a grant changed.
   `***`, not a partial value.
 
 The second measurement closes the obvious repair for the first. The natural fix
-for "27 people share one masked CPF" is to add the partner's name to the key.
-**The name reads `***`.** Keying on `(company, masked CPF, '***')` is byte-identical
+for "unrelated people share one masked CPF" is to add the partner's name to the
+key. **The name reads `***`.** Keying on `(company, masked CPF, '***')` is byte-identical
 to keying on `(company, masked CPF)`, so the repair would produce a key that
 *looks* disambiguated and is not — strictly worse than not attempting it, because
 the next reader would believe the hole was closed. **The bucket is irreducible,
@@ -380,3 +389,37 @@ load, over the same table.
   vacuum policy that dropped `bronze_cnpj_socios_quarantine` would turn 1,781
   `rejected_by_our_gate` keys per month into `absent_after_observation`, and the
   satellite would end-date them.
+
+### What would change this decision
+
+The section ADRs 0012 and 0013 carry and this one did not, added by the final
+whole-branch review. The two halves of this ADR have different answers.
+
+**The hub half — no `hub_socio`:**
+
+- **The RFB unmasking `cpf_cnpj_socio`, or publishing any stable partner
+  identifier.** That is the only thing that makes a partner a business object
+  this vault can key on, and it would make `hub_socio` correct rather than
+  merely prescribed. Nothing short of it helps: adding the name does not, because
+  the name reads `***`.
+- **A grant admitting us to `opl_pii_readers` does NOT change this.** It unmasks
+  `nome_socio_razao_social`, which is a UC mask over a real value; the CPF mask is
+  the RFB's, in the file, and is irreversible for every reader. The two are
+  separate and the ADR keeps them separate for exactly this reason.
+
+**The satellite half — disappearance-driven, gated on one state:**
+
+- **A partner-count distribution that made a driving key meaningful.** §3a was
+  rejected because 49.7% of companies with partners have more than one at once.
+  On a relationship that really is one-to-one over time, §3a is the better
+  pattern and this rejection does not carry over to it.
+- **Departures caused by our own gate ceasing to be possible** — see ADR 0010's
+  own version of this. If the quarantine stopped removing rows from bronze, the
+  gate on `CLOSING_STATE` would still be correct but would no longer be
+  load-bearing, and `closed_by` would record a distinction that cannot vary.
+- **Measuring how many `rejected_by_our_gate` keys have an OPEN window.** This is
+  the number nobody has, and it is what sizes the consequence of the gate: 1,781
+  keys per month are protected by it, but how many of those would have had a
+  window closed is unmeasured. A large answer strengthens the gate; a zero answer
+  would mean the protection is real but never yet exercised, which is worth
+  knowing before anyone simplifies it away.

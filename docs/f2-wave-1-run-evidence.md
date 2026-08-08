@@ -260,24 +260,28 @@ package, with line counts taken **after** those passes
 | `src/opl/vault/hashing.py` | 229 | the BK hash standard, pure Python, pyspark-free |
 | `src/opl/vault/hashing_spark.py` | 316 | the same standard as a Catalyst expression (ADR 0012) |
 | `src/opl/vault/observation.py` | 433 | the five-state observation ledger (ADR 0010) |
-| `src/opl/vault/specs.py` | 486 | the five table kinds and their `__post_init__` guards |
-| `src/opl/vault/registry.py` | 502 | discovery, the whole-set guards, the union |
-| `src/opl/vault/loading.py` | 308 | the one spelling of the hash expression and the month window |
-| `src/opl/vault/hubs.py` · `links.py` · `satellites.py` | 145 · 234 · 329 | the three generic loaders |
-| `src/opl/vault/partners.py` · `effectivity.py` | 283 · 384 | the socios link and its window (ADR 0011) |
-| `src/opl/vault/reference.py` | 238 | six reference tables, routed around a `codigo` collision |
-| `src/opl/vault/domains/cnpj.py` | 404 | every table this domain declares |
+| `src/opl/vault/specs.py` | 487 | the five table kinds and their `__post_init__` guards |
+| `src/opl/vault/registry.py` | 511 | discovery, the whole-set guards, the union |
+| `src/opl/vault/loading.py` | 341 | the one spelling of the hash-key expression and the month window |
+| `src/opl/vault/hubs.py` · `links.py` · `satellites.py` | 145 · 234 · 391 | the three generic loaders |
+| `src/opl/vault/partners.py` · `effectivity.py` | 310 · 441 | the socios link and its window (ADR 0011) |
+| `src/opl/vault/reference.py` | 273 | six reference tables, routed around a `codigo` collision |
+| `src/opl/vault/domains/cnpj.py` | 413 | every table this domain declares |
 | `src/opl/vault/columns.py` · `months.py` · `domains/__init__.py` | 92 · 74 · 69 | shared names and discovery |
 
 Test files, all under the 800-line cap: `test_observation.py` **800 exactly**,
-`test_cnpj_vault.py` 761, `test_socios_vault.py` 754, `test_registry.py` 649,
-`test_estabelecimento_vault.py` 661, `conftest.py` 473, `test_reference_vault.py`
-364, `test_hashing_spark.py` 341, `test_hashing.py` 311, `test_loading.py` 164.
+`test_socios_vault.py` 791, `test_cnpj_vault.py` 772, `test_registry.py` 758,
+`test_estabelecimento_vault.py` 721, `conftest.py` 473, `test_reference_vault.py`
+378, `test_hashing_spark.py` 341, `test_hashing.py` 311, `test_loading.py` 234.
 
-**Two files are at their cap and are the ones to watch**: `test_observation.py` at
-800/800 (Task 7's correction notes were condensed twice to fit) and
-`test_estabelecimento_vault.py`, which hit 840 during Task 4 and was brought back
-to exactly 800 before Task 5's fixtures were extracted into `conftest.py`.
+**Counts are at HEAD, after the final fix wave**, which is why several moved:
+`cnpj.py` was quoted at 404 here and was 410 even before that wave — a stale
+count, found by the docs review. **Three files are now worth watching against the
+cap**: `test_observation.py` at 800/800 (Task 7's correction notes were condensed
+twice to fit), `test_socios_vault.py` at 791, and `test_registry.py` at 758 after
+four discovery-refusal tests landed. `test_estabelecimento_vault.py` hit 840
+during Task 4 and was brought back to exactly 800 before Task 5's fixtures were
+extracted into `conftest.py`; that extraction is why it has room again.
 
 **Tasks 0–6, oldest first** (`git log --oneline 44018ad..f71355b`):
 
@@ -375,8 +379,19 @@ Measured over 2026-07's 27,990,592 socios rows
 | 3 — foreign | 12,824 | **0 — all NULL** | — |
 
 The RFB masks a natural person's CPF to six middle digits **at source**. The key
-space is 10⁶ and **999,853 of it is occupied — 99.99% saturated**; ~27.3 unrelated
-people collapse onto every key. Foreign partners have no business key at all.
+space is 10⁶ and **999,853 of it is occupied — 99.99% saturated**, so a key cannot
+identify a person and the next PF partner published lands on one somebody already
+holds. Foreign partners have no business key at all.
+
+> **The "~27.3 unrelated people per key" that used to close this paragraph is a
+> ROW count, corrected by the final whole-branch review.** 27,260,118 ÷ 999,853 ≈
+> 27.3 counts partnership **rows** per key, and one person with several
+> partnerships contributes several rows — so it is an **upper bound** on people
+> per key, presented as a point estimate. Distinct people per key is
+> **unmeasured**, and unmeasurable from this data: telling two of them apart on
+> this key is exactly what the mask prevents. Nothing rests on it — 99.99%
+> saturation is measured and is the whole argument. Corrected in ADR 0011 and in
+> the three code comments that restate it.
 
 The plan's supporting claim — "1,797 rows with no name are hubs with no business
 identifier" — points at the wrong population: those rows are quarantined and
@@ -611,7 +626,7 @@ test code by the reviewer. Four mutation probes, all producing real red output:
 | 1 | every departure → `rejected_by_our_gate` | **7 failed, 18 passed** |
 | 2 | quarantine branch deleted | 5 failed, 20 passed |
 | 3 | four-state (pre-correction) derivation | 5 failed, 20 passed |
-| 4 | `observed_with_rejected_siblings` branch deleted | 3 failed, 22 deselected |
+| 4 | `observed_with_rejected_siblings` branch deleted | 3 failed, 22 **passed** |
 
 **Probe 1 is the one that matters**: it went red cross-table but **green on the
 estabelecimentos-only test**, which is the vacuity D2 existed to remove —
@@ -850,10 +865,24 @@ leaves **3,088** exact duplicates. The link load therefore needs a stated dedup
 rule, and has one (earliest delivered entry date, `F.min` over a struct).
 
 **Controller measurement answering the task's Q3**
-(`01f192c0-a8da-159e-81b6-0ed2cd6f1758`): the effectivity satellite closes exactly
-**65,444** windows, **4** carrying a NULL partner key, **zero** overlap with
-July's 1,781 quarantine-only keys. **So no window is closed by our own gate** —
-which is the entire point of gating on the ledger.
+(`01f192c0-a8da-159e-81b6-0ed2cd6f1758`): the effectivity satellite **should
+close** exactly **65,444** windows, **4** carrying a NULL partner key, with
+**zero** overlap against July's 1,781 quarantine-only keys — **so no window
+should be closed by our own gate**, which is the entire point of gating on the
+ledger.
+
+> **"Should", not "does", and the tense is the whole point.** That statement id
+> is a **SQL query over bronze**, not a loader run — it computes which link keys
+> the ledger would call `absent_after_observation`. **`load_effectivity_satellite`
+> has never run against real bronze**, here or anywhere in this phase, so 65,444
+> is a prediction the loader is expected to reproduce and not an outcome it
+> produced. ADR 0011 has this right at its own `:287` ("the satellite **should**
+> close"); this section said "closes", in the present tense and credited to a
+> controller measurement, and it is the one place in this document where a loader
+> is credited with an outcome. That is exactly the source-measurement /
+> code-measurement conflation [§1](#1-how-to-read-this-document) and
+> [§25.1](#25-if-a-reader-trusts-this-document-and-is-wrong-to-where-would-that-happen)
+> exist to prevent, so it is corrected here rather than footnoted.
 
 ### 13.1 A controller error worth keeping, in the exact failure class the task exists to prevent
 
@@ -1132,6 +1161,27 @@ and is what actually guards the property, is the committed sweep in
     ledger rows** — e.g. `months=[JUN, JUN, JUL]`. Pre-existing, contradicts the
     module's own stated grain, and is the same family as three refusals the module
     already implements. A `sorted(set(...))` would close it.
+11. **A hub with two satellites derives the observation ledger twice, and that is
+    a known accepted cost.** `load_satellite` consults the ledger per load — for
+    the departure count and for `_window`'s refusal of an unloaded month — so
+    loading `sat_estabelecimento_dados` and `sat_estabelecimento_endereco` pays
+    the derivation **twice over the same grain**, and ADR 0010 measures that
+    derivation at **93 s** on estabelecimentos. Nothing is wrong with either
+    result; the second one is simply recomputed. Left rather than fixed:
+    de-duplicating it means either caching across loader calls (state this layer
+    deliberately has none of) or hoisting the ledger into a caller that does not
+    exist yet. **A wave-2 job loading several satellites per hub should hoist it**,
+    and this is the note that says so before someone measures a job and is
+    surprised.
+12. **The estabelecimentos duplicate-row rate is unmeasured.** The zero
+    `(cnpj_basico, _snapshot_month)` duplicate rate that justifies the satellite's
+    silent dedup tie-break (`01f19274-c1e0-1f3a-998a-ee0234483f5c`) is an
+    **empresas** measurement; Task 4 pointed the same loader at two
+    estabelecimentos satellites over 72.3M rows and the equivalent question was
+    never asked. `SatelliteLoadResult.collapsed_duplicates` now reports what each
+    load folds, so a real load answers it; the source-side query is in the
+    final-fix report for the controller. Stated as unmeasured rather than left to
+    read as covered by the empresas number.
 
 ---
 
@@ -1398,16 +1448,33 @@ least likely to be re-derived by a reader.
 
 **`docs/adr/0010:326` read: "here it is weaker still, because a third of the
 absence signal is our own doing."** No reading of that ADR's own table yields a
-third. Over the two months measured, the gate-caused states total
-4 + 1,792 + 1,781 = **3,577** against **732,921** non-`observed` rows — **0.49%**.
-Restricted to **departures**, which is what an end-dating satellite actually acts
-on, it is **4 of 65,448 — 0.006%**.
+third. Task 7 replaced it with two fractions — **0.49%** of non-`observed` rows
+and **"4 of 65,448 — 0.006%"** of departures.
+
+> **⚠️ AND THOSE TWO REPLACEMENTS WERE ALSO WRONG, found by the final
+> whole-branch review and withdrawn without a fourth figure.** Both count only
+> estabelecimentos' 4 gate-caused departures while excluding socios' 1,781
+> `rejected_by_our_gate` keys from **both** sides — the keys ADR 0011 says
+> closing would "have the vault assert that 1,781 partnerships ended" and
+> [§20.7](#20-what-this-pr-does-not-settle) says a lost quarantine would
+> end-date. On the docs' own framing the departure figure is `1,785 / 67,229` ≈
+> **2.7%**, ~440× the 0.006%; and 91% of the 0.49%'s 732,921 denominator is
+> pre-birth grid artifacts that no end-dating satellite acts on, so restricted to
+> real absence (69,021) the gate share is **5.2%**. **"A third" was too high and
+> both corrections understate.** No replacement fraction is offered because none
+> is computable: every one of them needs to know how many of the 1,781 have an
+> open window, which is **unmeasured and has no statement id**.
+>
+> **This is [§23.1](#231-a-correction-that-overshot-in-three-places)'s pattern
+> happening inside the bullet that documents it** — twice in the same sentence,
+> in the document whose closing section already states that a retraction gets
+> less scrutiny than the original.
 
 The argument does not need a fraction and is stronger without one: what makes a
 derived delete weak is that **any** of the silence can be ours, not how much —
 and on estabelecimentos the four rejects are **100%** of that table's departures.
-Corrected in place with both computations shown, so the next reader can check the
-arithmetic rather than inherit a new figure.
+That is what ADR 0010 now says, with all three withdrawn versions recorded above
+it so the next reader inherits the history rather than a fourth number.
 
 **`src/opl/vault/domains/cnpj.py:71-75` read that `situacao_cadastral` and
 `motivo_situacao_cadastral` "move together almost exactly (976,355 against

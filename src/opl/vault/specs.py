@@ -253,7 +253,8 @@ class Link:
     (`cnpj_basico`, `identificador_socio`, `cpf_cnpj_socio`), whose last two components
     identify no business object this vault has a hub for: the RFB masks a partner's CPF
     to six middle digits, so its key space is 10^6 and 99.99% occupied and a hub on it
-    would merge ~27 unrelated people per key. They are stored on the link and hashed
+    merges unrelated people onto every key by construction. They are stored on the
+    link and hashed
     into its key, which is the idiom the master spec itself chooses for `transaction_id`
     on `link_payment`. See ADR 0011.
 

@@ -132,8 +132,20 @@ no longer knows.
 documented artefact.
 *Rejected on cost.* At our grain that is roughly 169M rows per month — ~69M
 companies + ~72M establishments + ~28M partners — growing linearly and forever,
-carrying no payload, on a Free Edition workspace that peaked at 39.7 GB this
-phase and whose retention control does not run through the wired path.
+carrying no payload, on a Free Edition workspace whose storage peaked at
+**39.71 GB** during **F1.4b**, and whose retention control does not run through
+the wired path.
+
+> **That peak is F1.4b's, not this phase's**, and the ADR said "this phase" until
+> the final whole-branch review. **F2 wave 1 wrote nothing to the workspace at
+> all** — no bundle deploy, no job run, no write of any kind — so it has no peak
+> to quote. The figure is `docs/f1.4b-pr-b-run-evidence.md` §16.2, where it is
+> also stated that ~48 GB is the projected floor and that 39.71 GB was reached
+> only because an operator hand-deleted between groups. It was additionally the
+> only workspace number across ADRs 0010–0013 with no statement id, against the
+> run-evidence document's own rule; it keeps none, because it is a Volume
+> measurement from another phase's document rather than a SQL result, and the
+> citation is that document.
 DataVault4dbt acknowledges the growth ("can lead to significant data growth over
 time") and offers no mitigation; **the search behind this ADR looked for a
 compression pattern for an RTS and found none** (`.plans/f2-research-snapshot-dv2.md`,
@@ -221,7 +233,11 @@ branch order below (quarantine before the absence split), over the two months:
 `absent_after_observation` is **zero on estabelecimentos in both months**. Every
 one of the 444,520 keys the four-state version called a candidate delete is
 pre-birth, and that table has **no true departures at all** — its only four
-absences are our own gate's. All five states occur across the two tables, and
+departures are our own gate's. (This read "its only four **absences**", which the
+table four lines above contradicts: 444,520 rows of that month are
+`absent_before_first_observation`. Same shape as the error §23.1 of the
+run-evidence document caught, and found the same way — by reading the sentence
+against the table beside it.) All five states occur across the two tables, and
 none of the twelve rows above is a state the model cannot name.
 
 ### Defined on the past only
@@ -344,15 +360,35 @@ single-table test for the other shape green.
   the source's, and the ledger is what tells the two apart. Any satellite that
   wants to end-date has to say, in its own code, which state it is acting on.
 
-  > **This bullet read "because a third of the absence signal is our own doing",
-  > corrected in Task 7's pass. No reading of the table above yields a third.**
-  > Over the two months measured, the gate-caused states total 4 + 1,792 + 1,781
-  > = **3,577** against **732,921** non-`observed` rows — **0.49%**. Restricted to
-  > DEPARTURES, which is what an end-dating satellite acts on, it is **4 of
-  > 65,448 — 0.006%**. The argument does not need a fraction and is stronger
-  > without one: what makes the derived delete weak is that **any** of the silence
-  > can be ours, not how much, because the four estabelecimentos rejects are
-  > **100%** of that table's departures.
+  > **THREE VERSIONS OF THIS SENTENCE HAVE NOW BEEN WITHDRAWN, AND THE THIRD IS
+  > WITHDRAWN WITHOUT A REPLACEMENT FIGURE.** It first read "because **a third**
+  > of the absence signal is our own doing"; no reading of the table above yields
+  > a third. Task 7's pass replaced that with two fractions — **0.49%** of
+  > non-`observed` rows, and **"4 of 65,448 — 0.006%"** of departures — and the
+  > final whole-branch review found both of those wrong in their turn.
+  >
+  > Both replacements are scoped narrower than the claim they support. Each
+  > counts only estabelecimentos' **4** gate-caused departures in the numerator
+  > while leaving socios' **1,781** `rejected_by_our_gate` keys out of both sides
+  > — the very keys ADR 0011 says closing would "have the vault assert that 1,781
+  > partnerships ended", and that this document's own vacuum-hazard bullet says a
+  > lost quarantine would end-date. Counted the way the docs themselves frame it,
+  > the departure figure is `1,785 / 67,229` ≈ **2.7%**, about **440×** the
+  > quoted 0.006%. The 0.49% has the mirror problem: **91%** of its 732,921
+  > denominator is `absent_before_first_observation` grid artifacts, which no
+  > end-dating satellite acts on at all; restricted to real absence
+  > (65,444 + 4 + 1,792 + 1,781 = 69,021) the gate share is **5.2%**. So "a
+  > third" was too high and **both corrections understate** — which is the same
+  > overshoot pattern the run-evidence document's §23.1 records, occurring inside
+  > the bullet that documents it.
+  >
+  > **No fourth figure is offered, because none of them is computable from what
+  > has been measured.** Every fraction of this shape needs to know how many of
+  > the 1,781 have an OPEN WINDOW for a close to matter to, and that number is
+  > **unmeasured — no statement id exists for it**. The argument never needed a
+  > fraction and is stronger without one: what makes the derived delete weak is
+  > that **any** of the silence can be ours, not how much, and on
+  > estabelecimentos the four rejects are **100%** of that table's departures.
 - **The deviation is now two-sided and documented.** ADR 0006 admits row-level
   quarantine; this ADR admits that doing so leaves the raw vault unable to
   distinguish two very different silences, and builds the missing distinction
@@ -373,3 +409,30 @@ single-table test for the other shape green.
   state the ledger returns: `absent_after_observation` closes a window and
   `rejected_by_our_gate` does not, and the state that authorised a close is
   written into the row. See ADR 0011.
+
+### What would change this decision
+
+The section ADRs 0012 and 0013 carry and this one did not, added by the final
+whole-branch review. Each of these is a measurement, not an opinion.
+
+- **The derivation ceasing to be cheap.** "Derive, do not materialise" rests on
+  93 s / 26 s, both single first-run observations on today's data volumes. A
+  phase that consults the ledger many times per job, or a key space that grows
+  materially, should re-measure before inheriting the decision — and materialise
+  on the number rather than on the inconvenience.
+- **The gate moving.** If the row-level DQ quarantine is ever replaced by
+  file-level rejection or by soft downstream rules, the extract stops being lossy
+  in the way this ADR models, `rejected_by_our_gate` becomes unreachable, and the
+  five states collapse toward the literature's own patterns. That is Option 1,
+  rejected here on cost rather than on principle.
+- **The quarantine losing its durability.** The ledger's whole distinction
+  depends on the quarantine tables being retained per month as reliably as
+  bronze. A retention or vacuum policy that broke that would not degrade this
+  decision, it would falsify it — the ledger would keep answering, and would
+  report our own rejections as departures.
+- **A published compression pattern for a record tracking satellite.** The search
+  behind this ADR looked for one and found none, which is what makes 3a cost what
+  it costs. A real one would reopen 3a on its merits.
+- **A source delivering deletes.** Everything here exists because absence has to
+  be interpreted. A feed that states a departure removes the need to infer one,
+  and the ledger would become a cross-check rather than the mechanism.

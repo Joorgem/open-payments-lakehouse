@@ -282,9 +282,12 @@ LINK_COMPANY_PARTNER = Link(
     ),
     # THE MEASURED BUSINESS KEY OF A PARTNERSHIP ROW, and neither component belongs to
     # a hub. `cpf_cnpj_socio` is masked at SOURCE by the RFB to six middle digits for a
-    # PF partner: the key space is 10^6 and 999,853 of it is occupied, so a
-    # `hub_socio` on it would merge ~27 unrelated people onto every key. The
-    # relationship carries the grain instead. See ADR 0011.
+    # PF partner: the key space is 10^6 and 999,853 of it is occupied -- 99.99%
+    # saturated -- so a `hub_socio` on it merges unrelated people onto every key by
+    # construction. (~27.3 partnership ROWS per key; distinct PEOPLE per key is
+    # unmeasured and the mask makes it unmeasurable, so the row figure is an upper
+    # bound and the saturation is the argument.) The relationship carries the grain
+    # instead. See ADR 0011.
     dependent_child_keys=(
         BusinessKeyColumn(name="identificador_socio"),
         BusinessKeyColumn(name="cpf_cnpj_socio"),

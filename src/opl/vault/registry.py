@@ -64,9 +64,10 @@ said what shape they had.
     would have gone into one column. The role prefixes the reference column.
   - DEPENDENT-CHILD KEYS on a link. The measured sócio grain is (`cnpj_basico`,
     `identificador_socio`, `cpf_cnpj_socio`), whose last two components belong to NO
-    hub: the RFB masks a partner's CPF to six middle digits, so a hub on it would merge
-    ~27 unrelated people per key. They are key components stored on the link, which is
-    the idiom the master spec itself chooses for `transaction_id` on `link_payment`.
+    hub: the RFB masks a partner's CPF to six middle digits, so its key space is 10^6
+    and 99.99% occupied and a hub on it merges unrelated people onto every key by
+    construction. They are key components stored on the link, which is the idiom the
+    master spec itself chooses for `transaction_id` on `link_payment`.
   - `EffectivitySatellite`, a satellite ON a link. It is a fourth kind and not a
     `Satellite` with a link parent, for the reason
     `_assert_every_satellite_hangs_off_a_hub` still gives: a `Satellite` is delta-driven
