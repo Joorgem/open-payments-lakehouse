@@ -24,10 +24,13 @@
 #
 # EXIT CODES, because a green exit here is meant to be quotable:
 #   0  every chunk ran, every chunk passed, and the reconciliation closed.
-#   1  a test failed, a chunk exceeded the cap, or the reconciliation did NOT close.
-#   2  a SUBSET of chunks was requested. Nothing is claimed about the suite. This is
-#      deliberately non-zero so a partial run can never be pasted as evidence that the
-#      suite passes.
+#   1  a test failed, a chunk exceeded the cap, the reconciliation did NOT close, or an
+#      argument was refused.
+#   2  NOTHING IS CLAIMED ABOUT THE SUITE. Two runs reach it: a SUBSET of chunks was
+#      requested, and `--collect-only`, which reconciles the partition and runs no
+#      test. Deliberately non-zero in both cases so neither can be pasted as evidence
+#      that the suite passes. (A `--collect-only` run whose partition is BROKEN exits 1
+#      instead, because that is a finding rather than an absence of one.)
 #
 # USAGE
 #   scripts/run_suite.sh              # all chunks; the command a document quotes
@@ -38,6 +41,20 @@
 # does not set them: a shell that cannot run pytest should say so as pytest, not be
 # silently repaired here.
 set -uo pipefail
+
+# RUN FROM THE REPOSITORY ROOT, whatever directory the operator invoked this from. The
+# chunk arguments below are repo-relative pytest paths and so is the log root, so the
+# two only agree if the working directory is pinned rather than assumed.
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+
+# THE LOG ROOT, REPO-RELATIVE AND GIT-IGNORED, AND THAT IS A PRIVACY DECISION RATHER
+# THAN A TIDINESS ONE. This script's output is pasted verbatim into run-evidence
+# documents that are published, and those documents promise to redact the operator's OS
+# username. `${TMPDIR:-/tmp}` -- what this used to use -- is
+# `C:\Users\<operator>\AppData\Local\Temp` on Windows, so the `logs:` line below would
+# have carried that username into the published paste. The path printed is relative for
+# the same reason: there is no absolute path in this output to leak.
+LOG_ROOT=".run-suite-logs"
 
 CAP_SECONDS="${SUITE_CHUNK_CAP:-600}"
 WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
@@ -56,12 +73,10 @@ chunk_name() { printf '%s' "${CHUNKS[$1]%%|*}"; }
 chunk_args() { printf '%s' "${CHUNKS[$1]#*|}"; }
 
 log_dir() {
-  # One directory per invocation, printed at the end, so every number below has a file
-  # behind it. Under the repo's ignored scratch root rather than /tmp: on Windows the
-  # two are not the same place and a reader has to be able to find it.
-  local root="${TMPDIR:-/tmp}/opl-run-suite"
-  mkdir -p "$root"
-  printf '%s/%s' "$root" "$(date +%Y%m%d-%H%M%S)-$$"
+  # One directory per invocation, under `LOG_ROOT` above, so every number this script
+  # prints has a file behind it and a reader can find it from the repository root.
+  # `main` creates it; `mkdir -p` there makes this parent too.
+  printf '%s/%s' "$LOG_ROOT" "$(date +%Y%m%d-%H%M%S)-$$"
 }
 
 collect_ids() {
@@ -141,13 +156,32 @@ run_chunk() {
     "$(count_in "$line" passed)" "$(count_in "$line" failed)" "$elapsed" "$rc"
 }
 
+chunk_index() {
+  # `$1` as a 0-based index into CHUNKS, or REFUSE BY NAME. Both halves are fixes for
+  # a shape that used to pass: `[0-9]*` is a glob and not a full match, so `3abc`
+  # arrived as chunk 3 with the `abc` silently dropped; and a number past the end
+  # reached `${CHUNKS[$1]}` and died under `set -u` with bash's own unbound-variable
+  # message, naming neither the argument nor the range it had to be in.
+  case "$1" in
+    ''|*[!0-9]*)
+      printf 'unknown argument %s -- expected a chunk number or --collect-only\n' \
+        "$1" >&2
+      return 1 ;;
+  esac
+  if [ "$1" -lt 1 ] || [ "$1" -gt "${#CHUNKS[@]}" ]; then
+    printf 'there is no chunk %s -- the partition has %s, numbered 1 to %s\n' \
+      "$1" "${#CHUNKS[@]}" "${#CHUNKS[@]}" >&2
+    return 1
+  fi
+  printf '%s' "$(( $1 - 1 ))"
+}
+
 main() {
-  local dir requested=() only_collect=0 arg
+  local dir requested=() only_collect=0 arg index
   for arg in "$@"; do
     case "$arg" in
       --collect-only) only_collect=1 ;;
-      [0-9]*) requested+=( "$(( arg - 1 ))" ) ;;
-      *) printf 'unknown argument %s\n' "$arg" >&2; return 1 ;;
+      *) index="$(chunk_index "$arg")" || return 1; requested+=( "$index" ) ;;
     esac
   done
   dir="$(log_dir)"; mkdir -p "$dir"

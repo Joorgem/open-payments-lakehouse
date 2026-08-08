@@ -18,3 +18,8 @@ dist/
 
 # working plans and handoffs (local only)
 /.plans/
+
+# scripts/run_suite.sh writes one log directory per invocation here. Repo-relative
+# rather than under $TMPDIR so the path it prints carries no operator username into a
+# published run-evidence paste; ignored because these are run artifacts, not sources.
+/.run-suite-logs/

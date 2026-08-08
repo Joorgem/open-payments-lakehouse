@@ -2,7 +2,9 @@
 
 **This document covers all of F2 wave 1 — Tasks 0 through 7** on branch
 `feat/f2-wave-1-cnpj-vault`, from `44018ad` (merge base) to `f71355b`, plus
-Task 7's own commit. Task 0 recovers the headroom `src/opl/bronze/registry.py`
+Task 7's own **five** commits and the final whole-branch review's fix wave
+(both listed in [§4](#4-what-this-branch-builds)).
+Task 0 recovers the headroom `src/opl/bronze/registry.py`
 had run out of and closes two blind-pass routes in its wiring lock; Task 1 lands
 the DV2 business-key hash standard; Task 2 derives the **observation ledger**
 that this phase's central claim rests on (ADR 0010); Task 3 builds `hub_empresa`
@@ -109,9 +111,20 @@ The reconciliation is in the script's output, not in prose around it:
   number;
 - a chunk that outgrows the cap fails **loudly, naming itself**, rather than
   being discovered as a mysterious kill with no output;
-- exit 0 means the whole suite ran and reconciled. A **partial** run exits 2 and
-  says so in a banner, so it can never be pasted as evidence that the suite
-  passes.
+- exit 0 means the whole suite ran and reconciled. Exit 2 means **nothing is
+  claimed about the suite** — a partial run *and* a `--collect-only` run both
+  land there, each with its own banner, so neither can be pasted as evidence
+  that the suite passes.
+
+**Its log directory is repo-relative and git-ignored, and that is a privacy
+decision.** The script prints its `logs:` line unconditionally and this document
+tells an operator to paste that output verbatim; an earlier version rooted the
+directory at `${TMPDIR:-/tmp}`, which on Windows is
+`C:\Users\<operator>\AppData\Local\Temp` — so the paste would have carried the
+operator's OS username into a published document that promises above to redact
+it. The root is now `.run-suite-logs/`, printed relative, with **no absolute
+path anywhere in the output**. That is the single `.gitignore` entry this branch
+adds.
 
 ### 3.2 The partition reconciles — Task 7, verbatim
 
@@ -119,7 +132,7 @@ The reconciliation is in the script's output, not in prose around it:
 $ bash scripts/run_suite.sh --collect-only
 
 opl test suite, run as a reconciled partition of 4 chunks
-logs: /tmp/opl-run-suite/20260808-002308-430712
+logs: .run-suite-logs/20260808-013951-477777
 
 COLLECTING (no tests run yet)
   non-vault                 710 selected
@@ -235,9 +248,12 @@ measurement of a moment, not as a property of the code.
 
 ## 4. What this branch builds
 
-`git diff 44018ad...HEAD --stat` at `f71355b`: **37 files changed, 11,188
-insertions, 255 deletions**. The vault package, with line counts taken **after
-Task 7's correction pass** (`wc -l src/opl/vault/*.py src/opl/vault/domains/*.py`):
+`git diff 44018ad...f71355b --stat` — the branch **through Task 6**, which is
+where the code lands: **37 files changed, 11,188 insertions, 255 deletions**.
+Task 7's own commits (listed below) add this document, three ADRs,
+`scripts/run_suite.sh` and two correction passes on top of that. The vault
+package, with line counts taken **after** those passes
+(`wc -l src/opl/vault/*.py src/opl/vault/domains/*.py`):
 
 | file | lines | what |
 |---|---|---|
@@ -263,7 +279,7 @@ Test files, all under the 800-line cap: `test_observation.py` **800 exactly**,
 `test_estabelecimento_vault.py`, which hit 840 during Task 4 and was brought back
 to exactly 800 before Task 5's fixtures were extracted into `conftest.py`.
 
-**Commits, oldest first** (`git log --oneline 44018ad..HEAD`):
+**Tasks 0–6, oldest first** (`git log --oneline 44018ad..f71355b`):
 
 ```
 e18e2fe test: the wiring lock could not see a guard that left registry.py
@@ -287,12 +303,34 @@ c3b17a9 fix: one spelling of the identifying-end filter, and three guards that w
 f71355b fix: collapsed_duplicates counts what it claims, and specs.py gives kinds room
 ```
 
-**`CLAUDE.md`, `AGENTS.md` and `.gitignore` are untouched by the entire branch** —
-`git diff 44018ad..HEAD` over those three paths is empty, verified by the
+**Task 7, oldest first** (`git log --oneline f71355b..HEAD`) — five commits, not
+one, and this document is only the third of them:
+
+```
+bca002b test: run the suite as one reconciled command, because four stitched ones cannot be quoted
+16b6ade fix: twenty statements this phase falsified in its own files, two of them corrections that overshot
+c57ae63 docs: ADRs 0012 and 0013, the two modelling decisions that lived only in a docstring
+674aa40 docs: F2 wave 1 run evidence, with what it does not establish stated first
+3188dc9 fix: the estabelecimentos change rates, re-measured over the full payloads
+```
+
+plus the final whole-branch review's fix wave, which is where the two
+outward-facing findings below were closed.
+
+**`CLAUDE.md` and `AGENTS.md` are untouched by the entire branch** —
+`git diff 44018ad..HEAD` over those two paths is empty, verified by the
 controller at four separate points in the phase. One implementer commit
 (`3539bcd`, "unpublish the agent context") did touch them; it was **dropped**, as
 out of scope and against a gate reserved to the human. It never reached the
 branch under review.
+
+**`.gitignore` was untouched until the final fix wave, which adds exactly one
+line**: `/.run-suite-logs/`, the run-suite log root
+([§3.1](#31-why-this-needed-a-script)). It was moved out of `${TMPDIR}` because
+the script prints its path and this document tells an operator to paste that
+output verbatim; on Windows `$TMPDIR` carries the operator's OS username. The
+entry is the change that makes the new root ignorable, and is the only edit to
+that file on this branch.
 
 ---
 
@@ -1446,8 +1484,11 @@ early.
    `UNICODE_VERSION_DIVERGENCE` really is 40 elements** — counted from the
    frozensets, not from the prose describing them.
 9. **The protected paths really are untouched.** `git diff 44018ad..HEAD` over
-   `CLAUDE.md`, `AGENTS.md` and `.gitignore` is empty, re-verified in Task 7 as
-   well as at four earlier points.
+   `CLAUDE.md` and `AGENTS.md` is empty, re-verified in Task 7 and in the final
+   fix wave as well as at four earlier points. `.gitignore` was in this list
+   until that fix wave, which adds one line for the run-suite log root and says
+   so in [§4](#4-what-this-branch-builds); the reason it had to move is
+   [§3.1](#31-why-this-needed-a-script).
 10. **No hardcoded catalog or schema exists in `src/opl/vault/`.** Every table name
     goes through `DEFAULT.table(...)`.
 
