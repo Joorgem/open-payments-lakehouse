@@ -45,8 +45,10 @@ they are different things (full quotes, URLs and evidence strength in
   updated / deleted*, which is a claim about the world.
 - **Effectivity satellite** — two incompatible definitions in circulation
   (AutomateDV's driving-key window over a link; DataVault4dbt's `is_active`
-  appearance tracking). Task 5's ADR is where that ambiguity gets adjudicated;
-  it is named here only so this one is not read as covering it.
+  appearance tracking). **ADR 0011 adjudicated it**: the driving-key definition
+  cannot express the partnership relationship at all, because 49.7% of companies
+  with partners have more than one simultaneous partner. Named here only so this
+  ADR is not read as covering it.
 
 The canonical detection mechanic for a full extract is a lookback into the
 current staging load: *"Perform a lookup back into the staging area to check
@@ -335,8 +337,12 @@ single-table test for the other shape green.
   have to be asserted from the month — a date attached to a key that has no row.
   The month-to-ref-date mapping is one row per month and belongs wherever a
   caller needs a date.
-- **Nothing consumes this yet.** Tasks 3, 4 and 5 are where the ledger meets a
-  satellite, and where "a key absent from 2026-07 gets no satellite row and no
-  inferred end-date" becomes a property of the vault rather than of a test
-  fixture. Until then, the strongest honest claim is that the distinction exists
-  and is correct at both grains.
+- **~~Nothing consumes this yet.~~ Something does, as of Task 5.** Tasks 3 and 4
+  wired the ledger into `load_satellite`, where it contributes a reported
+  departure count and `_window`'s refusal of an unloaded month but where **no
+  code branches on a state** — the filter that would have was dead by
+  construction, and `opl.vault.satellites` says so. Task 5's
+  `sat_eff_company_partner` is the first table whose CONTENT depends on which
+  state the ledger returns: `absent_after_observation` closes a window and
+  `rejected_by_our_gate` does not, and the state that authorised a close is
+  written into the row. See ADR 0011.
