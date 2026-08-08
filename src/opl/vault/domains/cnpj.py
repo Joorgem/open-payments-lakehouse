@@ -1,7 +1,8 @@
 # src/opl/vault/domains/cnpj.py
 """The CNPJ domain's vault tables and grains. Wave 1: `hub_empresa` and
 `sat_empresa_dados` (Task 3), then `hub_estabelecimento`, its two satellites and
-`link_empresa_estabelecimento` (Task 4).
+`link_empresa_estabelecimento` (Task 4), `link_company_partner` and its effectivity
+satellite (Task 5), then the six reference tables below (Task 6).
 
 THIS FILE IS DATA. Every guard that could refuse what is below lives in
 `opl.vault.registry`, and every mechanism that reads it lives in `opl.vault.hubs`,
@@ -86,6 +87,7 @@ satellite, or a deliberate omission with a reason beside it, and a column added 
 contract turns that test red."""
 from __future__ import annotations
 
+from opl.bronze.lookup_routing import LOOKUP_SUFFIX
 from opl.bronze.registry import table_spec as bronze_table_spec
 from opl.config import DEFAULT
 from opl.vault.observation import ObservationGrain
@@ -95,6 +97,7 @@ from opl.vault.registry import (
     Hub,
     Link,
     LinkEnd,
+    ReferenceTable,
     Satellite,
     VaultDomain,
 )
@@ -317,6 +320,59 @@ UNMODELLED_SOCIOS_COLUMNS = (
     "qualificacao_representante_legal",
 )
 
+# --------------------------------------------------------------------------- #
+# The six reference tables: natural key, no hub, no hash key. `opl.vault.
+# registry_reference` argues the kind; `opl.vault.reference` is the loader and
+# argues why these six tables cannot have a change-detection or end-dating path
+# exercised on them -- `bronze_cnpj_lookup` is 2026-06 ONLY, because the 2026-07
+# lookup zips were never published in that month's set. There is no second
+# observation, so no `hash_diff` to compare, no `applied_date` sequence, and no
+# absence for the observation ledger to report. See that module's docstring for
+# what is proven by a synthetic second month instead, and what is not claimed.
+# --------------------------------------------------------------------------- #
+
+_LOOKUP = bronze_table_spec("lookup")
+LOOKUP_SOURCE = DEFAULT.table(_LOOKUP.bronze)
+
+# THE SIX TYPES, READ FROM `LOOKUP_SUFFIX` RATHER THAN RETYPED -- one spelling of
+# the six tags, not a second one hand-copied from the docs. THE BRIEF FOR THIS TASK
+# LISTS FIVE (CNAE, município, natureza jurídica, motivo, qualificação de sócio) AND
+# OMITS PAÍS -- but `bronze_cnpj_lookup` carries país as a sixth, identically shaped
+# (`codigo`/`descricao`) reference type with no property that distinguishes it from
+# the other five (no masking, no different change rate, no relationship attribute),
+# so leaving it out would be an unmodelled column with no argument beside it, which
+# is the one thing `UNMODELLED_ESTABELECIMENTO_COLUMNS` above exists never to be.
+# All six are modelled; the brief's list of five is read as incomplete, not as an
+# exclusion.
+REF_CNAE = ReferenceTable(
+    name="ref_cnae", lookup_type=LOOKUP_SUFFIX["CNAE"],
+    natural_key="codigo", payload="descricao",
+)
+REF_MOTIVO = ReferenceTable(
+    name="ref_motivo", lookup_type=LOOKUP_SUFFIX["MOTI"],
+    natural_key="codigo", payload="descricao",
+)
+REF_MUNICIPIO = ReferenceTable(
+    name="ref_municipio", lookup_type=LOOKUP_SUFFIX["MUNIC"],
+    natural_key="codigo", payload="descricao",
+)
+REF_NATUREZA_JURIDICA = ReferenceTable(
+    name="ref_natureza_juridica", lookup_type=LOOKUP_SUFFIX["NATJU"],
+    natural_key="codigo", payload="descricao",
+)
+REF_PAIS = ReferenceTable(
+    name="ref_pais", lookup_type=LOOKUP_SUFFIX["PAIS"],
+    natural_key="codigo", payload="descricao",
+)
+REF_QUALIFICACAO = ReferenceTable(
+    name="ref_qualificacao", lookup_type=LOOKUP_SUFFIX["QUALS"],
+    natural_key="codigo", payload="descricao",
+)
+
+REFERENCE_TABLES = (
+    REF_CNAE, REF_MOTIVO, REF_MUNICIPIO, REF_NATUREZA_JURIDICA, REF_PAIS, REF_QUALIFICACAO,
+)
+
 DOMAIN = VaultDomain(
     name="cnpj",
     tables=(
@@ -328,5 +384,6 @@ DOMAIN = VaultDomain(
         LINK_EMPRESA_ESTABELECIMENTO,
         LINK_COMPANY_PARTNER,
         SAT_EFF_COMPANY_PARTNER,
+        *REFERENCE_TABLES,
     ),
 )

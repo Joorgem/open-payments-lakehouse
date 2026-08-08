@@ -84,7 +84,16 @@ and says so.
 
 No table QUALIFICATION either -- a spec carries an unqualified `name`, and the loaders
 take the qualified table as an argument, so `opl.config` is consulted in the domain
-module and in the job task and nowhere in this layer."""
+module and in the job task and nowhere in this layer.
+
+TASK 6'S KIND LIVES IN A SEPARATE FILE, `opl.vault.registry_reference`, and the
+decision is argued there rather than restated here: a DV2 reference table (CNAE,
+município, natureza jurídica, motivo, qualificação de sócio, país) has a natural key
+and a payload and joins to nothing here through a digest, so it carries neither a
+hash key nor a `parent` this module's whole-set guards would need to resolve.
+`VaultTable` and the `isinstance` guards below read the union rather than restating
+it, so this file's only change for a table kind with nothing to resolve is the
+import and the word added to `VaultTable`."""
 from __future__ import annotations
 
 import importlib
@@ -95,6 +104,7 @@ from types import MappingProxyType
 from typing import cast
 
 from opl.vault.columns import EFFECTIVITY_COLUMNS, METADATA_COLUMNS
+from opl.vault.registry_reference import ReferenceTable
 
 # The name a domain module must bind at module level. One attribute, spelled once,
 # because `discover_domains` reads it by name and a module that spells it differently
@@ -443,7 +453,7 @@ class EffectivitySatellite:
             )
 
 
-VaultTable = Hub | Satellite | Link | EffectivitySatellite
+VaultTable = Hub | Satellite | Link | EffectivitySatellite | ReferenceTable
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -24,6 +24,7 @@ import sys
 
 import pytest
 
+from opl.bronze.lookup_routing import LOOKUP_SUFFIX
 from opl.vault import domains
 from opl.vault.columns import (
     APPLIED_DATE,
@@ -34,13 +35,14 @@ from opl.vault.columns import (
     LOAD_DATE,
     RECORD_SOURCE,
 )
-from opl.vault.domains.cnpj import COMPANY_PARTNER_GRAIN
+from opl.vault.domains.cnpj import COMPANY_PARTNER_GRAIN, REFERENCE_TABLES
 from opl.vault.registry import (
     BusinessKeyColumn,
     EffectivitySatellite,
     Hub,
     Link,
     LinkEnd,
+    ReferenceTable,
     Satellite,
     VaultDomain,
     build_registry,
@@ -139,6 +141,12 @@ def test_the_cnpj_domain_registers_its_wave_one_tables():
         "hub_estabelecimento",
         "link_company_partner",
         "link_empresa_estabelecimento",
+        "ref_cnae",
+        "ref_motivo",
+        "ref_municipio",
+        "ref_natureza_juridica",
+        "ref_pais",
+        "ref_qualificacao",
         "sat_eff_company_partner",
         "sat_empresa_dados",
         "sat_estabelecimento_dados",
@@ -511,3 +519,106 @@ def test_a_zero_width_business_key_is_refused():
 def test_the_specs_are_frozen():
     with pytest.raises(AttributeError):
         _HUB.name = "other"
+
+
+# --------------------------------------------------------------------------- #
+# The reference-table kind, added in Task 6 for the six CNPJ lookup types
+# --------------------------------------------------------------------------- #
+
+def test_a_reference_table_registers_with_no_relationship_to_resolve():
+    """The whole finding `opl.vault.registry_reference` argues: a reference table
+    names no other table, so it needs no whole-set guard -- only the per-table
+    `__post_init__` below, which already ran before `build_registry` was called.
+    A domain of a reference table ALONE builds clean, unlike a satellite or a link,
+    which both refuse when built alone (see the tests above)."""
+    ref = ReferenceTable(
+        name="ref_thing", lookup_type="thing", natural_key="codigo", payload="descricao"
+    )
+    registry = build_registry([_domain(ref)])
+
+    assert registry["ref_thing"] is ref
+
+
+def test_a_reference_table_registers_alongside_a_hub_in_the_same_domain():
+    """Nothing about `VaultDomain` or `build_registry` requires a domain's tables to
+    be one kind -- the CNPJ domain itself mixes hubs, links, satellites and now six
+    reference tables in one `DOMAIN.tables` tuple."""
+    ref = ReferenceTable(
+        name="ref_thing", lookup_type="thing", natural_key="codigo", payload="descricao"
+    )
+    registry = build_registry([_domain(_HUB, _SAT, ref)])
+
+    assert sorted(registry) == ["hub_thing", "ref_thing", "sat_thing_dados"]
+
+
+def test_a_reference_table_with_no_name_is_refused():
+    with pytest.raises(ValueError, match="name"):
+        ReferenceTable(name="", lookup_type="thing", natural_key="codigo", payload="descricao")
+
+
+def test_a_reference_table_with_no_lookup_type_is_refused():
+    with pytest.raises(ValueError, match="lookup_type"):
+        ReferenceTable(name="ref_thing", lookup_type="", natural_key="codigo", payload="descricao")
+
+
+@pytest.mark.parametrize("field", ["natural_key", "payload"])
+def test_a_reference_table_needs_both_a_natural_key_and_a_payload_column(field):
+    kwargs = {"name": "ref_thing", "lookup_type": "thing",
+              "natural_key": "codigo", "payload": "descricao"}
+    kwargs[field] = ""
+    with pytest.raises(ValueError, match=field.replace("_", " ")):
+        ReferenceTable(**kwargs)
+
+
+def test_a_reference_table_whose_natural_key_equals_its_payload_is_refused():
+    """The write would put the description where the key belongs, or the reverse --
+    `codigo` and `descricao` naming the same column is not a table with one column,
+    it is a spec that cannot say which value goes where."""
+    with pytest.raises(ValueError, match="both"):
+        ReferenceTable(
+            name="ref_thing", lookup_type="thing", natural_key="codigo", payload="codigo"
+        )
+
+
+@pytest.mark.parametrize("reserved", [LOAD_DATE, RECORD_SOURCE])
+def test_a_reference_tables_natural_key_may_not_be_dv2_metadata(reserved):
+    """The loader writes `load_date` and `record_source` itself; a natural key or
+    payload of the same name would be silently overwritten by the metadata on the
+    write, keeping the column and losing the source's own value."""
+    with pytest.raises(ValueError, match=reserved):
+        ReferenceTable(
+            name="ref_thing", lookup_type="thing", natural_key=reserved, payload="descricao"
+        )
+
+
+def test_two_domains_claiming_the_same_reference_table_name_are_refused():
+    """The generic cross-domain collision guard already covers this kind -- nothing
+    in `_collected_tables` special-cases which kind of `VaultTable` it is looking
+    at, which is the property that let this kind need no new guard function."""
+    ref_a = ReferenceTable(
+        name="ref_thing", lookup_type="thing", natural_key="codigo", payload="descricao"
+    )
+    ref_b = ReferenceTable(
+        name="ref_thing", lookup_type="other", natural_key="codigo", payload="descricao"
+    )
+
+    with pytest.raises(ValueError, match="ref_thing"):
+        build_registry([_domain(ref_a, name="a"), _domain(ref_b, name="b")])
+
+
+def test_the_cnpj_domain_models_all_six_reference_types_including_pais():
+    """THE PAÍS DECISION. The task-6 brief's own prose lists five types and omits
+    país; `bronze_cnpj_lookup` carries país as a sixth, identically shaped type, and
+    `domains/cnpj.py` models it rather than leaving it out -- this pins that six, not
+    five, are registered, and that each one's `lookup_type` is read from
+    `LOOKUP_SUFFIX` rather than a hand-typed second spelling of the same six tags."""
+    assert {ref.name: ref.lookup_type for ref in REFERENCE_TABLES} == {
+        "ref_cnae": LOOKUP_SUFFIX["CNAE"],
+        "ref_motivo": LOOKUP_SUFFIX["MOTI"],
+        "ref_municipio": LOOKUP_SUFFIX["MUNIC"],
+        "ref_natureza_juridica": LOOKUP_SUFFIX["NATJU"],
+        "ref_pais": LOOKUP_SUFFIX["PAIS"],
+        "ref_qualificacao": LOOKUP_SUFFIX["QUALS"],
+    }
+    for ref in REFERENCE_TABLES:
+        assert (ref.natural_key, ref.payload) == ("codigo", "descricao")
