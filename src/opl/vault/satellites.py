@@ -54,14 +54,28 @@ On empresas the question was measured after the Task 3 review and the answer is 
 duplicate `(cnpj_basico, _snapshot_month)` rows across both months
 (`01f19274-c1e0-1f3a-998a-ee0234483f5c`), so the tie-break is unexercised there today.
 
+**THAT MEASUREMENT IS ABOUT EMPRESAS AND THIS LOADER NO LONGER ONLY LOADS EMPRESAS.**
+Task 4 pointed it at `sat_estabelecimento_dados` and `sat_estabelecimento_endereco`
+over 72.3M rows and the equivalent question -- duplicate
+`(cnpj_basico, cnpj_ordem, cnpj_dv, _snapshot_month)` rows -- was never asked. **The
+estabelecimentos duplicate rate is UNMEASURED**, not measured at zero, and the empresas
+statement id above must not be read as covering it. The query that would settle it is
+one `GROUP BY` (see the F2 wave-1 fix report); until it is run, the number to look at is
+`SatelliteLoadResult.collapsed_duplicates`, which reports what each load actually
+folded. Task 5 asked this question of its own tables and answered it there; it did not
+come back for this one.
+
 WHAT THE RULE COSTS WHERE IT DOES FIRE, since "deterministic" is not "correct". Bronze
 is append-only and a corrected batch can be promoted for the same month, so two rows
 for one key-month with DIFFERENT payloads are reachable. This loader picks one of them
-silently -- there is no refusal and no count -- and **a later re-load cannot correct
-the choice**, because the anti-join drops a candidate on `(hash key, applied_date)`
-alone and never looks at the payload. Repairing such a row means deleting it from the
-satellite by hand. Task 5, whose link grain has 4,329 measured collisions, should treat
-that as a decision to make rather than a rule to inherit."""
+silently -- there is no refusal -- and **a later re-load cannot correct the choice**,
+because the anti-join drops a candidate on `(hash key, applied_date)` alone and never
+looks at the payload. Repairing such a row means deleting it from the satellite by
+hand. There IS now a count: `_collapsed_duplicates` reports the fold in every load's
+result, which is what the three sibling loaders already did and what this one was
+missing -- a silent fold whose choice cannot be revoked was the worst of the four to
+leave uncounted. Task 5, whose link grain has 4,329 measured collisions, treated the
+rule as a decision to make rather than one to inherit."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -100,6 +114,19 @@ class SatelliteLoadResult:
 
     table: str
     appended: int
+    # What the target already held before this load, whole-table and not window-scoped,
+    # for `HubLoadResult.already_present`'s reason: the satellite may hold rows from
+    # months outside the window, and reporting a narrower number than the one that was
+    # measured would be a claim the count cannot support. This was the only result
+    # object of the six without it, while `load_satellite` computed the number anyway.
+    already_present: int
+    # Source rows folded into another row sharing its (hash key, `applied_date`), by
+    # `satellite_candidates`' lowest-`hash_diff` tie-break. Reported for the reason
+    # `partners`, `reference` and `effectivity` report theirs, and here the reason is
+    # sharper than for any of them: THIS fold discards a payload, silently, and a later
+    # re-load cannot correct the choice (the anti-join drops the candidate on (hash key,
+    # `applied_date`) alone and never looks at what was kept). See the module docstring.
+    collapsed_duplicates: int
     # Keys the observation ledger calls `absent_after_observation` over this window:
     # present in an earlier month, absent here. A CANDIDATE delete and never an
     # asserted one -- it is equally the shape of a missed file, a dropped partition, or
@@ -244,6 +271,40 @@ def satellite_candidates(
     )
 
 
+def _collapsed_duplicates(
+    spark: SparkSession,
+    satellite: Satellite,
+    hub: Hub,
+    source_table: str,
+    months: Sequence[str] | None,
+) -> int:
+    """Source rows in the window, minus distinct (hash key, `applied_date`) pairs.
+
+    A SECOND PASS, DELIBERATELY, in the shape `opl.vault.partners._collapsed_duplicates`
+    and `opl.vault.reference._collapsed_duplicates` use -- and this loader is the one
+    that most needed it. The other three folds either discard nothing (`partners`,
+    whose link rows carry no payload) or discard one delivered value under a rule the
+    module argues for (`effectivity`'s earliest entry date). This one picks a PAYLOAD
+    silently, and the module docstring records that a re-load cannot correct the pick.
+    A fold with that consequence and no count was the one number an operator had no way
+    to get. `satellite` is taken for the same reason `hub` is: the pair is what the
+    caller already validated, and reading the source through anything else would be a
+    second spelling of the grain this counts against.
+
+    THE HASH KEY IS RECOMPUTED RATHER THAN THE RAW COLUMNS COUNTED, which costs a second
+    digest over the window and is not interchangeable with the cheap version:
+    `zero_padded_column` maps `'1'` and `'01'` onto one padded key, so distinct raw
+    values can share a hash key. Counting the raw columns would report fewer duplicates
+    than the fold actually performs, which is the wrong direction for a number whose
+    whole job is to make the fold visible."""
+    source = read_snapshot_window(spark, source_table, months)
+    keyed = source.select(
+        hash_key_expression(hub).alias(hub.hash_key),
+        F.col(SNAPSHOT_REF_DATE_COLUMN).alias(APPLIED_DATE),
+    )
+    return keyed.count() - keyed.distinct().count()
+
+
 def _candidate_departures(
     spark: SparkSession, grain: ObservationGrain, months: Sequence[str] | None
 ) -> int:
@@ -307,16 +368,15 @@ def load_satellite(
     candidates = satellite_candidates(
         spark, satellite, hub, source_table=source_table, months=months
     )
+    collapsed = _collapsed_duplicates(spark, satellite, hub, source_table, months)
     departures = _candidate_departures(spark, grain, months)
     before = rows_in(spark, target_table)
     existing = None
     if before:
         existing = spark.read.table(target_table).select(hub.hash_key, APPLIED_DATE, HASH_DIFF)
-        candidates = candidates.join(
-            existing.select(hub.hash_key, APPLIED_DATE),
-            on=[hub.hash_key, APPLIED_DATE],
-            how="left_anti",
-        )
+    # The anti-join that used to sit here is inside `changed_rows` now -- it was the one
+    # step of that function's contract each caller had to remember, and it was the step
+    # the docstring called load-bearing. See `loading._without_persisted`.
     changed = changed_rows(candidates, existing, hub.hash_key)
     (
         _in_column_order(changed, satellite, hub, load_date)
@@ -325,5 +385,7 @@ def load_satellite(
     return SatelliteLoadResult(
         table=target_table,
         appended=rows_in(spark, target_table) - before,
+        already_present=before,
+        collapsed_duplicates=collapsed,
         candidate_departures=departures,
     )

@@ -85,7 +85,11 @@ and says so.
 
 No table QUALIFICATION either -- a spec carries an unqualified `name`, and the loaders
 take the qualified table as an argument, so `opl.config` is consulted in the domain
-module and in the job task and nowhere in this layer.
+module and by whatever calls a loader, and nowhere in this layer. (That "whatever" is
+NOT a job task on this branch: nothing in `databricks/` runs any of this yet, which is
+`docs/f2-wave-1-run-evidence.md` §20's third item. Two refusal messages in this file
+told an operator to check "the `table` parameter of the job that failed"; there is no
+such job to check, so they name the domain module instead.)
 
 THE FIVE KIND SPECS MOVED TO `opl.vault.specs` IN TASK 6'S FIX ROUND, and this module
 imports every one of them back -- `from opl.vault.registry import Hub` and the like
@@ -455,8 +459,9 @@ def table_spec(registry: Mapping[str, VaultTable], name: str) -> VaultTable:
     except KeyError:
         raise UnknownVaultTable(
             f"unknown vault table {name!r} -- registered tables are: "
-            f"{', '.join(sorted(registry))}. Every vault job task takes the table "
-            "name as a parameter; check the `table` parameter of the job that failed"
+            f"{', '.join(sorted(registry))}. A table is registered by a module of "
+            "opl.vault.domains binding DOMAIN; if this name is one you expect, check "
+            "that its domain module declares it rather than that the caller mistyped it"
         ) from None
 
 
@@ -473,8 +478,11 @@ def discover_domains(search_paths: Sequence[str], package: str) -> tuple[VaultDo
     A MODULE WITHOUT `DOMAIN` IS REFUSED rather than skipped, and that is the whole
     difference between discovery and guesswork: a domain file whose constant is
     misspelled would otherwise be found, contribute nothing, and leave its tables
-    quietly unregistered -- which surfaces later as `UnknownVaultTable` from a job,
-    pointing at the job rather than at the typo."""
+    quietly unregistered -- which surfaces later as `UnknownVaultTable` from whatever
+    asked for the table, pointing at the caller rather than at the typo.
+
+    All four behaviours above are pinned by `tests/vault/test_registry.py`: the two
+    refusals in this loop, the empty-package refusal below, and the underscore skip."""
     found: list[VaultDomain] = []
     names = sorted(
         info.name
@@ -497,6 +505,6 @@ def discover_domains(search_paths: Sequence[str], package: str) -> tuple[VaultDo
     if not found:
         raise ValueError(
             f"{package} contains no domain module. The registry would be empty and "
-            "every vault job would refuse its own table name"
+            "every lookup of any vault table would then refuse the name it was given"
         )
     return tuple(found)

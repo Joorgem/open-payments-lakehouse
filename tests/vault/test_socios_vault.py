@@ -605,6 +605,43 @@ def test_a_grain_at_hub_grain_is_refused_by_the_effectivity_loader(
     assert not spark.catalog.tableExists(socios_target.eff)
 
 
+def test_a_grain_declaring_the_links_columns_in_another_order_is_told_the_truth(
+    spark, socios_source, socios_target
+):
+    """A PERMUTED KEY SET IS NEITHER COARSER NOR FINER, and it used to be told it was.
+
+    One `!=` covered both mistakes here, so a grain naming the link's own three columns
+    in a different order got the "coarser and a relationship stays open, finer and it
+    closes windows that never departed" message -- and neither is true of a permutation.
+    `groupBy` is order-insensitive, so that ledger would have answered identically; the
+    refusal is about keeping the two declarations ONE list, and the message now says so
+    and names the call that produces it. `opl.vault.satellites` grew the two-message
+    form for the hub half in Task 4 and it never reached this loader.
+
+    The refusal itself is unchanged, which is what the first assertion pins: this is a
+    correction to what a reader is told, not to what is accepted."""
+    permuted = ObservationGrain(
+        name="link_company_partner", bronze_table=socios_source.bronze,
+        quarantine_table=socios_source.quarantine,
+        key_columns=tuple(reversed(IDENTITY)),
+    )
+
+    with pytest.raises(ValueError, match="different order") as refusal:
+        load_effectivity_satellite(
+            spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=socios_source.bronze,
+            target_table=socios_target.eff, load_date=LOADED_AT, grain=permuted,
+        )
+
+    message = str(refusal.value)
+    # The false claim, not the word: the corrected message says "neither coarser nor
+    # finer", so grepping for "coarser" alone would go red on the fix. What must be
+    # gone is the ASSERTION that the ledger is one of the two.
+    assert "coarser and a relationship that ended stays open" not in message
+    assert "neither coarser nor finer" in message
+    assert "link_identity_columns" in message
+    assert not spark.catalog.tableExists(socios_target.eff)
+
+
 def test_a_typed_key_column_is_refused_by_both_loaders_before_they_hash(
     spark, socios_source, socios_target
 ):

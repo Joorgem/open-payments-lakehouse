@@ -86,8 +86,8 @@ PARTNER_IS_FOREIGN = "3"
 # A CNPJ completo is fourteen characters and its first eight are the `cnpj_basico`
 # `hub_empresa` keys on. `cpf_cnpj_socio` holds one for a PJ partner, the RFB's
 # `***NNNNNN**` masked CPF (eleven characters) for a PF partner, and NULL for a foreign
-# one. CROSS-CHECKED RATHER THAN TRUSTED: `_refuse_a_link_this_loader_cannot_write`
-# asserts the company hub really does declare width 8, in the shape
+# one. CROSS-CHECKED RATHER THAN TRUSTED: `_refuse_a_hub_this_slice_does_not_fit`
+# asserts that BOTH ends' hubs really declare width 8, in the shape
 # `opl.bronze.registry` uses for a literal it cannot import.
 CNPJ_BASICO_WIDTH = 8
 CNPJ_COMPLETO_WIDTH = 14
@@ -115,15 +115,51 @@ class PartnerLinkLoadResult:
     collapsed_duplicates: int
 
 
-def _refuse_a_link_this_loader_cannot_write(link: Link, hubs: Sequence[Hub]) -> None:
+def _refuse_a_hub_this_slice_does_not_fit(hub: Hub, role: str) -> None:
+    """One end's hub must be keyed on `cnpj_basico` alone, at the width this module
+    slices to.
+
+    CHECKED FOR BOTH ENDS, AND THAT IS A CORRECTION. This validated the COMPANY end only
+    while the message it raised argued about the PARTNER end's slice -- true here purely
+    because `link_company_partner` is self-referencing, so both ends resolve to the same
+    `Hub` object and checking either happened to check both. That coincidence is a
+    property of one link, not of this function, and it is exactly the kind of thing a
+    reader takes for a general guarantee. The two ends are checked by name instead.
+
+    Both checks are real, and for different reasons: the COMPANY end is hashed by
+    `hash_key_expression` from the source's own `cnpj_basico`, and the PARTNER end by
+    `hash_key_over` from a substring of `cpf_cnpj_socio` -- so the partner hub's
+    declared width is what `_padded` pads that substring to, and a hub declaring another
+    width would take the digest of a differently-padded value from the one `load_hub`
+    wrote."""
+    if hub.business_key_columns != ("cnpj_basico",) or (
+        hub.business_keys[0].width != CNPJ_BASICO_WIDTH
+    ):
+        raise ValueError(
+            f"the {role} end resolves to hub {hub.name!r}, keyed on "
+            f"{hub.business_key_columns} at width {hub.business_keys[0].width!r}. This "
+            f"loader slices the partner's root as the first {CNPJ_BASICO_WIDTH} "
+            f"characters of {PARTNER_KEY_COLUMN!r} and pads both ends to that hub's "
+            "declared width, so a hub keyed or sized differently would take the digest "
+            "of the wrong value -- and it would join to nothing without failing"
+        )
+
+
+def _refuse_a_link_this_derivation_does_not_fit(link: Link, hubs: Sequence[Hub]) -> None:
     """The link, its hubs and this module's knowledge of socios must describe one table.
+
+    NAMED APART FROM `opl.vault.links._refuse_a_link_this_loader_cannot_write`, which it
+    shared a name with while doing the OPPOSITE job: that one refuses a link with a
+    dependent-child key or a non-identifying end, and this one refuses a link WITHOUT
+    them. Two module-private functions may share a name; two functions this repository's
+    own prose refers to unqualified may not.
 
     THE HAZARD IS THAT EVERY MISTAKE HERE PRODUCES A PLAUSIBLE TABLE. This loader reads
     two dependent-child keys by name and derives the partner root from one of them; a
-    link declaring other keys, or a company hub keyed on something else, would still
-    load, still be idempotent, and still join -- to the wrong things. So the three
-    things that must agree are checked rather than assumed, including the width, which
-    is a literal here and a spec value there."""
+    link declaring other keys, or a hub keyed on something else, would still load, still
+    be idempotent, and still join -- to the wrong things. So everything that must agree
+    is checked rather than assumed, including the width, which is a literal here and a
+    spec value there."""
     refuse_mismatched_hubs(link, hubs)
     if [end.identifying for end in link.ends] != [True, False]:
         raise ValueError(
@@ -133,7 +169,6 @@ def _refuse_a_link_this_loader_cannot_write(link: Link, hubs: Sequence[Hub]) -> 
             "`cnpj_basico`, then a non-identifying PARTNER end it derives. It indexes "
             "them positionally, so any other shape would hash and label the wrong one"
         )
-    company = hubs[0]
     if link.dependent_child_key_columns != (PARTNER_KIND_COLUMN, PARTNER_KEY_COLUMN):
         raise ValueError(
             f"link {link.name!r} declares dependent-child keys "
@@ -142,16 +177,8 @@ def _refuse_a_link_this_loader_cannot_write(link: Link, hubs: Sequence[Hub]) -> 
             "company's root from the second of those by name, so another key list "
             "would leave every partner reference NULL without failing"
         )
-    if company.business_key_columns != ("cnpj_basico",) or company.business_keys[
-        0
-    ].width != CNPJ_BASICO_WIDTH:
-        raise ValueError(
-            f"the company end resolves to hub {company.name!r}, keyed on "
-            f"{company.business_key_columns} at width "
-            f"{company.business_keys[0].width!r}. This loader slices the partner's root "
-            f"as the first {CNPJ_BASICO_WIDTH} characters of {PARTNER_KEY_COLUMN!r}, so "
-            "a hub keyed differently would take the digest of the wrong substring"
-        )
+    for hub, role in zip(hubs, ("company", "partner"), strict=True):
+        _refuse_a_hub_this_slice_does_not_fit(hub, role)
 
 
 def partner_company_root() -> Column:
@@ -255,7 +282,7 @@ def load_partner_link(
     Idempotent by anti-join on the link's own hash key, like `load_link`: a re-run finds
     every key present and appends nothing. `load_date` has no default for `load_hub`'s
     reason -- a loader that stamps its own clock cannot be asserted against."""
-    _refuse_a_link_this_loader_cannot_write(link, hubs)
+    _refuse_a_link_this_derivation_does_not_fit(link, hubs)
     before = rows_in(spark, target_table)
     collapsed = _collapsed_duplicates(spark, link, hubs, source_table, months)
     candidates = partner_link_candidates(

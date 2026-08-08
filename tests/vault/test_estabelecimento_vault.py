@@ -571,6 +571,66 @@ def test_a_change_in_an_unmodelled_column_produces_no_row_in_either_satellite(
     assert [result.appended for result in results] == [1, 1]
 
 
+def test_two_source_rows_for_one_key_and_month_are_folded_and_counted(
+    spark, estab_source, estab_target
+):
+    """THE FOLD THIS LOADER USED TO PERFORM SILENTLY. Two source rows share a key and a
+    month with DIFFERENT payloads; `satellite_candidates` keeps the one with the lowest
+    `hash_diff` and drops the other. One satellite row lands, and
+    `collapsed_duplicates` says a row was discarded.
+
+    IT IS THE COUNT AND NOT THE CHOICE THAT MATTERS HERE, and that is why this test does
+    not assert WHICH payload survived. The rule is deterministic (`min` over a struct,
+    so two runs agree) but arbitrary -- neither row is more true than the other -- and
+    pinning the winner would turn an arbitrary tie-break into a promise. What must not
+    be arbitrary is whether an operator can SEE that a payload was thrown away, because
+    a later re-load cannot revoke the pick: the anti-join drops the candidate on (hash
+    key, `applied_date`) alone and never looks at the payload again.
+
+    Reachable on real bronze even though it is unmeasured there: bronze is append-only
+    and a corrected batch can be promoted for the same month. `opl.vault.satellites`
+    records that the ZERO duplicate rate measured after Task 3 is an EMPRESAS number and
+    that the estabelecimentos rate -- this table's -- was never asked for."""
+    twinned = f"{estab_source.db}.twinned_{uuid4().hex[:8]}"
+    write_delta(spark, twinned, _SCHEMA, [
+        estabelecimento_row(E_UNCHANGED, JUN),
+        estabelecimento_row(E_UNCHANGED, JUN, situacao_cadastral="08"),
+        estabelecimento_row(E_STATUS, JUN),
+    ])
+    grain = ObservationGrain(
+        name="hub_estabelecimento", bronze_table=twinned,
+        quarantine_table=estab_source.quarantine, key_columns=HUB.business_key_columns,
+    )
+
+    result = load_satellite(
+        spark, DADOS, hub=HUB, source_table=twinned,
+        target_table=f"{estab_target.dados}_twinned", load_date=LOADED_AT, grain=grain,
+    )
+
+    assert result.collapsed_duplicates == 1
+    assert result.appended == 2
+    # `already_present` on a first load is the target's own count before it, which is
+    # zero because the table did not exist. The contrast is asserted below.
+    assert result.already_present == 0
+
+
+def test_a_source_with_no_duplicates_reports_zero_collapsed_and_what_was_there_before(
+    spark, estab_loaded
+):
+    """The contrast case, so `collapsed_duplicates == 1` above reads as the fold firing
+    rather than as a constant the loader always reports -- and the shared fixture is the
+    right place for it, because it is the one source in this file measured to have one
+    row per key per month, which is the shape real bronze was measured to have on
+    empresas.
+
+    `already_present` is asserted here for the reason `HubLoadResult`'s is: it is a
+    whole-table count taken before the append, not a window-scoped one, and it was the
+    only one of the six result objects missing it while the loader computed it anyway."""
+    assert estab_loaded.dados_result.collapsed_duplicates == 0
+    assert estab_loaded.endereco_result.collapsed_duplicates == 0
+    assert estab_loaded.dados_result.already_present == 0
+
+
 def test_each_satellite_writes_exactly_its_own_payload_and_no_end_date(spark, estab_loaded):
     """THE MUTATION-RESISTANT HALF of both claims at once.
 

@@ -31,9 +31,9 @@ of the DATA and not only of this file.
 HUB GRAIN WOULD BE THE WRONG LEDGER AND WOULD FAIL QUIETLY. A partner who loses one of
 two partnerships is `absent_after_observation` at LINK grain and plainly `observed` at
 hub grain, so a hub-grain ledger would report no departure and the window would stay
-open forever. `_refuse_a_mismatched_grain` compares the grain's key columns against the
-link's own identity columns, which is the strongest available statement of "the ledger
-is keyed on the thing the satellite records".
+open forever. `_refuse_a_mismatched_link_grain` compares the grain's key columns against
+the link's own identity columns, which is the strongest available statement of "the
+ledger is keyed on the thing the satellite records".
 
 THE OPEN IS DELIVERED AND THE CLOSE IS DERIVED, AND THE TABLE KEEPS THEM APART. The
 entry column keeps the SOURCE'S OWN NAME and the source's own spelling --
@@ -138,7 +138,50 @@ class EffectivityLoadResult:
     collapsed_duplicates: int
 
 
-def _refuse_a_mismatched_grain(
+def _grain_key_mismatch(
+    link: Link, identity: tuple[str, ...], grain: ObservationGrain
+) -> str | None:
+    """Why `grain`'s key columns are not `link`'s identity, or None if they are.
+
+    TWO DIFFERENT MISTAKES, TWO MESSAGES, and the sibling of
+    `opl.vault.satellites._grain_key_mismatch` -- which exists for exactly this reason
+    and whose fix never propagated here. One `!=` told the REORDERED case that its
+    ledger was "coarser or finer", which is false: a permuted key set is neither, the
+    `groupBy` behind the ledger is order-insensitive, and the reader is sent looking for
+    a missing or extra column that is not missing.
+
+    THE MESSAGES DIFFER FROM THE SATELLITE'S BECAUSE THE CONSEQUENCES DO, which is why
+    this is two functions rather than one shared one. A hub grain that is wrong misses
+    or invents a reported departure COUNT; a link grain that is wrong decides which
+    windows this loader CLOSES, and a window wrongly left open is a live wrong answer in
+    the table rather than a number in a log. The order argument itself is argued once,
+    in the satellite's version, and is not restated here."""
+    declared = tuple(grain.key_columns)
+    if set(declared) != set(identity):
+        return (
+            f"the observation grain is keyed on {declared} and link {link.name!r} on "
+            f"{identity}. The ledger must be keyed on the LINK's identity: coarser and a "
+            "relationship that ended stays open because the key survives elsewhere, "
+            "finer and it closes windows that never departed. Build the grain from the "
+            "link spec"
+        )
+    if declared != identity:
+        return (
+            f"the observation grain is keyed on {declared} and link {link.name!r} on "
+            f"{identity} -- the same columns in a different order, which is neither "
+            "coarser nor finer. The LEDGER would answer the same, because groupBy does "
+            "not care; this is refused so the two declarations stay one list rather "
+            "than two sets. The link's hash order IS load-bearing "
+            "(`link_hash_key_expression` concatenates in it), and this loader keys the "
+            "ledger's rows with that same expression -- so anything pairing the two "
+            "positionally would pair the wrong columns. Build the grain with "
+            "key_columns=opl.vault.registry.link_identity_columns(registry, <the link>) "
+            "rather than restating the columns"
+        )
+    return None
+
+
+def _refuse_a_mismatched_link_grain(
     satellite: EffectivitySatellite, link: Link, hubs: Sequence[Hub],
     grain: ObservationGrain, source_table: str,
 ) -> None:
@@ -150,7 +193,12 @@ def _refuse_a_mismatched_grain(
     column coarser than the link -- the hub grain, say -- reports a departure only when
     a partner leaves EVERY company, so a relationship that really ended stays open with
     nothing failing. `identity_columns_of` derives the comparison from the link's own
-    spec, so the two cannot drift."""
+    spec, so the two cannot drift.
+
+    NAMED FOR THE LINK, not `_refuse_a_mismatched_grain`, because
+    `opl.vault.satellites` has a function of that name doing the HUB half and the two
+    were routinely referred to unqualified -- including by prose that meant the other
+    one."""
     if satellite.parent != link.name:
         raise ValueError(
             f"effectivity satellite {satellite.name!r} declares parent "
@@ -169,15 +217,9 @@ def _refuse_a_mismatched_grain(
             f"satellite {satellite.name!r} is being loaded from {source_table!r}. The "
             "ledger would decide which windows close from a different table's absences"
         )
-    identity = identity_columns_of(link, hubs)
-    if tuple(grain.key_columns) != identity:
-        raise ValueError(
-            f"the observation grain is keyed on {tuple(grain.key_columns)} and link "
-            f"{link.name!r} on {identity}. The ledger must be keyed on the LINK's "
-            "identity, in its hash order: coarser and a relationship that ended stays "
-            "open because the key survives elsewhere, finer and it closes windows that "
-            "never departed. Build the grain from the link spec"
-        )
+    mismatch = _grain_key_mismatch(link, identity_columns_of(link, hubs), grain)
+    if mismatch is not None:
+        raise ValueError(mismatch)
 
 
 def _observed(
@@ -329,6 +371,30 @@ def _in_column_order(
     )
 
 
+def _append_and_count_closes(rows: DataFrame, target_table: str) -> int:
+    """Append `rows` and return how many of them CLOSE a window.
+
+    COUNTED FROM THE FRAME THAT IS WRITTEN, NOT FROM `load_date` ON THE TARGET, and the
+    earlier spelling is the bug this replaces: filtering the target on `load_date` made
+    a re-run under the SAME stamp report `appended=0` beside the PREVIOUS run's
+    `closed` -- two numbers on two bases in one result object. This is a breakdown of
+    `appended`, on `appended`'s own basis: the write is a single atomic Delta append of
+    exactly these rows, so the only way the two can disagree is a failed write, which
+    raises.
+
+    THE FRAME IS PERSISTED BECAUSE IT IS CONSUMED TWICE, once by the count and once by
+    the write, and the second consumption would otherwise re-derive the ledger, the
+    dedup and the window from bronze. Counting first and writing second is deliberate:
+    a count that ran after the append could be served from a re-read of the target and
+    would then be on the target's basis rather than on this frame's, which is the exact
+    conflation above."""
+    rows = rows.persist()
+    closed = rows.filter(~F.col(IS_ACTIVE)).count()
+    rows.write.format("delta").mode("append").saveAsTable(target_table)
+    rows.unpersist()
+    return closed
+
+
 def load_effectivity_satellite(
     spark: SparkSession,
     satellite: EffectivitySatellite,
@@ -348,7 +414,7 @@ def load_effectivity_satellite(
     relationship present in both months writes ONE row rather than two. Idempotent: a
     re-run finds every (key, applied_date) persisted, drops them before the window, and
     appends nothing."""
-    _refuse_a_mismatched_grain(satellite, link, hubs, grain, source_table)
+    _refuse_a_mismatched_link_grain(satellite, link, hubs, grain, source_table)
     observed = _observed(spark, satellite, link, hubs, source_table, months)
     collapsed = observed.select(F.coalesce(F.sum(F.col(_ROWS) - 1), F.lit(0))).first()[0]
     departures = _departures(spark, link, hubs, grain, months)
@@ -359,22 +425,13 @@ def load_effectivity_satellite(
         existing = spark.read.table(target_table).select(
             link.hash_key, APPLIED_DATE, IS_ACTIVE
         )
-        candidates = candidates.join(
-            existing.select(link.hash_key, APPLIED_DATE),
-            on=[link.hash_key, APPLIED_DATE], how="left_anti",
-        )
+    # The anti-join that used to sit here is inside `changed_rows` now -- see
+    # `loading._without_persisted` for why a precondition that function called
+    # load-bearing should not have been the caller's to remember.
     changed = changed_rows(candidates, existing, link.hash_key, change_column=IS_ACTIVE)
-    rows = _in_column_order(changed, satellite, link, load_date).persist()
-    # COUNTED FROM THE FRAME THAT IS WRITTEN, NOT FROM `load_date` ON THE TARGET, and
-    # the earlier spelling is the bug this replaces: filtering the target on
-    # `load_date` made a re-run under the SAME stamp report `appended=0` beside the
-    # PREVIOUS run's `closed`, two numbers on two bases in one result object. This is
-    # a breakdown of `appended`, on `appended`'s own basis -- the write is a single
-    # atomic Delta append of exactly these rows, so the only way the two can disagree
-    # is a failed write, which raises.
-    closed = rows.filter(~F.col(IS_ACTIVE)).count()
-    rows.write.format("delta").mode("append").saveAsTable(target_table)
-    rows.unpersist()
+    closed = _append_and_count_closes(
+        _in_column_order(changed, satellite, link, load_date), target_table
+    )
     return EffectivityLoadResult(
         table=target_table,
         appended=rows_in(spark, target_table) - before,

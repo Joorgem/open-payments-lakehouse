@@ -47,15 +47,34 @@ forever. That is a stated limitation, not a silent one; the mechanism is proven 
 a synthetic second month in `tests/vault/test_reference_vault.py`, since real bronze
 has none to measure it against.
 
-THE DEDUP TIE-BREAK, MEASURED TO NEVER FIRE TODAY, on the same "earliest wins, and
-that is the honest reading" doctrine `opl.vault.hubs.hub_candidates` and
-`opl.vault.satellites.satellite_candidates` already use: `codigo` is unique within a
-type in every one of the six 2026-06 counts (CNAE 1,359 rows / 1,359 distinct
-`codigo`, and the same identity for the other five). A duplicate `(codigo,
-lookup_type)` pair is therefore UNMEASURED, not assumed absent, and the
-deterministic pick -- earliest month, then lowest `record_source`, then lowest
-`descricao` -- is `F.min` over a struct for the reason it is everywhere else in this
-package: two runs over the same data must agree."""
+THE DEDUP TIE-BREAK, MEASURED TO NEVER FIRE TODAY. `codigo` is unique within a type
+in every one of the six 2026-06 counts (CNAE 1,359 rows / 1,359 distinct `codigo`,
+and the same identity for the other five). A duplicate `(codigo, lookup_type)` pair
+is therefore UNMEASURED, not assumed absent, and the deterministic pick -- earliest
+month, then lowest `record_source`, then lowest `descricao` -- is `F.min` over a
+struct for the reason it is everywhere else in this package: two runs over the same
+data must agree.
+
+THIS PACKAGE HAS **TWO** TIE-BREAK DOCTRINES AND THIS TABLE IS ON THE FIRST ONE, which
+is worth stating because an earlier version of this paragraph credited both to
+"earliest wins, and that is the honest reading" and `opl.vault.effectivity` says the
+opposite of one of them, four lines apart:
+
+  - EARLIEST WINS, AND IT MEANS SOMETHING. `opl.vault.hubs.hub_candidates` (through
+    `loading.earliest_record_source`), `opl.vault.effectivity` (the earliest delivered
+    `data_entrada_sociedade`), and this module's leading `_snapshot_month`. The chosen
+    value is the first observation, which is a claim a reader can check against the
+    source.
+  - DETERMINISTIC BUT ARBITRARY. `opl.vault.satellites.satellite_candidates` breaks a
+    tie on the lowest `hash_diff`, and a digest is not earlier, truer or better than
+    its twin -- it is only stable. `opl.vault.effectivity`'s docstring names that
+    contrast explicitly ("unlike `opl.vault.satellites`' lowest-`hash_diff` tie-break
+    it is not arbitrary"), so citing that module here as a fellow "earliest" was a
+    direct contradiction of it.
+
+The tail of this module's own struct is in the second category and says so: after
+`_snapshot_month`, `record_source` and `descricao` are ordered lexicographically
+because SOMETHING must be, not because a lower one is more true."""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -115,7 +134,23 @@ def _routed_files(source: DataFrame, lookup_type: str) -> list[str]:
     CALLS `lookup_type_from_filename` OVER EVERY DISTINCT FILENAME PRESENT, not only
     the ones a caller expects to match, so a filename the function cannot classify
     raises HERE -- before a candidate is built for ANY reference table -- rather than
-    being silently excluded from every one of them."""
+    being silently excluded from every one of them.
+
+    THE MISSING-COLUMN REFUSAL IS NAMED, like every sibling's. `reference_candidates`
+    refuses `ref.natural_key` and `ref.payload` by name through
+    `refuse_non_string_columns`, and then this function reached for `_source_file`
+    raw -- so the ONE column this module routes on was the one whose absence arrived as
+    a Spark `AnalysisException` about a column list, where every other missing column in
+    this package gives a `ValueError` saying which table is wrong and why."""
+    if SOURCE_FILE_COLUMN not in source.columns:
+        raise ValueError(
+            f"the reference source has no {SOURCE_FILE_COLUMN!r} column, so the six "
+            "reference types in it cannot be told apart. `codigo` is unique WITHIN a "
+            "type and collides ACROSS types, so a load without this column would not "
+            "fail -- it would merge two reference types onto one row. Every bronze "
+            f"table carries {SOURCE_FILE_COLUMN!r}; a source that does not is not a "
+            "bronze table this loader can route"
+        )
     files = [row[0] for row in source.select(SOURCE_FILE_COLUMN).distinct().collect()]
     return [f for f in files if lookup_type_from_filename(f) == lookup_type]
 

@@ -21,6 +21,7 @@ the file that does the counting."""
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 
 import pytest
 
@@ -88,6 +89,41 @@ DOMAIN = VaultDomain(name='payments', tables=(HUB, CUSTOMER, SAT, LINK))
 """
 
 
+def _probe_package(tmp_path, name: str, modules: dict[str, str]):
+    """A throwaway domains package in `tmp_path`, with `modules` as its module bodies.
+
+    Shared by the D5 proof and by the four discovery refusals below, so all five go
+    through the same shape a real `opl/vault/domains/` has: a package directory, an
+    `__init__.py`, and one file per module."""
+    package = tmp_path / name
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    for module, body in modules.items():
+        (package / f"{module}.py").write_text(body, encoding="utf-8")
+    return package
+
+
+@contextmanager
+def _importable(tmp_path, package):
+    """`package` importable by name for the duration, and gone from `sys.modules`
+    afterwards.
+
+    THE CLEANUP IS NOT HOUSEKEEPING. `discover_domains` IMPORTS what it finds, so a
+    probe module left in `sys.modules` would be served from cache to the next test that
+    happens to use the same package name -- and these tests deliberately reuse names to
+    build the same package with different contents."""
+    sys.path.insert(0, str(tmp_path))
+    try:
+        yield
+    finally:
+        sys.path.remove(str(tmp_path))
+        for module in [
+            name for name in sys.modules
+            if name == package.name or name.startswith(f"{package.name}.")
+        ]:
+            sys.modules.pop(module, None)
+
+
 def test_a_new_domain_of_hubs_satellites_and_links_is_discovered_without_editing_any_file(
     tmp_path,
 ):
@@ -109,17 +145,9 @@ def test_a_new_domain_of_hubs_satellites_and_links_is_discovered_without_editing
     import SIDE EFFECT -- `DOMAIN` is a value that `discover_domains` reads -- which is
     what lets this run without mutating the real registry, and what lets the whole-set
     guards run over every domain at once rather than in filesystem order."""
-    package = tmp_path / "probe_domains"
-    package.mkdir()
-    (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "payments.py").write_text(_PROBE_DOMAIN_SOURCE, encoding="utf-8")
-    sys.path.insert(0, str(tmp_path))
-    try:
+    package = _probe_package(tmp_path, "probe_domains", {"payments": _PROBE_DOMAIN_SOURCE})
+    with _importable(tmp_path, package):
         discovered = discover_domains([str(package)], "probe_domains")
-    finally:
-        sys.path.remove(str(tmp_path))
-        sys.modules.pop("probe_domains.payments", None)
-        sys.modules.pop("probe_domains", None)
 
     registry = build_registry(discovered)
 
@@ -130,6 +158,87 @@ def test_a_new_domain_of_hubs_satellites_and_links_is_discovered_without_editing
     assert [hub.name for hub in linked_hubs(registry, registry["link_payment"])] == [
         "hub_account", "hub_customer"
     ]
+
+
+# --------------------------------------------------------------------------- #
+# The four ways discovery can go wrong. THE MECHANISM THE EXTENSIBILITY CLAIM RESTS
+# ON, and every one of these was unasserted: each failure leaves wave 2's tables
+# silently unregistered, surfacing later as `UnknownVaultTable` from a JOB, which
+# points at the job rather than at the typo.
+# --------------------------------------------------------------------------- #
+
+def test_a_module_in_the_domains_package_binding_no_DOMAIN_is_refused(tmp_path):
+    """"THE WHOLE DIFFERENCE BETWEEN DISCOVERY AND GUESSWORK", in `discover_domains`'
+    own words, and until now nothing held it.
+
+    A domain file whose constant is misspelled -- `DOMAINS`, `Domain`, or a module
+    someone started and left half-written -- would otherwise be found, imported,
+    contribute nothing, and leave every table it declares unregistered with the import
+    succeeding. Skipping it is the tempting behaviour and it is the wrong one: the
+    module is IN the domains package, so it has already declared its intent."""
+    package = _probe_package(tmp_path, "probe_nodomain", {
+        "payments": _PROBE_DOMAIN_SOURCE.replace("DOMAIN =", "DOMAINS ="),
+    })
+
+    with _importable(tmp_path, package):
+        with pytest.raises(ValueError, match="binds no DOMAIN"):
+            discover_domains([str(package)], "probe_nodomain")
+
+
+def test_a_module_whose_DOMAIN_is_not_a_vault_domain_is_refused(tmp_path):
+    """The near miss of the one above: the name is right and the VALUE is not a
+    `VaultDomain`.
+
+    A `TypeError` rather than a `ValueError`, and the distinction is the module's own:
+    the name was found, so this is not a discovery failure but a shape one. Left
+    unrefused it would reach `build_registry`, whose guards iterate `domain.tables` and
+    would fail on whatever the object does or does not have -- an `AttributeError`
+    naming neither the module nor the attribute it should have bound."""
+    package = _probe_package(tmp_path, "probe_wrongtype", {
+        "payments": "DOMAIN = 'payments'\n",
+    })
+
+    with _importable(tmp_path, package):
+        with pytest.raises(TypeError, match="not a VaultDomain"):
+            discover_domains([str(package)], "probe_wrongtype")
+
+
+def test_a_domains_package_with_no_domain_module_at_all_is_refused(tmp_path):
+    """An empty package is refused rather than yielding an empty tuple, because the
+    consequence downstream is not empty: `build_registry(())` returns an empty mapping
+    and EVERY vault job then refuses its own table name, pointing at the table.
+
+    Reachable by a packaging mistake rather than by a typo -- a wheel built without the
+    domain modules, a path handed to `discover_domains` that is not the package it was
+    meant to be -- which is exactly the class of error that otherwise surfaces far from
+    its cause."""
+    package = _probe_package(tmp_path, "probe_empty", {})
+
+    with _importable(tmp_path, package):
+        with pytest.raises(ValueError, match="no domain module"):
+            discover_domains([str(package)], "probe_empty")
+
+
+def test_an_underscore_prefixed_module_is_skipped_and_does_not_have_to_be_a_domain(
+    tmp_path,
+):
+    """The escape hatch that makes the refusal above liveable: a domains package can
+    hold a shared helper without it having to pretend to be a domain.
+
+    ASSERTED IN BOTH DIRECTIONS IN ONE TEST, because either half alone is satisfied by
+    the wrong implementation. `_shared` binds no `DOMAIN`, so a discovery that did not
+    skip it would RAISE -- that is the skip. And the result is exactly the one real
+    domain, so a discovery that skipped it by reading it and discarding the result would
+    still be wrong about what it found."""
+    package = _probe_package(tmp_path, "probe_underscore", {
+        "_shared": "HELPERS = ('not a domain',)\n",
+        "payments": _PROBE_DOMAIN_SOURCE,
+    })
+
+    with _importable(tmp_path, package):
+        discovered = discover_domains([str(package)], "probe_underscore")
+
+    assert [domain.name for domain in discovered] == ["payments"]
 
 
 def test_the_cnpj_domain_registers_its_wave_one_tables():

@@ -22,7 +22,12 @@ import pytest
 
 from opl.vault.hashing import hash_key
 from opl.vault.hubs import load_hub
-from opl.vault.loading import hash_key_expression, read_snapshot_window, rows_in
+from opl.vault.loading import (
+    changed_rows,
+    hash_key_expression,
+    read_snapshot_window,
+    rows_in,
+)
 from opl.vault.months import validated_months
 from opl.vault.registry import BusinessKeyColumn, Hub
 
@@ -146,6 +151,71 @@ def test_a_business_key_with_no_width_is_not_padded(spark):
     hub = Hub(name="h", hash_key="h_hk", business_keys=(BusinessKeyColumn(name="k"),))
 
     assert frame.select(hash_key_expression(hub).alias("d")).first()["d"] == hash_key(["7"])
+
+
+# --------------------------------------------------------------------------- #
+# `changed_rows`' own precondition, asserted on `changed_rows`.
+# --------------------------------------------------------------------------- #
+
+_CHANGED_SCHEMA = "k string, applied_date date, hash_diff string"
+_JUN_REF, _JUL_REF = date(2026, 6, 13), date(2026, 7, 11)
+
+
+def test_changed_rows_drops_a_candidate_its_target_already_holds(spark):
+    """THE PRECONDITION THE DOCSTRING CALLED LOAD-BEARING, ASSERTED ON THE FUNCTION THAT
+    OWNS IT rather than on the two loaders that used to satisfy it by hand.
+
+    Both callers ran this anti-join themselves before calling, so the one step of
+    `changed_rows`' contract that was NOT shared was the step its own docstring named as
+    the reason for sharing. A third caller omitting it does not fail: two rows land at
+    one position in the window, `lag` marks whichever it orders second as unchanged, and
+    when the non-persisted one lands first it survives the filter and is appended again
+    -- a duplicate on roughly half of re-runs, non-deterministically.
+
+    `('A', JUN)` below is offered as a candidate AND is already persisted, so it must
+    not come back. `('A', JUL)` must, because its digest differs from the persisted
+    June row's -- which is also the assertion that `existing` still SEEDS the window
+    rather than merely filtering it."""
+    candidates = spark.createDataFrame(
+        [("A", _JUN_REF, "d1"), ("A", _JUL_REF, "d2"), ("B", _JUN_REF, "d3")],
+        _CHANGED_SCHEMA,
+    )
+    existing = spark.createDataFrame([("A", _JUN_REF, "d1")], _CHANGED_SCHEMA)
+
+    rows = changed_rows(candidates, existing, "k").collect()
+
+    assert sorted((row["k"], row["applied_date"]) for row in rows) == [
+        ("A", _JUL_REF), ("B", _JUN_REF)
+    ]
+
+
+def test_changed_rows_appends_nothing_when_every_candidate_is_already_persisted(spark):
+    """Idempotence at the shared level: a re-run offers exactly what is on disk and
+    gets back nothing. Asserted here as well as through the loaders because this is the
+    property the anti-join exists for, and it now lives in one place."""
+    rows = spark.createDataFrame(
+        [("A", _JUN_REF, "d1"), ("A", _JUL_REF, "d2")], _CHANGED_SCHEMA
+    )
+
+    assert changed_rows(rows, rows, "k").count() == 0
+
+
+def test_changed_rows_with_no_target_treats_every_first_row_as_changed(spark):
+    """`existing=None` is a first load, where there is nothing to drop and nothing to
+    seed the window with. The contrast case, so the two assertions above read as the
+    anti-join firing rather than as a constant."""
+    candidates = spark.createDataFrame(
+        [("A", _JUN_REF, "d1"), ("A", _JUL_REF, "d1"), ("B", _JUN_REF, "d3")],
+        _CHANGED_SCHEMA,
+    )
+
+    rows = changed_rows(candidates, None, "k").collect()
+
+    # ('A', JUL) repeats ('A', JUN)'s digest, so it is unchanged and dropped -- by the
+    # `lag`, which is the OTHER half of this function and must still work untouched.
+    assert sorted((row["k"], row["applied_date"]) for row in rows) == [
+        ("A", _JUN_REF), ("B", _JUN_REF)
+    ]
 
 
 def test_the_loader_path_refuses_a_bare_string_month(spark, snapshots):

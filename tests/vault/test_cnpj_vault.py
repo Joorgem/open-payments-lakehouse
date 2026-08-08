@@ -43,7 +43,7 @@ from opl.vault.loading import (
     SNAPSHOT_MONTH_COLUMN,
     SNAPSHOT_REF_DATE_COLUMN,
 )
-from opl.vault.observation import ObservationGrain
+from opl.vault.observation import MONTH_COLUMN, ObservationGrain
 from opl.vault.registry import BusinessKeyColumn, Hub, Satellite
 from opl.vault.satellites import load_satellite
 
@@ -725,6 +725,15 @@ def test_the_bronze_audit_columns_this_layer_reads_are_the_ones_the_ingest_write
     writes. Renamed there and not here, the loaders would select a column that is not
     present and fail in Spark, naming the column and nothing about why.
 
+    `observation.MONTH_COLUMN` IS THE THIRD SPELLING OF `_snapshot_month` AND IS
+    ASSERTED HERE FOR THAT REASON. `opl.bronze.snapshot.SNAPSHOT_MONTH_COLUMN` is the
+    bronze constant, `loading` re-exports it, and the ledger declares its own because it
+    imports no bronze module -- so the vault carries two live constants for one column
+    name. `opl.vault.effectivity` imports BOTH and `unionByName`s frames keyed on each,
+    which is the shape that would break: a rename on one side gives a union over two
+    differently-named columns, and `unionByName` fails on a name that is not there. A
+    check that only pinned the bronze one would leave the second free to drift.
+
     The record-source VALUE is pinned too, because this module's fixture asserts
     against it -- a fixture carrying a value bronze does not produce would make every
     `record_source` assertion above self-referential."""
@@ -737,9 +746,11 @@ def test_the_bronze_audit_columns_this_layer_reads_are_the_ones_the_ingest_write
         snapshot_month=JUN,
     )
 
-    assert {BRONZE_RECORD_SOURCE, SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN} <= set(
-        stamped.columns
-    )
+    assert {
+        BRONZE_RECORD_SOURCE, SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN,
+        MONTH_COLUMN,
+    } <= set(stamped.columns)
+    assert MONTH_COLUMN == SNAPSHOT_MONTH_COLUMN
     assert stamped.first()[BRONZE_RECORD_SOURCE] == RECORD_SOURCE_VALUE
     assert stamped.first()[SNAPSHOT_REF_DATE_COLUMN] == JUN_REF
 

@@ -259,4 +259,26 @@ verdict() {
     "$total" "$expected"
 }
 
-main "$@"
+# THE INVOCATION IS WRAPPED IN BRACES AND ENDS IN AN EXPLICIT `exit`, AND BOTH HALVES
+# ARE LOAD-BEARING. Bash reads a script INCREMENTALLY, by byte offset, while it runs it.
+# A ~1,470 s run therefore holds this file open for twenty-five minutes, and anything
+# that rewrites it in that window -- an editor, a `git checkout`, an agent's own edit --
+# leaves bash resuming at an offset that now lands mid-token in different text. What
+# comes out is fragments executed as commands AFTER the verdict has printed, at line
+# numbers past the end of the file that was started, with the exit status already
+# decided. Observed once, on the first end-to-end run of this script:
+#
+#   VERDICT: RECONCILED -- 922 passed, 922 selected, agreed by two derivations
+#   scripts/run_suite.sh: line 231: $'\n    fi\n    printf ': command not found
+#   scripts/run_suite.sh: line 241: $1: unbound variable
+#   $ echo $?
+#   0
+#
+# A tool whose whole purpose is to be quotable as evidence must not print a green
+# verdict and then emit errors, least of all while returning 0. `{ ...; }` is a compound
+# command, so bash PARSES `main "$@"; exit $?` in full before executing any of it, and
+# the `exit` then terminates the shell without another read. A bare `main "$@"` followed
+# by `exit $?` on its own line does NOT fix this -- the `exit` is read after `main`
+# returns, from the offset that has already moved. Both were tested against a file
+# rewritten mid-run; only this form survives.
+{ main "$@"; exit $?; }

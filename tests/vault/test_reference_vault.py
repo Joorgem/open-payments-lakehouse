@@ -111,8 +111,16 @@ def _fixture_rows() -> list[tuple]:
         lookup_row(*R_MUNIC_1200, JUN),
         lookup_row(*R_NATJU_1200, JUN),
         # The dedup pair: same codigo and type, same month, two source rows.
-        lookup_row(D_CODIGO, "ARROZ B", "cnae", JUN, record_source=D_LOSING_SOURCE),
-        lookup_row(D_CODIGO, "ARROZ A", "cnae", JUN),
+        #
+        # THE DESCRIPTIONS ARE ORDERED AGAINST THE RECORD SOURCES ON PURPOSE. The
+        # tie-break is `min` over the STRUCT (month, record_source, descricao), so
+        # `record_source` decides before `descricao` is ever compared. Give the losing
+        # source the alphabetically LATER description and both orderings agree, and the
+        # test cannot tell which field decided. `D_LOSING_SOURCE` therefore carries
+        # 'ARROZ A': a struct comparison keeps 'ARROZ B', and a hypothetical
+        # descricao-first one would keep 'ARROZ A'.
+        lookup_row(D_CODIGO, "ARROZ A", "cnae", JUN, record_source=D_LOSING_SOURCE),
+        lookup_row(D_CODIGO, "ARROZ B", "cnae", JUN),
     ]
     return rows
 
@@ -346,13 +354,19 @@ def test_the_target_carries_the_injected_load_date_and_the_earliest_record_sourc
 
 def test_a_duplicate_codigo_within_one_type_is_folded_deterministically(spark, lookup_source):
     """Two June rows share `codigo='9000001'` within `cnae` -- unmeasured on real
-    2026-06 bronze (every type is 1:1 on rows-to-distinct-codigo), so this is the
-    same kind of mechanism probe `opl.vault.satellites`' dedup test is for empresas.
-    THE LOWER `record_source` WINS: `D_LOSING_SOURCE` sorts after
-    `RECORD_SOURCE_VALUE`, so `'ARROZ A'` (the plain source) must be the one kept."""
+    2026-06 bronze (every type is 1:1 on rows-to-distinct-codigo), so this is a
+    mechanism probe rather than a mirror of anything real.
+
+    THE LOWER `record_source` WINS, AND THE FIXTURE NOW LETS THAT BE OBSERVED. The
+    struct is (month, `record_source`, `descricao`) and both rows share a month, so
+    `record_source` is what decides -- but the pair used to give the losing source the
+    later description too, and then BOTH field orders returned the same row and this
+    assertion held against an implementation that compared `descricao` first. The
+    losing row now carries `'ARROZ A'`, so keeping `'ARROZ B'` is a statement about
+    `record_source` and nothing else."""
     target, result = _load(spark, lookup_source, REF_CNAE)
 
-    assert _rows(spark, target)["9000001"] == "ARROZ A"
+    assert _rows(spark, target)["9000001"] == "ARROZ B"
     assert result.collapsed_duplicates == 1
 
 

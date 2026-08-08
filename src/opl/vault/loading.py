@@ -15,10 +15,22 @@ establishments. `hash_key_expression` is called by `load_hub`, `load_satellite`,
 `link_hash_key_expression`, which is in this file beside it. `load_reference_table` is
 the one loader that calls neither, and deliberately: a reference table has no hash key
 at all (`opl.vault.specs.ReferenceTable` states that as its own decision). So every
-digest this vault writes is built here, and there is no second way to spell it. (This
-sentence named exactly three loaders until Task 7's correction pass -- true when it was
-written at Task 3, left behind by Tasks 5 and 6. The property it asserts is unchanged:
-one spelling, in this module.)
+HASH KEY this vault writes is built here, and there is no second way to spell one.
+(This sentence named exactly three loaders until Task 7's correction pass -- true when
+it was written at Task 3, left behind by Tasks 5 and 6. The property it asserts is
+unchanged: one spelling, in this module.)
+
+IT SAYS "HASH KEY" AND NOT "DIGEST", WHICH IS A NARROWER CLAIM AND THE TRUE ONE. It
+read "every digest this vault writes is built here" until the final whole-branch
+review, and `hash_diff` is a digest this vault writes that is NOT built here:
+`opl.vault.satellites.satellite_candidates` calls `hash_key_column` over the payload
+directly. That is not a second spelling and nothing about it is wrong -- both reach
+`opl.vault.hashing_spark.hash_key_column`, which is the one implementation of the
+standard, and a payload is not a business key so there is no `Hub` to take its
+components from. The property this module actually holds is about the BUSINESS-KEY
+side: every expression that keys a row to a hub or a link is built from a spec, here.
+The claim about the standard as a whole belongs to `hashing_spark`, and is that
+module's to make.
 
 THE MONTH WINDOW IS VALIDATED FOR SHAPE HERE AND FOR EXISTENCE ELSEWHERE. `is_month`
 is the one spelling of "YYYY-MM naming a real month" in this repository -- the rule
@@ -221,6 +233,28 @@ def earliest_record_source(keyed: DataFrame, group_by: Sequence[str]) -> DataFra
     )
 
 
+def _without_persisted(candidates: DataFrame, existing: DataFrame, key: str) -> DataFrame:
+    """`candidates`, minus every (key, `applied_date`) pair `existing` already holds.
+
+    RUN BEFORE THE UNION IN `changed_rows`, AND THAT ORDERING IS LOAD-BEARING RATHER
+    THAN TIDY. Leaving a persisted pair in puts two rows at the same position in the
+    window: whichever of the identical pair `lag` happens to order second is marked
+    unchanged while the first is marked changed, so if the non-persisted one lands
+    first it survives the filter and is appended again -- a duplicate on roughly half
+    of re-runs, non-deterministically, with nothing failing.
+
+    IT LIVES HERE AND NOT IN THE CALLERS, WHICH IS A CORRECTION. Both loaders performed
+    this anti-join themselves while `changed_rows`' own docstring described it as part
+    of what the two share -- so the single step that docstring called load-bearing was
+    the one piece a THIRD caller could omit, and `opl.vault.registry`'s extensibility
+    claim is precisely that there will be a third caller. A precondition cheaper to
+    satisfy than to state belongs inside the function that needs it; `changed_rows` has
+    both frames and both join keys, so there was never anything to hand out."""
+    return candidates.join(
+        existing.select(key, APPLIED_DATE), on=[key, APPLIED_DATE], how="left_anti"
+    )
+
+
 def changed_rows(
     candidates: DataFrame,
     existing: DataFrame | None,
@@ -229,7 +263,8 @@ def changed_rows(
     change_column: str = HASH_DIFF,
 ) -> DataFrame:
     """The candidates whose `change_column` differs from the one that preceded it for
-    the same key, in `applied_date` order.
+    the same key, in `applied_date` order -- with anything already persisted at that
+    (key, `applied_date`) dropped first, by `_without_persisted`.
 
     SHARED BY THE DESCRIPTIVE SATELLITE AND THE EFFECTIVITY SATELLITE, which differ only
     in what they watch: `hash_diff` over a payload, or `is_active` over a relationship.
@@ -239,19 +274,17 @@ def changed_rows(
     THE PERSISTED ROWS SEED THE WINDOW, which is what makes an incremental load
     correct. June is already in the satellite when July's snapshot arrives, so July's
     comparison has to be against the row on disk rather than against another row in the
-    same batch; a `lag` over the candidates alone would call July's value new.
-
-    A CANDIDATE WHOSE (key, applied_date) IS ALREADY PERSISTED IS DROPPED FIRST, before
-    the union, and that ordering is load-bearing rather than tidy: leaving it in would
-    put two rows at the same position in the window, and whichever of the identical
-    pair `lag` happened to place second would be marked unchanged while the first was
-    marked changed -- so a re-run would append a duplicate roughly half the time.
+    same batch; a `lag` over the candidates alone would call July's value new. So
+    `existing` is used twice and for opposite purposes -- it seeds the comparison and it
+    removes the rows that would corrupt it -- which is why both uses are in one place.
 
     ORDERED BY `applied_date`, so a snapshot loaded out of order still lands in its
     true position. What that cannot repair is a row already written: backfilling June
     after July leaves July's row in place even though it is now redundant. Redundant,
     not wrong -- it still says the value was V on 2026-07-11 -- so the correction is to
     load in order, not to rewrite."""
+    if existing is not None:
+        candidates = _without_persisted(candidates, existing, key)
     lineage = candidates.select(key, APPLIED_DATE, change_column).withColumn(
         _PERSISTED, F.lit(False)
     )
