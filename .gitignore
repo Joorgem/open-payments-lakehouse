@@ -23,3 +23,10 @@ dist/
 # rather than under $TMPDIR so the path it prints carries no operator username into a
 # published run-evidence paste; ignored because these are run artifacts, not sources.
 /.run-suite-logs/
+
+# Agent context. Kept on disk so the tooling still reads it, deliberately unpublished:
+# it names the job this project was started for, records the agent-autonomy rules, and
+# carries this machine's JAVA_HOME/HADOOP_HOME and Databricks CLI specifics -- none of
+# which belong in a public repo whose point is the engineering.
+CLAUDE.md
+AGENTS.md
