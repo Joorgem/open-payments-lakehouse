@@ -510,6 +510,33 @@ def test_no_vault_entry_point_raises_system_exit(script):
     assert source.rstrip().endswith('if __name__ == "__main__":\n    main()')
 
 
+def _grains_the_jobs_build() -> list[tuple[str, str, str, ObservationGrain]]:
+    """Every `(job, task, script, grain)` the vault YAMLs' load tasks build, skipping the
+    tasks whose loader takes no observation grain.
+
+    Extracted from the test below only so that test stays inside the project's 50-line
+    cap. The branch is on SPEC KIND because that is what decides which entry point owns a
+    table, and it is the same discrimination the two loaders make internally."""
+    satellite_task = _load("vault_load_satellite")
+    effectivity_task = _load("vault_load_effectivity")
+    built: list[tuple[str, str, str, ObservationGrain]] = []
+    for job_yml in _VAULT_JOBS:
+        for key, (script, table, source) in _load_tasks(job_yml).items():
+            spec = domains.table_spec(table)
+            if isinstance(spec, Satellite):
+                grain = satellite_task.grain_for(
+                    domains.parent_hub(spec), bronze_table_spec(source)
+                )
+            elif isinstance(spec, EffectivitySatellite):
+                grain = effectivity_task.grain_for(
+                    domains.parent_link(spec), bronze_table_spec(source)
+                )
+            else:
+                continue
+            built.append((job_yml, key, script, grain))
+    return built
+
+
 def test_the_grain_this_task_builds_is_the_grain_the_domain_declares():
     """THE ONE PLACE THE JOB LAYER RE-DERIVES SOMETHING THE DOMAIN ALREADY DECLARED, and
     the reason it is asserted rather than argued.
@@ -530,32 +557,17 @@ def test_the_grain_this_task_builds_is_the_grain_the_domain_declares():
         for value in vars(cnpj_domain).values()
         if isinstance(value, ObservationGrain)
     }
-    satellite_task = _load("vault_load_satellite")
-    effectivity_task = _load("vault_load_effectivity")
-    checked = 0
-    for job_yml in _VAULT_JOBS:
-        for key, (script, table, source) in _load_tasks(job_yml).items():
-            spec = domains.table_spec(table)
-            if isinstance(spec, Satellite):
-                built = satellite_task.grain_for(
-                    domains.parent_hub(spec), bronze_table_spec(source)
-                )
-            elif isinstance(spec, EffectivitySatellite):
-                built = effectivity_task.grain_for(
-                    domains.parent_link(spec), bronze_table_spec(source)
-                )
-            else:
-                continue
-            assert built.name in declared, (
-                f"{job_yml}:{key} ({script}) builds a grain called {built.name!r}, which "
-                f"opl.vault.domains.cnpj declares no constant for ({sorted(declared)})"
-            )
-            assert built == declared[built.name], (
-                f"{job_yml}:{key} builds {built} and the domain declares "
-                f"{declared[built.name]} -- the job layer and the domain disagree about "
-                "which tables the ledger reads or which columns key it"
-            )
-            checked += 1
+    built = _grains_the_jobs_build()
+    for job_yml, key, script, grain in built:
+        assert grain.name in declared, (
+            f"{job_yml}:{key} ({script}) builds a grain called {grain.name!r}, which "
+            f"opl.vault.domains.cnpj declares no constant for ({sorted(declared)})"
+        )
+        assert grain == declared[grain.name], (
+            f"{job_yml}:{key} builds {grain} and the domain declares "
+            f"{declared[grain.name]} -- the job layer and the domain disagree about "
+            "which tables the ledger reads or which columns key it"
+        )
     # DERIVED FROM THE REGISTRY rather than written as a literal: every registered table
     # whose loader takes an observation grain must have had one checked. With the
     # totality lock above -- each registered table loaded by exactly one task -- these
@@ -565,9 +577,9 @@ def test_the_grain_this_task_builds_is_the_grain_the_domain_declares():
         isinstance(spec, Satellite | EffectivitySatellite)
         for spec in domains.REGISTRY.values()
     )
-    assert checked == expected, (
-        f"{checked} of the {expected} registered tables whose loader takes an observation "
-        "grain had one checked here"
+    assert len(built) == expected, (
+        f"{len(built)} of the {expected} registered tables whose loader takes an "
+        "observation grain had one checked here"
     )
 
 
