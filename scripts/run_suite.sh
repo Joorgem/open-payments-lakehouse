@@ -62,11 +62,23 @@ WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
 # THE PARTITION: "<name>|<pytest path arguments>". Split by measured runtime, not by
 # meaning -- the only requirement the reconciliation enforces is that the four together
 # collect exactly what the bare suite collects.
+#
+# EVERY VAULT CHUNK NAMES ITS FILES, SO A NEW FILE UNDER tests/vault IS IN NO CHUNK.
+# Chunk 1 ignores that directory and the other three are explicit lists, so a vault test
+# module added without an edit here is collected by the bare suite, found in no chunk,
+# and `reconcile_partition` exits non-zero -- which is the reconciliation working, and is
+# also a surprise if you were told the new tests "land in the non-vault chunk". That is
+# true of a test added under `tests/` and false of one added under `tests/vault/`.
+# F2 wave 1's workspace run added `test_effectivity_window.py` and put it in
+# `vault-ledger-registry` rather than in `vault-estab-socios`: the socios chunk has
+# ranged 454-1,197 s across runs against a 600 s cap and is the one under a standing
+# split warning, and this file reads the same socios fixture the ledger chunk's
+# `test_observation.py` already exercises the ledger through.
 CHUNKS=(
   "non-vault|--ignore=tests/vault"
   "vault-cnpj-hashing|tests/vault/test_cnpj_vault.py tests/vault/test_hashing.py tests/vault/test_hashing_spark.py"
   "vault-estab-socios|tests/vault/test_estabelecimento_vault.py tests/vault/test_socios_vault.py"
-  "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_registry.py tests/vault/test_reference_vault.py"
+  "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_registry.py tests/vault/test_reference_vault.py tests/vault/test_effectivity_window.py"
 )
 
 chunk_name() { printf '%s' "${CHUNKS[$1]%%|*}"; }

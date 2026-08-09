@@ -1,0 +1,131 @@
+# databricks/resources/vault_reference_job.yml
+# The six reference tables: 7,408 rows in total, from one 2026-06-only bronze table.
+#
+# SIX TASKS OVER ONE SOURCE, WHICH IS THE SHAPE THE DATA FORCES. `bronze_cnpj_lookup`
+# holds all six reference types in ONE table, told apart only by `_source_file`, and
+# `codigo` is unique WITHIN a type and collides ACROSS them: `'05'`, `'08'`, `'09'` and
+# `'10'` each name a motivo AND a qualificação (MOTI and QUALS share a two-character
+# width), and `'1200'` is both a município and a natureza jurídica. So each task narrows
+# the same source to its own `lookup_type`, and the uniqueness invariant to assert
+# afterwards is WITHIN a table and never across -- a `codigo` present in two of the six
+# with two different `descricao` values is the loader working.
+#
+# NO HISTORY, STATED RATHER THAN IMPLIED. There is exactly one month: the 2026-07 lookup
+# zips were never published in that month's set, and 37 of the 39 available CNPJ months
+# are uningested. So there is no second `descricao` to compare, no `applied_date`
+# sequence, and no absence for the observation ledger to report -- and
+# `opl.vault.reference` states the consequence plainly, that a later revision of a code's
+# description would NOT be picked up, because the anti-join drops the candidate on
+# `codigo` alone.
+#
+# THE SIX RUN IN PARALLEL, unlike the sequenced tasks in the other three vault jobs. They
+# write six different Delta tables from one 7,408-row source, so there is nothing to
+# serialise for and no wall-clock worth separating: this is the one vault job whose cost
+# is not the measurement.
+resources:
+  jobs:
+    opl_vault_cnpj_reference:
+      name: opl-vault-cnpj-reference
+      parameters:
+        - name: months
+          # A LIST, for the reason vault_empresa_job.yml carries in full, even though
+          # this source holds one month today. The window is required rather than
+          # defaulted so the day a second month lands an unparameterised run does not
+          # silently widen.
+          #
+          #     databricks bundle run opl_vault_cnpj_reference -t free \
+          #       --params months=2026-06,revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-MONTH"
+        - name: revision
+          default: "REQUIRED-PASS-A-REVISION"
+      tasks:
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        - task_key: ref_cnae
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_reference.py
+            parameters:
+              - "ref_cnae"
+              - "lookup"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+        - task_key: ref_motivo
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_reference.py
+            parameters:
+              - "ref_motivo"
+              - "lookup"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+        - task_key: ref_municipio
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_reference.py
+            parameters:
+              - "ref_municipio"
+              - "lookup"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+        - task_key: ref_natureza_juridica
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_reference.py
+            parameters:
+              - "ref_natureza_juridica"
+              - "lookup"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+        # PAÍS IS MODELLED, and its presence here is the decision rather than an
+        # oversight in the other direction: the task brief lists five reference types
+        # and omits it, but `bronze_cnpj_lookup` carries país as a sixth, identically
+        # shaped (`codigo`/`descricao`) type with no property distinguishing it from the
+        # other five. See `opl/vault/domains/cnpj.py`.
+        - task_key: ref_pais
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_reference.py
+            parameters:
+              - "ref_pais"
+              - "lookup"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+        - task_key: ref_qualificacao
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_reference.py
+            parameters:
+              - "ref_qualificacao"
+              - "lookup"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

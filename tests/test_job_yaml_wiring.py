@@ -73,6 +73,18 @@ _GUARDED_JOBS = (
     # the current rules reject. Its header's isolation argument is about what STARTS
     # the job, not about which code the job then runs (ADR 0009).
     "repromote_batch_job.yml",
+    # THE FOUR VAULT JOBS (F2 wave 1's workspace run), and the choice is the same one
+    # every job in this list has to answer: does a run against a wheel built from
+    # another revision matter? It matters MORE here than for an ingestion job. A vault
+    # loader appends into a table whose identity is a HASH KEY, so a wheel carrying a
+    # different `opl.vault.hashing_spark` -- one whitespace rule, one padding width, one
+    # component order -- writes rows that are individually well-formed and key to
+    # nothing the previous load wrote. Nothing fails, every join returns fewer rows, and
+    # the repair is deleting rows by hand because the loaders are insert-only.
+    "vault_empresa_job.yml",
+    "vault_estabelecimento_job.yml",
+    "vault_partner_job.yml",
+    "vault_reference_job.yml",
 )
 
 _UNGUARDED_JOBS = {

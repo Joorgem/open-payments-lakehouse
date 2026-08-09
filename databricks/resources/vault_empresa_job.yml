@@ -1,0 +1,113 @@
+# databricks/resources/vault_empresa_job.yml
+# THE FIRST JOB IN THIS REPOSITORY THAT RUNS A VAULT LOADER. Until this file existed,
+# `grep -rl vault databricks/` returned nothing: seventeen modules, four ADRs and a
+# published set of predictions, and no loader had ever executed.
+#
+# ONE JOB PER PLAN TASK, not one job for the whole vault, and the reason is measurement
+# rather than tidiness. F2 wave 1's workspace-run phase loads these tables in four
+# separate steps and needs WALL-CLOCK AND COST PER LOADER at real volume, which is a
+# number nobody has: the Databricks UI reports duration per task and per run, so one job
+# per plan task with one task per vault table makes each loader's cost readable without
+# instrumenting anything. A single job would also put a 72.3M-row estabelecimentos load
+# in the same failure domain as a 7,408-row reference load, which is the argument
+# `bronze_job.yml` already makes for keeping the giants apart from the lookups.
+#
+# THIS JOB IS THE SMALLEST REAL TOPOLOGY -- one hub, one satellite -- which is why the
+# phase starts here. Expected: `hub_empresa` 69,062,849 rows and `sat_empresa_dados`
+# 69,202,817 (68,922,881 companies with one row + 139,968 with two).
+#
+# WRITTEN AS THE TEMPLATE THE OTHER THREE VAULT JOBS WERE COPIED FROM, which is the risk
+# `tests/test_vault_job_wiring.py` exists to refuse: every parameter list below names a
+# vault table AND a bronze table, and every wrong value either could carry is the name
+# of a table that EXISTS. A leftover string does not fail the run -- it loads another
+# table, or loads this one from another source, and reports SUCCESS.
+resources:
+  jobs:
+    opl_vault_cnpj_empresa:
+      name: opl-vault-cnpj-empresa
+      parameters:
+        - name: months
+          # A LIST, and the plural is load-bearing rather than cosmetic. Every bronze
+          # ingestion job takes ONE month because it stamps that month onto the rows it
+          # reads; a vault load READS `_snapshot_month` and compares months to each
+          # other, so its window is a set. `opl.vault.job_params.MONTH_SEPARATOR` is
+          # `+` and not a comma because `--params` is itself comma-separated.
+          #
+          # The default is a value the tasks refuse (`opl.config.SENTINEL_MONTH`, shared
+          # with the four ingestion jobs -- one sentinel, one spelling, even though its
+          # wording is singular). The ORIGINAL reason for that sentinel does NOT carry
+          # over: bronze's real-month default re-ingested against an empty checkpoint
+          # and doubled the row counts, and nothing here writes `_snapshot_month` at
+          # all. The reason it is kept is its own -- a forgotten `--params` would
+          # otherwise become a silent load of a window nobody chose.
+          default: "REQUIRED-PASS-A-MONTH"
+        - name: revision
+          # The revision this run is launched for; the default is a value the guard
+          # below refuses, so a run launched without --params stops instead of checking
+          # nothing.
+          #
+          #     databricks bundle run opl_vault_cnpj_empresa -t free \
+          #       --params months=2026-06+2026-07,revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
+      tasks:
+        # FIRST, AND NOTHING BEFORE IT (ADR 0009). Compares the revision above -- the
+        # operator's HEAD when the run was submitted -- against the revision the
+        # deployed wheel was built from. Side-effect-free, which is required rather
+        # than incidental: `max_retries: 0` does not prevent a retry on INTERNAL_ERROR,
+        # so a guard that touched a table could touch it twice.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        # THE HUB BEFORE ITS SATELLITE. The satellite computes its own hash key from the
+        # source rather than joining to the hub, so this order is not what makes the
+        # digests agree -- `opl.vault.loading.hash_key_expression` is. What it buys is
+        # that the satellite's rows never reference a hub row that does not exist yet,
+        # which is a dangling reference no error would report.
+        - task_key: hub_empresa
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_hub.py
+            # [vault table, BRONZE SOURCE KEY, months, load_date]. The source is a
+            # registry key and never a qualified table name: `opl.bronze.registry` owns
+            # the staging/bronze/quarantine triple and `opl.config.DEFAULT.table` owns
+            # the catalog and schema, so neither is spelled here.
+            parameters:
+              - "hub_empresa"
+              - "empresas"
+              - "{{job.parameters.months}}"
+              # ONE LOAD TIMESTAMP FOR THE WHOLE RUN. `opl.vault.hubs` gives `load_date`
+              # no default so that a loader cannot stamp its own clock; this is the
+              # value "the job's own parameters pin" that its docstring names, and it is
+              # identical across every task of this run, so the hub and its satellite
+              # agree about when the run happened.
+              - "{{job.start_time.iso_datetime}}"
+
+        - task_key: sat_empresa_dados
+          depends_on: [{ task_key: hub_empresa }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_satellite.py
+            # The parent hub is NOT a parameter: `opl.vault.domains.parent_hub` resolves
+            # it from the registry, which is the fix `_refuse_a_mismatched_hub`'s own
+            # message names. A hub passed by hand here would be a second chance for a
+            # copied YAML to key a satellite on the wrong digest -- which joins to
+            # nothing and reports success.
+            parameters:
+              - "sat_empresa_dados"
+              - "empresas"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl
