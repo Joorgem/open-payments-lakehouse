@@ -1692,3 +1692,84 @@ documents that were most wrong in it were the two that had already been correcte
 once. A retraction is not a guarantee that what replaced it is true, and the
 replacement gets less scrutiny than the original precisely because it arrives
 wearing the authority of a correction.
+
+---
+
+## 26. Predictions published *before* the run that tests them (workspace-run Task 2.5)
+
+This section is dated **2026-08-09**, after the sections above, and it exists because
+the workspace-run plan asserted something about this document that was not true. Its
+acceptance table said "every one is published in `docs/f2-wave-1-run-evidence.md` as a
+**prediction**". Three of its six numbers — **69,202,817**, **72,318,968** and
+**28,051,707** — appeared **zero times** anywhere in this file, and three more modelled
+tables had no prediction at all. A phase whose whole method is "reconcile a run against a
+number published beforehand" cannot have half its table unpublished, and a number first
+written down *after* the run that produced it is not a prediction. So these are recorded
+here, with statement ids, while **no loader has yet run**.
+
+**Every number below is still a prediction.** The tense is deliberate, exactly as
+[§13](#13-task-5--the-effectivity-satellite) uses it: these say *should*, not *does*.
+
+| table | predicted rows | derivation | statement |
+|---|---|---|---|
+| `hub_empresa` | **69,062,849** | distinct `cnpj_basico`, both months | `01f1943d-11d7-16bf-ac0d-316e1828fe92` |
+| `sat_empresa_dados` | **69,202,817** | 69,062,849 first observations + 139,968 changed | `01f1943d-6606-1f0a-b21d-f1f998e9bd3c` |
+| `hub_estabelecimento` | **72,318,968** | distinct (`cnpj_basico`,`cnpj_ordem`,`cnpj_dv`), both months | `01f1943f-30ff-18a3-805c-4bd37c7bed46` |
+| `sat_estabelecimento_dados` | **73,530,802** | 72,318,968 + 1,211,834 changed (`01f192de-b784…`) | derived from the two |
+| `sat_estabelecimento_endereco` | **72,889,043** | 72,318,968 + 570,075 changed (`01f192de-b784…`) | derived from the two |
+| `link_empresa_estabelecimento` | **72,318,968** | hierarchical, one parent per child, so link grain = estabelecimento grain | `01f1943f-30ff-18a3-805c-4bd37c7bed46` |
+| `link_company_partner` | **28,051,707** | distinct (`cnpj_basico`,`identificador_socio`,`cpf_cnpj_socio`), both months, NULL-safe | `01f1943f-5e50-1a47-ab68-abd92f120ec8` |
+
+### 26.1 The estabelecimentos duplicate rate, measured for the first time — it is **zero**
+
+`satellites.py:57-66` recorded this rate as **unmeasured, not zero**, and
+[§18.2](#182-the-satellite-dedup-tie-break--it-never-fires) said the same. Measured now
+(`01f1943f-30ff-18a3-805c-4bd37c7bed46`): **0** duplicate
+(`cnpj_basico`,`cnpj_ordem`,`cnpj_dv`,`_snapshot_month`) tuples, over both months.
+
+So `collapsed_duplicates` **will not fire** on estabelecimentos either, and the
+satellite's deterministic tie-break stays **unexercised on real data** — proven as a
+mechanism on synthetic fixtures only, exactly as it already was for empresas. The
+workspace-run plan expected this measurement to possibly make the tie-break "load-bearing
+rather than latent"; it resolves the other way, and the honest report is that the path is
+still unexercised rather than newly confirmed. The socios link remains the only place in
+this vault with measured collisions (4,329) that actually exercises a dedup rule.
+
+### 26.2 Two ways to compute these numbers wrongly, both of which produce a plausible answer
+
+Both were hit while deriving the table above, and both are recorded because each
+produces a number close enough to the right one to be published without suspicion.
+
+**A raw payload comparison overcounts satellite rows.** Comparing the payload `struct`
+directly gives `sat_empresa_dados` = **69,202,818**, one more than the truth, off a
+`changed_rows` of **139,969** rather than 139,968. The vault's `hash_diff` compares
+`_normalised` values — `strip().upper()`, `hashing_spark.py:160-167` — so two payloads
+differing only in case or in the 29-character trim class are the **same** to the loader.
+Measured (`01f1943d-6606-1f0a-b21d-f1f998e9bd3c`): `changed_raw` **139,969**,
+`changed_upper` **139,968**, `case_only_changes` **1**. Exactly one company in 69 million
+changed its razão social's case and nothing else. **A prediction for a satellite must be
+computed the way its loader computes it, or it is a prediction of a different table.**
+
+**`COUNT(DISTINCT a,b,c)` silently drops every row where any component is NULL.** At link
+grain it returns **28,042,946** against the null-safe `GROUP BY`'s **28,051,707** — short
+by **8,761**, because 25,653 socios rows carry `cpf_cnpj_socio` NULL. This is the same
+failure family as the `LEFT ANTI JOIN … USING` that manufactured **8,757** phantom
+departures ([§13](#13-task-5--the-effectivity-satellite)), in a different operator: SQL's
+NULL is not a value to `DISTINCT` any more than it is to `=`. `GROUP BY` treats it as one,
+which is why the ledger is built on `groupBy` and unions rather than joins
+(`observation.py:404-411`). **The two wrong answers here differ by 4 — 8,761 against
+8,757 — which is precisely how little the shape of a NULL bug tells you about its size.**
+
+### 26.3 What this section does not claim
+
+- **No loader has run.** Every number above is still SQL over bronze, and the whole point
+  of the phase this section belongs to is to replace them with loader output.
+- The two `sat_estabelecimento_*` totals are **derived**, not directly measured: they add
+  a newly measured key count to a change count published earlier (`01f192de-b784…`). A
+  direct measurement was attempted and abandoned — 16 `regexp_replace` calls over 144M
+  rows with a window function exceeded the query timeout, and the honest record is that
+  the arithmetic is the source rather than a single statement.
+- The citations this document's own §12 and §14 carry for `01f19061-707d…` and
+  `01f192c7-7c0b…` were **checked and are correct here**: they measure departed keys and
+  the `codigo` collision respectively, which is what those sections use them for. It was
+  the workspace-run plan that pointed them at a union count and a row total.
