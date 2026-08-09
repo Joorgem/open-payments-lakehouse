@@ -74,10 +74,28 @@ WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
 # ranged 454-1,197 s across runs against a 600 s cap and is the one under a standing
 # split warning, and this file reads the same socios fixture the ledger chunk's
 # `test_observation.py` already exercises the ledger through.
+#
+# `vault-estab-socios` WAS ONE CHUNK AND IS NOW TWO, BECAUSE IT ACTUALLY BLEW THE CAP.
+# Measured 2026-08-09: **632 s, over the 600 s cap**, `!! OVER THE 600s CAP` fired, all 54
+# tests passing. The split condition everyone expected was "the next task that ADDS an
+# estabelecimentos or socios test must split this first" -- and that is not what happened.
+# F2 wave 1's workspace run added no test here at all (its new file went to
+# `vault-ledger-registry`); the chunk crossed the line on CONTENTION alone, on unchanged
+# code, having measured 454 s earlier the same day. So the trigger was never test count.
+# Recorded runtimes for this one chunk, same code: 519, 555, 454, 632, 1,197 s. Anyone
+# tempted to merge these two files back together should read that list first, and note
+# that the 92%-of-cap figure the handoff carried was one sample of it.
+#
+# SPLIT BY FILE, ONE EACH, because the two are exactly even where it is measurable: 27
+# tests each, 721 and 791 lines. The runtime is dominated by Spark fixture setup rather
+# than by test count, so neither half is 316 s; each pays the setup again. That is the
+# cost of the split and it is worth it -- a chunk over the cap makes `run_suite.sh` exit 1
+# and the suite unquotable as evidence, which is a worse failure than a slower total.
 CHUNKS=(
   "non-vault|--ignore=tests/vault"
   "vault-cnpj-hashing|tests/vault/test_cnpj_vault.py tests/vault/test_hashing.py tests/vault/test_hashing_spark.py"
-  "vault-estab-socios|tests/vault/test_estabelecimento_vault.py tests/vault/test_socios_vault.py"
+  "vault-estab|tests/vault/test_estabelecimento_vault.py"
+  "vault-socios|tests/vault/test_socios_vault.py"
   "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_registry.py tests/vault/test_reference_vault.py tests/vault/test_effectivity_window.py"
 )
 
