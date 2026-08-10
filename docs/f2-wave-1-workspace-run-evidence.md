@@ -195,3 +195,47 @@ materialised on a load that reports nothing. Launch a measuring run with
 `--params months=…,revision=…,report_diagnostics=true` — which is the way to answer the
 still-open question of the **estabelecimentos duplicate rate**, unmeasured rather than
 measured at zero.
+
+#### 1.6.2 The change is real and the framing around it was wrong — measured by review
+
+The paragraph above, the commit that introduced it, and **the controller's own statement
+of the option before choosing it** ("~4× faster") all implied the two optional passes
+were most of the satellite's cost. **They are not.** An independent reviewer built two
+synthetic fixtures and timed `load_satellite` both ways on local Spark:
+
+| fixture | flag off | flag on | ratio |
+|---|---|---|---|
+| 300,000 keys/month, contention-free | **72.43 s** | 79.63 s | **1.10×** |
+| 900,000 keys/month, some contention | **192.39 s** | 233.65 s | **1.21×** |
+
+Decomposed at 900,000 keys: constructing `observation_ledger` — the part that is **not**
+skippable, including `_window`'s eager job — costs **1.76 s**; the `.count()` over it that
+`_candidate_departures` now gates costs **20.35 s**; `_collapsed_duplicates`' independent
+second scan costs **28.56 s**.
+
+**So the narrow laziness claim is TRUE and the headline was false.** `_window`'s eager
+work is a single-column `distinct()` that scales with distinct months rather than with row
+count, and the `crossJoin` grid genuinely is never materialised without an action — which
+is exactly why deriving the ledger unconditionally keeps the month guard for ~1.76 s
+instead of ~22 s. But the two diagnostics are **9–18% of `load_satellite`'s wall clock,
+not "the expensive part"**. The other 82–91% is in code this change never touched:
+`satellite_candidates` hashing every source row, and `_append_changed`'s lag window plus
+the Delta write. On a first load `existing` is `None`, so the entire candidate set must be
+hashed and windowed regardless of any flag.
+
+**The consequence for Task 4, corrected before it runs rather than after.** Expect roughly
+a **10–20%** reduction from this flag, not an order of magnitude, and do not expect
+estabelecimentos to approach `load_hub`'s per-row cost. **The satellite cost problem is
+still substantially open**, and the place to look is the hashing/window/write path, not
+the ledger.
+
+Stated against the measurement: it is `local[2]` Spark on synthetic data, not Free Edition
+serverless on real bronze, and the 900,000-key run had CPU contention. The *direction*
+reproduced at two scales with one run contention-free; the exact percentage is not a
+promise about the cluster.
+
+**Carried to Task 5, confirmed by the same review:** `effectivity._observed` is a lazy,
+**uncached** DataFrame consumed twice — once by the `collapsed` action and once through
+`_statements` — so its full DAG runs twice over ~28M socios rows. The repair is
+`persist()`, not a flag, because the count is already a column of the frame the write
+needs. Pre-existing, out of scope for this commit, and now measured rather than suspected.
