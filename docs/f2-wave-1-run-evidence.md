@@ -762,14 +762,32 @@ test rather than reviewing the result. Now recorded as **ADR 0012**.
 **Controller-verified** (`01f1926d-3977-17ac-ac74-7a95efc0cc45`; subjects located
 via `01f1926d-0b67-1186-9c93-0643761d6ac4`):
 
+> **⚠️ THE SIX DIGESTS BELOW WERE WRONG AND ARE CORRECTED — 2026-08-09, by the run.**
+> The values originally published here (`7b5be2ebc84d`, `eae9293b1e21`,
+> `11ccd931ac6e`, `4d5d82fca3e3`, `a3d6b665cc11`) came from the controller's **SQL
+> replication** of the hash, which never reproduced the `S<len>:<norm>`
+> length-prefixed component encoding this vault's standard uses
+> (`hashing.py:118-148`). **No vault code has ever produced them.** The table now
+> carries what `sat_empresa_dados` actually holds, cross-checked against
+> `opl.vault.hashing.hash_key` — the pure-Python spelling, a THIRD implementation
+> independent of both the Spark loader and the original SQL — run over the same
+> bronze payloads. See `f2-wave-1-workspace-run-evidence.md` §1.4.
+>
+> **The replication was close enough to preserve equality and inequality**, which is
+> why the demonstration below held and why nothing downstream was decided on a false
+> premise. It was not close enough to produce the right strings. That is the exact
+> shape of a check that confirms an argument while publishing wrong data, and this
+> section asserted "nothing in the argument needs the strings" without knowing how
+> much it would need that to be true.
+
 | `cnpj_basico` | `applied_date` | razão social | payload hash (12) | satellite rows |
 |---|---|---|---|---|
-| 00000000 | 2026-06-13 | *(masked)* | `7b5be2ebc84d` | **1** |
-| 00000000 | 2026-07-11 | *(masked)* — same value | `7b5be2ebc84d` | |
-| 00006290 | 2026-06-13 | *(masked)* | `eae9293b1e21` | **2** |
-| 00006290 | 2026-07-11 | *(masked)* — a different value | `11ccd931ac6e` | |
-| 00012453 | 2026-06-13 | *(masked)* | `4d5d82fca3e3` | **2** |
-| 00012453 | 2026-07-11 | *(masked)* — a different value | `a3d6b665cc11` | |
+| 00000000 | 2026-06-13 | *(masked)* | `1219a5166aaf` | **1** |
+| 00000000 | 2026-07-11 | *(masked)* — same value | `1219a5166aaf` | |
+| 00006290 | 2026-06-13 | *(masked)* | `2742a6ded16c` | **2** |
+| 00006290 | 2026-07-11 | *(masked)* — a different value | `be94af372f32` | |
+| 00012453 | 2026-06-13 | *(masked)* | `64e1d8a254b3` | **2** |
+| 00012453 | 2026-07-11 | *(masked)* — a different value | `636b9a248361` | |
 
 Two satellite rows for a company whose razão social changed, one for a company
 that did not, with `applied_date` taken from `_snapshot_ref_date` — the RFB's own
