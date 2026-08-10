@@ -49,6 +49,27 @@ resources:
           #     databricks bundle run opl_vault_cnpj_empresa -t free \
           #       --params months=2026-06+2026-07,revision=$(git rev-parse HEAD)
           default: "REQUIRED-PASS-A-REVISION"
+        - name: report_diagnostics
+          # THE ONE DEFAULT IN THIS FILE THAT IS NOT A REFUSAL, and it is off. The two
+          # parameters above have no safe default -- any window is one nobody chose, any
+          # revision is one nobody checked -- so theirs are values the tasks reject.
+          # This one's default is safe by construction: off, `load_satellite` skips two
+          # full passes over the source and reports both counts as `None`, i.e. NOT
+          # MEASURED, which is a smaller claim than the run makes today rather than a
+          # wrong one.
+          #
+          # MEASURED, WHICH IS WHY IT EXISTS: the first real run loaded
+          # `sat_empresa_dados` in 5,635 s against `hub_empresa`'s 281 s over the same
+          # 69M keys, and the two diagnostics were the second and third of four passes.
+          # Both answered 0. See docs/f2-wave-1-workspace-run-evidence.md section 1.6.
+          #
+          #     databricks bundle run opl_vault_cnpj_empresa -t free \
+          #       --params months=2026-06+2026-07,revision=$(git rev-parse HEAD),\
+          #                report_diagnostics=true
+          #
+          # `true`/`false` and nothing else; `opl.vault.job_params.optional_flag`
+          # refuses anything it cannot read rather than reading it as this default.
+          default: "false"
       tasks:
         # FIRST, AND NOTHING BEFORE IT (ADR 0009). Compares the revision above -- the
         # operator's HEAD when the run was submitted -- against the revision the
@@ -104,6 +125,13 @@ resources:
               - "empresas"
               - "{{job.parameters.months}}"
               - "{{job.start_time.iso_datetime}}"
+              # THE FIFTH PARAMETER ONLY THIS ENTRY POINT TAKES. It is the job's own
+              # parameter and never a literal, for `months`' reason: a `"true"` hardcoded
+              # here would make every run of this job pay for the diagnostics with no way
+              # to say otherwise at launch, and a `"false"` hardcoded here would make the
+              # job parameter above unreachable -- present, settable, and connected to
+              # nothing.
+              - "{{job.parameters.report_diagnostics}}"
 
       environments:
         - environment_key: opl_env

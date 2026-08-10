@@ -316,10 +316,18 @@ def load_estabelecimento_vault(spark, source, names, *, load_date=LOADED_AT, mon
     )
     for satellite, table in ((ESTABELECIMENTO_DADOS, "dados"),
                              (ESTABELECIMENTO_ENDERECO, "endereco")):
+        # `report_diagnostics=True` BECAUSE THIS FIXTURE'S READERS ASSERT THE TWO NUMBERS.
+        # The loader defaults it OFF -- on 72.3M rows those two counts were most of a
+        # 5,635 s load and both answered 0 -- and off they come back `None`, which is
+        # "not measured" and not a zero anything can be checked against. The tests reading
+        # this fixture claim `candidate_departures == 0` (our own gate is not a departure)
+        # and `collapsed_duplicates == 0` (one row per key per month here), so this fixture
+        # has to be a measuring load. The default path is pinned in
+        # `tests/vault/test_satellite_diagnostics.py`, on both arms.
         setattr(names, f"{table}_result", load_satellite(
             spark, satellite, hub=ESTABELECIMENTO_HUB, source_table=source.bronze,
             target_table=getattr(names, table), load_date=load_date,
-            grain=source.grain, months=months,
+            grain=source.grain, months=months, report_diagnostics=True,
         ))
     names.link_result = load_link(
         spark, EMPRESA_ESTABELECIMENTO_LINK, hubs=EMPRESA_ESTABELECIMENTO_HUBS,

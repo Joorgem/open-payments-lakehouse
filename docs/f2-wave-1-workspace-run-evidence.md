@@ -173,3 +173,25 @@ is 72.3M keys with **two** satellites, one carrying a 10-column payload, plus a 
 On this structure that is several hours, most of it spent on two counts that came back
 zero. Whether those two diagnostics are worth a full scan and a full ledger derivation
 per load is now a decision with a number behind it.
+
+#### 1.6.1 The decision that number bought, taken before Task 4 ran
+
+`load_satellite` now takes **`report_diagnostics`, defaulting OFF**, and the two job
+YAMLs carry it as a job parameter defaulting to `"false"`. Off, neither count is
+computed and both are reported as **`None`** — the types are `int | None` and
+`SatelliteLoadResult` refuses a pair carrying one of each, because **`None` is "not
+measured" and `0` is "measured, found none"** and the two zeros above are published as
+evidence. A flag that turned a real 0 into a silent 0 would make that evidence
+unfalsifiable. The task prints two different sentences for the two states, and the
+skipped one carries no number at all.
+
+**What is NOT skipped is deriving the ledger.** That derivation is the only route by
+which `months` reaches `observation._window`'s refusal of a month with no row on either
+side — a guard `satellites.py` names as one of the two things consulting the ledger
+really buys, and without which `months=['2026-09']` writes nothing and reports success.
+So the derivation runs on every load and only the `count()` over it is optional; past
+that refusal `observation_ledger` is a plan, so the `crossJoin` grid is never
+materialised on a load that reports nothing. Launch a measuring run with
+`--params months=…,revision=…,report_diagnostics=true` — which is the way to answer the
+still-open question of the **estabelecimentos duplicate rate**, unmeasured rather than
+measured at zero.

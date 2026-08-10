@@ -52,8 +52,12 @@ WHY NO OTHER VAULT TASK CARRIES THIS GUARD. Every other loader derives its outpu
 PRESENCE -- a hub row, a link row, a changed payload, a reference code -- and a
 one-month window loads that month's rows exactly right. This is the only table whose
 output is derived from ABSENCE, and absence is the one thing a one-month ledger cannot
-express. `vault_load_satellite.py` reports the same ledger's departure count and
-annotates it rather than refusing, for that reason and it says so.
+express. `vault_load_satellite.py` annotates the same ledger's departure count rather
+than refusing, for that reason and it says so -- and since that count became optional
+there (`report_diagnostics`, default off) it may not be reported at all, which is
+another reason the guard cannot be a number an operator is expected to read. THIS task
+takes no such flag: `closed` is counted from the frame it writes, so it costs no extra
+pass, and it is this table's output rather than a diagnostic.
 
 THE SENTINEL DEFAULT IS KEPT AND ITS ORIGINAL RATIONALE DOES NOT TRANSFER. Bronze's
 `month` default is a sentinel because a real month there re-ingests against an empty

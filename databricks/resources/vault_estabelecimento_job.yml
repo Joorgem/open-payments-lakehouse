@@ -38,6 +38,18 @@ resources:
           #     databricks bundle run opl_vault_cnpj_estabelecimento -t free \
           #       --params months=2026-06+2026-07,revision=$(git rev-parse HEAD)
           default: "REQUIRED-PASS-A-REVISION"
+        - name: report_diagnostics
+          # OFF, and this is the job the default was decided for. See
+          # vault_empresa_job.yml, which carries the full argument; what is specific here
+          # is the size: 72.3M keys, TWO satellites, one of them a 10-column payload. On
+          # `sat_empresa_dados` the two diagnostics were part of 5,635 s against a 281 s
+          # hub over 69M keys and both answered 0; this job would pay that twice, over
+          # more rows, for two numbers whose value on THIS table is genuinely unknown --
+          # the estabelecimentos duplicate rate is unmeasured, not measured at zero
+          # (`opl.vault.satellites`). Which is the argument for launching this job ONCE
+          # with report_diagnostics=true and reading the number, not for making every
+          # load carry it.
+          default: "false"
       tasks:
         - task_key: assert_deployed_revision
           max_retries: 0
@@ -86,6 +98,8 @@ resources:
               - "estabelecimentos"
               - "{{job.parameters.months}}"
               - "{{job.start_time.iso_datetime}}"
+              # The job's own parameter, never a literal -- see vault_empresa_job.yml.
+              - "{{job.parameters.report_diagnostics}}"
 
         # TWO SATELLITES ON ONE HUB, SEQUENCED RATHER THAN PARALLEL, so each one's
         # wall-clock is its own. They share a grain and differ only in payload (ADR
@@ -102,6 +116,11 @@ resources:
               - "estabelecimentos"
               - "{{job.parameters.months}}"
               - "{{job.start_time.iso_datetime}}"
+              # ONE FLAG FOR BOTH SATELLITES, which is what makes the pair comparable:
+              # the two share a grain and differ only in payload (ADR 0013), so a run
+              # that measured one and not the other would report two wall-clocks taken
+              # on two different bases.
+              - "{{job.parameters.report_diagnostics}}"
 
         # AFTER BOTH HUBS IT REFERENCES. `link_candidates` computes its hub references
         # from the source rather than joining to the hubs, so this order is not what

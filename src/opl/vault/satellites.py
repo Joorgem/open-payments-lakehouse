@@ -61,9 +61,31 @@ over 72.3M rows and the equivalent question -- duplicate
 estabelecimentos duplicate rate is UNMEASURED**, not measured at zero, and the empresas
 statement id above must not be read as covering it. The query that would settle it is
 one `GROUP BY` (see the F2 wave-1 fix report); until it is run, the number to look at is
-`SatelliteLoadResult.collapsed_duplicates`, which reports what each load actually
-folded. Task 5 asked this question of its own tables and answered it there; it did not
-come back for this one.
+`SatelliteLoadResult.collapsed_duplicates` **on a load that was asked to measure it** --
+see `report_diagnostics` below. Task 5 asked this question of its own tables and answered
+it there; it did not come back for this one.
+
+THE TWO REPORTED COUNTS ARE OPTIONAL AND DEFAULT TO OFF, AND THAT IS A COST DECISION
+WITH A NUMBER BEHIND IT. The vault's first real run loaded `sat_empresa_dados` in
+**5,635 s** against `hub_empresa`'s **281 s** over the same 69,062,849 keys
+(`docs/f2-wave-1-workspace-run-evidence.md` §1.6). `load_hub` makes ONE pass over the
+source; this loader made FOUR -- `satellite_candidates`, then `_collapsed_duplicates`
+(a second full scan), then the ledger's all-keys x all-months grid for
+`_candidate_departures`, then the append -- and the middle two WRITE NOTHING. Both
+answered 0. Estabelecimentos is 72.3M keys with two satellites. So `load_satellite`
+takes `report_diagnostics`, default False, and a load that was not asked reports both
+counts as `None`.
+
+`None` IS NOT `0`, AND KEEPING THEM APART IS THE POINT RATHER THAN A DETAIL. Those two
+zeros are published as evidence that the dedup tie-break and the departure path are
+unexercised by real data. A flag that turned a real 0 into a silent 0 would make that
+evidence unfalsifiable, because nothing in the result or the log would separate a
+measurement from a skip -- so the fields are `int | None`, `SatelliteLoadResult` refuses
+a half-measured pair, and `databricks/src/vault_load_satellite.py` prints two different
+sentences. WHAT IS **NOT** OPTIONAL is deriving the ledger: that is what routes `months`
+through `observation._window` and its refusal of a month with no row on either side,
+which is the second of the two things this module says consulting the ledger really
+buys. The derivation runs on every load; only the `count()` over it is skipped.
 
 WHAT THE RULE COSTS WHERE IT DOES FIRE, since "deterministic" is not "correct". Bronze
 is append-only and a corrected batch can be promoted for the same month, so two rows
@@ -110,7 +132,7 @@ _CHOSEN = "_chosen"
 
 @dataclass(frozen=True)
 class SatelliteLoadResult:
-    """What one satellite load did, plus the one number the ledger contributes."""
+    """What one satellite load did, plus the two numbers it was asked to measure."""
 
     table: str
     appended: int
@@ -126,13 +148,33 @@ class SatelliteLoadResult:
     # sharper than for any of them: THIS fold discards a payload, silently, and a later
     # re-load cannot correct the choice (the anti-join drops the candidate on (hash key,
     # `applied_date`) alone and never looks at what was kept). See the module docstring.
-    collapsed_duplicates: int
+    #
+    # `None` WHEN THE LOAD WAS NOT ASKED TO MEASURE IT -- the type is what keeps that
+    # apart from a measured 0, and the two readings are not close: a 0 says this loader
+    # discarded no payload, a `None` says nobody looked.
+    collapsed_duplicates: int | None
     # Keys the observation ledger calls `absent_after_observation` over this window:
     # present in an earlier month, absent here. A CANDIDATE delete and never an
     # asserted one -- it is equally the shape of a missed file, a dropped partition, or
     # an entity that returns next month. Reported so an operator can see it; acted on
-    # nowhere in this module.
-    candidate_departures: int
+    # nowhere in this module. `None` under the same rule as above.
+    candidate_departures: int | None
+
+    def __post_init__(self) -> None:
+        """ONE FLAG GOVERNS BOTH, so a half-measured pair is a state no load can produce
+        and no reader can interpret -- `collapsed_duplicates=0` beside
+        `candidate_departures=None` claims the load both did and did not do the extra
+        work. Refused in the type rather than trusted to its one caller, because the
+        whole value of `None` here is that it means exactly one thing."""
+        if (self.collapsed_duplicates is None) != (self.candidate_departures is None):
+            raise ValueError(
+                f"a satellite load reported collapsed_duplicates="
+                f"{self.collapsed_duplicates!r} beside candidate_departures="
+                f"{self.candidate_departures!r}. One report_diagnostics flag decides both, "
+                "so they are measured together or not at all: None means NOT MEASURED and "
+                "0 means measured and found none, and a pair carrying one of each cannot "
+                "be read as either"
+            )
 
 
 def _refuse_a_mismatched_hub(satellite: Satellite, hub: Hub) -> None:
@@ -305,20 +347,55 @@ def _collapsed_duplicates(
     return keyed.count() - keyed.distinct().count()
 
 
-def _candidate_departures(
-    spark: SparkSession, grain: ObservationGrain, months: Sequence[str] | None
-) -> int:
-    """How many (key, month) pairs the ledger calls `absent_after_observation`.
+def _candidate_departures(ledger: DataFrame) -> int:
+    """How many (key, month) pairs `ledger` calls `absent_after_observation`.
 
-    Eager, and BEFORE anything is written, for both of the reasons this loader consults
-    the ledger at all: the number belongs in the operator's log next to what was
-    written, and deriving the ledger is what routes `months` through
-    `observation._window`, whose refusal of a month with no row on either side is the
-    guard a satellite has no other way to get."""
-    ledger = observation_ledger(spark, grain, months=months)
+    IT TAKES THE LEDGER RATHER THAN DERIVING ONE, AND THAT SPLIT IS WHAT MADE THE COUNT
+    SAFE TO SKIP. This function used to call `observation_ledger` itself, which bundled
+    two unrelated things into one optional step: a number for the operator's log, and
+    the ONLY route by which `months` reaches `observation._window` and its refusal of a
+    month with no row on either side. Skipping the pair would have dropped a guard the
+    module docstring calls one of the two real things the ledger buys. So the derivation
+    moved out to `load_satellite`, which does it unconditionally, and what is left here
+    is the part that is genuinely only a report.
+
+    THE DERIVATION IS LAZY PAST THAT REFUSAL, which is why moving it out costs nothing on
+    a load that reports no count: `observation_ledger` runs one eager job -- the distinct
+    months `_window` collects -- and returns a plan. The `crossJoin` grid over the whole
+    key space and the fold over it are built only when something asks for rows, and this
+    `count()` is the only thing in this module that does.
+
+    Eager, and BEFORE anything is written, so the number belongs in the operator's log
+    next to what was written rather than to a later run."""
     return ledger.filter(
         F.col(STATE_COLUMN) == F.lit(ObservationState.ABSENT_AFTER_OBSERVATION.value)
     ).count()
+
+
+def _diagnostics(
+    spark: SparkSession,
+    satellite: Satellite,
+    hub: Hub,
+    source_table: str,
+    months: Sequence[str] | None,
+    ledger: DataFrame,
+    *,
+    report: bool,
+) -> tuple[int | None, int | None]:
+    """The two reported counts, or `(None, None)` when this load was not asked for them.
+
+    `None` AND NEVER `0`, which is the whole reason this returns an optional pair rather
+    than defaulting to zeros. The first real run of this loader reported 0 collapsed
+    duplicates and 0 candidate departures, and both zeros are PUBLISHED as evidence that
+    two paths are unexercised by real data; a skip that reported 0 would make that
+    evidence unfalsifiable, because no reader could separate a measurement from an
+    omission. See the module docstring for what the skip is worth in seconds."""
+    if not report:
+        return None, None
+    return (
+        _collapsed_duplicates(spark, satellite, hub, source_table, months),
+        _candidate_departures(ledger),
+    )
 
 
 def _in_column_order(
@@ -342,35 +419,22 @@ def _in_column_order(
     )
 
 
-def load_satellite(
+def _append_changed(
     spark: SparkSession,
+    candidates: DataFrame,
     satellite: Satellite,
-    *,
     hub: Hub,
-    source_table: str,
     target_table: str,
     load_date: datetime,
-    grain: ObservationGrain,
-    months: Sequence[str] | None = None,
-) -> SatelliteLoadResult:
-    """Append a row for every (hash key, `applied_date`) whose payload changed.
+    before: int,
+) -> None:
+    """Append the candidates whose payload changed, in the satellite's column order.
 
-    `load_date` is an argument with no default, for `load_hub`'s reason: a loader that
-    stamps its own clock cannot be asserted against, and in the data it would make the
-    LDTS a record of when the pipeline happened to run.
-
-    Idempotent: a re-run finds every (key, applied_date) it would write already
-    persisted, drops them before the window, and appends nothing. The write is a single
-    Delta append, so there is no partial state between the refusals above and the
-    committed rows."""
-    _refuse_a_mismatched_hub(satellite, hub)
-    _refuse_a_mismatched_grain(hub, grain, source_table)
-    candidates = satellite_candidates(
-        spark, satellite, hub, source_table=source_table, months=months
-    )
-    collapsed = _collapsed_duplicates(spark, satellite, hub, source_table, months)
-    departures = _candidate_departures(spark, grain, months)
-    before = rows_in(spark, target_table)
+    Split out of `load_satellite` when the diagnostics became optional, so that function
+    stays inside this project's 50-line cap. It is a single Delta append of one frame, so
+    the split adds no state between `load_satellite`'s refusals and the committed rows --
+    `before` is passed in rather than re-read for the same reason it is read at all: the
+    result object's `appended` is an after-minus-before over one measurement point."""
     existing = None
     if before:
         existing = spark.read.table(target_table).select(hub.hash_key, APPLIED_DATE, HASH_DIFF)
@@ -382,6 +446,50 @@ def load_satellite(
         _in_column_order(changed, satellite, hub, load_date)
         .write.format("delta").mode("append").saveAsTable(target_table)
     )
+
+
+def load_satellite(
+    spark: SparkSession,
+    satellite: Satellite,
+    *,
+    hub: Hub,
+    source_table: str,
+    target_table: str,
+    load_date: datetime,
+    grain: ObservationGrain,
+    months: Sequence[str] | None = None,
+    report_diagnostics: bool = False,
+) -> SatelliteLoadResult:
+    """Append a row for every (hash key, `applied_date`) whose payload changed.
+
+    `load_date` is an argument with no default, for `load_hub`'s reason: a loader that
+    stamps its own clock cannot be asserted against, and in the data it would make the
+    LDTS a record of when the pipeline happened to run.
+
+    `report_diagnostics` DEFAULTS OFF, AND OFF REPORTS `None` RATHER THAN `0`. On, this
+    load pays a second full scan of the source and materialises the ledger's key-space
+    grid to fill `collapsed_duplicates` and `candidate_departures`; off it pays neither,
+    and "not measured" is a thing no reader can confuse with "measured, found none". The
+    first real run spent most of 5,635 s on the two and both answered 0; see _diagnostics.
+
+    Idempotent: a re-run finds every (key, applied_date) it would write already
+    persisted, drops them before the window, and appends nothing. The write is a single
+    Delta append, so there is no partial state between the refusals and the committed
+    rows."""
+    _refuse_a_mismatched_hub(satellite, hub)
+    _refuse_a_mismatched_grain(hub, grain, source_table)
+    candidates = satellite_candidates(
+        spark, satellite, hub, source_table=source_table, months=months
+    )
+    # DERIVED ON EVERY LOAD, INCLUDING ONE THAT REPORTS NOTHING FROM IT: this is the only
+    # route by which `months` reaches `observation._window`'s refusal of a month with no
+    # row on either side. Lazy past that refusal -- see `_candidate_departures`.
+    ledger = observation_ledger(spark, grain, months=months)
+    collapsed, departures = _diagnostics(
+        spark, satellite, hub, source_table, months, ledger, report=report_diagnostics
+    )
+    before = rows_in(spark, target_table)
+    _append_changed(spark, candidates, satellite, hub, target_table, load_date, before)
     return SatelliteLoadResult(
         table=target_table,
         appended=rows_in(spark, target_table) - before,

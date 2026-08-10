@@ -31,7 +31,19 @@ is not a refusal; what would be wrong is reading `candidate_departures = 0` as "
 departed". The line printed below states which of the two it is rather than leaving the
 zero to be interpreted.
 
-argv: [table, source, months, load_date]"""
+`report_diagnostics` IS A JOB PARAMETER AND IT DEFAULTS TO `false`, WHICH IS THE ONLY
+DEFAULT IN THIS FILE THAT IS NOT A REFUSAL. `months` defaults to a sentinel the task
+rejects because no window is a safe one; this flag's default is safe by construction --
+off, the loader measures neither `collapsed_duplicates` nor `candidate_departures`,
+reports both as `None`, and skips two full passes over the source that the first real
+run spent most of 5,635 s on. See `opl.vault.satellites`.
+
+SO THIS TASK PRINTS TWO DIFFERENT SENTENCES, and that is load-bearing rather than
+cosmetic. `0 candidate departures` is a MEASUREMENT, published as evidence that a path
+is unexercised; a run that skipped the measurement must print nothing a reader could
+count as that zero. `_diagnostics_note` is where the two are kept apart.
+
+argv: [table, source, months, load_date, report_diagnostics]"""
 import sys
 
 from pyspark.sql import SparkSession
@@ -40,15 +52,26 @@ from opl.bronze.registry import BronzeTable
 from opl.bronze.registry import table_spec as bronze_table_spec
 from opl.config import DEFAULT
 from opl.vault import domains
-from opl.vault.job_params import required_load_date, required_months, required_spec
+from opl.vault.job_params import (
+    optional_flag,
+    required_load_date,
+    required_months,
+    required_spec,
+)
 from opl.vault.observation import ObservationGrain
 from opl.vault.registry import Hub, Satellite
-from opl.vault.satellites import load_satellite
+from opl.vault.satellites import SatelliteLoadResult, load_satellite
 
 # Below this many months in the window, the ledger cannot report an absence at all --
 # see the module docstring, and `vault_load_effectivity.py`, which refuses rather than
 # annotates because absence is that table's whole output.
 MONTHS_AN_ABSENCE_NEEDS = 2
+
+# THE JOB PARAMETER'S NAME, SPELLED ONCE. The YAMLs declare it, the launch command sets
+# it, the refusal message names it and `tests/test_vault_job_wiring.py` reads it from
+# here rather than restating it -- so a rename is one edit and a YAML left behind is a
+# red test instead of a flag that is passed to nothing.
+DIAGNOSTICS_PARAMETER = "report_diagnostics"
 
 
 def grain_for(hub: Hub, source: BronzeTable) -> ObservationGrain:
@@ -78,12 +101,39 @@ def _departure_note(months: tuple[str, ...], departures: int) -> str:
     return f"{departures} candidate departures (absent_after_observation, never asserted)"
 
 
+def _diagnostics_note(months: tuple[str, ...], result: SatelliteLoadResult) -> str:
+    """The two optional counts, or the fact that this run did not measure them.
+
+    THE TWO STATES MUST NOT READ ALIKE, which is the whole reason this is a function and
+    not an f-string. `0 source rows were folded` is a measurement, and it is published as
+    evidence that the dedup tie-break is unexercised by real data; a load that skipped
+    the measurement and printed a zero would put an unfalsifiable claim in a task log,
+    where nobody re-derives anything. So the skip says what it skipped and why, and never
+    prints a number."""
+    if result.collapsed_duplicates is None:
+        return (
+            f"NEITHER DIAGNOSTIC WAS MEASURED ({DIAGNOSTICS_PARAMETER}=false, the "
+            "default), so this run reports no fold count and no departure count -- which "
+            "is not either of them being zero. Each costs a full extra pass over the "
+            f"source. Re-run with --params ...,{DIAGNOSTICS_PARAMETER}=true to measure "
+            "them"
+        )
+    return (
+        f"{result.collapsed_duplicates} source rows were folded into a row sharing "
+        f"their (hash key, applied_date); "
+        f"{_departure_note(months, result.candidate_departures)}"
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     spec = required_spec(args[0] if args else "", Satellite, loader="vault_load_satellite")
     source = bronze_table_spec(args[1] if len(args) > 1 else "")
     months = required_months(args[2] if len(args) > 2 else "", action=f"load {spec.name}")
     load_date = required_load_date(args[3] if len(args) > 3 else "")
+    diagnostics = optional_flag(
+        args[4] if len(args) > 4 else "", parameter=DIAGNOSTICS_PARAMETER
+    )
     hub = domains.parent_hub(spec)
     spark = SparkSession.builder.getOrCreate()
     result = load_satellite(
@@ -95,14 +145,13 @@ def main(argv: list[str] | None = None) -> None:
         load_date=load_date,
         grain=grain_for(hub, source),
         months=list(months),
+        report_diagnostics=diagnostics,
     )
-    departures = _departure_note(months, result.candidate_departures)
     print(
         f"vault_load_satellite: {result.table} +{result.appended} rows from "
         f"{DEFAULT.table(source.bronze)} over {list(months)}, keyed on {hub.name}; the "
         f"target already held {result.already_present} rows (whole table, not this "
-        f"window); {result.collapsed_duplicates} source rows were folded into a row "
-        f"sharing their (hash key, applied_date); {departures}"
+        f"window); {_diagnostics_note(months, result)}"
     )
 
 

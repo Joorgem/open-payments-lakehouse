@@ -65,6 +65,12 @@ MONTH_SEPARATOR = "+"
 # literal string, which is the one wrong value worth diagnosing by name.
 LOAD_DATE_REFERENCE = "{{job.start_time.iso_datetime}}"
 
+# THE TWO SPELLINGS A BOOLEAN JOB PARAMETER MAY TAKE, and there are two rather than the
+# usual grab-bag of `1/yes/on/y` because a job parameter is written once in a YAML and
+# read by `optional_flag` alone. Every additional accepted spelling is a value a reader
+# has to know is accepted; every REJECTED one is diagnosed by the message below.
+_FLAG_VALUES = {"true": True, "false": False}
+
 
 def required_months(value: str | None, *, action: str) -> tuple[str, ...]:
     """The window `action` will load, or refuse. Never `None`, never empty.
@@ -126,6 +132,40 @@ def _refuse_a_repeated_month(months: tuple[str, ...], action: str) -> None:
             "window is wide enough to close anything by counting the months it was given, "
             "and a repeat would carry a one-month window past that check"
         )
+
+
+def optional_flag(value: str | None, *, parameter: str) -> bool:
+    """A boolean job parameter, DEFAULTING OFF when the task was handed nothing.
+
+    THE ASYMMETRY WITH `required_months` IS THE POINT, because everything else in this
+    module refuses an absent value and this one does not. A missing window has no safe
+    default: every candidate is a load nobody chose, and the widest is silent, unbounded
+    and indistinguishable in the log from the window that was meant. A missing FLAG has
+    a default that is both cheap and honest -- the work is skipped and the result says
+    `None`, which `opl.vault.satellites.SatelliteLoadResult` keeps distinct from a
+    measured 0. Nothing is claimed that was not measured, so nothing is lost by
+    defaulting, and requiring it would only make every launch carry a parameter to say
+    "as usual".
+
+    A VALUE NOBODY CAN READ IS STILL REFUSED, rather than falling back on that default,
+    and this is where a `bool(value)` shortcut would be actively harmful. Anyone passing
+    `report_diagnostics=yes` is asking for the diagnostics; read as off, their run comes
+    back with `None` in both fields -- byte-identical to the run they were trying not to
+    launch -- and read by `bool` the string `"false"` would be TRUE, which is the same
+    mistake in the other direction and costs hours rather than a relaunch."""
+    candidate = (value or "").strip().lower()
+    if not candidate:
+        return False
+    if candidate not in _FLAG_VALUES:
+        raise ValueError(
+            f"job parameter {parameter}={value!r} is not a boolean. Pass one of "
+            f"{sorted(_FLAG_VALUES)} -- e.g. --params months=2026-06"
+            f"{MONTH_SEPARATOR}2026-07,{parameter}=true. It is refused rather than "
+            "read as the default, because a value the parser cannot read is an "
+            "operator who asked for something, and defaulting would hand them back "
+            "exactly the run they were trying not to launch"
+        )
+    return _FLAG_VALUES[candidate]
 
 
 def required_load_date(value: str | None) -> datetime:

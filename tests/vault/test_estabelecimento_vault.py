@@ -605,6 +605,10 @@ def test_two_source_rows_for_one_key_and_month_are_folded_and_counted(
     result = load_satellite(
         spark, DADOS, hub=HUB, source_table=twinned,
         target_table=f"{estab_target.dados}_twinned", load_date=LOADED_AT, grain=grain,
+        # ASKED FOR, because the count is what this test is about. The loader defaults
+        # this off and then reports `None` -- not measured, which is not a zero -- so a
+        # test asserting a fold count has to be the one that pays for it.
+        report_diagnostics=True,
     )
 
     assert result.collapsed_duplicates == 1

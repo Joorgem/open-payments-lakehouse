@@ -56,6 +56,7 @@ from opl.config import DEFAULT, SENTINEL_MONTH, is_month
 from opl.contracts.cnpj_schemas import columns_for
 from opl.vault import domains
 from opl.vault.domains import cnpj as cnpj_domain
+from opl.vault.job_params import optional_flag
 from opl.vault.observation import ObservationGrain
 from opl.vault.registry import (
     EffectivitySatellite,
@@ -95,6 +96,14 @@ _GUARD = "assert_deployed_revision"
 _PYTHON_FILE_PREFIX = "../src/"
 _MONTHS_PARAMETER = "{{job.parameters.months}}"
 _LOAD_DATE_REFERENCE = "{{job.start_time.iso_datetime}}"
+
+# THE ONE ENTRY POINT THAT TAKES A FIFTH PARAMETER. Every vault load task is handed
+# [table, source, months, load_date]; the descriptive satellite takes `report_diagnostics`
+# after them, because it is the only loader here with optional work to skip. The arity is
+# derived from the SCRIPT below rather than allowed to be "4 or 5", so a fifth parameter
+# handed to a loader that ignores it -- the shape a copy of a satellite task produces --
+# is refused here instead of being passed to nothing.
+_DIAGNOSTICS_SCRIPT = "vault_load_satellite"
 
 # The one loader per kind, EXCEPT for links -- see `_entry_point_for`, where the split
 # between the two link loaders is derived rather than listed.
@@ -151,11 +160,15 @@ def _load_tasks(job_yml: str, root: Path = _RESOURCES) -> dict[str, tuple[str, s
         if key == _GUARD:
             continue
         parameters = task["spark_python_task"]["parameters"]
-        assert len(parameters) == 4, (
-            f"{job_yml}:{key} is handed {parameters}; every vault load task takes "
-            "exactly [table, source, months, load_date]"
+        script = _script_of(task, f"{job_yml}:{key}")
+        names = ["table", "source", "months", "load_date"]
+        if script == _DIAGNOSTICS_SCRIPT:
+            names.append("report_diagnostics")
+        assert len(parameters) == len(names), (
+            f"{job_yml}:{key} runs {script}.py and is handed {parameters}; that entry "
+            f"point takes exactly {names}"
         )
-        found[key] = (_script_of(task, f"{job_yml}:{key}"), parameters[0], parameters[1])
+        found[key] = (script, parameters[0], parameters[1])
     return found
 
 
@@ -370,8 +383,8 @@ def test_every_task_is_handed_the_jobs_own_window_and_the_runs_start_time(job_ym
         if key == _GUARD:
             continue
         parameters = task["spark_python_task"]["parameters"]
-        assert parameters[2:] == [_MONTHS_PARAMETER, _LOAD_DATE_REFERENCE], (
-            f"{job_yml}:{key} is handed {parameters}: the last two must be "
+        assert parameters[2:4] == [_MONTHS_PARAMETER, _LOAD_DATE_REFERENCE], (
+            f"{job_yml}:{key} is handed {parameters}: the third and fourth must be "
             f"{_MONTHS_PARAMETER} and {_LOAD_DATE_REFERENCE}"
         )
 
@@ -404,6 +417,47 @@ def _assert_the_months_default_cannot_pass(job_yml: str, root: Path = _RESOURCES
 @pytest.mark.parametrize("job_yml", _VAULT_JOBS)
 def test_the_months_default_refuses_rather_than_naming_a_window_nobody_chose(job_yml):
     _assert_the_months_default_cannot_pass(job_yml)
+
+
+@pytest.mark.parametrize("job_yml", _VAULT_JOBS)
+def test_the_diagnostics_flag_is_declared_exactly_where_a_task_is_handed_one(job_yml):
+    """THE ONLY VAULT JOB PARAMETER WHOSE DEFAULT IS NOT A REFUSAL, and the three ways
+    that can go wrong are all silent. Declared and passed to no task: settable at launch,
+    connected to nothing, so `--params report_diagnostics=true` runs the cheap load and
+    the "not measured" line reads as a bug. Passed but not declared: an unresolved
+    reference reaches the task verbatim and is refused there, after a serverless start.
+    Declared with a default that parses ON: every un-parameterised run pays for two full
+    extra passes over the source, which this flag exists to stop being unconditional.
+
+    The default is parsed by the SAME function the task parses it with, so "off" here
+    means what the loader will do rather than what the string looks like."""
+    name = _load(_DIAGNOSTICS_SCRIPT).DIAGNOSTICS_PARAMETER
+    reference = f"{{{{job.parameters.{name}}}}}"
+    tasks = _tasks_of(job_yml)
+    handed = [key for key, (script, _t, _s) in _load_tasks(job_yml).items()
+              if script == _DIAGNOSTICS_SCRIPT]
+    declared = {
+        parameter["name"]: parameter.get("default")
+        for parameter in _job_of(job_yml).get("parameters", [])
+    }
+
+    assert (name in declared) == bool(handed), (
+        f"{job_yml} declares {sorted(declared)} and hands {name!r} to {handed}: declared "
+        "and passed to no task is a launch parameter wired to nothing; passed and not "
+        "declared hands its tasks an unresolved reference"
+    )
+    for key in handed:
+        parameters = tasks[key]["spark_python_task"]["parameters"]
+        assert parameters[4] == reference, (
+            f"{job_yml}:{key} is handed {parameters} -- the fifth must be {reference}, "
+            "never a literal, or the job parameter cannot reach it"
+        )
+    if handed:
+        assert optional_flag(declared[name], parameter=name) is False, (
+            f"{job_yml}'s {name} default is {declared[name]!r}, which parses ON. Every run "
+            "launched without --params would pay for a second full scan of the source and "
+            "a materialised observation ledger it never asked for"
+        )
 
 
 @pytest.mark.parametrize("job_yml", _VAULT_JOBS)
@@ -629,6 +683,34 @@ def test_a_repeated_month_cannot_inflate_the_window_past_the_guard():
     task = _load("vault_load_effectivity")
     with pytest.raises(ValueError, match="more than once"):
         task.main(["sat_eff_company_partner", "socios", "2026-07+2026-07", _A_GOOD_LOAD_DATE])
+
+
+def test_a_task_handed_no_diagnostics_flag_runs_the_cheap_load_rather_than_refusing():
+    """THE ONE ABSENT JOB PARAMETER THIS PACKAGE DEFAULTS INSTEAD OF REFUSING, asserted
+    because it is the exception to everything above it in this section. A missing window
+    is refused: every default is a load nobody chose. A missing FLAG has a default that
+    claims LESS rather than something wrong -- neither diagnostic is measured and the
+    result says `None`, which nothing can read as a zero. Absence has to keep working
+    besides: `test_an_entry_point_handed_a_table_of_the_wrong_kind_refuses_before_spark`
+    drives `main` with four arguments, as does any operator's older launch command."""
+    name = _load(_DIAGNOSTICS_SCRIPT).DIAGNOSTICS_PARAMETER
+
+    assert optional_flag(None, parameter=name) is False
+    assert optional_flag("", parameter=name) is False
+    assert optional_flag("false", parameter=name) is False
+    assert optional_flag("true", parameter=name) is True
+    assert optional_flag(" TRUE ", parameter=name) is True
+
+
+def test_a_diagnostics_flag_the_parser_cannot_read_is_refused_and_not_read_as_off():
+    """`report_diagnostics=yes` is an operator ASKING for the measurement.
+
+    Defaulted, their run comes back with `None` in both fields -- byte-identical to the
+    run they were trying not to launch -- and there is nothing in the log to say the
+    parameter was ignored. The refusal costs a relaunch; the default costs the
+    measurement they came for."""
+    with pytest.raises(ValueError, match="report_diagnostics='yes'"):
+        optional_flag("yes", parameter="report_diagnostics")
 
 
 @pytest.mark.parametrize(

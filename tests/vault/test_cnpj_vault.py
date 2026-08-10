@@ -190,10 +190,15 @@ def _load_hub(spark, source, target, *, load_date=LOADED_AT, months=None):
     )
 
 
-def _load_sat(spark, source, target, *, load_date=LOADED_AT, months=None):
+def _load_sat(spark, source, target, *, load_date=LOADED_AT, months=None, diagnostics=False):
+    """`diagnostics` MIRRORS THE LOADER'S OWN DEFAULT, which is off: on 69M rows the two
+    counts it fills were most of a 5,635 s load and both answered 0, so they are measured
+    only where a test asserts them. Off they are `None` -- not measured, and not a zero
+    any assertion could be built on. Both arms are pinned in `test_satellite_diagnostics`."""
     return load_satellite(
         spark, SAT, hub=HUB, source_table=source.bronze, target_table=target.sat,
         load_date=load_date, grain=source.grain, months=months,
+        report_diagnostics=diagnostics,
     )
 
 
@@ -228,7 +233,10 @@ def loaded(spark, source, tmp_path_factory):
     path, every refusal) take the function-scoped `target` fixture instead."""
     names = SimpleNamespace(hub=f"{source.db}.hub_shared", sat=f"{source.db}.sat_shared")
     hub_result = _load_hub(spark, source, names)
-    sat_result = _load_sat(spark, source, names)
+    # MEASURED, because `test_a_departed_key_gets_no_row_for_the_month_it_is_absent_from`
+    # asserts this load's departure count -- and the count is the whole of what that test
+    # says the satellite did about `C_DEPARTED`: report, and act in no way.
+    sat_result = _load_sat(spark, source, names, diagnostics=True)
     names.hub_result, names.sat_result = hub_result, sat_result
     return names
 

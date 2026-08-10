@@ -91,9 +91,18 @@ WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
 # than by test count, so neither half is 316 s; each pays the setup again. That is the
 # cost of the split and it is worth it -- a chunk over the cap makes `run_suite.sh` exit 1
 # and the suite unquotable as evidence, which is a worse failure than a slower total.
+#
+# `test_satellite_diagnostics.py` IS IN `vault-cnpj-hashing`, AND THAT IS A CHOICE ABOUT
+# WHICH CHUNK CAN AFFORD IT rather than about subject alone. It loads `sat_empresa_dados`
+# over a small empresas fixture, which is `test_cnpj_vault.py`'s table and this chunk's
+# subject; and the two chunks under the standing split warning are `vault-estab` and
+# `vault-socios`, whose one file each was split off precisely because that pair crossed
+# the cap. Adding a sixth file to `vault-ledger-registry` (five files, including the two
+# at 800 lines) would load the other candidate. This chunk's third member is a fixture
+# the file builds itself, so what it costs is one more Spark module setup.
 CHUNKS=(
   "non-vault|--ignore=tests/vault"
-  "vault-cnpj-hashing|tests/vault/test_cnpj_vault.py tests/vault/test_hashing.py tests/vault/test_hashing_spark.py"
+  "vault-cnpj-hashing|tests/vault/test_cnpj_vault.py tests/vault/test_hashing.py tests/vault/test_hashing_spark.py tests/vault/test_satellite_diagnostics.py"
   "vault-estab|tests/vault/test_estabelecimento_vault.py"
   "vault-socios|tests/vault/test_socios_vault.py"
   "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_registry.py tests/vault/test_reference_vault.py tests/vault/test_effectivity_window.py"
