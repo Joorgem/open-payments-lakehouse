@@ -26,6 +26,16 @@
 # without it; what it would produce is a link whose references point at hub rows that do
 # not exist. Run the empresa job first. That ordering is the phase's task order (Task 3
 # before Task 5) and is not expressible between two Databricks jobs.
+#
+# SO IT IS ENFORCED WHERE IT CAN BE, AND THIS PARAGRAPH USED TO END WITHOUT ONE.
+# `opl.vault.links.refuse_unloaded_hubs` runs inside `load_partner_link`, before the
+# window is scanned and before anything is written, and refuses a run whose `hub_empresa`
+# is missing or empty. It is an EXISTENCE check and not referential integrity: a hub that
+# is present and populated but short of some referenced key still passes, because the
+# anti-join that would catch that costs about a full extra pass (2,606 s, measured on
+# `hub_empresa_from_estabelecimentos` over 144M rows, to insert zero). So the guard closes
+# "the empresa job never ran here" completely and closes nothing else -- run the empresa
+# job first regardless.
 resources:
   jobs:
     opl_vault_cnpj_partner:

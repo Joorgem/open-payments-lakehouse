@@ -81,6 +81,7 @@ from .conftest import (
     RELOADED_AT,
     bronze_schema,
     derived_table,
+    estab_hub_tables,
     estabelecimento_row,
     load_estabelecimento_vault,
     write_delta,
@@ -361,17 +362,23 @@ def test_reloading_the_hub_the_satellites_and_the_link_appends_nothing(
 
 
 def test_loading_july_after_june_adds_only_the_relationship_born_in_july(
-    spark, estab_source, estab_target
+    spark, estab_source, estab_target, estab_loaded
 ):
     """The incremental path. June holds nine establishments and July adds the one born
     in it; the four rejected keys are already in the link from June and a link is
-    insert-only, so they stay."""
+    insert-only, so they stay.
+
+    `estab_loaded` IS REQUESTED FOR ITS HUBS, not for its link: `load_link` now refuses a
+    hub table that is missing or empty, and that shared load is where these two hubs are
+    populated. It costs nothing extra -- it is module-scoped and already built."""
     june = load_link(
-        spark, LINK, hubs=LINK_HUBS, source_table=estab_source.bronze,
+        spark, LINK, hubs=LINK_HUBS, hub_tables=estab_hub_tables(estab_loaded),
+        source_table=estab_source.bronze,
         target_table=estab_target.link, load_date=LOADED_AT, months=[JUN],
     )
     both = load_link(
-        spark, LINK, hubs=LINK_HUBS, source_table=estab_source.bronze,
+        spark, LINK, hubs=LINK_HUBS, hub_tables=estab_hub_tables(estab_loaded),
+        source_table=estab_source.bronze,
         target_table=estab_target.link, load_date=RELOADED_AT, months=[JUN, JUL],
     )
 
@@ -383,10 +390,16 @@ def test_a_link_handed_its_hubs_in_the_wrong_order_is_refused(spark, estab_sourc
     """The refusal that only a link needs. A reordered pair produces two CORRECT
     reference columns and a link hash key computed over the business keys concatenated
     backwards -- every row present, every join working, and the table's identity column
-    disagreeing with what the next load computes."""
+    disagreeing with what the next load computes.
+
+    THE HUB TABLES HANDED IN HERE ARE `estab_target`'S, WHICH NOTHING HAS LOADED, and
+    that is deliberate: this refusal is a statement about the SPEC and must arrive before
+    the preflight goes anywhere near the metastore. If the two guards were ever
+    reordered, this test would go red on the hub message instead."""
     with pytest.raises(ValueError, match="CONCATENATED IN ORDER"):
         load_link(
-            spark, LINK, hubs=tuple(reversed(LINK_HUBS)), source_table=estab_source.bronze,
+            spark, LINK, hubs=tuple(reversed(LINK_HUBS)),
+            hub_tables=estab_hub_tables(estab_target), source_table=estab_source.bronze,
             target_table=estab_target.link, load_date=LOADED_AT,
         )
 
@@ -394,7 +407,7 @@ def test_a_link_handed_its_hubs_in_the_wrong_order_is_refused(spark, estab_sourc
 
 
 def test_an_overlong_key_component_fails_the_link_load_rather_than_merging_two_pairs(
-    spark, estab_source, estab_target
+    spark, estab_source, estab_target, estab_loaded
 ):
     """THE TASK 3 REVIEW'S I2, APPLIED TO THE NEW LOADER BEFORE IT COULD BE FOUND AGAIN.
 
@@ -414,12 +427,14 @@ def test_an_overlong_key_component_fails_the_link_load_rather_than_merging_two_p
 
     with pytest.raises(Exception, match="refusing to truncate"):
         load_link(
-            spark, LINK, hubs=LINK_HUBS, source_table=bad,
-            target_table=estab_target.link, load_date=LOADED_AT,
+            spark, LINK, hubs=LINK_HUBS, hub_tables=estab_hub_tables(estab_loaded),
+            source_table=bad, target_table=estab_target.link, load_date=LOADED_AT,
         )
 
 
-def test_a_source_missing_one_hubs_key_column_is_refused_by_name(spark, estab_source, estab_target):
+def test_a_source_missing_one_hubs_key_column_is_refused_by_name(
+    spark, estab_source, estab_target, estab_loaded
+):
     """`link_candidates` requires EVERY participating hub's business key to be a column
     of the one source. The review found that guard untested while `links.py`'s docstring
     claimed it ("an error naming the missing column rather than a NULL reference").
@@ -434,15 +449,15 @@ def test_a_source_missing_one_hubs_key_column_is_refused_by_name(spark, estab_so
 
     with pytest.raises(ValueError, match="cnpj_ordem"):
         load_link(
-            spark, LINK, hubs=LINK_HUBS, source_table=without,
-            target_table=estab_target.link, load_date=LOADED_AT,
+            spark, LINK, hubs=LINK_HUBS, hub_tables=estab_hub_tables(estab_loaded),
+            source_table=without, target_table=estab_target.link, load_date=LOADED_AT,
         )
 
     assert not spark.catalog.tableExists(estab_target.link)
 
 
 def test_a_typed_key_column_is_refused_by_the_link_loader_before_it_hashes(
-    spark, estab_source, estab_target
+    spark, estab_source, estab_target, estab_loaded
 ):
     """The sibling of `test_cnpj_vault.py::test_a_source_column_that_is_not_a_string_is_
     refused_by_name`, for the third consumer of the hash standard.
@@ -460,8 +475,8 @@ def test_a_typed_key_column_is_refused_by_the_link_loader_before_it_hashes(
 
     with pytest.raises(TypeError, match="cnpj_dv"):
         load_link(
-            spark, LINK, hubs=LINK_HUBS, source_table=typed,
-            target_table=estab_target.link, load_date=LOADED_AT,
+            spark, LINK, hubs=LINK_HUBS, hub_tables=estab_hub_tables(estab_loaded),
+            source_table=typed, target_table=estab_target.link, load_date=LOADED_AT,
         )
 
     assert not spark.catalog.tableExists(estab_target.link)
@@ -476,7 +491,8 @@ def test_a_link_handed_a_hub_it_does_not_name_is_refused(spark, estab_source, es
     else entirely."""
     with pytest.raises(ValueError, match="was handed"):
         load_link(
-            spark, LINK, hubs=(EMPRESA_HUB, EMPRESA_HUB), source_table=estab_source.bronze,
+            spark, LINK, hubs=(EMPRESA_HUB, EMPRESA_HUB),
+            hub_tables=estab_hub_tables(estab_target), source_table=estab_source.bronze,
             target_table=estab_target.link, load_date=LOADED_AT,
         )
 
@@ -689,7 +705,7 @@ def test_a_grain_declaring_the_key_columns_in_another_order_is_refused(
 
 
 def test_a_link_with_roled_ends_writes_its_references_under_the_role_prefixed_names(
-    spark, estab_source, estab_target
+    spark, estab_source, estab_target, estab_loaded
 ):
     """THE REGISTRY VALIDATES A LINK'S COLUMNS UNDER `LinkEnd.reference_column` AND THIS
     LOADER USED TO WRITE THEM UNDER `hub.hash_key`. The two agree whenever no end has a
@@ -709,7 +725,8 @@ def test_a_link_with_roled_ends_writes_its_references_under_the_role_prefixed_na
               LinkEnd(hub=HUB.name, role="child")),
     )
     load_link(
-        spark, roled, hubs=LINK_HUBS, source_table=estab_source.bronze,
+        spark, roled, hubs=LINK_HUBS, hub_tables=estab_hub_tables(estab_loaded),
+        source_table=estab_source.bronze,
         target_table=estab_target.link, load_date=LOADED_AT,
     )
     written = spark.read.table(estab_target.link)

@@ -42,10 +42,17 @@ def main(argv: list[str] | None = None) -> None:
     months = required_months(args[2] if len(args) > 2 else "", action=f"load {spec.name}")
     load_date = required_load_date(args[3] if len(args) > 3 else "")
     spark = SparkSession.builder.getOrCreate()
+    hubs = domains.linked_hubs(spec)
     result = load_partner_link(
         spark,
         spec,
-        hubs=domains.linked_hubs(spec),
+        hubs=hubs,
+        # THE ARGUMENT THIS JOB EXISTS TO GET RIGHT. `vault_partner_job.yml` does not
+        # load `hub_empresa`, which BOTH ends of this link reference -- that is the
+        # empresa job's task, and no `depends_on` reaches across two jobs. Handing the
+        # loader where the hub lives is what lets it refuse the wrong-order run instead
+        # of appending 28M references to rows that are not there.
+        hub_tables={hub.name: DEFAULT.table(hub.name) for hub in hubs},
         source_table=DEFAULT.table(source.bronze),
         target_table=DEFAULT.table(spec.name),
         load_date=load_date,

@@ -39,10 +39,27 @@ one-to-many -- every establishment has exactly one company -- and it is still a 
 rather than a column on `hub_estabelecimento`, because a hub row asserts only that a
 key exists and a hub carrying a reference to another hub would stop being join-safe
 for anything else keying on it. Nothing in this module knows the cardinality; a
-many-to-many link loads through the same code."""
+many-to-many link loads through the same code.
+
+THE HUBS ARE NOT JOINED AND ARE STILL REQUIRED TO EXIST, which is not a contradiction
+and is `refuse_unloaded_hubs`' whole subject. `link_candidates` COMPUTES each reference
+from the source, so the digests agree with `load_hub`'s by construction and not by
+ordering -- that property is unchanged. What ordering decides is whether the rows this
+loader appends point at hub rows that are THERE, and on an insert-only table a dangling
+reference is not repaired by a later load; somebody deletes rows by hand. So the hubs
+arrive as `hub_tables`, a mapping from hub name to the table it was loaded into, and the
+loader refuses before it writes if one of them is missing or empty. Read that function
+for exactly what the refusal covers and, more importantly, what it does not.
+
+`hub_tables` HAS NO DEFAULT ON EITHER LINK LOADER, and that is the argument for the shape
+rather than a detail of it. An optional preflight is one a later job forgets to switch
+on, and forgetting is the whole defect: `vault_partner_job.yml` has carried a paragraph
+describing this hazard since it was written, and nothing enforced it. The two SPEC
+refusals still run ahead of the preflight, because they are pure and because a caller who
+mismatched the hubs should be told that rather than that the wrong hub's table is empty."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -101,6 +118,81 @@ def refuse_mismatched_hubs(link: Link, hubs: Sequence[Hub]) -> None:
             "every reference column stays correct and every join keeps working -- "
             "resolve them with opl.vault.domains.linked_hubs rather than by hand"
         )
+
+
+def _refuse_a_hub_that_was_never_loaded(link: Link, hub: Hub, table: str, rows: int | None) -> None:
+    """One hub's verdict: `rows is None` means the table is not there, 0 means it is
+    there and empty, anything else passes.
+
+    TWO MESSAGES BECAUSE THEY ARE TWO MISTAKES WITH TWO REPAIRS. A table that does not
+    exist is a job that never ran in this workspace; a table that exists and holds
+    nothing is a job that ran over a window which loaded nothing, and re-running the
+    same window will do it again. One message covering both would send half its readers
+    to the wrong command."""
+    if rows is None:
+        raise ValueError(
+            f"link {link.name!r} references hub {hub.name!r}, and {table!r} does not "
+            "exist. The link's references are COMPUTED from the source rather than "
+            "joined to the hub, so this load would not fail -- it would append every "
+            "relationship in the window with hash keys pointing at hub rows that are "
+            "not there, and report success. Load that hub first; across two jobs no "
+            "`depends_on` can say so, which is why this is checked here"
+        )
+    if rows == 0:
+        raise ValueError(
+            f"link {link.name!r} references hub {hub.name!r}, and {table!r} holds no "
+            "rows. Every reference this load writes would dangle, silently, on a table "
+            "that is insert-only -- so the repair is deleting rows by hand rather than "
+            "re-running. A hub that exists and is empty is a hub whose own load ran "
+            "over a window that matched nothing; check that window before this one"
+        )
+
+
+def refuse_unloaded_hubs(
+    spark: SparkSession, link: Link, hubs: Sequence[Hub], hub_tables: Mapping[str, str]
+) -> None:
+    """Refuse, before anything is written, if a hub `link` references is MISSING or
+    EMPTY in the workspace this load is writing into.
+
+    WHAT IT CATCHES IS ONE THING AND IT IS THE THING THAT HAPPENED. `vault_partner_job`
+    loads `link_company_partner`, both of whose ends reference `hub_empresa` -- a hub
+    that job does not load and `vault_empresa_job` does. A Databricks `depends_on` does
+    not cross a job boundary, so the ordering was an operator's to get right, and the
+    wrong order does not fail: 28M link rows land with `company_hub_empresa_hk` pointing
+    at nothing, and the run reports success.
+
+    WHAT IT DOES NOT CATCH, said plainly because a guard that oversells its coverage is
+    worse than none. This is an EXISTENCE test, not referential integrity:
+
+      - A hub that exists and is populated but is missing SOME referenced key. The
+        anti-join that would catch it costs about an extra full pass -- measured here at
+        2,606 s for `hub_empresa_from_estabelecimentos`, anti-joining 144M rows to
+        insert zero -- which is the wrong price to pay on every load, forever, for an
+        ordering mistake. The partial case is also not the measured one: all 310,374 of
+        310,374 PJ partner CNPJs resolve to `hub_empresa`
+        (`01f19063-44ef-132a-8aa7-9068b624b370`), and the company end is derived from
+        `cnpj_basico`, which is `hub_empresa`'s own business key. Measurements of two
+        months, not guarantees -- and this guard is not one either.
+      - A hub loaded over a NARROWER window than the link. It is non-empty, so this
+        passes, and the link's keys from months the hub never saw dangle.
+      - A `hub_tables` entry naming some other populated table. The probe asks whether a
+        table has rows, not whether it is the hub."""
+    for hub in hubs:
+        table = hub_tables.get(hub.name)
+        if table is None:
+            raise ValueError(
+                f"link {link.name!r} references hub {hub.name!r} and `hub_tables` names "
+                f"{sorted(hub_tables)}. Every hub a link references must be named, or "
+                "the one left out is the one whose absence this refusal exists to find"
+            )
+        # `rows_in` IS THE PROBE BECAUSE IT IS THE COUNT THIS LOADER ALREADY TAKES of
+        # its own target one call later: Delta answers an unfiltered `count()` from the
+        # transaction log's file statistics rather than by scanning, so the preflight is
+        # two catalog operations per hub and no pass over the data. `tableExists` is
+        # asked separately only so "never created" and "created and empty" can be told
+        # apart -- `rows_in` alone answers 0 for both.
+        rows = rows_in(spark, table) if spark.catalog.tableExists(table) else None
+        _refuse_a_hub_that_was_never_loaded(link, hub, table, rows)
 
 
 def _refuse_a_link_this_loader_cannot_write(link: Link) -> None:
@@ -192,6 +284,7 @@ def load_link(
     link: Link,
     *,
     hubs: Sequence[Hub],
+    hub_tables: Mapping[str, str],
     source_table: str,
     target_table: str,
     load_date: datetime,
@@ -209,6 +302,7 @@ def load_link(
     that stamps its own clock cannot be asserted against."""
     _refuse_a_link_this_loader_cannot_write(link)
     refuse_mismatched_hubs(link, hubs)
+    refuse_unloaded_hubs(spark, link, hubs, hub_tables)
     before = rows_in(spark, target_table)
     candidates = link_candidates(
         spark, link, hubs, source_table=source_table, months=months

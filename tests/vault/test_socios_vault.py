@@ -110,6 +110,7 @@ from .conftest import (
     SOCIOS_CONTRACT,
     SOCIOS_SCHEMA,
     derived_table,
+    socios_hub_tables,
     socios_row,
     write_delta,
 )
@@ -142,6 +143,8 @@ def _load_all(spark, socios_source, names, *, load_date=LOADED_AT, months=None, 
     names.link_result = load_partner_link(
         spark, LINK, hubs=LINK_HUBS, source_table=socios_source.bronze,
         target_table=names.link, load_date=load_date, months=months,
+        # AFTER THE HUB LOAD ABOVE, and now because the loader refuses otherwise.
+        hub_tables=socios_hub_tables(names),
     )
     names.eff_result = load_effectivity_satellite(
         spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=socios_source.bronze,
@@ -558,7 +561,8 @@ def test_the_generic_link_loader_refuses_the_link_it_cannot_write(
     partnered with itself."""
     with pytest.raises(ValueError, match="dependent-child keys or a non-identifying"):
         load_link(
-            spark, LINK, hubs=LINK_HUBS, source_table=socios_source.bronze,
+            spark, LINK, hubs=LINK_HUBS, hub_tables=socios_hub_tables(socios_target),
+            source_table=socios_source.bronze,
             target_table=socios_target.link, load_date=LOADED_AT,
         )
 
@@ -579,7 +583,8 @@ def test_the_partner_loader_refuses_a_link_whose_dependent_child_keys_it_cannot_
 
     with pytest.raises(ValueError, match="derives the partner"):
         load_partner_link(
-            spark, renamed, hubs=LINK_HUBS, source_table=socios_source.bronze,
+            spark, renamed, hubs=LINK_HUBS, hub_tables=socios_hub_tables(socios_target),
+            source_table=socios_source.bronze,
             target_table=socios_target.link, load_date=LOADED_AT,
         )
 
@@ -643,7 +648,7 @@ def test_a_grain_declaring_the_links_columns_in_another_order_is_told_the_truth(
 
 
 def test_a_typed_key_column_is_refused_by_both_loaders_before_they_hash(
-    spark, socios_source, socios_target
+    spark, socios_source, socios_target, loaded
 ):
     """Spark casts a typed column silently and hashes the CAST, where `hash_key` raises
     on a value with no `.strip()`: one spelling answers and the other refuses, which no
@@ -663,7 +668,7 @@ def test_a_typed_key_column_is_refused_by_both_loaders_before_they_hash(
     for load in (
         lambda: load_partner_link(
             spark, LINK, hubs=LINK_HUBS, source_table=typed, target_table=socios_target.link,
-            load_date=LOADED_AT),
+            load_date=LOADED_AT, hub_tables=socios_hub_tables(loaded)),
         lambda: load_effectivity_satellite(
             spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=typed,
             target_table=socios_target.eff, load_date=LOADED_AT, grain=grain),

@@ -348,8 +348,8 @@ def test_a_table_is_loaded_after_every_table_it_references_that_the_same_job_loa
 
     Scoped to parents THIS job loads, deliberately. `vault_partner_job.yml` does not load
     `hub_empresa`, which both ends of its link reference: that hub is the empresa job's,
-    and an ordering between two Databricks jobs is the phase's task order (Task 3 before
-    Task 5), not something a `depends_on` can express."""
+    and no `depends_on` reaches across two jobs. What covers that half is not this lock
+    but `opl.vault.links.refuse_unloaded_hubs`, inside both link loaders."""
     tasks = _tasks_of(job_yml)
     loads = _load_tasks(job_yml)
     task_of_table = {table: key for key, (_, table, _source) in loads.items()}

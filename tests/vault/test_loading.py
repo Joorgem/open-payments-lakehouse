@@ -12,16 +12,30 @@ THE THREE MONTH REFUSALS ARE NOT TESTED TWICE. They live in `opl.vault.months`, 
 with the observation ledger since the review flagged the duplication, and
 `tests/vault/test_observation.py` already exercises them through the ledger. What is
 asserted here is that the LOADER path reaches them -- which is a different claim, and
-was the false one."""
+was the false one.
+
+THE HUB PREFLIGHT IS ASSERTED HERE FOR THE SAME REASON AND IN THE SAME SHAPE.
+`links.refuse_unloaded_hubs` is one guard with two callers -- `load_link` and
+`load_partner_link` -- and its whole subject is a load that writes 28M rows of dangling
+references and reports success. It is not in either link module's own test file because
+those two files are the domain fixtures' (`test_estabelecimento_vault.py`,
+`test_socios_vault.py`, at 734 and 795 lines against this project's 800-line cap), and a
+guard shared by two loaders asserted in one of their files reads as that domain's
+property. What the two domain files DO carry after this change is the ordering: their
+spec refusals are handed hub tables nothing has loaded, so a preflight moved ahead of
+`refuse_mismatched_hubs` turns them red."""
 from __future__ import annotations
 
 from datetime import date, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
+from opl.vault import domains
 from opl.vault.hashing import hash_key
 from opl.vault.hubs import load_hub
+from opl.vault.links import load_link
 from opl.vault.loading import (
     changed_rows,
     hash_key_expression,
@@ -29,7 +43,10 @@ from opl.vault.loading import (
     rows_in,
 )
 from opl.vault.months import validated_months
+from opl.vault.partners import load_partner_link
 from opl.vault.registry import BusinessKeyColumn, Hub
+
+from .conftest import LOADED_AT, MAY, write_delta
 
 JUN, JUL = "2026-06", "2026-07"
 _SCHEMA = "cnpj_basico string, _snapshot_month string, _snapshot_ref_date date"
@@ -232,3 +249,219 @@ def test_the_loader_path_refuses_a_bare_string_month(spark, snapshots):
             spark, hub, source_table=snapshots, target_table="unused",
             load_date=datetime(2027, 1, 1), months="2026-06",
         )
+
+
+# --------------------------------------------------------------------------- #
+# The hub preflight, on both link loaders.
+#
+# THE DEFECT IT ANSWERS IS AN ORDERING BETWEEN TWO JOBS, WHICH IS WHY IT IS IN THE
+# LOADER. `vault_partner_job.yml` loads `link_company_partner`, both of whose ends
+# reference `hub_empresa` -- and that hub is `vault_empresa_job.yml`'s. A Databricks
+# `depends_on` does not cross a job boundary, so on a fresh workspace the partner job can
+# run first, and nothing in the write path notices: `partner_link_candidates` COMPUTES
+# its references rather than joining to the hub, so 28M rows land pointing at hub rows
+# that do not exist and the run reports success. On an insert-only table the repair is
+# deleting rows by hand.
+#
+# WHAT IS ASSERTED IS "MISSING OR EMPTY", AND DELIBERATELY NOT MORE. Full referential
+# integrity -- anti-joining every reference against the hub -- costs about an extra full
+# pass, measured on this workspace at 2,606 s for `hub_empresa_from_estabelecimentos`
+# anti-joining 144M rows to insert zero. There is no test below for a hub that is
+# populated and missing SOME referenced key, because the guard does not catch that and a
+# test claiming it did would be the same overstatement in another file.
+# --------------------------------------------------------------------------- #
+
+_PREFLIGHT_SCHEMA = (
+    "cnpj_basico string, cnpj_ordem string, cnpj_dv string, "
+    "identificador_socio string, cpf_cnpj_socio string, "
+    "_snapshot_month string, _record_source string"
+)
+# ONE SOURCE CARRYING BOTH LINKS' KEY COLUMNS. Estabelecimentos and socios are two bronze
+# tables in production; here they are one, because what is under test is a guard that
+# never reads the source at all and a second fixture would be a second Delta write for
+# nothing. Two rows, two distinct establishments and two distinct relationships.
+_PREFLIGHT_ROWS = [
+    ("10000001", "0001", "23", "2", "***111111**", JUN, "rfb_cnpj_webdav"),
+    ("10000002", "0001", "45", "1", "90000001000199", JUL, "rfb_cnpj_webdav"),
+]
+
+ESTAB_LINK = domains.table_spec("link_empresa_estabelecimento")
+ESTAB_LINK_HUBS = domains.linked_hubs(ESTAB_LINK)
+PARTNER_LINK = domains.table_spec("link_company_partner")
+PARTNER_LINK_HUBS = domains.linked_hubs(PARTNER_LINK)
+EMPRESA_HUB, ESTABELECIMENTO_HUB = ESTAB_LINK_HUBS
+
+
+def _estab_hubs(empresa: str, estabelecimento: str) -> dict[str, str]:
+    """`link_empresa_estabelecimento`'s two hubs, keyed by hub NAME, which is how the
+    preflight looks each one up. Spelled once so a test varies WHICH table a hub points
+    at and nothing else."""
+    return {EMPRESA_HUB.name: empresa, ESTABELECIMENTO_HUB.name: estabelecimento}
+
+
+@pytest.fixture(scope="module")
+def preflight(spark, vault_database):
+    """A source, the two hubs really loaded from it, and a hub table that EXISTS AND IS
+    EMPTY.
+
+    THE EMPTY HUB IS MADE THE WAY AN OPERATOR MAKES ONE -- a real `load_hub` over a month
+    this source does not hold. A hand-written zero-row table would test the same `count()`
+    and would not be the thing the refusal message names, which is a hub whose own load
+    ran over a window that matched nothing."""
+    db = vault_database("link_preflight")
+    source = f"{db}.source"
+    write_delta(spark, source, _PREFLIGHT_SCHEMA, _PREFLIGHT_ROWS)
+    names = SimpleNamespace(
+        db=db, source=source, empresa=f"{db}.hub_empresa", empty=f"{db}.hub_empresa_empty",
+        estabelecimento=f"{db}.hub_estabelecimento",
+        never_created=f"{db}.hub_no_job_ever_loaded",
+    )
+    for hub, table in ((EMPRESA_HUB, names.empresa),
+                       (ESTABELECIMENTO_HUB, names.estabelecimento)):
+        load_hub(spark, hub, source_table=source, target_table=table, load_date=LOADED_AT)
+    load_hub(spark, EMPRESA_HUB, source_table=source, target_table=names.empty,
+             load_date=LOADED_AT, months=[MAY])
+    return names
+
+
+@pytest.fixture
+def link_target(preflight):
+    """A fresh link table per test. Sharing one would let "nothing was written" pass
+    because an earlier test had not written either."""
+    return f"{preflight.db}.link_{uuid4().hex[:8]}"
+
+
+def test_a_link_load_refuses_a_hub_table_no_job_ever_created_and_writes_nothing(
+    spark, preflight, link_target
+):
+    """The wrong-order run in its exact shape, on the generic loader.
+
+    The assertion that matters is the second one: an exception alone would also be raised
+    by a guard placed after the append, which is the version of this fix that fixes
+    nothing."""
+    with pytest.raises(ValueError, match="does not exist"):
+        load_link(
+            spark, ESTAB_LINK, hubs=ESTAB_LINK_HUBS,
+            hub_tables=_estab_hubs(preflight.never_created, preflight.estabelecimento),
+            source_table=preflight.source, target_table=link_target, load_date=LOADED_AT,
+        )
+
+    assert not spark.catalog.tableExists(link_target)
+
+
+def test_a_link_load_refuses_a_hub_table_that_exists_and_holds_no_rows(
+    spark, preflight, link_target
+):
+    """THE HALF `tableExists` ALONE WOULD MISS, and it is not hypothetical: a hub job
+    launched without `--params months=...` refuses on the sentinel, but one launched with
+    a well-formed month the source does not hold writes an empty table and reports
+    success. The link would then reference a hub that is there and holds nothing."""
+    with pytest.raises(ValueError, match="holds no rows"):
+        load_link(
+            spark, ESTAB_LINK, hubs=ESTAB_LINK_HUBS,
+            hub_tables=_estab_hubs(preflight.empty, preflight.estabelecimento),
+            source_table=preflight.source, target_table=link_target, load_date=LOADED_AT,
+        )
+
+    assert not spark.catalog.tableExists(link_target)
+
+
+def test_a_link_load_writes_as_before_when_every_hub_it_references_is_populated(
+    spark, preflight, link_target
+):
+    """The contrast case, without which the two refusals above are indistinguishable from
+    a loader that refuses everything."""
+    result = load_link(
+        spark, ESTAB_LINK, hubs=ESTAB_LINK_HUBS,
+        hub_tables=_estab_hubs(preflight.empresa, preflight.estabelecimento),
+        source_table=preflight.source, target_table=link_target, load_date=LOADED_AT,
+    )
+
+    assert result.appended == 2
+    assert spark.read.table(link_target).count() == 2
+
+
+def test_a_hub_the_link_references_and_the_mapping_leaves_out_is_refused_by_name(
+    spark, preflight, link_target
+):
+    """The mapping is keyed by hub name, so the way to get this wrong is to omit a hub
+    rather than to misorder one -- and the hub omitted is exactly the one whose absence
+    the preflight exists to find. Silently skipping it would make the guard weakest
+    against the mistake nearest to it."""
+    with pytest.raises(ValueError, match="must be named"):
+        load_link(
+            spark, ESTAB_LINK, hubs=ESTAB_LINK_HUBS,
+            hub_tables={EMPRESA_HUB.name: preflight.empresa},
+            source_table=preflight.source, target_table=link_target, load_date=LOADED_AT,
+        )
+
+    assert not spark.catalog.tableExists(link_target)
+
+
+def test_the_partner_link_loader_refuses_a_hub_no_job_ever_created_and_writes_nothing(
+    spark, preflight, link_target
+):
+    """THE LOADER THE FINDING IS ABOUT. `link_company_partner` is self-referencing, so
+    `hub_empresa` is both of its ends, and `vault_partner_job.yml` loads neither it nor
+    anything else that would.
+
+    The refusal also stands ahead of `_collapsed_duplicates`, a second full scan of the
+    window, so the wrong-order run pays for nothing before being turned away."""
+    with pytest.raises(ValueError, match="does not exist"):
+        load_partner_link(
+            spark, PARTNER_LINK, hubs=PARTNER_LINK_HUBS,
+            hub_tables={EMPRESA_HUB.name: preflight.never_created},
+            source_table=preflight.source, target_table=link_target, load_date=LOADED_AT,
+        )
+
+    assert not spark.catalog.tableExists(link_target)
+
+
+def test_the_partner_link_loader_refuses_an_empty_hub_and_writes_when_it_is_populated(
+    spark, preflight, link_target
+):
+    """Both arms on the derived loader, in one test, because the empty arm alone cannot
+    tell a guard from a loader that stopped working."""
+    with pytest.raises(ValueError, match="holds no rows"):
+        load_partner_link(
+            spark, PARTNER_LINK, hubs=PARTNER_LINK_HUBS,
+            hub_tables={EMPRESA_HUB.name: preflight.empty},
+            source_table=preflight.source, target_table=link_target, load_date=LOADED_AT,
+        )
+    assert not spark.catalog.tableExists(link_target)
+
+    result = load_partner_link(
+        spark, PARTNER_LINK, hubs=PARTNER_LINK_HUBS,
+        hub_tables={EMPRESA_HUB.name: preflight.empresa},
+        source_table=preflight.source, target_table=link_target, load_date=LOADED_AT,
+    )
+
+    assert result.appended == 2
+
+
+def test_a_hub_gone_empty_between_two_loads_leaves_the_rows_already_written_untouched(
+    spark, preflight, link_target
+):
+    """"BEFORE ANY WRITE" IS A CLAIM ABOUT A TARGET THAT ALREADY HAS ROWS, and a
+    non-existent target cannot carry it: `saveAsTable` on an append that wrote zero rows
+    still creates the table, so "the table is absent" and "the table is unchanged" are
+    two different assertions and only the second survives a second load.
+
+    A hub does not empty itself. What this stands in for is the incremental run -- the
+    link already loaded, the hub since rebuilt or pointed at a window that matched
+    nothing -- where a guard placed after the append would have appended first."""
+    load_link(
+        spark, ESTAB_LINK, hubs=ESTAB_LINK_HUBS,
+        hub_tables=_estab_hubs(preflight.empresa, preflight.estabelecimento),
+        source_table=preflight.source, target_table=link_target, load_date=LOADED_AT,
+    )
+    before = spark.read.table(link_target).count()
+
+    with pytest.raises(ValueError, match="holds no rows"):
+        load_link(
+            spark, ESTAB_LINK, hubs=ESTAB_LINK_HUBS,
+            hub_tables=_estab_hubs(preflight.empty, preflight.estabelecimento),
+            source_table=preflight.source, target_table=link_target, load_date=LOADED_AT,
+        )
+
+    assert (before, spark.read.table(link_target).count()) == (2, 2)
