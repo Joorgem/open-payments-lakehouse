@@ -1,0 +1,152 @@
+# databricks/resources/vault_estabelecimento_job.yml
+# The estabelecimentos half of F2 wave 1: one hub, two satellites, one hierarchical
+# link, and `hub_empresa`'s SECOND FEED. Five tasks over one 72.3M-row bronze table.
+#
+# WHY `hub_empresa` IS LOADED HERE AS WELL AS IN ITS OWN JOB, and why it is worth a task
+# rather than a footnote. Estabelecimentos carries `cnpj_basico`, so it is a legitimate
+# second feed for that hub (`opl/vault/domains/cnpj.py:245-250`) and the hub's anti-join
+# makes running both free. Measured before this job existed
+# (`01f19421-a4af-18ce-9b7a-39076b56fcee`): distinct roots in estabelecimentos =
+# 69,062,849, distinct keys in empresas = 69,062,849, roots absent from empresas = 0. So
+# this task must insert 0 rows and report `already_present = 69,062,849`, leaving the
+# empresa job's number intact -- which is the cheapest available proof that the hub's
+# anti-join is idempotent ACROSS FEEDS, not merely across re-runs. Skipping the second
+# feed to protect that number would throw the proof away to keep the thing it proves.
+#
+# EXPECTED ROW COUNTS, published as predictions before this job ran:
+#   hub_estabelecimento           72,318,968
+#   sat_estabelecimento_dados     73,530,802   (71,874,448 + 444,520 new + 1,211,834 changed)
+#   sat_estabelecimento_endereco  72,889,043   (71,874,448 + 444,520 new +   570,075 changed)
+#   link_empresa_estabelecimento  72,318,968   (hierarchical: one parent per child)
+#
+# THE FOUR `encoding_replacement_char` ESTABLISHMENTS ARE THIS JOB'S ACCEPTANCE TEST.
+# They are in 2026-06's bronze and in 2026-07's QUARANTINE, so the ledger must call them
+# `rejected_by_our_gate` and the satellites must record no change and no departure for
+# them -- the whole point of ADR 0010 being that our own DQ gate must never look like a
+# source departure.
+resources:
+  jobs:
+    opl_vault_cnpj_estabelecimento:
+      name: opl-vault-cnpj-estabelecimento
+      parameters:
+        - name: months
+          # A LIST; see vault_empresa_job.yml, which carries the full argument for the
+          # plural, for the `+` separator and for keeping the sentinel default under a
+          # reason that is not the one bronze keeps it under.
+          default: "REQUIRED-PASS-A-MONTH"
+        - name: revision
+          #     databricks bundle run opl_vault_cnpj_estabelecimento -t free \
+          #       --params months=2026-06+2026-07,revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
+        - name: report_diagnostics
+          # OFF, and this is the job the default was decided for. See
+          # vault_empresa_job.yml, which carries the full argument; what is specific here
+          # is the size: 72.3M keys, TWO satellites, one of them a 10-column payload. On
+          # `sat_empresa_dados` the two diagnostics were part of 5,635 s against a 281 s
+          # hub over 69M keys and both answered 0; this job would pay that twice, over
+          # more rows, for two numbers whose value on THIS table is genuinely unknown --
+          # the estabelecimentos duplicate rate is unmeasured, not measured at zero
+          # (`opl.vault.satellites`). Which is the argument for launching this job ONCE
+          # with report_diagnostics=true and reading the number, not for making every
+          # load carry it.
+          default: "false"
+      tasks:
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        - task_key: hub_estabelecimento
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_hub.py
+            parameters:
+              - "hub_estabelecimento"
+              - "estabelecimentos"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+        # THE SECOND FEED. Same entry point, same source table, a different vault table
+        # -- which is exactly why `vault_load_hub.py` takes the pair as two parameters
+        # rather than deriving one from the other. Ordered after the establishment hub
+        # only so the two hub loads do not contend; nothing in either depends on the
+        # other.
+        - task_key: hub_empresa_from_estabelecimentos
+          depends_on: [{ task_key: hub_estabelecimento }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_hub.py
+            parameters:
+              - "hub_empresa"
+              - "estabelecimentos"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+        - task_key: sat_estabelecimento_dados
+          depends_on: [{ task_key: hub_estabelecimento }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_satellite.py
+            parameters:
+              - "sat_estabelecimento_dados"
+              - "estabelecimentos"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+              # The job's own parameter, never a literal -- see vault_empresa_job.yml.
+              - "{{job.parameters.report_diagnostics}}"
+
+        # TWO SATELLITES ON ONE HUB, SEQUENCED RATHER THAN PARALLEL, so each one's
+        # wall-clock is its own. They share a grain and differ only in payload (ADR
+        # 0013), so the pair is also the measurement that says what the split cost:
+        # `_dados` rewrites 1,211,834 rows where `_endereco` rewrites 570,075.
+        - task_key: sat_estabelecimento_endereco
+          depends_on: [{ task_key: sat_estabelecimento_dados }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_satellite.py
+            parameters:
+              - "sat_estabelecimento_endereco"
+              - "estabelecimentos"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+              # ONE FLAG FOR BOTH SATELLITES, which is what makes the pair comparable:
+              # the two share a grain and differ only in payload (ADR 0013), so a run
+              # that measured one and not the other would report two wall-clocks taken
+              # on two different bases.
+              - "{{job.parameters.report_diagnostics}}"
+
+        # AFTER BOTH HUBS IT REFERENCES. `link_candidates` computes its hub references
+        # from the source rather than joining to the hubs, so this order is not what
+        # makes them resolve -- what it buys is that no link row references a hub row
+        # that does not exist yet, which is a dangling reference nothing would report.
+        - task_key: link_empresa_estabelecimento
+          depends_on:
+            - task_key: sat_estabelecimento_endereco
+            - task_key: hub_empresa_from_estabelecimentos
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_link.py
+            # `vault_load_link.py` and NOT `vault_load_partner_link.py`: this link's
+            # ends are all identifying and both are read from columns the source names
+            # after the hub's business key. The partner link is the other entry point,
+            # and `load_link` refuses it outright rather than loading it wrong.
+            parameters:
+              - "link_empresa_estabelecimento"
+              - "estabelecimentos"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

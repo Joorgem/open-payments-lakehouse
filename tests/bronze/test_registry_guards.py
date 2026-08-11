@@ -9,17 +9,18 @@ guard, which is the axis this phase has been growing along.
 
 Every test here works the same way: put a spec that must not exist into `REGISTRY`
 with `monkeypatch`, call the guard, and assert it refuses AND says why. They are
-therefore direct-call tests, which is exactly the vacuity
-`test_every_guard_this_module_defines_is_actually_called_at_import` exists to close
--- commenting out the calls at the bottom of registry.py once left this whole file
-green. That test lives here, with the guards it certifies.
+therefore direct-call tests, which proves a function refuses and says nothing about
+whether anything ever runs it -- commenting out the calls at the bottom of registry.py
+once left this whole file green. `test_registry_guard_wiring.py` is what closes that
+vacuity, and it moved out of this file when it was taught to read more than one
+registry module: what breaks it is a change to the registry's MODULE LAYOUT, which is
+a third reason to edit and therefore a third file.
 
 The traps are synthesised rather than committed to `REGISTRY`, for the obvious
 reason: an entry that a guard refuses cannot exist in source, because it would break
 the import of every module that reads the registry."""
 from __future__ import annotations
 
-import ast
 import subprocess
 import sys
 import textwrap
@@ -38,12 +39,21 @@ from opl.bronze.registry import (
     _assert_contracts_exist,
     _assert_no_masked_contract_declares_a_check_constraint,
     _assert_no_table_claims_a_reserved_subdir,
-    _assert_no_two_tables_share_a_checkpoint_namespace,
     _assert_no_two_tables_share_a_contract,
-    _assert_no_two_tables_share_a_delta_name,
     _assert_no_two_tables_share_a_landing_subdir,
     _assert_prefixes_match_their_file_groups,
     _assert_subdirs_are_single_path_components,
+)
+
+# The three name-collision guards live in their own module since F2 Task 0 -- see
+# `opl.bronze.registry_collisions` for the seam. They take the registry they validate
+# as an argument, because `registry.py` calls them at its own import and importing it
+# back would be a cycle; `REGISTRY` above is the same dict object `monkeypatch.setitem`
+# mutates, so every trap below reaches them exactly as it reached them in-place.
+from opl.bronze.registry_collisions import (
+    _assert_no_table_key_is_month_shaped,
+    _assert_no_two_tables_share_a_checkpoint_namespace,
+    _assert_no_two_tables_share_a_delta_name,
 )
 
 
@@ -80,7 +90,7 @@ def test_a_pasted_delta_name_is_refused_at_import(monkeypatch):
     monkeypatch.setitem(REGISTRY, "empresas", pasted)
 
     with pytest.raises(ValueError, match="both declare Delta table"):
-        _assert_no_two_tables_share_a_delta_name()
+        _assert_no_two_tables_share_a_delta_name(REGISTRY)
 
 
 def test_a_delta_name_reused_in_a_different_role_is_refused(monkeypatch):
@@ -102,7 +112,7 @@ def test_a_delta_name_reused_in_a_different_role_is_refused(monkeypatch):
     monkeypatch.setitem(REGISTRY, "lookup", trap)
 
     with pytest.raises(ValueError, match="both declare Delta table"):
-        _assert_no_two_tables_share_a_delta_name()
+        _assert_no_two_tables_share_a_delta_name(REGISTRY)
 
 
 def test_a_delta_name_that_differs_only_in_case_is_refused(monkeypatch):
@@ -136,7 +146,7 @@ def test_a_delta_name_that_differs_only_in_case_is_refused(monkeypatch):
     monkeypatch.setitem(REGISTRY, "empresas", pasted)
 
     with pytest.raises(ValueError) as excinfo:
-        _assert_no_two_tables_share_a_delta_name()
+        _assert_no_two_tables_share_a_delta_name(REGISTRY)
     message = str(excinfo.value)
     assert "both declare Delta table" in message
     assert "'BRONZE_CNPJ_ESTAB_STAGING'" in message, (
@@ -158,7 +168,7 @@ def test_a_delta_name_collision_in_one_spelling_reads_as_one_name(monkeypatch):
     monkeypatch.setitem(REGISTRY, "lookup", pasted)
 
     with pytest.raises(ValueError) as excinfo:
-        _assert_no_two_tables_share_a_delta_name()
+        _assert_no_two_tables_share_a_delta_name(REGISTRY)
     message = str(excinfo.value)
     assert "CASE-INSENSITIVE" not in message
     assert message.count("'bronze_cnpj_estab_staging'") == 1
@@ -195,104 +205,73 @@ def test_a_pasted_checkpoint_namespace_is_refused_at_import(monkeypatch):
     monkeypatch.setitem(REGISTRY, "empresas", pasted)
 
     with pytest.raises(ValueError, match="both claim checkpoint namespace"):
-        _assert_no_two_tables_share_a_checkpoint_namespace()
+        _assert_no_two_tables_share_a_checkpoint_namespace(REGISTRY)
 
 
-def _module_level_guard_wiring() -> tuple[set[str], set[str]]:
-    """Every `_assert_*` the registry DEFINES, and every one it CALLS at module level.
+@pytest.mark.parametrize("table_key", ["2026-06", "2026-07", "2027-01"])
+def test_a_month_shaped_table_key_is_refused_at_import(monkeypatch, table_key):
+    """The guard the 800-line cap declined, now that F2 Task 0 has made room.
 
-    Read off the AST rather than the module object, because that is the only place
-    the difference is visible: a guard that is defined and never called is a perfectly
-    ordinary function attribute at runtime, indistinguishable from a wired one.
+    It lived as a lock in `test_autoloader_helpers.py::test_no_table_shares_or_nests_
+    state_across_months_or_with_the_orphans`, whose docstring said the structural
+    version belonged in the registry and did not fit. A CI lock protects a merge; it
+    does not protect the ad-hoc run of a branch whose tests have not been run, which is
+    how these jobs get launched while a phase is in flight -- the same argument that put
+    every other guard exercised in this file at import.
 
-    `utf-8-sig`, not `utf-8`: Python's own tokenizer strips a leading BOM, so a
-    BOM'd registry.py imports fine and only THIS read would choke on it -- turning a
-    wiring regression into a SyntaxError from a test that never mentions encodings.
-    Not hypothetical; a Windows editor put one there while this test was written."""
-    tree = ast.parse(Path(registry.__file__).read_text(encoding="utf-8-sig"))
-    defined = {
-        node.name
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name.startswith("_assert_")
-    }
-    return defined, _names_called_where_the_module_body_runs(tree)
+    What gets through is not an error. `autoloader` builds
+    `_checkpoints/<month>/<table_key>`, and the pre-month-scoping `_checkpoints/
+    <table_key>` directories still exist in the Volume holding 2026-06 state,
+    deliberately unmigrated (probed in the workspace during the Task 0 review: all four
+    exist, beside the month-scoped `2026-07`). A table_key of `2026-06` makes that orphan
+    directory BE the month directory, so every table's 2026-06 state is written inside a
+    checkpoint another query wrote -- a new RocksDB store and offset log nested under an
+    existing one, which is the exact nesting month-scoping was introduced to make
+    impossible. "Wrote", not "owns": nothing reads those orphans today, which is why they
+    were left in place, and overstating that would be the kind of claim this repo treats
+    as a defect.
 
+    `2026-06` is the sharpest of the three because it is a month this Volume already
+    holds state for. The other two are months no key collides with TODAY, and are here
+    because the defect is the SHAPE, not the coincidence."""
+    trap = replace(REGISTRY["socios"], table_key=table_key)
+    monkeypatch.setitem(REGISTRY, "socios", trap)
 
-def _names_called_where_the_module_body_runs(tree: ast.Module) -> set[str]:
-    """Every bare name called from code that executes on import.
-
-    Descends into module-level `if`/`try`/`with` bodies but NOT into function, class
-    or lambda bodies -- a call inside a `def` runs when that def is called, which is
-    the whole distinction this file is trying to draw.
-
-    Broader than matching a bare top-level call statement, which is what this did
-    first. That version reported a guard wired as `if True: _assert_x()` as UNWIRED,
-    telling a contributor to add a call that is already there and already running.
-    A wiring test whose diagnosis can be wrong about working code gets working code
-    "fixed".
-
-    The residual limit, stated because it is real: a guard called under a module-level
-    `if` that is FALSE at import counts as wired here. Accepted -- the alternative is
-    evaluating module-level conditions statically, and nothing in this module has ever
-    had a conditional guard call. What this rules out is the case that actually
-    happens: the call deleted, or a new guard never wired at all."""
-    called: set[str] = set()
-
-    def walk(node: ast.AST) -> None:
-        for child in ast.iter_child_nodes(node):
-            if isinstance(
-                child,
-                ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda,
-            ):
-                continue
-            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
-                called.add(child.func.id)
-            walk(child)
-
-    walk(tree)
-    return called
+    with pytest.raises(ValueError) as excinfo:
+        _assert_no_table_key_is_month_shaped(REGISTRY)
+    message = str(excinfo.value)
+    assert "socios" in message and repr(table_key) in message
+    # Refused for being a MONTH, not for colliding with another table -- the operator
+    # told "give each table a table_key of its own" would rename it to another month.
+    assert "which is a MONTH" in message
+    assert "_checkpoints/<month>/<table_key>" in message
 
 
-def test_every_guard_this_module_defines_is_actually_called_at_import():
-    """The test that makes every other refusal test in this file mean something.
+@pytest.mark.parametrize("table_key", ["2026-13", "2026-00", "26-06", "2026-6", "bronze_2026-06"])
+def test_a_table_key_that_only_looks_month_shaped_is_left_alone(monkeypatch, table_key):
+    """GUARDS THE GUARD, in the direction that costs something if it goes wrong.
 
-    Found by mutation probe while writing the two paste guards: commenting out ALL
-    THREE of their calls at the bottom of registry.py left the registry suite --
-    then one file of 33 tests, since split in two -- 33/33 GREEN. The
-    refusal tests invoke the guard functions DIRECTLY, so they prove a function
-    refuses -- they say nothing about whether anything ever runs it. A guard that is
-    defined and unwired is worth exactly as much as no guard, and the entire point of
-    this phase is that these refusals happen AT IMPORT and not only in CI. Tests
-    named `..._at_import` that pass with the import wiring deleted are the vacuity an
-    F1.4a implementer already found once in this repo.
+    Everything above would also pass if this refused every table_key containing four
+    digits and a hyphen, which would refuse a registry nobody can fix by renaming --
+    and this guard runs at IMPORT, so a false positive breaks every module that reads
+    the registry, including the extraction scripts that never touch Spark.
 
-    Structural rather than per-guard, so it does not have to be remembered: F1.4b and
-    every phase after it may add guards here, and each new one is covered by this the
-    moment it is written. The naming convention is the contract -- an `_assert_*` at
-    module level in registry.py is a guard, and a guard is called at import. A helper
-    that is not meant to run at import must not be named `_assert_*` (see
-    `_malformed_subdir_reason`, `_reserved_subdirs`, `_file_group_prefixes`).
+    `2026-13` and `2026-00` are the pointed cases and the reason the guard asks
+    `opl.config.is_month` rather than carrying its own pattern: they have the SHAPE of
+    a month and name no directory that can exist, because `require_month` refuses them
+    -- so there is no `_checkpoints/2026-13` for a table to be confused with, and
+    refusing them here would be a second spelling of the month rule diverging from the
+    first. Two spellings of that rule is how `2026-13` came to be refused at two of
+    four entry points in the first place."""
+    trap = replace(REGISTRY["socios"], table_key=table_key)
+    monkeypatch.setitem(REGISTRY, "socios", trap)
 
-    Does NOT pin the ORDER of the calls, which is load-bearing for two of them and
-    documented in comments there -- `_assert_subdirs_are_single_path_components`
-    before the reserved-name check is what makes that check's exact-string comparison
-    total. Wiring and ordering are separate properties; this closes the first."""
-    defined, called = _module_level_guard_wiring()
-    # Guard the guard: a walk that found nothing satisfies `defined <= called`
-    # vacuously. Named guards rather than a count -- a count says "the AST walk is
-    # wrong" at the phase that legitimately retires one, which is a false accusation
-    # pointed at the wrong file.
-    assert {"_assert_contracts_exist", "_assert_landing_modes_known"} <= defined, (
-        f"the AST walk found {sorted(defined)}, missing guards this module certainly "
-        "defines -- the walk is broken, not the module"
-    )
-    unwired = defined - called
-    assert not unwired, (
-        f"registry.py defines {sorted(unwired)} but never calls them at module "
-        "import, so they refuse nothing -- a direct-call test of such a guard passes "
-        "while the registry it guards is unprotected. Add the call at the bottom of "
-        "the module."
-    )
+    # The other three live keys go through the guard untouched on every one of these
+    # runs, so this also says the live registry is not refused. Deliberately NOT a pin
+    # of the four names: that is `test_registry.py`'s side of the seam, and the strongest
+    # enforcement of "the live registry passes" is the import at the top of this file --
+    # the guard runs there, so a false positive fails collection of the whole suite.
+    _assert_no_table_key_is_month_shaped(REGISTRY)
 
 
 def test_a_pasted_subdir_is_refused_at_import(monkeypatch):

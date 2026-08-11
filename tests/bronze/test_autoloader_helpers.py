@@ -190,12 +190,18 @@ def test_no_table_shares_or_nests_state_across_months_or_with_the_orphans():
     asserted over the whole registry rather than sampled. Without it the three
     literal months below would be checking a naming convention.
 
-    It is a LOCK, not a guard: nothing refuses a month-shaped `table_key` at import.
-    The structural version belongs in
-    `registry._assert_no_two_tables_share_a_checkpoint_namespace`, and does not fit
-    -- `registry.py` is at 798 lines of an 800 cap and this repo requires the *why*
-    beside a guard. See the Task 5 Step 0 fix report for the extraction that would
-    make room."""
+    IT NOW HAS A GUARD BEHIND IT, which it did not when it was written:
+    `registry_collisions._assert_no_table_key_is_month_shaped` refuses a month-shaped
+    `table_key` at IMPORT. It was declined at the time because `registry.py` stood at
+    798 lines of an 800 cap and this repo requires the *why* beside a guard; F2 Task 0
+    made the room by extracting the collision guards, and the guard landed beside the
+    checkpoint-namespace one rather than inside it, for the reason the subdir trio is
+    three functions.
+
+    THIS ASSERTION STAYS ANYWAY, and not as a duplicate. What the guard refuses is a
+    registry; what this states is the PREMISE the sampled comparison below rests on --
+    the months are a sample, the shape claim is not, and a test whose sample is only
+    valid under a stated premise has to state it where it is used."""
     for spec in REGISTRY.values():
         assert not is_month(spec.table_key), (
             f"{spec.name}.table_key={spec.table_key!r} is month-shaped, so "

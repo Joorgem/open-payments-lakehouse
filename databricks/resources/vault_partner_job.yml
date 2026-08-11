@@ -1,0 +1,89 @@
+# databricks/resources/vault_partner_job.yml
+# `link_company_partner` and its effectivity satellite -- F2 wave 1's sharpest proof and
+# the two tables whose loaders are unlike every other one in this vault.
+#
+# WHAT THIS JOB HAS TO PRODUCE. The link: 28,051,707 rows, the union of 2026-06's
+# 27,832,326 and 2026-07's 27,986,263 at link grain with 27,766,882 in both. The
+# effectivity satellite: exactly 65,444 CLOSED windows, of which 4 carry a NULL partner
+# key, with ZERO intersection against July's 1,781 `rejected_by_our_gate` keys -- which
+# is the whole argument for gating the close on the observation ledger. No window closed
+# by our own quarantine.
+#
+# THE `months` PARAMETER IS A LIST AND THIS JOB IS WHY. Run with one month, the
+# effectivity task closes ZERO windows -- for any data, always -- because the ledger
+# derives its key universe from the same window it reports on, so no key can be absent
+# from the only month it is asked about. Two single-month runs give 0 and 0 and both
+# report success. `vault_load_effectivity.py` REFUSES a one-month window before Spark
+# for that reason; its module docstring carries the full argument, and
+# `tests/vault/test_effectivity_window.py` pins the zero so it stays a documented
+# property of the window rather than a bug someone later "fixes".
+#
+# THIS JOB DOES NOT LOAD `hub_empresa`, WHICH BOTH ENDS OF THE LINK REFERENCE. The link
+# is self-referencing -- all 310,374 distinct PJ partner CNPJs resolve to a `cnpj_basico`
+# already in empresas, zero unresolved (`01f19063-44ef-132a-8aa7-9068b624b370`) -- so the
+# hub it needs is the one `vault_empresa_job.yml` loads. `partner_link_candidates`
+# COMPUTES both references rather than joining to the hub, so this job does not fail
+# without it; what it would produce is a link whose references point at hub rows that do
+# not exist. Run the empresa job first. That ordering is the phase's task order (Task 3
+# before Task 5) and is not expressible between two Databricks jobs.
+resources:
+  jobs:
+    opl_vault_cnpj_partner:
+      name: opl-vault-cnpj-partner
+      parameters:
+        - name: months
+          # A LIST; see vault_empresa_job.yml for the full argument. Here the plural is
+          # not merely correct, it is the difference between 65,444 and 0.
+          default: "REQUIRED-PASS-A-MONTH"
+        - name: revision
+          #     databricks bundle run opl_vault_cnpj_partner -t free \
+          #       --params months=2026-06+2026-07,revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
+      tasks:
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        # `vault_load_partner_link.py` AND NOT `vault_load_link.py`, and the difference
+        # is not a preference. The generic loader computes every end's reference from the
+        # columns its hub is NAMED after; this link's partner end is the first eight
+        # characters of `cpf_cnpj_socio`, which is not such a column. `load_link` refuses
+        # the link rather than loading both ends from `cnpj_basico` and producing 27.99M
+        # relationships that each read as a company partnered with itself.
+        - task_key: link_company_partner
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_partner_link.py
+            parameters:
+              - "link_company_partner"
+              - "socios"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+        # AFTER THE LINK IT HANGS OFF. The satellite keys through
+        # `link_hash_key_expression` rather than joining to the link, so this order is
+        # not what makes the keys agree -- it is what stops the satellite asserting a
+        # window for a relationship the link does not yet carry.
+        - task_key: sat_eff_company_partner
+          depends_on: [{ task_key: link_company_partner }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_effectivity.py
+            parameters:
+              - "sat_eff_company_partner"
+              - "socios"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl
