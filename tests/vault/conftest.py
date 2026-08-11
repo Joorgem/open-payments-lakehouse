@@ -172,6 +172,24 @@ ESTABELECIMENTO_ENDERECO = domains.table_spec("sat_estabelecimento_endereco")
 EMPRESA_ESTABELECIMENTO_LINK = domains.table_spec("link_empresa_estabelecimento")
 EMPRESA_ESTABELECIMENTO_HUBS = domains.linked_hubs(EMPRESA_ESTABELECIMENTO_LINK)
 
+
+def estab_hub_tables(names) -> dict[str, str]:
+    """Where `link_empresa_estabelecimento`'s two hubs live in `names`, keyed by hub name
+    -- the mapping `links.refuse_unloaded_hubs` looks each hub up in before writing.
+
+    A HELPER RATHER THAN A LITERAL AT EACH CALL SITE because the two hub names are the
+    keys the loader looks up BY, so a test spelling one of them wrong would be handed the
+    "hub not in the mapping" refusal instead of whatever it was asserting."""
+    return {EMPRESA_HUB.name: names.empresa_hub, ESTABELECIMENTO_HUB.name: names.hub}
+
+
+def socios_hub_tables(names) -> dict[str, str]:
+    """Where `link_company_partner`'s hub lives in `names`. ONE entry for a link with two
+    ends: it is self-referencing, so both ends resolve to `hub_empresa` and a mapping
+    keyed by hub name cannot disagree with itself about where that hub is."""
+    return {EMPRESA_HUB.name: names.hub}
+
+
 # Establishments as (cnpj_basico, cnpj_ordem, cnpj_dv), RAW as bronze holds them.
 E_STATUS = ("10000001", "0001", "23")     # situação cadastral moves; the address does not
 E_ADDRESS = ("10000001", "0002", "04")    # the address moves; the status does not
@@ -329,8 +347,11 @@ def load_estabelecimento_vault(spark, source, names, *, load_date=LOADED_AT, mon
             target_table=getattr(names, table), load_date=load_date,
             grain=source.grain, months=months, report_diagnostics=True,
         ))
+    # AFTER BOTH HUB LOADS, which is now a precondition rather than an ordering the
+    # fixture happens to have: `load_link` refuses a hub table that is missing or empty.
     names.link_result = load_link(
         spark, EMPRESA_ESTABELECIMENTO_LINK, hubs=EMPRESA_ESTABELECIMENTO_HUBS,
+        hub_tables=estab_hub_tables(names),
         source_table=source.bronze, target_table=names.link, load_date=load_date,
         months=months,
     )

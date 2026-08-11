@@ -54,7 +54,7 @@ satellite's, which has to choose one `data_entrada_sociedade` -- see
 `opl.vault.effectivity`."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -63,7 +63,7 @@ from pyspark.sql import functions as F
 
 from opl.vault.columns import LOAD_DATE, RECORD_SOURCE
 from opl.vault.hashing_spark import refuse_non_string_columns
-from opl.vault.links import refuse_mismatched_hubs
+from opl.vault.links import refuse_mismatched_hubs, refuse_unloaded_hubs
 from opl.vault.loading import (
     BRONZE_RECORD_SOURCE,
     SNAPSHOT_MONTH_COLUMN,
@@ -271,6 +271,7 @@ def load_partner_link(
     link: Link,
     *,
     hubs: Sequence[Hub],
+    hub_tables: Mapping[str, str],
     source_table: str,
     target_table: str,
     load_date: datetime,
@@ -281,8 +282,15 @@ def load_partner_link(
 
     Idempotent by anti-join on the link's own hash key, like `load_link`: a re-run finds
     every key present and appends nothing. `load_date` has no default for `load_hub`'s
-    reason -- a loader that stamps its own clock cannot be asserted against."""
+    reason -- a loader that stamps its own clock cannot be asserted against.
+
+    THE HUB PREFLIGHT IS SHARED WITH `load_link` AND MATTERS MORE HERE, because this is
+    the loader whose job does not load the hub it references: `vault_partner_job` loads
+    the link and `vault_empresa_job` loads `hub_empresa`, both ends of it. It runs ahead
+    of `_collapsed_duplicates`, which is a second full scan of the window, so a
+    wrong-order run is refused before it pays for anything."""
     _refuse_a_link_this_derivation_does_not_fit(link, hubs)
+    refuse_unloaded_hubs(spark, link, hubs, hub_tables)
     before = rows_in(spark, target_table)
     collapsed = _collapsed_duplicates(spark, link, hubs, source_table, months)
     candidates = partner_link_candidates(

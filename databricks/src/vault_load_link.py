@@ -40,10 +40,16 @@ def main(argv: list[str] | None = None) -> None:
     months = required_months(args[2] if len(args) > 2 else "", action=f"load {spec.name}")
     load_date = required_load_date(args[3] if len(args) > 3 else "")
     spark = SparkSession.builder.getOrCreate()
+    hubs = domains.linked_hubs(spec)
     result = load_link(
         spark,
         spec,
-        hubs=domains.linked_hubs(spec),
+        hubs=hubs,
+        # WHERE THE LOADER LOOKS FOR EACH HUB, and the qualification is this file's to
+        # supply for `opl.vault.registry`'s reason: a spec carries an unqualified name
+        # and `opl.config` is consulted by whatever calls a loader. Keyed by hub name, so
+        # a self-referencing link contributes one entry rather than two that could differ.
+        hub_tables={hub.name: DEFAULT.table(hub.name) for hub in hubs},
         source_table=DEFAULT.table(source.bronze),
         target_table=DEFAULT.table(spec.name),
         load_date=load_date,
