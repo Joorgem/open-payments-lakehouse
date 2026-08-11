@@ -7,10 +7,19 @@ THE TRAP THIS MODULE EXISTS FOR, MEASURED (`01f192c7-7c0b-169f-9a14-fae6761be7e9
 `01f192c7-9820-18be-ba93-5167bf5e1ede`). `bronze_cnpj_lookup` holds six reference
 types in one table -- CNAE, motivo, município, natureza jurídica, país, qualificação
 de sócio -- distinguished only by `_source_file`, and `codigo` is unique WITHIN a
-type and collides ACROSS types: `codigo='05'`, `'08'`, `'09'`, `'10'` each name a
-motivo AND a qualificação, because MOTI and QUALS share a two-character width;
+type and collides ACROSS types. MOTI and QUALS share a two-character width;
 `municipio`/`natureza_juridica` share a four-character one the same way. Neither
-`codigo` alone nor its width identifies the type. A loader that grouped this table on
+`codigo` alone nor its width identifies the type.
+
+MEASURED AFTER THE LOAD, AND IT IS AN ORDER OF MAGNITUDE WORSE THAN THIS COMMENT USED TO
+SAY (`01f195ab-6474-1eaa-ab96-66b4b9ac2bc8`). The sentence above named four codes --
+`'05'`, `'08'`, `'09'`, `'10'` -- and read as an enumeration. **There are 105 colliding
+codes**: 50 that name both a motivo and a qualificação, and 55 that name both a município
+and a natureza jurídica. `'00'` is one of them, which a plan correction had removed on the
+strength of this comment's four. No code spans three types, and **all 105 carry a
+DIFFERENT `descricao` in each type** -- so a `codigo`-only grouping would have merged 105
+pairs of unrelated reference rows, not four, and every one of those merges would have
+silently replaced one description with another's. A loader that grouped this table on
 `codigo` alone would silently merge two reference types into one row -- right row
 count, right column names, one description replaced by the other's, nothing failing.
 

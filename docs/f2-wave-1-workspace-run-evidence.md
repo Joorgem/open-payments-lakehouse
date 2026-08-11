@@ -468,3 +468,82 @@ compute. SQLSTATE: 0A000
 The effectivity satellite is the cheapest per row of any loader here despite re-deriving
 its whole input twice, which is the clearest evidence yet that this vault's cost lives in
 hashing width and row count rather than in the number of passes.
+
+---
+
+## 4. Task 6 — the six reference tables, and a collision an order of magnitude wider than documented
+
+**The run.** Job `opl-vault-cnpj-reference`, run `386613524606089`, launched with
+`months=2026-06,revision=9d433d65b354cdf562ea0b9fd9dffad41e3c8a29`. **SUCCESS**, 7/7 tasks.
+A single month, deliberately: `bronze_cnpj_lookup` holds only 2026-06.
+
+### 4.1 The counts
+
+**Controller-verified** (`01f195ab-39d0-1a8d-a985-cba412d37c00`):
+
+| table | rows | distinct `codigo` |
+|---|---|---|
+| `ref_cnae` | 1,359 | 1,359 |
+| `ref_motivo` | 63 | 63 |
+| `ref_municipio` | 5,572 | 5,572 |
+| `ref_natureza_juridica` | 91 | 91 |
+| `ref_pais` | 255 | 255 |
+| `ref_qualificacao` | 68 | 68 |
+| **total** | **7,408** | |
+
+**7,408 exactly**, as predicted, and in every table `rows == distinct codigo` — the real
+invariant is uniqueness **within** a table, which is what the corrected acceptance asked
+for.
+
+### 4.2 105 colliding codes, not four — and the correction that got it wrong was mine
+
+**Controller-verified** (`01f195ab-6474-1eaa-ab96-66b4b9ac2bc8`):
+
+| | count |
+|---|---|
+| codes appearing in more than one reference table | **105** |
+| …naming both a motivo and a qualificação | **50** |
+| …naming both a município and a natureza jurídica | **55** |
+| …spanning three or more types | **0** |
+| **colliding codes whose two rows share a `descricao`** | **0** |
+
+That last row is the acceptance: **every one of the 105 carries a different description in
+each of its two types**, so the routing merged nothing. A `codigo`-only grouping would have
+destroyed **105** pairs of unrelated reference rows — right row count, right column names,
+one description silently replaced by another's.
+
+**`reference.py` named four codes and read as an enumeration.** `'05'`, `'08'`, `'09'`,
+`'10'`. The real figure is 50 for that pair alone. The comment has been corrected against
+the measurement.
+
+**And the plan correction that dropped `'00'` was mine, and it was wrong.** Before this
+phase ran a single loader, the controller reviewed the plan and struck `'00'` from Task 6's
+list of colliding codes, on the grounds that `reference.py` documented only four and `'00'`
+appeared nowhere. `'00'` collides. The plan's original author was right and the reviewer
+was wrong, because **the correction was taken from a code comment rather than from the
+data, in a phase whose entire method is to prefer the data.** `.plans/HANDOFF.md` records
+that corrections in this project overshoot — three times in F2 wave 1, once inside the very
+bullet documenting the pattern. This is the fourth, and the first written by the controller
+against its own plan.
+
+### 4.3 Single-month, therefore no history — restated because it is easy to forget
+
+These six tables are loaded from a **single** month. There is no `hash_diff` comparison,
+no `applied_date` sequence, and no absence for the observation ledger to report. The
+insert-only reference kind is exercised; **reference-table history is not**, and this run
+did not change that.
+
+### 4.4 Cost
+
+| task | duration |
+|---|---|
+| `assert_deployed_revision` | 37 s |
+| five `ref_*` loads | 79–80 s each |
+| `ref_qualificacao` | 135 s |
+| **sum** | **569 s** |
+
+`ref_cnae` is 23,635 B in one file; `ref_municipio` 41,665 B in one file. **The whole of
+Task 6 is under 100 KB** — against 33.13 GB for Tasks 3–5. The per-task floor of ~80 s is
+serverless session startup, not work: these six tasks spend essentially all their time
+starting up, which is the argument for one job per plan task landing on the right side of
+the trade only because the giants dominate everything else.
