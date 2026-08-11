@@ -547,3 +547,151 @@ Task 6 is under 100 KB** — against 33.13 GB for Tasks 3–5. The per-task floo
 serverless session startup, not work: these six tasks spend essentially all their time
 starting up, which is the argument for one job per plan task landing on the right side of
 the trade only because the giants dominate everything else.
+
+---
+
+## 5. Task 7 — every prediction, marked
+
+The phase existed to convert a document of predictions into a document of results. This
+is that reconciliation, in one table, with the disagreements kept rather than absorbed.
+
+| # | prediction | **actual** | verdict |
+|---|---|---|---|
+| 1 | `hub_empresa` 69,062,849 | **69,062,849** | confirmed |
+| 2 | `sat_empresa_dados` 69,202,817 | **69,202,817** | confirmed |
+| 3 | `hub_estabelecimento` 72,318,968 | **72,318,968** | confirmed |
+| 4 | `sat_estabelecimento_dados` 73,530,802 | **73,530,802** | confirmed |
+| 5 | `sat_estabelecimento_endereco` 72,889,043 | **72,888,582** | **FALSIFIED, −461** |
+| 6 | `link_empresa_estabelecimento` 72,318,968 | **72,318,968** | confirmed |
+| 7 | `link_company_partner` 28,051,707 | **28,051,707** | confirmed |
+| 8 | effectivity closes **exactly 65,444** | **65,444** | confirmed |
+| 9 | …of which 4 carry a NULL partner key | **4** | confirmed |
+| 10 | …with 0 that are our own quarantine | **0** | confirmed, and by a sharper test |
+| 11 | six reference tables, 7,408 rows | **7,408** | confirmed |
+| 12 | `hub_empresa`'s second feed inserts 0 | **+0**, `already_present` 69,062,849 | confirmed |
+| 13 | the four quarantined establishments are not departures | **0 candidate departures** | confirmed |
+| 14 | §11.2's six payload digests | **all six differ** | **FALSIFIED, retracted** |
+| 15 | `codigo` collides across reference types | **105 codes**, not the 4 documented | **understated** |
+
+**Eleven confirmed, two falsified, one understated by an order of magnitude, one
+confirmed by a test sharper than the one specified.** Nothing was edited to agree.
+
+### 5.1 What this phase falsified, and who authored each error
+
+Seven things. **Five of them were only reachable by running something**, which is the
+argument for the phase.
+
+1. **§11.2's six payload digests** — an SQL replication that never reproduced the
+   length-prefixed component encoding. Settled by a third implementation, not by
+   preferring one of two. *Authored by the F2 wave 1 controller.*
+2. **`_endereco`'s 570,075 change rate** — a raw comparison where the vault normalises.
+   The true figure is 569,614: 347 case-only changes plus 114 whitespace-only.
+   *Authored by the F2 wave 1 controller.*
+3. **"~4× faster" for the diagnostics flag** — an inference from one duration split,
+   stated as a number in the option that was chosen on it. Measured at **1.10–1.21×**.
+   *Authored by this phase's controller, before the work it justified.*
+4. **`persist()` on serverless** — `NOT_SUPPORTED_WITH_SERVERLESS`. It cost a run, and it
+   retired a repair an independent review had recommended for a second call site.
+   *Authored by F2 wave 1, undetectable locally.*
+5. **`max_retries: 0` prevents retries** — it does not. Attempt 0 and attempt 1 both ran.
+   *Known and written in the handoff; now observed rather than cited.*
+6. **Four colliding `codigo` values** — there are **105**. *Authored by F2 wave 1.*
+7. **`'00'` is not a colliding code** — it is. *Authored by this phase's controller, as a
+   correction to its own plan, taken from a code comment instead of from the data.*
+
+**Two of the seven are the controller's own, and one of those is a correction that
+overshot.** That is the pattern `.plans/HANDOFF.md` names, arriving on schedule.
+
+### 5.2 What was checked and found TRUE
+
+A pass reporting only hits is indistinguishable from one that stopped early.
+
+- **Every hub's hash is injective over its load** — rows, distinct hash keys and distinct
+  business keys agree, on `hub_empresa` (one-component key) and `hub_estabelecimento`
+  (three-component key) alike.
+- **Every satellite's key count equals its hub's**, exactly, on all four satellites.
+- **`applied_date` is source-derived**: 2026-06-13 → 2026-07-11, the RFB's own declared
+  dates from the inner filenames, not month-end and not run time.
+- **`{{job.start_time.iso_datetime}}` resolves** — one `load_date` per run, which
+  `bundle validate` could not have told us.
+- **The provenance guard runs and accepts**, naming the revision it read. Its **refusal**
+  path is still unexercised, and is reported as such.
+- **The deployed artefact matched the tree on every one of six deploys**, verified by
+  sha256 and by the stamped revision, never by the success line. One deploy's output
+  mentioned only "Uploading bundle files" and the wheel had in fact been re-uploaded —
+  the artefact check is what established that, not the log.
+- **Task ordering holds in execution**: satellites and links sat `BLOCKED` until their
+  hubs finished, on a dependency graph derived from the domain rather than hand-listed.
+- **The five-state ledger is right about our own quarantine**, on both estabelecimentos
+  (4 keys) and socios (5 keys) — no window closed and no departure asserted on a key our
+  DQ gate removed.
+- **The link is idempotent at 28M rows**, appending 0 against a populated target.
+- **The hub anti-join is idempotent across two different source feeds.**
+- **No UC-mask literal entered any vault table**, while 27,323,455 source-masked keys
+  entered correctly.
+
+### 5.3 What is still unexercised, after everything ran
+
+- **End-dating on a descriptive satellite.** 0 candidate departures everywhere: the RFB
+  retains baixadas. Tested against a synthetic fixture only.
+- **The satellite dedup tie-break.** 0 collapsed duplicates on all four satellites, and
+  the estabelecimentos duplicate rate — recorded as *unmeasured, not zero* — is now
+  **measured at zero**. The tie-break is latent, not confirmed.
+- **Reference-table history.** Single-month by construction.
+- **The provenance guard's refusal**, in the workspace.
+- **`reclaim_landing`'s wired path**, unchanged by this phase.
+
+The link's dedup rule is the one mechanism that moved from latent to exercised: **8,654
+rows folded**.
+
+### 5.4 Cost of the whole vault
+
+| task | wall clock | storage |
+|---|---|---|
+| 3 — empresa | 5,950 s | 8.175 GB |
+| 4 — estabelecimento | 16,041 s | 22.035 GB |
+| 5 — partner | 5,125 s | 2.920 GB |
+| 6 — reference | 569 s | < 0.001 GB |
+| **total** | **~7.7 h** | **33.13 GB** |
+
+The cost lives in **hashing width and row count**, not in the number of passes: a
+three-component hub key cost 6.6× a one-component key for 1.05× the rows, and the
+effectivity satellite — which re-derives its entire input twice because serverless forbids
+caching — is the cheapest per row of any loader here.
+
+### 5.5 The suite, and why this document does not quote a single verdict line
+
+**1,081 collected, 6 deselected, 0 failures**, at the phase's final commit:
+
+```
+non-vault              847 passed   0 failed   294s
+vault-cnpj-hashing      65 passed   0 failed   223s
+vault-estab             27 passed   0 failed   234s
+vault-socios            27 passed   0 failed   308s
+vault-ledger-registry  115 passed   0 failed   396s
+                       ---
+                      1081 = --collect-only's own count
+```
+
+`scripts/run_suite.sh` exists to print ONE reconciled verdict a document can quote, and
+**this document does not quote one, because no process in this environment emitted one.**
+Four of five end-to-end attempts were killed by the harness. What is quoted instead is the
+handoff's own documented fallback — chunk by chunk at a single commit, summed, and
+compared against `--collect-only`'s independent count — with the partition proven total
+and non-overlapping by set equality on every invocation.
+
+That distinction is the point. "Every test passed and I reconciled the chunks myself" is a
+weaker claim than "`VERDICT: RECONCILED`", and printing the stronger one would be the
+exact failure this script was written to prevent: a reader unable to tell a partition from
+an overlapping sample.
+
+**Two traps found in the fallback itself**, both new:
+
+- **`run_suite.sh N` runs the full collection pass first** — five `--collect-only`
+  invocations before the one chunk requested — so a single-chunk foreground call has
+  ~540 s of headroom against a cap the script checks at 600 s.
+- **`vault-estab-socios` blew the cap at 632 s** on unchanged code, hours after measuring
+  454 s, and was split. Its range across runs is **454–1,197 s**. Splitting 27 and 27 tests
+  produced 443 s and 366 s: **test count does not predict runtime here.** The split
+  condition everyone expected — "the next task that adds a test here must split it first"
+  — is not what fired. Contention was.
