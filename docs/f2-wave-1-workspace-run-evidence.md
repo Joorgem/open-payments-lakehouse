@@ -356,3 +356,115 @@ Two measurements confirm §1.6.2's review conclusion on **real** data rather tha
 The satellites at 5,630 s and 5,428 s are close to `sat_empresa_dados`' 5,635 s despite
 carrying 6 and 10 payload columns against 4, which points the same way: the per-row cost
 is dominated by keying and windowing, not by payload width.
+
+---
+
+## 3. Task 5 — the effectivity satellite, and the number this phase existed to convert
+
+ADR 0011 said the satellite **"should close exactly 65,444 windows"**, and said "should"
+because no loader had run. This is that sentence's other half.
+
+**Two runs.** The first, `604594149706864`, **failed** — see §3.4. The second,
+`328031414215659`, launched with
+`months=2026-06+2026-07,revision=37f9d7255e208a25dc8a22180d4379f242c80c9f`, **SUCCESS**.
+
+| task | result | duration |
+|---|---|---|
+| `assert_deployed_revision` | SUCCESS | 36 s |
+| `link_company_partner` | SUCCESS | **1,774 s** |
+| `sat_eff_company_partner` | SUCCESS | **3,315 s** |
+
+### 3.1 "Should close" is now "closed"
+
+**Reported** by the loader's own stdout:
+
+```
+vault_load_effectivity: +28117151 rows ..., of which 65444 CLOSE a window
+(derived, gated on absent_after_observation); the target already held 0 rows;
+8654 source rows were folded into a row sharing their (link key, month),
+each discarding one delivered entry date
+```
+
+**Controller-verified** (`01f1958e-e5f2-13ed-90ab-eabc1ae12e2a`):
+
+| acceptance | required | **actual** | |
+|---|---|---|---|
+| `link_company_partner` | 28,051,707 | **28,051,707** | OK |
+| windows closed | **exactly 65,444** | **65,444** | OK |
+| closed carrying a NULL partner key | 4 | **4** | OK |
+| closed that are our own quarantine | **0** | **0** | OK |
+
+The satellite holds **28,117,151** rows, and `28,051,707 + 65,444 = 28,117,151` exactly:
+one row per relationship, plus one closing row per departure. The arithmetic closes
+without a residue.
+
+**A detail the prediction did not anticipate, and it strengthens the result.** The plan
+asked for zero intersection against July's **1,781** `rejected_by_our_gate` keys. Only
+**5** quarantined July keys exist in `link_company_partner` at all — because the 1,781 are
+absent from bronze and so were never linked, while the 5 are
+`observed_with_rejected_siblings`, in bronze **and** in quarantine at once. So the
+intersection is taken against the 5 that could actually have collided, and it is **0**.
+The 1,781 could not have closed a window even if the ledger were wrong; the 5 could.
+**The test is sharper than the one that was specified**, and it passes.
+
+### 3.2 The dedup rule fired; the satellite tie-break still has not
+
+**8,654 source rows were folded**, each discarding one delivered `data_entrada_sociedade`.
+This is the **first deduplication mechanism in this vault exercised by real data** — the
+link's business key is genuinely not unique in source, as `f2-wave-1-run-evidence.md`
+measured (4,329 collisions in 2026-07 alone). The satellite tie-break, by contrast,
+returned 0 on every table in Tasks 3 and 4 and remains **unexercised**.
+
+### 3.3 Nothing wrote the UC mask, and 27.3M rows legitimately carry the source mask
+
+**Controller-verified** (`01f1952c-0101-1347-8dcd-e85e48b839cf`): of 28,051,707 link rows,
+**27,323,455** carry a `cpf_cnpj_socio` beginning with three asterisks — the RFB's **own
+source masking** of PF partners — and **0** carry the literal three-character value Unity
+Catalog returns for a masked column. `nome_socio_razao_social` and `nome_do_representante`
+are in no vault table.
+
+**The plan's original wording for this check would have failed on 27.3 million correct
+rows.** It said "confirm nothing wrote the mask anywhere", conflating two mechanisms the
+handoff explicitly warns not to conflate. The corrected check — the UC-mask literal is
+absent, the source-masked keys are present — is the one that means something.
+
+`COUNT_IF(cpf_cnpj_socio IS NULL)` = **8,761**, which closes the other finding from the
+opposite direction: that is exactly the count `COUNT(DISTINCT a,b,c)` had dropped.
+
+### 3.4 The first run failed, and the failure was worth more than the run
+
+`604594149706864` failed its effectivity task **twice**:
+
+```
+[NOT_SUPPORTED_WITH_SERVERLESS] PERSIST TABLE is not supported on serverless
+compute. SQLSTATE: 0A000
+```
+
+- **`persist()` does not exist on this platform**, and neither does `cache()`. The frame
+  is consumed twice — once by the close count, once by the append — and must now
+  re-derive. Fixed in `37f9d72`, guarded by an AST test over every module that can run in
+  a job, because **local Spark supports caching happily**: the whole suite passed with the
+  call in place and the refusal appeared for the first time in the workspace.
+- **It retired a repair a review had recommended.** The same review that measured the
+  diagnostics flag proposed `persist()` for `_observed`. It would have failed identically.
+- **`max_retries: 0` did not prevent a retry** — attempt 0 (716 s) and attempt 1 (189 s).
+  The handoff's warning, observed rather than cited.
+- **Nothing was written, and that was luck of ordering.** `persist()` precedes both the
+  count and the append. Had it sat after, two attempts would have appended twice into a
+  satellite whose entire purpose is one open window per relationship.
+- **The re-run proved link idempotence for free.** `link_company_partner` ran a second
+  time against a target already holding 28,051,707 rows and **appended 0**. Nobody planned
+  that test; the failure produced it.
+
+### 3.5 Cost
+
+| | rows | duration | files | size |
+|---|---|---|---|---|
+| `link_company_partner` | 28,051,707 | 1,774 s | 32 | **1.932 GB** |
+| `sat_eff_company_partner` | 28,117,151 | 3,315 s | 94 | **0.988 GB** |
+
+**2.920 GB for Task 5 — 33.13 GB of vault across Tasks 3, 4 and 5.**
+
+The effectivity satellite is the cheapest per row of any loader here despite re-deriving
+its whole input twice, which is the clearest evidence yet that this vault's cost lives in
+hashing width and row count rather than in the number of passes.
