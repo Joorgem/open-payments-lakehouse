@@ -382,16 +382,32 @@ def _append_and_count_closes(rows: DataFrame, target_table: str) -> int:
     exactly these rows, so the only way the two can disagree is a failed write, which
     raises.
 
-    THE FRAME IS PERSISTED BECAUSE IT IS CONSUMED TWICE, once by the count and once by
-    the write, and the second consumption would otherwise re-derive the ledger, the
-    dedup and the window from bronze. Counting first and writing second is deliberate:
-    a count that ran after the append could be served from a re-read of the target and
-    would then be on the target's basis rather than on this frame's, which is the exact
-    conflation above."""
-    rows = rows.persist()
+    THE FRAME IS CONSUMED TWICE -- once by the count, once by the write -- AND IT IS NOT
+    PERSISTED, WHICH COSTS A SECOND DERIVATION AND IS NOT A CHOICE. This function used to
+    call `rows.persist()` here, and that is a hard failure on the deploy target:
+
+        [NOT_SUPPORTED_WITH_SERVERLESS] PERSIST TABLE is not supported on serverless
+        compute. SQLSTATE: 0A000
+
+    Measured on Databricks serverless 2026-08-09, run `604594149706864`, where it failed
+    the task twice (`max_retries: 0` does not prevent a retry on INTERNAL_ERROR) before
+    any row was written -- `persist()` precedes both the count and the append, so the
+    refusal cost nothing but the run. **Serverless forbids explicit caching outright**, so
+    there is no `cache()` spelling of this either, and the second consumption re-derives
+    the ledger, the dedup and the window from bronze. That is the price of running here.
+
+    It also retires a repair that a review recommended for `_observed`, which is likewise
+    consumed twice a few lines above: `persist()` cannot fix that one either. Anything
+    that wants to stop re-deriving on this platform has to materialise to a table or
+    restructure so the frame is read once, not ask the engine to hold it.
+
+    COUNTING FIRST AND WRITING SECOND IS STILL DELIBERATE: a count that ran after the
+    append could be served from a re-read of the target and would then be on the target's
+    basis rather than on this frame's, which is the exact conflation above. Both
+    derivations run the same deterministic plan over the same input, so the count
+    describes precisely the rows the append writes."""
     closed = rows.filter(~F.col(IS_ACTIVE)).count()
     rows.write.format("delta").mode("append").saveAsTable(target_table)
-    rows.unpersist()
     return closed
 
 
