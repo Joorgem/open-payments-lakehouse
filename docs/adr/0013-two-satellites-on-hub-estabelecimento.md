@@ -43,6 +43,16 @@ present in both 2026-06 and 2026-07, over the **full payloads** exactly as
 | `_dados` | 6 | **1,211,834** | **1.69%** |
 | `_endereco` | 10 | **570,075** | **0.79%** |
 
+> **⚠️ Corrected 2026-08-09 by the workspace run, and THIS DECISION SURVIVES IT.**
+> `_endereco`'s 570,075 is a **raw** comparison; `hash_diff` compares `strip().upper()`
+> values, under which the count is **569,614** — 347 case-only changes and 114
+> whitespace-only ones (`01f19522-2f3a…`, `01f19524-27f6…`). `_dados`' **1,211,834 was
+> confirmed exactly** by the run, which is itself evidence for the split argued here: six
+> coded columns do not drift in case or padding and ten free-text ones do. The rate moves
+> to 0.792% and the ratio to ≈2.13× — **both inside the rounding already printed**, so
+> nothing this ADR decides changes. `sat_estabelecimento_endereco` holds 72,888,582 rows.
+> See `docs/f2-wave-1-workspace-run-evidence.md` §2.3.
+
 **≈ 2.13×.** Per column — **controller-measured**, from the earlier run
 (`01f192ac-d8be-1e59-99e5-05717e28efcc`), covering **four of `_dados`' six**:
 `nome_fantasia` **31,912** · `cnae_fiscal_principal` **84,588** ·

@@ -878,6 +878,17 @@ as `domains/cnpj.py` declares them (`01f192de-b784-1e33-a64b-625fad698c1a`):
 | `_dados` | 6 | **1,211,834** | **1.69%** |
 | `_endereco` | 10 | **570,075** | **0.79%** |
 
+> **⚠️ `_endereco`'s 570,075 IS A RAW COMPARISON AND THE VAULT DOES NOT USE ONE — measured
+> 2026-08-09 by the workspace run.** `hash_diff` compares `_normalised` values
+> (`strip().upper()`), under which the count is **569,614**: 347 establishments changed
+> only in case and 114 more only in leading/trailing whitespace
+> (`01f19522-2f3a…`, `01f19524-27f6…`). `sat_estabelecimento_endereco` therefore holds
+> **72,888,582** rows and not the 72,889,043 predicted from this figure.
+> **`_dados`' 1,211,834 was confirmed exactly by the run** — six coded columns where case
+> and padding do not vary, against ten free-text ones where they do. The ratio below and
+> ADR 0013's two-satellite argument are unaffected (569,614 moves 0.79% and ≈2.13× by less
+> than their own rounding). See `f2-wave-1-workspace-run-evidence.md` §2.3.
+
 **≈ 2.13×.** Per column — **controller-measured**, from the earlier run
 (`01f192ac-d8be-1e59-99e5-05717e28efcc`) and covering **four of `_dados`' six**:
 `nome_fantasia` 31,912 · `cnae_fiscal_principal` 84,588 · `situacao_cadastral`
@@ -1734,7 +1745,7 @@ here, with statement ids, while **no loader has yet run**.
 | `sat_empresa_dados` | **69,202,817** | 69,062,849 first observations + 139,968 changed | `01f1943d-6606-1f0a-b21d-f1f998e9bd3c` |
 | `hub_estabelecimento` | **72,318,968** | distinct (`cnpj_basico`,`cnpj_ordem`,`cnpj_dv`), both months | `01f1943f-30ff-18a3-805c-4bd37c7bed46` |
 | `sat_estabelecimento_dados` | **73,530,802** | 72,318,968 + 1,211,834 changed (`01f192de-b784…`) | derived from the two |
-| `sat_estabelecimento_endereco` | **72,889,043** | 72,318,968 + 570,075 changed (`01f192de-b784…`) | derived from the two |
+| `sat_estabelecimento_endereco` | ~~**72,889,043**~~ **FALSIFIED — actual 72,888,582** | predicted as 72,318,968 + 570,075; the real change count is **569,614**, because 570,075 is a RAW comparison and the vault normalises. See `f2-wave-1-workspace-run-evidence.md` §2.3 | `01f19524-27f6-15cc-9f73-4c3f72dbdafa` |
 | `link_empresa_estabelecimento` | **72,318,968** | hierarchical, one parent per child, so link grain = estabelecimento grain | `01f1943f-30ff-18a3-805c-4bd37c7bed46` |
 | `link_company_partner` | **28,051,707** | distinct (`cnpj_basico`,`identificador_socio`,`cpf_cnpj_socio`), both months, NULL-safe | `01f1943f-5e50-1a47-ab68-abd92f120ec8` |
 

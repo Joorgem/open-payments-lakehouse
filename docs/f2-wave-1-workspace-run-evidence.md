@@ -239,3 +239,120 @@ promise about the cluster.
 `_statements` — so its full DAG runs twice over ~28M socios rows. The repair is
 `persist()`, not a flag, because the count is already a column of the frame the write
 needs. Pre-existing, out of scope for this commit, and now measured rather than suspected.
+
+---
+
+## 2. Task 4 — `hub_estabelecimento`, both satellites, and the hierarchical link
+
+**The run.** Job `opl-vault-cnpj-estabelecimento`, run `1073632210131416`, launched with
+`months=2026-06+2026-07,revision=1b720824ed7ca2b992430f4d36f6d4adc3d50e4e,report_diagnostics=true`.
+Result **SUCCESS**.
+
+**Run with diagnostics ON, deliberately.** `report_diagnostics` defaults off as of
+`dedee79`, and this run overrides it. The default exists so ROUTINE loads do not pay;
+this is the measuring run, and its acceptance test *is* those two numbers. Using the flag
+to skip a run's own acceptance would be using it backwards.
+
+| task | result | duration |
+|---|---|---|
+| `assert_deployed_revision` | SUCCESS | 36 s |
+| `hub_estabelecimento` | SUCCESS | **1,842 s** |
+| `hub_empresa_from_estabelecimentos` | SUCCESS | **2,606 s** |
+| `sat_estabelecimento_dados` | SUCCESS | **5,630 s** |
+| `sat_estabelecimento_endereco` | SUCCESS | **5,428 s** |
+| `link_empresa_estabelecimento` | SUCCESS | **499 s** |
+
+### 2.1 Five of six reconcile exactly; one does not
+
+**Controller-verified** (`01f19521-d9c0-1e1b-b47e-41ba989ca1b3`):
+
+| table | predicted | **actual** | |
+|---|---|---|---|
+| `hub_estabelecimento` | 72,318,968 | **72,318,968** | ✅ |
+| `sat_estabelecimento_dados` | 73,530,802 | **73,530,802** | ✅ |
+| `link_empresa_estabelecimento` | 72,318,968 | **72,318,968** | ✅ |
+| `hub_empresa` after the second feed | 69,062,849 | **69,062,849** | ✅ |
+| `sat_estabelecimento_endereco` | 72,889,043 | **72,888,582** | ❌ **−461** |
+
+`hub_estabelecimento`'s rows and distinct `hub_estabelecimento_hk` are both 72,318,968, so
+the three-component key is injective over this load too. Every satellite's distinct key
+count equals the hub's exactly.
+
+### 2.2 The two acceptance tests that are not counts
+
+**The second feed inserted nothing.** `hub_empresa_from_estabelecimentos` **reported**
+`+0 rows ... the target already held 69062849 rows`. Estabelecimentos is a legitimate
+second feed for `hub_empresa` (`domains/cnpj.py:245-250`), and the hub's anti-join is
+idempotent across feeds on real data — Task 3's number survived a second load from a
+different source. Predicted from bronze beforehand (`01f19421-a4af…`: 0 estabelecimento
+roots absent from empresas) and confirmed by the loader.
+
+**The four quarantined establishments did not read as departures.** Both satellites
+**reported** `0 candidate departures`. Those four are in 2026-06 bronze and absent from
+2026-07 **because our own DQ gate rejected them**. The five-state ledger classified them
+`rejected_by_our_gate` rather than `absent_after_observation`, so no window closed and no
+departure was asserted. **This is the one result in this phase where a wrong number would
+have been a modelling defect rather than a counting one**, and it is ADR 0010's central
+claim meeting real data for the first time.
+
+Both satellites also **reported** `0 source rows were folded`, consistent with the 0
+duplicate `(key, month)` pairs measured in `f2-wave-1-run-evidence.md` §26.1. The dedup
+tie-break remains **unexercised**, not confirmed.
+
+### 2.3 The 461-row disagreement, decomposed until it closed
+
+`sat_estabelecimento_endereco` came in **461 rows short**. The prediction added the
+published change rate **570,075** to the key count; the loader wrote **569,614** changed
+rows. Measured rather than argued:
+
+| comparison | changed rows | statement |
+|---|---|---|
+| raw payload | **570,075** | `01f19522-2f3a-1a92-ae63-e34eb537cd29` |
+| `upper()` only | **569,728** | same |
+| `upper(trim())` | **569,614** | `01f19524-27f6-15cc-9f73-4c3f72dbdafa` |
+| **what the loader wrote** | **569,614** | `01f19521-d9c0…` |
+
+**570,075 is the RAW comparison, and the vault does not use one.** `hash_diff` compares
+`_normalised` values — `strip().upper()`, `hashing_spark.py:160-167`. The gap decomposes
+exactly: **347** establishments changed only in case, **114** more only in leading or
+trailing whitespace. `347 + 114 = 461`, and the fully normalised count equals the
+loader's to the row.
+
+**The loader is right; the published rate was measured a different way.** This is the same
+trap recorded in `f2-wave-1-run-evidence.md` §26.2, which cost one row on empresas and
+cost 461 here, and the reason it bit harder is visible in the payloads: `_dados` is six
+coded columns — CNAE, situação cadastral, dates, motivo — where case and padding do not
+vary, and it matched **exactly**. `_endereco` is ten free-text columns — logradouro,
+complemento, bairro, cidade no exterior — where they vary constantly. **The two satellites
+read the same rows with the same key and differ only in payload**, which is as clean a
+controlled comparison as this data offers.
+
+Not measured, and stated rather than implied: whether `_dados`' RAW change count also
+equals 1,211,834. The loader matching the published figure proves the *normalised* count
+is 1,211,834; it does not prove a raw comparison would agree.
+
+### 2.4 Cost — the bottleneck is the hash, confirmed on real data
+
+| | rows | duration | files | size |
+|---|---|---|---|---|
+| `hub_estabelecimento` | 72,318,968 | 1,842 s | 171 | **2.753 GB** |
+| `sat_estabelecimento_dados` | 73,530,802 | 5,630 s | 512 | **5.585 GB** |
+| `sat_estabelecimento_endereco` | 72,888,582 | 5,428 s | 1,024 | **6.496 GB** |
+| `link_empresa_estabelecimento` | 72,318,968 | 499 s | 512 | **7.201 GB** |
+
+**22.035 GB for Task 4**, against 8.175 GB for Task 3 — **30.21 GB of vault** so far.
+
+Two measurements confirm §1.6.2's review conclusion on **real** data rather than on a
+`local[2]` synthetic fixture:
+
+- **`hub_estabelecimento` took 1,842 s against `hub_empresa`'s 281 s — 6.6× for 1.05× the
+  keys.** The one structural difference is a business key of **three** components instead
+  of one, so each digest normalises and length-prefixes three values rather than one.
+  **The cost is in the hash.**
+- **`hub_empresa_from_estabelecimentos` took 2,606 s to insert zero rows.** Forty-three
+  minutes hashing 144M source rows to discover every key was already present. That is what
+  the idempotence proof costs, and it is now a number rather than an inference.
+
+The satellites at 5,630 s and 5,428 s are close to `sat_empresa_dados`' 5,635 s despite
+carrying 6 and 10 payload columns against 4, which points the same way: the per-row cost
+is dominated by keying and windowing, not by payload width.
