@@ -31,6 +31,9 @@ from opl.contracts.payments import (
     CONTRACT,
     COUNTERPARTY_COLUMNS,
     CURRENCIES,
+    DRIFT_COLUMN,
+    DRIFT_COLUMNS,
+    DRIFT_VALUES,
     EMITTED_AT_COLUMN,
     EVENT_TIME_COLUMN,
     IDENTITY_COLUMN,
@@ -92,11 +95,21 @@ def test_the_counterparties_are_the_two_columns_task_4_measures():
 def test_v1_declares_every_column_required_and_no_optional_one():
     """What makes "a NULL means the field was absent" true for the clean stream.
 
-    Task 2's drift adds an OPTIONAL column and this equality stops holding -- which is
-    the moment `REQUIRED_COLUMNS` stops being an alias for `COLUMNS` and starts
-    carrying information. Pinned now so that change is a visible diff."""
+    THIS DOCSTRING USED TO PREDICT ITS OWN FAILURE and the prediction was wrong, which is
+    recorded here rather than quietly overwritten. Task 0 wrote that F1b Task 2's drift
+    would add an OPTIONAL column and that `REQUIRED_COLUMNS` would stop equalling
+    `COLUMNS`. Task 2 landed and neither happened: a drift column the contract declares is
+    not drift. `COLUMNS` is what the serialiser walks, so a column in it is emitted on
+    every record; `REQUIRED_COLUMNS` is what a read schema is built from, so a column in it
+    is absorbed instead of rescued. The drifted rows are rows written under a LATER version
+    this lakehouse has not adopted, and the version bumps when it adopts one.
+
+    So the equality still holds, and the two names are still separate -- see
+    `test_the_drift_column_is_declared_but_not_by_v1` for what the contract knows about the
+    column without declaring it."""
     assert SCHEMA_VERSION == 1
     assert REQUIRED_COLUMNS == COLUMNS
+    assert DRIFT_COLUMN not in COLUMNS
 
 
 def test_the_value_domains_are_declared_and_upper_case_ascii():
@@ -108,6 +121,26 @@ def test_the_value_domains_are_declared_and_upper_case_ascii():
     for value in (*CURRENCIES, *PAYMENT_METHODS):
         assert value.isascii() and value == value.upper() and " " not in value
     assert AMOUNT_SCALE == 2
+
+
+def test_the_drift_column_is_declared_but_not_by_v1():
+    """THE NAME EXISTS ONCE AND BELONGS TO NO DECLARED TUPLE, which is the shape the drift
+    class needs and the only shape that keeps it catchable.
+
+    Named here because a string shared by a generator, a DQ gate and an evidence query must
+    have exactly one spelling -- this repository has already paid for a quarantine name
+    spelled twice. Absent from `COLUMNS`, `REQUIRED_COLUMNS` and
+    `BUSINESS_ATTRIBUTE_COLUMNS` because a declared drift column is emitted on every
+    record, absorbed by the read schema, and able to drop the pre-drift population out of a
+    distinct count. The import-time guard is exercised in
+    `tests/test_null_drop_trap.py`."""
+    assert DRIFT_COLUMN == "payment_channel"
+    assert DRIFT_COLUMNS == (DRIFT_COLUMN,)
+    assert DRIFT_VALUES == ("MOBILE", "INTERNET_BANKING", "TERMINAL")
+    for value in DRIFT_VALUES:
+        assert value and value.isascii() and value == value.upper() and " " not in value
+    declared = {*COLUMNS, *REQUIRED_COLUMNS, *BUSINESS_ATTRIBUTE_COLUMNS, *COUNTERPARTY_COLUMNS}
+    assert not set(DRIFT_COLUMNS) & declared
 
 
 def test_the_contract_module_imports_nothing_and_is_therefore_data():

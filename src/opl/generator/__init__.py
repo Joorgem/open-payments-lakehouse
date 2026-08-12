@@ -33,11 +33,22 @@ FOUR THINGS THIS PACKAGE DELIBERATELY DOES NOT DO, each of them the obvious thin
      into bytes on a Volume is F1b Task 3's job, and keeping the boundary here is what
      lets the byte-identity property be asserted in a unit test with no Volume.
 
-WHAT IT DOES NOT CONTAIN YET, so nobody looks for it: DUPLICATES, LATE ARRIVALS and
-DRIFT. This is the CLEAN stream, on purpose. Proving that a seed reproduces
-byte-identically before any defect is layered on is what keeps a later failure from
-having two candidate causes. The one thing that IS here and looks like a defect is the
-LEGITIMATE REPEAT -- a different `transaction_id` carrying identical business
-attributes -- because a duplicate is only measurable against something it can be
-confused with. See `opl.contracts.payments` for the full argument.
+WHERE THE THREE DEFECTS LIVE, so nobody looks for them in the wrong module.
+`opl.generator.stream` is the CLEAN stream and stays clean -- no duplicates, no late
+arrivals, no drift, and its bytes are pinned. `opl.generator.defects` is the layer that
+injects all three, each switched on its own, and `delivered_records(spec, NO_DEFECTS)`
+returns the clean stream unchanged. That split is not tidiness: proving a seed reproduces
+byte-identically BEFORE any defect is layered on is what keeps a later failure from having
+two candidate causes, and it only stays proven while the clean path can be exercised
+without the defect path.
+
+The one thing that is in the CLEAN stream and looks like a defect is the LEGITIMATE
+REPEAT -- a different `transaction_id` carrying identical business attributes -- because a
+duplicate is only measurable against something it can be confused with. See
+`opl.contracts.payments` for the full argument.
+
+`opl.generator.measures` is the fifth module and the one with the strictest rule: it
+COUNTS what a delivered stream contains, reading nothing but the rendered records, and it
+imports no part of `defects`. A measurement able to consult the injection would confirm
+itself, and the whole F1b claim is that the two agree.
 """

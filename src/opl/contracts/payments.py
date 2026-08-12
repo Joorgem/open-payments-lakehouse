@@ -38,9 +38,9 @@ was a candidate and each is wrong:
 SO A LEGITIMATE REPEAT AND A DUPLICATE ARE DIFFERENT ROWS, AND THE DATA SAYS WHICH.
 A legitimate repeat is a DIFFERENT `transaction_id` carrying identical
 `BUSINESS_ATTRIBUTE_COLUMNS` -- normal business, and it must survive every dedup. A
-duplicate (F1b Task 2, not built yet) is a byte-identical redelivery of an existing
-`transaction_id`. The clean stream already emits legitimate repeats, on purpose, so
-that when duplicates arrive there is something for them to be confused with: a fixture
+duplicate is a byte-identical redelivery of an existing `transaction_id`, injected by
+`opl.generator.defects`. The clean stream already emits legitimate repeats, on purpose,
+so that when duplicates arrive there is something to confuse them with: a fixture
 in which `COUNT(DISTINCT transaction_id)` and `COUNT(DISTINCT <business attributes>)`
 agree is a fixture that tests nothing.
 
@@ -50,7 +50,9 @@ ORDERING PROPERTY BETWEEN THEM -- a record is late when it is emitted after reco
 whose `event_time` is newer than its own -- so it can be stated, generated and
 asserted without any process ever reading the clock. Both are derived from the
 stream's own declared window; see `opl.generator.stream`. In the clean stream the two
-orders agree, which is precisely the property Task 2's late arrivals violate.
+orders agree, which is precisely the property the late arrivals in
+`opl.generator.defects` violate, and `opl.generator.measures.late_arrivals` is the one
+place the violation is counted.
 
 ALL-STRING IN BRONZE, MATCHING THE CNPJ DECISION (`opl.bronze.schema`), AND THE
 GENERATOR EMITS STRINGS TO MATCH. This is the one place a generator that knows types
@@ -74,8 +76,15 @@ disagreement is removed rather than managed:
 
 The consequence worth stating plainly: `NULL` in the payments bronze table can only
 mean "the JSON did not carry this field at all". Nothing else can produce it. That is
-what makes Task 2's schema drift measurable -- a NEW column appearing mid-stream makes
+what makes the schema drift measurable -- a NEW column appearing mid-stream makes
 every earlier row NULL in it, and no other mechanism competes for that meaning.
+
+AND IT IS ALSO WHAT ARMS A DEFECT THIS REPOSITORY HAS ALREADY MET. While no contract
+column is ever NULL, `COUNT(DISTINCT a, b, c)`'s row-dropping behaviour is INERT here;
+the drift column is the first NULL this stream can hold, and it arms it. See the
+`DRIFT_COLUMN` block below for the guard that keeps it out of every tuple a distinct
+count is taken over, and `opl.generator.measures` for the two differently-named counts
+that make the difference impossible to take by accident.
 
 JSON LINES, NOT CSV, AND THE CHOICE IS ABOUT TASK 2. The CNPJ files are headerless
 semicolon CSV because the RFB ships them that way. A payment stream is ours to shape,
@@ -111,10 +120,20 @@ and an `int()` round trip loses a leading zero the moment one arrives.
 """
 from __future__ import annotations
 
-# The contract's version. BUMPED, never edited in place: Task 2's schema drift adds an
-# optional column mid-stream, and a reader has to be able to say which version a row
-# was written under. v1 is the clean stream -- every column below required, no optional
-# columns at all -- which is what makes "a NULL means the field was absent" true.
+# The contract's version, and it is STILL 1 with F1b Task 2 landed -- which contradicts
+# what this comment said when Task 0 wrote it ("BUMPED, never edited in place: Task 2's
+# schema drift adds an optional column mid-stream"). The contradiction is a finding, not
+# an oversight, and the reason is one sentence: A DRIFT COLUMN THIS CONTRACT DECLARES IS
+# NOT DRIFT. See the `DRIFT_COLUMN` block below for the three mechanisms that make a
+# declared one invisible -- the serialiser would emit it on every record, the Auto Loader
+# read schema would absorb it, and a distinct count would silently drop the pre-drift
+# population.
+#
+# v1 is therefore what the generator writes, what a read schema is built from, and what
+# the DQ gate validates. A drifted row is a row written under a LATER version this
+# lakehouse has not adopted, which is precisely what schema drift IS. The version bumps
+# when the column is ADOPTED -- when the gate is meant to accept it rather than report it
+# -- and that is a decision with a diff, not a side effect of generating a defect.
 SCHEMA_VERSION = 1
 
 # The contract key, in the sense `opl.bronze.registry.BronzeTable.contract` means it.
@@ -161,10 +180,18 @@ COLUMNS = (
     *BUSINESS_ATTRIBUTE_COLUMNS,
 )
 
-# v1 has no optional column. Declared as its own name rather than as "= COLUMNS" at the
-# use site, because Task 2's drift adds a column that is NOT required, and the two
-# tuples stop being equal at that moment -- a reader who learned "required means all of
-# them" from an alias would carry that into the version where it is false.
+# v1 has no optional column, and Task 2 did NOT add one -- see `SCHEMA_VERSION` above for
+# why the drift column is undeclared rather than optional. Task 0 predicted these two
+# tuples would stop being equal here; they have not, and the prediction is corrected
+# rather than satisfied by a column that would destroy the defect it was added to carry.
+#
+# Still declared as its own name rather than as "= COLUMNS" at the use site, because the
+# two mean different things even while they hold the same values: `COLUMNS` is what every
+# record CARRIES (the serialiser walks it and its ORDER decides the emitted bytes), and
+# `REQUIRED_COLUMNS` is what every record must carry NON-EMPTY (the gate reads it, and
+# its order means nothing). The guard below depends on neither being an alias for the
+# other, because it is the required set -- not the carried set -- that decides whether a
+# distinct count can drop a row.
 REQUIRED_COLUMNS = COLUMNS
 
 # --- the value domains -----------------------------------------------------------
@@ -192,6 +219,62 @@ PAYMENT_METHODS = (
 # cents with no float anywhere in the path. A float would break byte-identity from a
 # seed (repr rounding) long before it broke arithmetic.
 AMOUNT_SCALE = 2
+
+# --- schema drift: the column v1 deliberately does NOT declare -------------------------
+#
+# F1b Task 2's drift class makes a NEW OPTIONAL COLUMN APPEAR MID-STREAM. Its name lives
+# here because a string shared by a generator, a DQ gate and an evidence query must have
+# exactly ONE spelling -- this repository has already paid for a quarantine name spelled
+# twice, which "sent estab triagers to a table full of unrelated F1.2 lookup rows".
+#
+# WHAT IT IS NOT is the load-bearing half: it appears in neither `COLUMNS`, nor
+# `REQUIRED_COLUMNS`, nor `BUSINESS_ATTRIBUTE_COLUMNS`, and
+# `_assert_no_drifting_column_is_declared_by_v1` refuses AT IMPORT any edit that puts it
+# in one of them. Three separate things break if it is declared, and every one of them is
+# SILENT -- each leaves a green suite behind:
+#
+#   1. `opl.generator.events.record_of` walks `COLUMNS`, so a drift column in there is
+#      emitted on EVERY record. The stream would then carry no drift at all, and every
+#      test of the drift class would still pass, because what they assert is that the
+#      column is present.
+#   2. Whatever builds the Auto Loader read schema builds it from this contract. A drift
+#      column in the read schema is a declared STRING column that is merely NULL before
+#      the drift point: nothing lands in `_rescued_data`, so `opl.bronze.dq.evaluate`'s
+#      `rescued_data_present` -- the highest-precedence rule in the gate -- never fires,
+#      and the drift is ABSORBED. "Caught by the gate rather than absorbed" is the phase
+#      requirement; declaring the column is how it silently stops being met.
+#   3. A drift column inside `BUSINESS_ATTRIBUTE_COLUMNS` reproduces this repository's own
+#      documented defect on this phase's own evidence. `COUNT(DISTINCT a, b, c)` DROPS
+#      every row that is NULL in any of a, b, c -- that is how 8,761 rows once went
+#      missing -- and every record before the drift point is NULL in this column by
+#      construction. The count would exclude the entire pre-drift population and report a
+#      smaller, confident number. In the clean stream that defect is INERT, because no
+#      contract column is ever NULL; the moment this column exists it is live.
+#
+# THE GENERAL RULE THE GUARD ACTUALLY ENFORCES, rather than a special case for this one
+# name: A COLUMN THAT SOME ROWS DO NOT CARRY MAY NEVER BE A BUSINESS ATTRIBUTE. The
+# attribute tuple is drawn from REQUIRED columns only, so a distinct count over it cannot
+# drop a row. That statement survives a second drift column being added; "keep
+# payment_channel out of the tuple" would not.
+#
+# AND THE NAME IS A TEMPTING ONE ON PURPOSE. A channel is exactly the kind of field
+# somebody would argue belongs in the attribute tuple, and picking an obviously-not-an-
+# attribute name (a producer version, a delivery counter) would have made the guard look
+# unnecessary while leaving it untested against the case that will actually happen.
+DRIFT_COLUMN = "payment_channel"
+
+# Every column the drift class may inject. A tuple of one today, and a tuple rather than a
+# bare name so that a second drift column is covered by the guard below without anyone
+# having to remember to widen it.
+DRIFT_COLUMNS = (DRIFT_COLUMN,)
+
+# The drift column's value domain, in the same alphabet as `PAYMENT_METHODS`: upper-case
+# ASCII, no accents, no spaces. Picked BY INDEX like every other domain here, so
+# reordering this tuple re-draws the channel of every drifted record in every stream.
+# NEVER EMPTY, and no member is: an empty string would be a second spelling of "absent",
+# and the whole value of this column is that its NULL means exactly one thing -- the
+# record was written before the producer started sending it.
+DRIFT_VALUES = ("MOBILE", "INTERNET_BANKING", "TERMINAL")
 
 # --- bronze naming -------------------------------------------------------------------
 #
@@ -268,4 +351,38 @@ def _assert_the_columns_partition_cleanly() -> None:
         )
 
 
+def _assert_no_drifting_column_is_declared_by_v1() -> None:
+    """Fail at import if a drift column has been added to anything v1 declares.
+
+    Three checks for three distinct silent failures -- see the `DRIFT_COLUMN` block
+    above. The third is the one that reproduces this repository's own NULL-dropping
+    `COUNT(DISTINCT ...)` defect, and the fourth check generalises it: it is
+    NULLABILITY, not this particular name, that makes a column unusable in a distinct
+    count, so a second optional column added later is refused without an edit here."""
+    for name, declared in (
+        ("COLUMNS", COLUMNS),
+        ("REQUIRED_COLUMNS", REQUIRED_COLUMNS),
+        ("BUSINESS_ATTRIBUTE_COLUMNS", BUSINESS_ATTRIBUTE_COLUMNS),
+    ):
+        intruders = [column for column in DRIFT_COLUMNS if column in declared]
+        if intruders:
+            raise ValueError(
+                f"{intruders} are drift columns and {name} declares them. A drift column "
+                "this contract declares is not drift: the serialiser would emit it on "
+                "every record, an Auto Loader read schema built from the contract would "
+                "absorb it instead of rescuing it, and a DISTINCT over the business "
+                "attributes would silently drop every row written before the drift "
+                "point -- this repository's own 8,761-row defect, on its own evidence."
+            )
+    nullable = [column for column in BUSINESS_ATTRIBUTE_COLUMNS if column not in REQUIRED_COLUMNS]
+    if nullable:
+        raise ValueError(
+            f"{nullable} are business attributes that are not required. A column some "
+            "rows do not carry cannot take part in a distinct count: SQL drops the whole "
+            "ROW rather than the missing value, so the answer comes back smaller and "
+            "reads as a cleaner stream than the one that exists."
+        )
+
+
 _assert_the_columns_partition_cleanly()
+_assert_no_drifting_column_is_declared_by_v1()
