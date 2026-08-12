@@ -81,6 +81,13 @@ MAX_ATTRIBUTE_ATTEMPTS = 64
 # asserted at import CASE-INSENSITIVELY, because `hash_key` upper-cases its components
 # -- so "payer" and "PAYER" would be one purpose and two fields would silently draw
 # the same value forever.
+#
+# PUBLIC, ALONG WITH `purpose_for` BELOW, BECAUSE THE PURPOSE NAMESPACE IS SHARED.
+# `opl.generator.defects` draws under its own purposes from the same (seed, stream_id)
+# space, and a defect purpose colliding with one of these would tie a defect's position
+# to a payment's amount -- perfectly correlated, perfectly reproducible, and chosen by
+# nobody. That module asserts its purposes against this tuple at import, which it can
+# only do if the tuple has a name it is allowed to read.
 PURPOSE_PAYER = "payer"
 PURPOSE_PAYEE = "payee"
 PURPOSE_AMOUNT = "amount"
@@ -90,7 +97,7 @@ PURPOSE_REPEAT_POSITION = "repeat-position"
 PURPOSE_REPEAT_SOURCE = "repeat-source"
 PURPOSE_TRANSACTION_ID = "transaction-id"
 
-_PURPOSES = (
+PURPOSES = (
     PURPOSE_PAYER,
     PURPOSE_PAYEE,
     PURPOSE_AMOUNT,
@@ -110,7 +117,7 @@ def _assert_purposes_are_distinct() -> None:
     index and payee index would be equal for every record. The payee redraw below
     would then push every payee one place along the pool, forever -- a stream that
     looks fine, reproduces perfectly, and encodes a relationship nobody chose."""
-    folded = [purpose.upper() for purpose in _PURPOSES]
+    folded = [purpose.upper() for purpose in PURPOSES]
     if len(set(folded)) != len(folded):
         raise ValueError(
             f"two derivation purposes collide after upper-casing: {sorted(folded)}. "
@@ -247,12 +254,17 @@ def _require_canonical_pool(pool: tuple[str, ...]) -> None:
         )
 
 
-def _purpose(spec: StreamSpec, field: str) -> str:
+def purpose_for(spec: StreamSpec, field: str) -> str:
     """The derivation purpose for `field` within `spec`'s stream.
 
     The stream id is folded in HERE rather than passed as a separate component, so
     every draw in the module reads as one purpose string and two streams with the same
-    seed and different ids share no value at all."""
+    seed and different ids share no value at all.
+
+    PUBLIC because `opl.generator.defects` must spell this exactly, not similarly: a
+    second `f"{spec.stream_id}/{field}"` written at another call site would keep working
+    until one of them gained a separator or a case fold, at which point the defect
+    positions of every stream ever generated would move with no diff to point at."""
     return f"{spec.stream_id}/{field}"
 
 
@@ -272,11 +284,11 @@ def _counterparties(spec: StreamSpec, *, index: int, salt: int) -> tuple[str, st
     case, for no gain in what this stream is for."""
     pool = spec.cnpj_pool
     payer_at = draw_below(
-        seed=spec.seed, purpose=_purpose(spec, PURPOSE_PAYER), index=index,
+        seed=spec.seed, purpose=purpose_for(spec, PURPOSE_PAYER), index=index,
         bound=len(pool), salt=salt,
     )
     payee_at = draw_below(
-        seed=spec.seed, purpose=_purpose(spec, PURPOSE_PAYEE), index=index,
+        seed=spec.seed, purpose=purpose_for(spec, PURPOSE_PAYEE), index=index,
         bound=len(pool) - 1, salt=salt,
     )
     if payee_at >= payer_at:
@@ -289,7 +301,7 @@ def _attributes(spec: StreamSpec, *, index: int, salt: int) -> _Attributes:
     payer, payee = _counterparties(spec, index=index, salt=salt)
     span = MAX_AMOUNT_CENTS - MIN_AMOUNT_CENTS + 1
     cents = MIN_AMOUNT_CENTS + draw_below(
-        seed=spec.seed, purpose=_purpose(spec, PURPOSE_AMOUNT), index=index,
+        seed=spec.seed, purpose=purpose_for(spec, PURPOSE_AMOUNT), index=index,
         bound=span, salt=salt,
     )
     return _Attributes(
@@ -297,11 +309,11 @@ def _attributes(spec: StreamSpec, *, index: int, salt: int) -> _Attributes:
         payee_cnpj_basico=payee,
         amount_cents=cents,
         currency=pick(
-            CURRENCIES, seed=spec.seed, purpose=_purpose(spec, PURPOSE_CURRENCY),
+            CURRENCIES, seed=spec.seed, purpose=purpose_for(spec, PURPOSE_CURRENCY),
             index=index, salt=salt,
         ),
         payment_method=pick(
-            PAYMENT_METHODS, seed=spec.seed, purpose=_purpose(spec, PURPOSE_METHOD),
+            PAYMENT_METHODS, seed=spec.seed, purpose=purpose_for(spec, PURPOSE_METHOD),
             index=index, salt=salt,
         ),
     )
@@ -346,7 +358,7 @@ def _repeat_positions(spec: StreamSpec) -> frozenset[int]:
         candidates,
         key=lambda position: digest(
             seed=spec.seed,
-            purpose=_purpose(spec, PURPOSE_REPEAT_POSITION),
+            purpose=purpose_for(spec, PURPOSE_REPEAT_POSITION),
             index=position,
         ),
     )
@@ -366,7 +378,7 @@ def _transaction_id(spec: StreamSpec, *, index: int) -> str:
     Opaque: nothing may parse it. It carries no time, no counterparty and no ordering,
     and `opl.contracts.payments` says so where a consumer will read it."""
     return digest(
-        seed=spec.seed, purpose=_purpose(spec, PURPOSE_TRANSACTION_ID), index=index
+        seed=spec.seed, purpose=purpose_for(spec, PURPOSE_TRANSACTION_ID), index=index
     ).hex()
 
 
@@ -399,7 +411,7 @@ def generate(spec: StreamSpec) -> tuple[PaymentEvent, ...]:
     for index in range(spec.event_count):
         if index in repeats:
             source = draw_below(
-                seed=spec.seed, purpose=_purpose(spec, PURPOSE_REPEAT_SOURCE),
+                seed=spec.seed, purpose=purpose_for(spec, PURPOSE_REPEAT_SOURCE),
                 index=index, bound=len(bases),
             )
             attributes = bases[source]

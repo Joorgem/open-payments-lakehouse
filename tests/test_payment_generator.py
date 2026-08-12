@@ -35,6 +35,7 @@ from opl.generator.events import (
     to_jsonl,
 )
 from opl.generator.instants import from_text, to_text
+from opl.generator.measures import late_arrivals
 from opl.generator.stream import StreamSpec, generate, records_for
 
 _GENERATOR = Path(stream_module.__file__).parent
@@ -190,7 +191,9 @@ def test_the_generator_runs_where_pyspark_is_not_installed():
 
         sys.meta_path.insert(0, _NoPyspark())
         from opl.generator.cnpj_pool import validated_pool
+        from opl.generator.defects import DefectSpec, delivered_records
         from opl.generator.events import to_jsonl
+        from opl.generator.measures import duplicate_row_count
         from opl.generator.stream import StreamSpec, records_for
 
         pool = validated_pool([f"{n:08d}" for n in range(1, 21)])
@@ -201,6 +204,8 @@ def test_the_generator_runs_where_pyspark_is_not_installed():
         )
         text = to_jsonl(records_for(spec))
         assert len(text.splitlines()) == 24
+        defective = delivered_records(spec, DefectSpec(duplicate_count=2))
+        assert duplicate_row_count(defective) == 2
         assert "pyspark" not in sys.modules
         print("ok")
         """
@@ -239,8 +244,17 @@ def test_the_clean_stream_contains_no_late_arrival():
     its own. So in a stream with none, sorting by `emitted_at` and sorting by
     `event_time` give the same order -- asserted here as both sequences being strictly
     increasing in emission order, which is the same statement without a sort to get
-    wrong."""
+    wrong.
+
+    AND IT IS NOW A MEASUREMENT RATHER THAN AN ARITHMETIC IDENTITY. When this was
+    written, `emitted_at = event_time + constant` meant the assertion could not have
+    failed for any stream this module could produce, and its author said so. The last
+    line runs `opl.generator.measures.late_arrivals` -- the same function that returns
+    five over `tests/test_payment_defects.py`'s late-arrival stream, and the same
+    definition Task 4's query mirrors -- so the zero here is a fact about this stream
+    rather than about the formula."""
     records = records_for(_SPEC)
+    assert late_arrivals(records) == ()
     events = [from_text(r["event_time"]) for r in records]
     emissions = [from_text(r["emitted_at"]) for r in records]
     assert events == sorted(events) and len(set(events)) == len(events)
@@ -454,7 +468,7 @@ def test_a_degenerate_spec_field_is_refused(field, value):
 def test_two_derivation_purposes_differing_only_in_case_are_refused(monkeypatch):
     """Two fields on one purpose draw the SAME 256-bit value at every index, so they
     would be perfectly correlated forever in a stream that reproduces perfectly."""
-    monkeypatch.setattr(stream_module, "_PURPOSES", ("payer", "PAYER"))
+    monkeypatch.setattr(stream_module, "PURPOSES", ("payer", "PAYER"))
     with pytest.raises(ValueError, match="collide after upper-casing"):
         stream_module._assert_purposes_are_distinct()
 
