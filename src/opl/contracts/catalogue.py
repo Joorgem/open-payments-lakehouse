@@ -1,0 +1,98 @@
+# src/opl/contracts/catalogue.py
+"""Every column contract this lakehouse ingests, in one mapping, keyed the way
+`opl.bronze.registry.BronzeTable.contract` keys it.
+
+WHY THIS EXISTS, and it is one of the four invariants F1b Task 0 named as binding
+the payments registry entry. `registry._assert_contracts_exist` refuses AT IMPORT a
+spec naming a contract that is not in `cnpj_schemas.TABLES` -- so registering a
+SECOND SOURCE means the registry has to be able to ask a question spanning both, and
+`cnpj_schemas` is the wrong place to answer it. That module's docstring says what it
+is: the RFB's headerless column layouts, verified against the official layout PDF. A
+generated payment stream is none of those things, and putting it in there would make
+`FILE_GROUPS`, `CSV_DIALECT` and `CNPJ_KEY_COLUMNS` sit beside a contract none of
+them describe.
+
+SO THE CATALOGUE IS A JOIN, NOT A HOME. Each source keeps its own contract module
+and this one only says which contracts exist and what columns each carries. Nothing
+here declares a column: every value below comes from the module that owns it, so
+there is no second spelling to drift.
+
+IT IMPORTS NO SPARK, and must not. `opl.bronze.registry` imports this, and the
+registry is imported by the extraction scripts, which run on a host where pyspark is
+an optional extra that is usually not installed
+(`tests/bronze/test_registry.py::test_the_registry_still_imports_where_pyspark_is_
+not_installed` holds that down). Both sources' contract modules are pure data --
+`cnpj_schemas` imports nothing at all and `opl.contracts.payments` is asserted to
+import nothing by `tests/test_payment_contract.py` -- so this stays free.
+
+TUPLES, WHERE `cnpj_schemas.columns_for` HANDS OUT A LIST. `TABLES` holds mutable
+lists and `columns_for` copies one per call; a caller that keeps the result -- and
+`rules._encoding_check` keeps it inside a closure that outlives the call, which is
+why it already writes `tuple(...)` defensively -- would otherwise be one `.append`
+away from silently changing which columns a rule set already handed to a running job
+is checking. A tuple removes the question instead of documenting it.
+"""
+from __future__ import annotations
+
+from opl.contracts import payments
+from opl.contracts.cnpj_schemas import TABLES
+
+
+def _assert_no_contract_is_declared_twice() -> None:
+    """Fail at import if the two sources claim one contract key.
+
+    THE MERGE BELOW IS LAST-ONE-WINS, which is the whole reason this runs. A payments
+    contract key that collided with an RFB one would silently REPLACE that contract's
+    column list: `struct_for("empresas")` would build the payment columns, the Auto
+    Loader would read the RFB's semicolon CSV against them, and every row would arrive
+    NULL or rescued. Nothing raises -- the dict is perfectly valid -- so the collision
+    has to be refused where it is made.
+
+    This is also, verbatim, the assertion F1b Task 0 wrote as
+    `test_payments_is_deliberately_not_registered_yet_and_the_refusal_says_so`'s first
+    line (`CONTRACT not in TABLES`). That test's scope line is now spent -- Task 3
+    registered the table -- and the property it opened with survives here as a guard
+    rather than being deleted with it."""
+    collisions = sorted({payments.CONTRACT} & set(TABLES))
+    if collisions:
+        raise ValueError(
+            f"{collisions} is declared by BOTH opl.contracts.cnpj_schemas.TABLES and "
+            "opl.contracts.payments. The mapping below is a last-one-wins merge, so a "
+            "shared key silently replaces one source's column list with the other's -- "
+            "the reader would then parse one source's bytes against the other's "
+            "columns and produce a table of NULLs rather than an error."
+        )
+
+
+_assert_no_contract_is_declared_twice()
+
+# EVERY contract a bronze table may declare, and the only thing that decides whether
+# `opl.bronze.registry` accepts one. Built from the owning modules rather than
+# restated: the CNPJ half is `cnpj_schemas.TABLES` and the payments half is
+# `opl.contracts.payments.COLUMNS`, whose ORDER is authoritative for the emitted JSON
+# bytes and is pinned as a golden copy in `tests/test_payment_contract.py`.
+CONTRACT_COLUMNS: dict[str, tuple[str, ...]] = {
+    **{contract: tuple(columns) for contract, columns in TABLES.items()},
+    payments.CONTRACT: tuple(payments.COLUMNS),
+}
+
+
+def columns_for(contract: str) -> tuple[str, ...]:
+    """The ordered column tuple for `contract`. Raises KeyError if unknown.
+
+    A bare KeyError, matching `cnpj_schemas.columns_for` and `rules.rules_for`, and
+    NOT `registry.UnknownTable`: that exception's docstring describes an
+    operator-supplied TABLE name arriving at a job boundary, and a contract key is
+    neither operator-supplied nor a table. The registry's own import-time guard is
+    what turns a bad contract into prose an operator reads."""
+    return CONTRACT_COLUMNS[contract]
+
+
+def is_known(contract: str) -> bool:
+    """Does any source declare `contract`? The predicate `registry` asks.
+
+    Public so the registry's guard can ask instead of carrying a second spelling of
+    `contract in CONTRACT_COLUMNS` -- the same treatment `opl.config.is_month` gets,
+    and for the same reason: two spellings of one rule is how `2026-13` came to be
+    refused at two of four entry points."""
+    return contract in CONTRACT_COLUMNS

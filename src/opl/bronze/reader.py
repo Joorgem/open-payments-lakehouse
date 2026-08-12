@@ -1,12 +1,35 @@
-"""CSV read options shared by the local batch reader and the Databricks Auto
-Loader stream, so both parse the RFB cp1252 files byte-identically. Auto Loader
-(cloudFiles) is Databricks-only; the batch reader here is the local-testable twin."""
+"""HOW EACH CONTRACT'S BYTES ARE PARSED: the source format and the reader options,
+keyed by contract.
+
+The CSV options are shared by the local batch reader and the Databricks Auto Loader
+stream, so both parse the RFB cp1252 files byte-identically. Auto Loader (cloudFiles)
+is Databricks-only; the batch reader here is the local-testable twin.
+
+TWO FORMATS SINCE F1b TASK 3, DISPATCHED ON THE CONTRACT AND NOWHERE ELSE. The RFB
+ships headerless semicolon CSV because that is what it ships; the payment stream is
+JSON Lines because the drift class this lakehouse must exhibit is a NEW OPTIONAL
+COLUMN APPEARING MID-STREAM, which in CSV is a column-count change that a positional
+reader either refuses outright or silently misaligns (`opl.contracts.payments` carries
+the full argument).
+
+CONTRACT-KEYED, LIKE `rules_for` AND `struct_for`, and that is the seam rather than a
+parameter on the stream. A format passed in by the caller would be a coordinate that
+does not come from the resolved spec -- the exact shape every task test in this
+repository refuses -- and an ingest entry point handed the wrong one reads JSON as CSV
+and produces one string column of NULLs per row without erroring."""
 from __future__ import annotations
 
 from pyspark.sql import DataFrame, SparkSession
 
 from opl.bronze.schema import struct_for
 from opl.contracts.cnpj_schemas import CSV_DIALECT
+from opl.contracts.payments import CONTRACT as PAYMENTS_CONTRACT
+
+# The `cloudFiles.format` / `spark.read.format` names. Constants because both the
+# format string and the option set are chosen from them below, and a literal in one
+# place and a constant in the other is how the two come apart.
+CSV_FORMAT = "csv"
+JSON_FORMAT = "json"
 
 
 def csv_read_options() -> dict[str, str]:
@@ -65,6 +88,57 @@ def csv_read_options() -> dict[str, str]:
         # trade is correctness for a known parallelism ceiling (ADR 0005).
         "multiLine": "true",
     }
+
+
+def jsonl_read_options() -> dict[str, str]:
+    """The reader options for a JSON Lines source. Deliberately three.
+
+    `multiLine=false` IS THE WHOLE FORMAT, and it is set rather than left to the
+    default. JSON Lines means one complete JSON object per line; with `multiLine=true`
+    Spark reads each FILE as a single JSON document and a 180-line stream parses as
+    one malformed record. It is also the split-friendly half: `multiLine=true` makes
+    the file the unit of parallelism, which `csv_read_options` accepts for the RFB
+    giants because correctness forced it and which nothing here needs.
+
+    `encoding=UTF-8` states what `opl.bronze.generated_landing` writes. The
+    generator's serialiser (`events.to_jsonl`) returns TEXT and the writer encodes UTF-8
+    explicitly and opens in binary, precisely so that the bytes on disk are the bytes
+    the golden digest was taken over; declaring the encoding here is the reading half
+    of that same statement. Left unset, Spark would detect -- and a detector that
+    guessed wrong would turn a mis-encoded byte into a silently different STRING
+    rather than into the U+FFFD that `rules._encoding_check` refuses.
+
+    `mode=PERMISSIVE` matches the CSV side and is what makes `rescuedDataColumn` the
+    reporting channel: a line the schema cannot absorb is rescued rather than dropped
+    (FAILFAST) or nulled. That column firing IS the drift verdict -- `dq._reject_reason`
+    ranks `rescued_data_present` above every per-table rule -- so nothing here may
+    quietly discard the evidence.
+
+    NO `columnNameOfCorruptRecord`: with `rescuedDataColumn` set, Auto Loader routes
+    unparseable input and unexpected fields into that one column, and a second
+    corrupt-record column would split one verdict across two places the gate reads
+    differently."""
+    return {
+        "multiLine": "false",
+        "encoding": "UTF-8",
+        "mode": "PERMISSIVE",
+    }
+
+
+def source_format(contract: str) -> str:
+    """The `cloudFiles.format` / reader format `contract`'s files are written in."""
+    return JSON_FORMAT if contract == PAYMENTS_CONTRACT else CSV_FORMAT
+
+
+def read_options(contract: str) -> dict[str, str]:
+    """The reader options for `contract`, matching `source_format(contract)`.
+
+    ONE DISPATCH, ASKED TWICE, rather than two independent ones: this reads
+    `source_format` instead of re-testing the contract, so a format and its options
+    cannot come apart. They would fail in the quiet direction if they did -- CSV
+    options on a JSON read are simply ignored by Spark, so the stream would parse with
+    Spark's own defaults and nothing would say so."""
+    return jsonl_read_options() if source_format(contract) == JSON_FORMAT else csv_read_options()
 
 
 def read_csv_batch(spark: SparkSession, path: str, table: str) -> DataFrame:

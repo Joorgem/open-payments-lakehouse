@@ -7,9 +7,10 @@ from __future__ import annotations
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
+from opl.bronze.dq import RESCUED_DATA_COLUMN
 from opl.bronze.lookup_routing import LOOKUP_SUFFIX
 from opl.bronze.promote import BATCH_COLUMN
-from opl.bronze.reader import csv_read_options
+from opl.bronze.reader import read_options, source_format
 from opl.bronze.registry import table_spec
 from opl.bronze.schema import struct_for
 from opl.bronze.snapshot import (
@@ -20,6 +21,13 @@ from opl.bronze.snapshot import (
 from opl.config import OplConfig, require_month
 
 RECORD_SOURCE = "rfb_cnpj_webdav"
+# WHERE A GENERATED SOURCE'S BYTES CAME FROM, which for payments is this repository
+# itself. Named as a value beside the RFB one rather than derived from the table,
+# because `_record_source` answers "who produced this row" and the two answers are
+# genuinely different kinds of thing: one is a WebDAV share on receita.fazenda.gov.br,
+# the other is `opl.generator` run against a seed. A row that cannot say which is a row
+# whose provenance has to be inferred from its table name.
+GENERATED_RECORD_SOURCE = "opl_payment_generator"
 # The one spelling of the column that records WHICH LANDED FILE a row came out of.
 # It lives here because this is where the column is created, and it is a constant
 # rather than a literal because `opl.bronze.retention` reads it back to decide which
@@ -147,6 +155,27 @@ def checkpoint_location(cfg: OplConfig, table_key: str, *, month: str) -> str:
     )
 
 
+# --- WHY THE SOURCE-DIR GUARD BELOW ACCEPTS EITHER LANDING ROOT ----------------------
+#
+# Module level for the reason `opl.bronze.rules` gives above `rules_for`: this is the
+# reasoning, not the guard, and inside the docstring it put the function past the
+# project's 50-line limit.
+#
+# A file-fed table lands under `cnpj/<month>/<subdir>` and a generated one under
+# `generated/<month>/<subdir>` (`opl.config`, `opl.bronze.registry_landing`). Both are
+# rebuilt in the guard and the source dir must equal ONE of them.
+#
+# STILL AN EQUALITY, NEVER A PREFIX TEST. "Starts with one of the two roots" would
+# re-admit exactly the two shapes the equality exists to refuse: the month ROOT itself
+# -- the F1.4b blocker, since it holds every other table's files and cloudFiles walks a
+# source dir recursively -- and any `..` that climbs back out of the month.
+#
+# EITHER ROOT ACCEPTED RATHER THAN THE RIGHT ONE SELECTED, and that is a decision. The
+# function is handed a PATH, not a spec, so telling it which root to expect would mean
+# threading the landing mode through `bronze_stream` for a comparison that is already
+# exact: registered subdirs are unique across the whole registry
+# (`registry._assert_no_two_tables_share_a_landing_subdir`), so no legitimate path can
+# satisfy the wrong root's rebuild, and no illegitimate one can satisfy either.
 def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: str) -> None:
     """Refuse a `source_dir` that is not one table's landing subdir for `month`.
 
@@ -157,11 +186,10 @@ def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: st
     reached from the source side instead. `bronze_ingest.py` threads ONE local into
     both for that reason; this refuses the caller that does not.
 
-    REBUILT THROUGH `cfg.landing_table` rather than compared by prefix, so the
-    layout is asked rather than re-spelled here -- and equality refuses two things a
-    prefix test would admit: the month ROOT (the F1.4b blocker, since it holds every
-    other table's files and cloudFiles walks a source dir recursively) and any `..`
-    that climbs back out of the month.
+    REBUILT THROUGH `opl.config`'s own landing helpers rather than compared by prefix,
+    so the layout is asked rather than re-spelled here. See the comment block above for
+    what the equality refuses that a prefix test would admit, and why BOTH roots are
+    accepted rather than the right one being selected.
 
     IT DEPENDS ON `registry._assert_subdirs_are_single_path_components`, and says so
     rather than being safe by luck: taking the last component and rebuilding is total
@@ -183,10 +211,11 @@ def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: st
     than trusting it, and until now that was not true of every spelling of it."""
     require_month(month, action="read")
     subdir = source_dir.rsplit("/", 1)[-1]
-    if source_dir != cfg.landing_table(subdir, month):
+    expected = (cfg.landing_table(subdir, month), cfg.landing_generated_table(subdir, month))
+    if source_dir not in expected:
         raise ValueError(
             f"refusing to read: source_dir={source_dir!r} is not a landing subdir of "
-            f"month={month!r} -- expected {cfg.landing_cnpj_month(month)}/<subdir>. The "
+            f"month={month!r} -- expected one of {expected}. The "
             "month is half of BOTH the files read and the checkpoint that records them "
             "as read, so a disagreement here restarts a stream against a source it did "
             "not checkpoint, which Spark's recovery semantics call not allowed and "
@@ -195,23 +224,42 @@ def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: st
         )
 
 
-def add_audit_columns(
+def add_common_audit_columns(
     df: DataFrame,
+    *,
     batch_id: str,
     snapshot_month: str,
-    record_source: str = RECORD_SOURCE,
+    record_source: str,
 ) -> DataFrame:
-    """Stamp the ingestion audit columns onto a bronze stream.
+    """The four audit columns EVERY bronze row carries, whatever its source.
 
-    `snapshot_month` is REQUIRED and has no default. A default would be one of
-    two things, both bad: `opl.config`'s pinned month, which is how F1.2's ingest
-    entry point silently tied every row to 2026-06, or the current month, which
-    invents a fact. The F1.2 evidence doc recorded the seam this closes --
-    "ingesting a second month requires parameterizing the month and adding a
-    snapshot key".
+    SPLIT OUT OF `add_audit_columns` BY F1b TASK 3, and the seam is which column is a
+    statement about the INGEST and which is a statement about the SOURCE.
+    `_ingested_at`, `_record_source`, `_batch_id` and `_snapshot_month` are properties
+    of the run: when it happened, who produced the bytes, which batch this is, which
+    month the operator asked for. `_snapshot_ref_date` is not -- it is "the date the
+    RFB declares in its own filename" (`opl.bronze.snapshot`), and a generated stream
+    declares no such thing.
 
-    Expects `_source_file` on `df`; every bronze stream adds it (see
-    `bronze_stream`), and the reference date is derived from it."""
+    STAMPING IT ANYWAY WOULD HAVE BEEN THE QUIET FAILURE, which is why this split
+    exists rather than payments simply reusing the wider function.
+    `snapshot.ref_date_column` yields NULL for any filename with no `.D<y><mm><dd>.`
+    token, so payments bronze would carry an all-NULL column -- and
+    `rules._unprovable_ref_date` exists precisely to REJECT that NULL, so the payments
+    rule set would have had to omit its own control to let the table load. A rule
+    deliberately left out so that a column it refuses can be written is the shape this
+    repository calls a control that disappeared rather than failed. The column is
+    absent instead, so there is nothing to refuse and nothing to excuse.
+
+    `snapshot_month` is REQUIRED and has no default. A default would be one of two
+    things, both bad: `opl.config`'s pinned month, which is how F1.2's ingest entry
+    point silently tied every row to 2026-06, or the current month, which invents a
+    fact. `record_source` is required for the same reason at a smaller scale -- a
+    default would make the RFB the answer for a source that is not it.
+
+    KEYWORD-ONLY: `batch_id`, `snapshot_month` and `record_source` are three adjacent
+    `str`s, and a positional call that swapped any two type-checks and stamps every row
+    of a batch with the wrong provenance."""
     return (
         df.withColumn("_ingested_at", F.current_timestamp())
         .withColumn("_record_source", F.lit(record_source))
@@ -221,15 +269,38 @@ def add_audit_columns(
         # renaming this literal leaves `rows_of_batch` counting 0 rows of its own
         # batch -- a promote that reports success having appended nothing -- and
         # `files_of_batch` proving nothing, so a reclaim silently deletes no bytes.
-        # That is the same argument SOURCE_FILE_COLUMN carries two lines below
-        # ("two spellings would silently reclaim nothing"), in the same function and
-        # for the same reason; this column was the one left out of it.
         .withColumn(BATCH_COLUMN, F.lit(batch_id))
         .withColumn(SNAPSHOT_MONTH_COLUMN, F.lit(snapshot_month))
-        .withColumn(
-            SNAPSHOT_REF_DATE_COLUMN,
-            ref_date_column(F.col(SOURCE_FILE_COLUMN), snapshot_month),
-        )
+    )
+
+
+def add_audit_columns(
+    df: DataFrame,
+    batch_id: str,
+    snapshot_month: str,
+    record_source: str = RECORD_SOURCE,
+) -> DataFrame:
+    """The common four, plus the reference date a FILE-FED source declares in its
+    own filename. The stamp every CNPJ ingest applies.
+
+    Its signature is unchanged -- positional, with the RFB record source defaulted --
+    because two live entry points call it that way and `tests/test_task_wiring.py`
+    pins `add_audit_columns(..., snapshot_month=<the one month local>)` as one of four
+    consumers that must read the same local. What changed is that the four columns it
+    shares with every other source now live in `add_common_audit_columns`, so a
+    generated source gets them without also getting a derivation that would be NULL
+    for every one of its rows. See that function for why that mattered.
+
+    Expects `_source_file` on `df`; every bronze stream adds it (see `bronze_stream`),
+    and the reference date is derived from it."""
+    return add_common_audit_columns(
+        df,
+        batch_id=batch_id,
+        snapshot_month=snapshot_month,
+        record_source=record_source,
+    ).withColumn(
+        SNAPSHOT_REF_DATE_COLUMN,
+        ref_date_column(F.col(SOURCE_FILE_COLUMN), snapshot_month),
     )
 
 
@@ -241,6 +312,29 @@ def lookup_type_column(file_path_col: Column) -> Column:
     return col
 
 
+# --- WHAT `bronze_stream` TAKES FROM THE CONTRACT, AND WHY THAT IS THE SEAM ----------
+#
+# TWO SOURCE FORMATS SINCE F1b TASK 3, dispatched on the CONTRACT and nowhere else
+# (`opl.bronze.reader.source_format` / `read_options`). The RFB files are semicolon
+# CSV; the generated payment stream is JSON Lines, because the drift class this
+# lakehouse must exhibit is a new optional column appearing mid-stream -- which in CSV
+# is a column-count change a positional reader either refuses outright or silently
+# misaligns (`opl.contracts.payments` carries the argument).
+#
+# A `format=` PARAMETER WAS THE ALTERNATIVE AND IS REFUSED. It would be a coordinate
+# arriving from somewhere other than the spec the caller resolved, which is the shape
+# every task test in this repository exists to forbid -- and an entry point handed the
+# wrong one reads JSON as CSV: one string column of NULLs per row, no error anywhere.
+#
+# THE SCHEMA IS SUPPLIED, WHICH IS WHAT MAKES `_rescued_data` THE DRIFT VERDICT. Auto
+# Loader's schema evolution defaults to `addNewColumns` only when no schema is
+# provided; given one it does not evolve, so a JSON key the contract does not declare
+# cannot be absorbed into the read schema. With `rescuedDataColumn` set it lands in
+# `_rescued_data` instead, and `dq._reject_reason` ranks `rescued_data_present` above
+# every per-table rule -- so the payment stream's mid-stream drift column is
+# quarantined rather than silently accepted. That is the whole reason
+# `opl.contracts.payments` refuses to DECLARE that column, and if the drift is ever
+# absorbed silently, one of those three facts moved.
 def bronze_stream(
     spark: SparkSession,
     cfg: OplConfig,
@@ -251,9 +345,14 @@ def bronze_stream(
     month: str,
 ) -> DataFrame:
     """Generalized cloudFiles bronze read for any contract table. Reads
-    ``source_dir`` with the ``struct_for(table)`` schema and the shared CSV
-    options, adds ``_source_file``. Lookup-specific columns are added by the
-    caller (see ``bronze_lookup_stream``).
+    ``source_dir`` with the ``struct_for(table)`` schema and the reader options
+    ``table``'s contract declares, adds ``_source_file``. Lookup-specific columns
+    are added by the caller (see ``bronze_lookup_stream``).
+
+    THE FORMAT AND ITS OPTIONS COME FROM THE CONTRACT, not from a parameter --
+    ``opl.bronze.reader.source_format`` / ``read_options``. See the comment block
+    above this function for that seam and for why the supplied schema is what makes
+    ``_rescued_data`` the drift verdict.
 
     ``month`` is REQUIRED and keyword-only, and it must be the month
     ``source_dir`` is under -- see ``_assert_source_dir_is_this_months``, which
@@ -273,13 +372,13 @@ def bronze_stream(
     _assert_source_dir_is_this_months(cfg, source_dir, month)
     reader = (
         spark.readStream.format("cloudFiles")
-        .option("cloudFiles.format", "csv")
+        .option("cloudFiles.format", source_format(table))
         .option("cloudFiles.schemaLocation", schema_location(cfg, table_key, month=month))
         .option("cloudFiles.inferColumnTypes", "false")
-        .option("rescuedDataColumn", "_rescued_data")
+        .option("rescuedDataColumn", RESCUED_DATA_COLUMN)
         .schema(struct_for(table))
     )
-    for k, v in csv_read_options().items():
+    for k, v in read_options(table).items():
         reader = reader.option(k, v)
     df = reader.load(source_dir)
     return df.withColumn(SOURCE_FILE_COLUMN, F.col("_metadata.file_path"))

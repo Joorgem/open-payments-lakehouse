@@ -25,6 +25,8 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from opl.bronze.registry import (
+    FILE_FED_LANDING_MODES,
+    LANDING_GENERATED,
     LANDING_LOCAL,
     LANDING_ZIPS,
     REGISTRY,
@@ -43,6 +45,7 @@ from opl.bronze.registry_collisions import (
     _assert_no_two_tables_share_a_delta_name,
 )
 from opl.config import DEFAULT
+from opl.contracts.catalogue import CONTRACT_COLUMNS
 from opl.contracts.cnpj_schemas import FILE_GROUPS, TABLES
 
 
@@ -238,6 +241,13 @@ def test_every_declared_prefix_agrees_with_the_file_group_that_downloads_it():
     is that the declaration can no longer be independently wrong: it either matches
     the string the downloader uses, or the import fails."""
     for spec in REGISTRY.values():
+        if spec.landing not in FILE_FED_LANDING_MODES:
+            # A GENERATED table has no downloader and therefore no file group, which
+            # is the invariant that blocked registering payments until F1b Task 3.
+            # Skipped here and asserted in the OTHER direction below, so it is not
+            # merely unchecked: it must have no group AND no prefix, which is stronger
+            # than the cross-check it is excused from.
+            continue
         groups = [g for g in FILE_GROUPS.values() if g["table"] == spec.contract]
         assert groups, f"{spec.name}: no FILE_GROUPS entry feeds {spec.contract!r}"
         prefixes = {g["prefix"] for g in groups}
@@ -272,9 +282,44 @@ def test_an_unregistered_contract_is_refused_and_says_what_to_do():
     assert "opl.bronze.registry" in message
 
 
-def test_every_registered_table_has_a_contract():
+def test_no_generated_table_claims_a_downloader():
+    """The other half of the prefix cross-check, over the live registry.
+
+    `test_every_declared_prefix_agrees_with_the_file_group_that_downloads_it` skips
+    generated tables because no `FILE_GROUPS` entry can feed one. This is what stops
+    that skip from being a hole: a generated table must have NO file group and NO
+    prefix. A file group would put two producers -- a downloader and this lakehouse's
+    own writer -- into one landing directory that one Auto Loader reads with no glob;
+    a prefix would be a false sentence in the file this repository treats as the
+    answer to "what is table X?", and would enter that table into
+    `test_no_two_tables_share_a_file_prefix` competing for a real producer's string.
+
+    Guard the guard: with no generated table registered the loop is vacuous, so the
+    last line asserts one exists."""
     for spec in REGISTRY.values():
-        assert spec.contract in TABLES, f"{spec.name} names contract {spec.contract!r}"
+        if spec.landing != LANDING_GENERATED:
+            continue
+        fed_by = [g for g, entry in FILE_GROUPS.items() if entry["table"] == spec.contract]
+        assert not fed_by, f"{spec.name} is generated and FILE_GROUPS {fed_by} feed it"
+        assert spec.prefix is None, (
+            f"{spec.name} is generated and declares prefix {spec.prefix!r} -- a prefix "
+            "is what a DOWNLOADER builds its file list from"
+        )
+    assert any(spec.landing == LANDING_GENERATED for spec in REGISTRY.values())
+
+
+def test_every_registered_table_has_a_contract():
+    """Against the CATALOGUE, not one source's module.
+
+    `cnpj_schemas.TABLES` was the whole answer until F1b Task 3 registered a second
+    source. Asking it now would fail on `payments` -- correctly, in the sense that
+    payments is not an RFB file layout, and wrongly, in the sense that the question is
+    "does a contract exist?" and it does. `opl.contracts.catalogue` is where the two
+    sources are joined, and it refuses at import if they ever claim one key."""
+    for spec in REGISTRY.values():
+        assert spec.contract in CONTRACT_COLUMNS, (
+            f"{spec.name} names contract {spec.contract!r}, which no source declares"
+        )
 
 
 def test_every_constraint_references_a_column_of_its_own_contract():
@@ -291,7 +336,7 @@ def test_every_constraint_references_a_column_of_its_own_contract():
     `cnpj_basico`, so estab's constraints on a socios entry would satisfy this.
     `test_no_two_tables_share_a_landing_subdir` is what catches that same paste."""
     for spec in REGISTRY.values():
-        columns = TABLES[spec.contract]
+        columns = CONTRACT_COLUMNS[spec.contract]
         for statement in spec.constraints:
             assert any(column in statement for column in columns), (
                 f"{spec.name} constraint {statement!r} names no column of its "

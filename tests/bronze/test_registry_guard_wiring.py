@@ -212,7 +212,13 @@ def test_every_guard_any_registry_module_defines_is_actually_called_at_import():
     # wrong" at the phase that legitimately retires one, which is a false accusation
     # pointed at the wrong file.
     primary = defined_by_module[_PRIMARY]
-    assert {"_assert_contracts_exist", "_assert_landing_modes_known"} <= primary, (
+    # `_assert_landing_modes_known` was the second name here until F1b Task 3 moved it,
+    # with the prefix cross-check and the landing roots, into `registry_landing.py` --
+    # `registry.py` calls it and no longer defines it, which is exactly the arrangement
+    # the sibling lock below certifies. Replaced with a guard that is still defined
+    # here rather than dropped to one name: two names are what keep this from passing
+    # on a walk that happens to find a single function.
+    assert {"_assert_contracts_exist", "_assert_no_two_tables_share_a_contract"} <= primary, (
         f"the AST walk found {sorted(primary)} in {_PRIMARY}, missing guards it certainly "
         "defines -- the walk is broken, not the module"
     )

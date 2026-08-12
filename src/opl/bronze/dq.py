@@ -19,6 +19,16 @@ from opl.bronze.rules import REQUIRES_COLUMN, rules_for
 
 REJECT_COLUMN = "_dq_reject_reason"
 
+# The column Auto Loader puts everything the read schema could not absorb into, and
+# the highest-precedence verdict this gate reaches. ONE SPELLING, and it lives here
+# rather than in `opl.bronze.autoloader` where the column is CREATED, for the reason
+# `promote.BATCH_COLUMN` lives with its readers: the two spellings fail in opposite
+# directions. Renaming the constant raises where it is imported; renaming the literal
+# on the WRITE side leaves `_reject_reason`'s `in df.columns` test quietly false, and
+# a rule that is skipped because its column is "absent" reports every drifted row as
+# clean. F1b's whole drift proof is that this fires.
+RESCUED_DATA_COLUMN = "_rescued_data"
+
 Rules = list[tuple[str, Callable[[], Column]]]
 
 
@@ -108,7 +118,11 @@ def _reject_reason(df: DataFrame, rules: Rules) -> Column:
     A skip is SILENT HERE and reported by the job task (`skip_notice`): this
     function runs in unit tests on bare frames constantly, so a print here would
     be noise everywhere and a warning nowhere."""
-    rescued = F.col("_rescued_data") if "_rescued_data" in df.columns else F.lit(None)
+    rescued = (
+        F.col(RESCUED_DATA_COLUMN)
+        if RESCUED_DATA_COLUMN in df.columns
+        else F.lit(None)
+    )
     chain = F.when(rescued.isNotNull(), F.lit("rescued_data_present"))
     # Asked, not re-decided, so the notice a task prints and the chain built here
     # can never describe different gates.

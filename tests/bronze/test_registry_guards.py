@@ -407,7 +407,7 @@ def test_a_prefix_that_disagrees_with_its_file_group_is_refused_at_import(monkey
     monkeypatch.setitem(REGISTRY, "estabelecimentos", trap)
 
     with pytest.raises(ValueError) as excinfo:
-        _assert_prefixes_match_their_file_groups()
+        _assert_prefixes_match_their_file_groups(REGISTRY)
     message = str(excinfo.value)
     assert "'Estabelecimento'" in message and "'Estabelecimentos'" in message
 
@@ -432,7 +432,7 @@ def test_a_table_fed_by_several_groups_must_declare_no_prefix(monkeypatch):
     monkeypatch.setitem(REGISTRY, "lookup", trap)
 
     with pytest.raises(ValueError) as excinfo:
-        _assert_prefixes_match_their_file_groups()
+        _assert_prefixes_match_their_file_groups(REGISTRY)
     assert "prefix=None" in str(excinfo.value)
 
 
@@ -621,8 +621,8 @@ def test_an_unmasked_contract_keeps_its_check_constraint():
         for spec in REGISTRY.values()
         if any("CHECK" in statement for statement in spec.constraints)
     ]
-    assert sorted(checked) == ["empresas", "estabelecimentos", "lookup"], (
-        f"expected the three unmasked tables to keep their CHECK, got {checked}"
+    assert sorted(checked) == ["empresas", "estabelecimentos", "lookup", "payments"], (
+        f"expected the four unmasked tables to keep their CHECK, got {checked}"
     )
 
 

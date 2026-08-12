@@ -68,6 +68,63 @@ class OplConfig:
         tree can map each staging dir 1:1 onto the landing dir it feeds."""
         return f"{self.volume_root}/_tmp/cnpj/{month or self.month}/{table}"
 
+    # --- the SECOND landing root: sources this lakehouse generates ------------------
+    #
+    # A SECOND ROOT RATHER THAN A RENAME OF THE FIRST, decided in
+    # `.plans/2026-08-10-master-route-and-autonomy-protocol.md` §6 and restated here
+    # because the alternative keeps looking cheaper than it is. `landing_cnpj_root` is
+    # interpolated into every CNPJ landing, zips, tmp and reclaim path, into two live
+    # Auto Loader source directories, and into the evidence documents that record where
+    # 144M rows came from; renaming it to `landing_source_root` would touch all of that
+    # to gain a word. What payments actually need is a root that is NOT `cnpj/`, and
+    # adding one costs nothing that already exists.
+    #
+    # `generated/` AND NOT `payments/`, though payments are its only tenant today. The
+    # discriminator is the LANDING MODE (`opl.bronze.registry_landing.LANDING_GENERATED`)
+    # and not the table: what these files have in common is that no downloader produced
+    # them, so a second generated source -- F5 replays the same stream through Redpanda
+    # -- lands beside payments under one root instead of forcing a third one. The root is
+    # a property of how the bytes arrive, exactly as `zips/` is.
+    #
+    # THE MONTH IS REQUIRED HERE AND FALLS BACK NOWHERE. `landing_cnpj_month` reads
+    # `month or self.month`, which is the substitution `require_month` exists to refuse
+    # and which four entry points wrote by accident; it keeps that fallback only because
+    # its callers predate the guard. These helpers have no legacy call site to preserve,
+    # so they ask `require_month` themselves -- which also closes the empty-string hole
+    # `opl.bronze.autoloader._assert_source_dir_is_this_months` documents at length,
+    # where `month=""` yields `generated//payments` and collapses onto the month root.
+    @property
+    def landing_generated_root(self) -> str:
+        return f"{self.volume_root}/generated"
+
+    def landing_generated_month(self, month: str) -> str:
+        return (
+            f"{self.landing_generated_root}/"
+            f"{require_month(month, action='locate the generated landing month')}"
+        )
+
+    def landing_generated_table(self, table: str, month: str) -> str:
+        """The directory a generated table's Auto Loader reads for `month`."""
+        return f"{self.landing_generated_month(month)}/{table}"
+
+    def landing_generated_tmp(self, table: str, month: str) -> str:
+        """Where a generated table's writer may stage a half-written file.
+
+        The twin of `landing_tmp`, under the same `_tmp/` root and for the same two
+        reasons: it is OUTSIDE every directory an Auto Loader reads, so a partial file
+        cannot be discovered by the stream that is about to read the finished one; and
+        it is on the SAME UC Volume, which is one FUSE mount, so `os.replace` from here
+        into `landing_generated_table` works where a system temp dir would raise EXDEV.
+        `opl.bronze.unzip_volume` has been doing exactly this on Databricks since F1.3,
+        which is why the pattern is reused rather than invented.
+
+        Mirrors the landing layout (`<month>/<table>`) so an operator listing this tree
+        maps each staging dir 1:1 onto the landing dir it feeds."""
+        return (
+            f"{self.volume_root}/_tmp/generated/"
+            f"{require_month(month, action='locate the generated staging dir')}/{table}"
+        )
+
     def table(self, name: str) -> str:
         return f"{self.catalog}.{self.schema}.{name}"
 

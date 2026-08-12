@@ -11,6 +11,7 @@ from opl.bronze.dq import REJECT_COLUMN, evaluate, split
 from opl.bronze.registry import REGISTRY
 from opl.bronze.rules import REQUIRED_FIELDS, REQUIRES_COLUMN, rules_for
 from opl.bronze.snapshot import SNAPSHOT_REF_DATE_COLUMN
+from opl.contracts.catalogue import CONTRACT_COLUMNS
 from opl.contracts.cnpj_schemas import TABLES
 
 _REPLACEMENT_CHAR = "�"
@@ -242,7 +243,12 @@ def test_every_predicate_is_a_zero_arg_factory_and_not_a_column():
     session-scoped and process-wide, so by the time any test runs, a session may
     already exist and the regression would hide. `isinstance(..., Column)` and an
     empty signature hold whether or not a JVM is up."""
-    for contract in ("lookup", "estabelecimentos", "empresas", "socios"):
+    # Derived from `REQUIRED_FIELDS` rather than listing today's contracts, so a fifth
+    # rule set cannot be added without this structural check reaching it. F1b Task 3
+    # added `payments`, whose two counterparty width rules are the module's first
+    # PARAMETERISED predicates -- a fourth shape, and the one most likely to be
+    # written as an eager Column by accident.
+    for contract in sorted(REQUIRED_FIELDS):
         for reason, predicate in rules_for(contract):
             assert not isinstance(predicate, Column), (
                 f"{contract}/{reason} is an eager Column; rules_for must stay "
@@ -264,11 +270,16 @@ def test_every_required_field_is_a_column_of_its_contract():
     inside the DQ gate task, which is to say after ingest has already written
     staging. Pure Python, so it costs a millisecond in CI and needs no session."""
     for contract, required in REQUIRED_FIELDS.items():
-        assert contract in TABLES, (
-            f"REQUIRED_FIELDS declares contract {contract!r}, which is not in "
-            f"cnpj_schemas.TABLES ({', '.join(sorted(TABLES))})"
+        # AGAINST THE CATALOGUE since F1b Task 3 registered a second source.
+        # `cnpj_schemas.TABLES` was the whole answer while every contract was an RFB
+        # file layout; asking it now would reject `payments` for not being one, which
+        # is true and is not the question. `opl.contracts.catalogue` is where the two
+        # sources are joined, and it refuses at import if they ever claim one key.
+        assert contract in CONTRACT_COLUMNS, (
+            f"REQUIRED_FIELDS declares contract {contract!r}, which no source declares "
+            f"({', '.join(sorted(CONTRACT_COLUMNS))})"
         )
-        missing = [column for column in required if column not in TABLES[contract]]
+        missing = [column for column in required if column not in CONTRACT_COLUMNS[contract]]
         assert not missing, (
             f"REQUIRED_FIELDS[{contract!r}] names {missing}, which "
             f"{'are' if len(missing) > 1 else 'is'} not "
@@ -663,7 +674,11 @@ def test_every_requires_column_entry_is_declared_against_a_real_rule():
             "the declaration is inert and the rule it was meant to guard will "
             "raise UNRESOLVED_COLUMN on any frame without its column"
         )
-        holders = [c for c in TABLES if column in TABLES[c]]
+        # Over the CATALOGUE, not one source's table: "only metadata columns may be
+        # declared skippable" is a claim about every contract this lakehouse ingests,
+        # and a second source is exactly where a name that is metadata for one and a
+        # real column for the other would appear.
+        holders = [c for c in CONTRACT_COLUMNS if column in CONTRACT_COLUMNS[c]]
         assert not holders, (
             f"REQUIRES_COLUMN[{reason!r}] names {column!r}, a column of contract(s) "
             f"{holders}. Only metadata columns may be declared skippable: a frame "
