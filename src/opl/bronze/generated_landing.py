@@ -218,7 +218,16 @@ def emit_stream_file(
             _refuse_a_different_stream(existing, payload, destination)
         return replace(landed, was_already_there=True)
     os.makedirs(tmp_directory, exist_ok=True)
-    staged = Path(tmp_directory) / filename_for(spec)
+    # RUN-UNIQUE, AND THE UNIQUENESS IS ABOUT FALSE ALARMS RATHER THAN CORRUPTION. The
+    # staged name used to be `filename_for(spec)`, which is the SAME path for every run
+    # of one profile and month. Two overlapping runs write identical bytes, so nothing
+    # downstream is wrong -- but one run can read back a file the other is mid-rewrite
+    # and fail `_write_verified`, or lose the `os.replace` to `FileNotFoundError` after
+    # the other moved it. Both failures would name a byte defect that did not happen, on
+    # the one property this phase spends three layers proving. The DESTINATION stays
+    # exactly as it was, so landing is still idempotent; only the scratch name moves.
+    # Found by review on PR #14.
+    staged = Path(tmp_directory) / f"{os.getpid()}-{filename_for(spec)}"
     _write_verified(payload, staged)
     # Atomic within the Volume's one FUSE mount, so the landing dir goes from holding
     # nothing to holding the whole file. Never a partial one, which cloudFiles would
