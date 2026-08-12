@@ -485,6 +485,31 @@ def test_a_delay_that_cannot_reorder_anything_is_refused():
         delivered_records(coarse, DefectSpec(late_count=1, late_by_ms=LATENESS_WINDOW_MS))
 
 
+def test_a_lateness_that_measures_as_something_else_is_refused():
+    """THE PROBE THAT CLOSES THE MEASURABILITY GUARD, and it took construction to reach.
+
+    Delay 60 of 61 records by exactly 60 intervals and the injected set stops being the
+    measured one: record 0 lands on the SAME `emitted_at` as the single punctual record
+    60, and rows released together cannot make each other late -- so 0 measures punctual
+    while 1..59 measure late. The guard catches the disagreement rather than delivering a
+    stream whose spec claims sixty late arrivals and whose data holds fifty-nine.
+
+    Without this test the guard would be a branch nothing had ever taken, which is how a
+    refusal path stays green and wrong."""
+    dense = StreamSpec(
+        seed=_SPEC.seed,
+        stream_id=_SPEC.stream_id,
+        event_count=61,
+        repeat_count=0,
+        window_start=_SPEC.window_start,
+        event_interval_ms=_SPEC.event_interval_ms,
+        emission_lag_ms=_SPEC.emission_lag_ms,
+        cnpj_pool=_POOL,
+    )
+    with pytest.raises(ValueError, match="lateness was injected at emission indices"):
+        delivered_records(dense, DefectSpec(late_count=60, late_by_ms=LATENESS_WINDOW_MS))
+
+
 def test_a_drift_that_starts_at_the_first_record_is_refused():
     """A column present from position 0 is a column the stream simply has: no pre-drift
     population to be NULL in it, nothing for a v1 reader to rescue, nothing for a distinct
