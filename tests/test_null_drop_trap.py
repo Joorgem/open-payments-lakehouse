@@ -183,7 +183,22 @@ def _string_literals(source: str) -> list[str]:
     An f-string arrives as a `JoinedStr` whose literal parts are reassembled here, because
     every SQL statement in this repository is built that way -- `opl.generator.cnpj_pool.
     pool_query` interpolates a table name into a `SELECT` -- and a sweep that only read
-    plain `Constant` nodes would miss all of them."""
+    plain `Constant` nodes would miss all of them.
+
+    `+`-CONCATENATION OF LITERALS IS FOLDED HERE, AND IT WAS A REAL HOLE. An independent
+    review of F1b Tasks 0-2 defeated the first spelling of this sweep with
+    `"SELECT COUNT(DISTINCT " + "amount, payment_channel" + ")"`: two `Constant` nodes, each
+    harmless alone, joined by an operator the sweep never looked at. Implicit adjacent
+    concatenation (`"a" "b"`, no `+`) was already caught only because CPython folds it into
+    one `Constant` before the AST exists -- which is luck, not coverage. `_folded` below
+    walks `BinOp(Add)` trees so the two spellings are treated alike.
+
+    WHAT IS STILL NOT COVERED, stated because the docstring this replaces understated it:
+    `%`-formatting, `.format()`, and any statement assembled from run-time values. This is
+    a floor, not a proof, and the layer that actually closes the defect is the import-time
+    guard in `opl.contracts.payments` -- which refuses the drift column in every declared
+    tuple and generalises to `BUSINESS_ATTRIBUTE_COLUMNS <= REQUIRED_COLUMNS`. That guard
+    resisted every bypass the same review attempted."""
     tree = ast.parse(source)
     docstrings = set()
     for node in ast.walk(tree):
@@ -193,11 +208,28 @@ def _string_literals(source: str) -> list[str]:
         if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
             if isinstance(body[0].value.value, str):
                 docstrings.add(id(body[0].value))
-    found = []
-    for node in ast.walk(tree):
+    def _folded(node: ast.AST) -> str | None:
+        """`node` as one string when it is built only from string literals, else None.
+
+        Recurses through `BinOp(Add)` so `"a" + "b"` reads as `"ab"`, which is the hole the
+        review found. A branch that is not a literal makes the whole expression unreadable
+        here -- returning the readable half would invent a statement nobody wrote."""
+        if isinstance(node, ast.Constant):
+            return node.value if isinstance(node.value, str) else None
         if isinstance(node, ast.JoinedStr):
             parts = [v.value for v in node.values if isinstance(v, ast.Constant)]
-            found.append("".join(part for part in parts if isinstance(part, str)))
+            return "".join(part for part in parts if isinstance(part, str))
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left, right = _folded(node.left), _folded(node.right)
+            return None if left is None or right is None else left + right
+        return None
+
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp | ast.JoinedStr):
+            text = _folded(node)
+            if text is not None:
+                found.append(text)
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             if id(node) not in docstrings:
                 found.append(node.value)
@@ -276,3 +308,36 @@ def test_the_sweep_catches_the_statement_it_is_looking_for():
     )
     for source in ignored:
         assert not any(_counts_distinct_over_the_drift_column(t) for t in _string_literals(source))
+
+
+def test_the_measurement_cannot_import_the_injection():
+    """`opl.generator.measures` must not import `opl.generator.defects`, at any depth.
+
+    THIS CLAIM WAS LOAD-BEARING AND UNGUARDED, which an independent review of F1b Tasks
+    0-2 found and this closes. `measures.py`'s own docstring and `opl.generator.__init__`
+    both rest on it: a measurement that could see the injection would confirm itself, and
+    every count this phase publishes -- 168 honest against 60 naive, five injected late
+    positions, seven duplicates -- would be the generator agreeing with the generator.
+
+    Every other invariant of comparable weight in this package is enforced rather than
+    stated: the purity sweep walks the AST, `_assert_no_drifting_column_is_declared_by_v1`
+    refuses at import, `_assert_every_column_has_a_renderer` refuses in both directions.
+    This one was prose. Now it is a test.
+
+    THE CHECK IS OVER THE IMPORTED MODULE'S OWN AST, not over `sys.modules`: importing
+    `measures` inside a test session where something else already imported `defects` would
+    make a `sys.modules` check pass while the source said otherwise."""
+    source = (_REPO / "src" / "opl" / "generator" / "measures.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.append(node.module)
+            imported.extend(f"{node.module}.{alias.name}" for alias in node.names)
+    offenders = sorted({name for name in imported if "defects" in name})
+    assert not offenders, (
+        f"opl.generator.measures imports {offenders} -- the measurement can now see the "
+        "injection, so every count it produces is the generator confirming itself"
+    )
