@@ -19,6 +19,7 @@ import pytest
 
 from opl.bronze.registry import REGISTRY, UnknownTable, table_spec
 from opl.contracts import payments
+from opl.contracts.catalogue import CONTRACT_COLUMNS
 from opl.contracts.cnpj_schemas import TABLES
 from opl.contracts.payments import (
     AMOUNT_SCALE,
@@ -224,44 +225,76 @@ def test_the_three_roles_are_three_different_tables():
     assert len(set(roles)) == 3
 
 
-def test_the_bronze_names_collide_with_nothing_the_registry_already_owns():
-    """The property that lets Task 3 lift this block into `REGISTRY` unchanged.
+def test_the_registry_carries_exactly_the_names_this_contract_declares():
+    """THE LIFT, ASSERTED FROM THE CONTRACT'S SIDE -- the successor to Task 0's
+    `test_the_bronze_names_collide_with_nothing_the_registry_already_owns`.
 
-    Checked ACROSS roles, not within each, for `test_no_two_tables_share_a_staging_
-    bronze_or_quarantine_name`'s reason: a payments quarantine that equalled a CNPJ
-    staging name would route payment rejects into a table a CNPJ promote reads."""
-    taken = {
-        value
-        for spec in REGISTRY.values()
-        for value in (spec.staging, spec.bronze, spec.quarantine)
-    }
+    That test held while payments was unregistered: it swept the registry for a
+    collision with each of these five names, so that Task 3 could insert the block
+    unchanged. Task 3 did, and the same five names are now IN the registry, which
+    makes a collision sweep vacuously false and the property it protected obsolete.
+
+    What replaces it is stronger and is the reason the block exists at all: the
+    registry entry must carry THESE strings and not retyped twins of them. The
+    documented defect is a quarantine name spelled twice, and a registry that had
+    `bronze_payments_quarantine` as its own literal would satisfy every uniqueness
+    check in `tests/bronze/test_registry.py` while being a second spelling that can
+    drift. Identity per field, not merely equality of the set: a SWAP between two
+    roles is what a uniqueness check structurally cannot see."""
+    spec = table_spec(CONTRACT)
+    assert spec.contract == CONTRACT
+    assert spec.table_key == BRONZE_TABLE_KEY
+    assert spec.staging == BRONZE_STAGING_TABLE
+    assert spec.bronze == BRONZE_TABLE
+    assert spec.quarantine == BRONZE_QUARANTINE_TABLE
+    assert spec.subdir == LANDING_SUBDIR
+
+
+def test_the_bronze_names_still_collide_with_nothing_another_table_owns():
+    """The collision property, restated over the OTHER tables now that this one is in.
+
+    Task 0 could sweep the whole registry because payments was absent from it. Every
+    other registered table is still swept here, and the reason has not changed: a
+    payments quarantine that equalled a CNPJ staging name would route payment rejects
+    into a table a CNPJ promote reads."""
+    others = [spec for spec in REGISTRY.values() if spec.contract != CONTRACT]
+    taken = {v for spec in others for v in (spec.staging, spec.bronze, spec.quarantine)}
     ours = {BRONZE_STAGING_TABLE, BRONZE_TABLE, BRONZE_QUARANTINE_TABLE}
-    assert not (ours & taken), f"{sorted(ours & taken)} is already a registered name"
-    assert BRONZE_TABLE_KEY not in {spec.table_key for spec in REGISTRY.values()}
-    assert LANDING_SUBDIR not in {spec.subdir for spec in REGISTRY.values()}
+    assert not (ours & taken), f"{sorted(ours & taken)} is another table's name"
+    assert BRONZE_TABLE_KEY not in {spec.table_key for spec in others}
+    assert LANDING_SUBDIR not in {spec.subdir for spec in others}
 
 
-def test_payments_is_deliberately_not_registered_yet_and_the_refusal_says_so():
-    """THE SCOPE LINE OF F1b TASK 0, asserted so it cannot be crossed by accident.
+def test_the_payments_contract_is_not_an_rfb_file_layout():
+    """The half of Task 0's scope line that OUTLIVES the registration.
 
-    A key in `opl.bronze.REGISTRY` is bound by four invariants, and every one is
-    satisfied by an artefact TASK 3 owns:
+    That test opened with `CONTRACT not in TABLES`, and the sentence is still true and
+    still load-bearing -- for a different reason than the one it was written for.
+    `cnpj_schemas.TABLES` is the RFB's headerless column layouts, verified against the
+    official layout PDF; `opl.contracts.catalogue` merges it with the payments
+    contract LAST-ONE-WINS, so a shared key would silently replace one source's column
+    list with the other's. `struct_for("empresas")` would then build the payment
+    columns, the RFB's semicolon CSV would be read against them, and every row would
+    arrive NULL or rescued -- with no error anywhere, because the dict is valid.
 
-      1. `test_every_registered_table_has_an_ingestion_job` asserts
-         `set(_JOB_OF) == set(REGISTRY)` -- a registered table needs a job YAML.
-      2. `test_every_registered_table_has_a_rule_set` needs `rules_for(contract)` to
-         yield the DQ gate's verdict on this source.
-      3. `registry._assert_contracts_exist` refuses AT IMPORT a contract absent from
-         `cnpj_schemas.TABLES`, so registering payments means giving the registry a
-         contract catalogue spanning both sources.
-      4. `registry._assert_prefixes_match_their_file_groups` refuses AT IMPORT a
-         contract no `FILE_GROUPS` entry feeds -- and a GENERATED source will never
-         have one, so that guard needs a landing mode beside `zips` and `local`.
-
-    Registering it here would mean authoring Task 3's job resource and DQ rules inside
-    Task 0, or breaking four green invariants. The names above are asserted
-    collision-free against the live registry instead, so the lift is one insertion."""
+    `catalogue._assert_no_contract_is_declared_twice` refuses that at import. This is
+    the same claim from the outside, so the guard cannot be deleted quietly."""
     assert CONTRACT not in TABLES
+    assert CONTRACT in CONTRACT_COLUMNS
+    assert CONTRACT_COLUMNS[CONTRACT] == COLUMNS
+
+
+def test_an_unregistered_contract_is_still_refused_by_name():
+    """`table_spec`'s refusal, which Task 0 exercised with `payments` itself.
+
+    It cannot use `payments` any more -- that is now a registered table, which is the
+    point of this task -- so it uses `simples`: a real RFB group with a real contract
+    and no bronze table, the same value `tests/bronze/test_registry.py` uses for the
+    producer-side refusal. Kept rather than deleted with the scope line, because what
+    it actually pins is that the refusal reaches an operator as prose naming the valid
+    tables, and that has nothing to do with which contract is missing."""
     with pytest.raises(UnknownTable) as excinfo:
-        table_spec(CONTRACT)
-    assert "unknown bronze table 'payments'" in str(excinfo.value)
+        table_spec("simples")
+    message = str(excinfo.value)
+    assert "unknown bronze table 'simples'" in message
+    assert CONTRACT in message and "estabelecimentos" in message

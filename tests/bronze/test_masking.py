@@ -189,19 +189,40 @@ def test_the_metadata_names_are_the_constants_the_writers_own():
 
 
 def test_the_rescued_column_is_the_one_the_stream_actually_configures():
-    """`_rescued_data` has no constant to import -- it is a cloudFiles OPTION VALUE
-    in `bronze_stream`. Read out of that source rather than restated, because it is
-    the one metadata name a rename could change without this module noticing."""
+    """`_rescued_data` NOW HAS AN OWNER, and this test changed shape because of it.
+
+    It used to read the literal out of `autoloader.py` with a regex, and said so:
+    "`_rescued_data` has no constant to import -- it is a cloudFiles OPTION VALUE in
+    `bronze_stream`". F1b Task 3 gave it one. The name became load-bearing in a second
+    place -- the drift verdict rests on `dq._reject_reason` finding that column on the
+    frame -- so it is declared as `opl.bronze.dq.RESCUED_DATA_COLUMN`, beside its
+    READER, exactly as `promote.BATCH_COLUMN` is.
+
+    So the first assertion is now an import rather than a grep, which is strictly
+    stronger: a rename of the constant fails at import in every module that reads it.
+    The second half stays a source read, because the property it protects is not the
+    NAME -- it is that the stream still configures the option AT ALL, and with that
+    constant. A `bronze_stream` that dropped the option would leave the CREATE TABLE
+    declaring a column nothing ever writes, and would silently disarm the drift
+    verdict this phase is built on: with no rescued column, an undeclared JSON key is
+    ignored rather than rescued, and the gate reports the batch clean."""
     from pathlib import Path
 
+    from opl.bronze.dq import RESCUED_DATA_COLUMN
+
+    assert RESCUED_DATA_COLUMN == METADATA_COLUMNS[0][0], (
+        f"the gate reads {RESCUED_DATA_COLUMN!r} but the CREATE TABLE declares "
+        f"{METADATA_COLUMNS[0][0]!r}; the first append would find a column it cannot write"
+    )
     source = (
         Path(__file__).resolve().parents[2] / "src" / "opl" / "bronze" / "autoloader.py"
     ).read_text(encoding="utf-8")
-    configured = re.findall(r'"rescuedDataColumn",\s*"([^"]+)"', source)
-    assert len(configured) == 1, "bronze_stream no longer sets rescuedDataColumn exactly once"
-    assert configured[0] == METADATA_COLUMNS[0][0], (
-        f"the stream rescues into {configured[0]!r} but the CREATE TABLE declares "
-        f"{METADATA_COLUMNS[0][0]!r}; the first append would find a column it cannot write"
+    configured = re.findall(r'"rescuedDataColumn",\s*([A-Za-z_][A-Za-z_0-9]*)\)', source)
+    assert configured == ["RESCUED_DATA_COLUMN"], (
+        "bronze_stream no longer sets rescuedDataColumn exactly once from the "
+        f"constant its readers import -- found {configured}. Without that option an "
+        "undeclared column is dropped instead of rescued, so schema drift reaches "
+        "bronze as an absence and the DQ gate reports the batch clean"
     )
 
 

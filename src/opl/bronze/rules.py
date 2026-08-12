@@ -16,7 +16,9 @@ from pyspark.sql import Column
 from pyspark.sql import functions as F
 
 from opl.bronze.snapshot import SNAPSHOT_REF_DATE_COLUMN
-from opl.contracts.cnpj_schemas import TABLES
+from opl.contracts.catalogue import CONTRACT_COLUMNS
+from opl.contracts.payments import CONTRACT as PAYMENTS_CONTRACT
+from opl.contracts.payments import COUNTERPARTY_COLUMNS, REQUIRED_COLUMNS
 
 _REPLACEMENT_CHAR = "�"
 
@@ -76,12 +78,29 @@ REQUIRES_COLUMN: dict[str, str] = {
 #     hard gate is held to, and either can be added once counted.
 # A tuple per contract, not a list: these are read by `_required_rules` on every
 # call and nothing may append to a shared default.
+#
+# PAYMENTS IS THE ONE ENTRY THAT IS NOT A JUDGEMENT CALL, and it is derived rather
+# than listed for that reason. Every other contract's tuple is a subset chosen by
+# measurement -- which RFB columns are never legitimately blank on live data -- because
+# the RFB is a source this project does not control. The payment stream is generated
+# here, `opl.contracts.payments` declares EVERY column required in v1, and
+# `record_of`'s `dict[str, str]` return type plus `format_amount`'s refusal of
+# non-positive input make "no contract column is ever blank" a property of
+# construction. So the gate asserts the contract's own claim in full: anything less
+# would be a gate that is looser than the generator, and the difference is exactly the
+# set of columns a bug between the two could empty without anyone noticing.
+#
+# DERIVED FROM `REQUIRED_COLUMNS`, NOT PASTED, so a v2 that adds a column adds its
+# rule. That is safe here and would NOT be safe for an RFB contract: adding a column
+# to a CNPJ tuple is a new way for a live table's ingest to go red and has to be
+# earned by a count. Here the rule set and the contract have one author.
 REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "lookup": ("codigo", "descricao"),
     "estabelecimentos": ("cnpj_basico", "cnpj_ordem", "cnpj_dv", "municipio"),
     "empresas": ("cnpj_basico", "razao_social", "natureza_juridica"),
     "socios": ("cnpj_basico", "identificador_socio", "nome_socio_razao_social",
                "qualificacao_socio"),
+    PAYMENTS_CONTRACT: tuple(REQUIRED_COLUMNS),
 }
 
 
@@ -139,11 +158,19 @@ def _encoding_check(contract: str) -> Callable[[], Column]:
     if ANY column holds the character and is left alone when none does, whatever
     mix of NULLs it carries.
 
-    `tuple(...)` snapshots the contract's column list. `TABLES` hands out its
-    mutable list, and this closure outlives the call -- a caller that mutated
-    that list would silently change which columns a rule set already handed to a
-    running job is checking."""
-    columns = tuple(TABLES[contract])
+    `tuple(...)` snapshots the contract's column list -- `CONTRACT_COLUMNS` hands
+    out tuples, so this is belt-and-braces today; it stays because the property is
+    about this closure outliving the call, not about the catalogue's current type.
+
+    IT IS A LIVE CONTROL ON THE PAYMENT STREAM, NOT INHERITED BOILERPLATE, which
+    needs saying because the obvious reading is that a generated UTF-8 JSON stream
+    cannot contain mojibake. It can, by exactly the route F1b's central risk runs
+    along: `opl.generator.events.to_jsonl` returns TEXT, and a writer that did not
+    encode UTF-8 explicitly -- or a reader that did not decode as UTF-8 -- hands Java
+    bytes it cannot map, and Java's decoder substitutes U+FFFD SILENTLY where Python
+    raises. That character is then the only in-band evidence the bytes on disk are
+    not the bytes the golden digest was taken over."""
+    columns = tuple(CONTRACT_COLUMNS[contract])
 
     def predicate() -> Column:
         chain = F.lit(False)
@@ -154,10 +181,42 @@ def _encoding_check(contract: str) -> Callable[[], Column]:
     return predicate
 
 
+# 8 characters, which is `cnpj_basico`'s width in every contract that carries a
+# company root -- the three RFB ones under that name, and the payment stream's two
+# counterparty columns under their own. Named once here because the rules below build
+# on it under two different column names; it is the same fact about the same key
+# space, and `opl.generator.cnpj_pool.CNPJ_BASICO_WIDTH` refuses a pool entry of any
+# other width at the boundary where payments' keys are drawn from `hub_empresa`.
+_CNPJ_BASICO_WIDTH = 8
+
+
+def _basico_length(column: str) -> Callable[[], Column]:
+    """`column` is not exactly 8 characters after trimming.
+
+    A LENGTH check and not a numeric one: alphanumeric CNPJs take effect 2026-07-31,
+    and an `int()` round trip loses a leading zero the moment one arrives
+    (`cnpj_schemas`). That is not an abstract worry for the payment stream -- it is
+    the precise failure F1b Task 4's 100%-resolution measurement exists to catch, and
+    this rule catches the same thing one step earlier, in the gate, BEFORE the rows
+    reach bronze and before anyone joins them to `hub_empresa`.
+
+    Parameterised by column since F1b Task 3, where the same shape has to be asserted
+    about `payer_cnpj_basico` and `payee_cnpj_basico`. The reason string is built from
+    the column name at the call site, so `bad_cnpj_basico_length` -- which already
+    exists as DATA in two live quarantine tables -- comes out byte-identical for the
+    three RFB contracts."""
+    return lambda: F.length(F.trim(F.col(column))) != _CNPJ_BASICO_WIDTH
+
+
 def _cnpj_basico_length() -> Column:
-    """8 characters after trimming. Alphanumeric since 2026-07-31, hence a LENGTH
-    check and not a numeric one (cnpj_schemas)."""
-    return F.length(F.trim(F.col("cnpj_basico"))) != 8
+    """The RFB contracts' `cnpj_basico` width rule, under its historical name.
+
+    Kept as a zero-argument function rather than replaced by `_basico_length(
+    "cnpj_basico")` at the three call sites: `test_every_predicate_is_a_zero_arg_
+    factory_and_not_a_column` inspects the signature of every predicate, and this is
+    the module's one plain-function example of the three shapes it deliberately
+    carries (a lambda, a closure, a module function)."""
+    return _basico_length("cnpj_basico")()
 
 
 def _unprovable_ref_date() -> Column:
@@ -235,6 +294,49 @@ def _unprovable_ref_date() -> Column:
 # byte-for-byte to what F1.2 shipped, and F1.4b's scope is the three tables it
 # introduces. Adding a new way for the one table already in production to go red
 # belongs in a change that says so, not as a rider on this one.
+#
+# --- AND NOT ON PAYMENTS, WHICH IS A DIFFERENT ANSWER TO THE SAME QUESTION -------
+#
+# The payments set is the only one below that omits `unprovable_snapshot_ref_date`
+# because THE COLUMN DOES NOT EXIST on those rows, not because the check was
+# declined. `_snapshot_ref_date` is "the date the source declares in its own
+# filename" (`opl.bronze.snapshot`), which is a fact about the RFB's mainframe naming
+# convention; a stream this lakehouse generates declares no such thing, so
+# `add_common_audit_columns` does not stamp it. Had it been stamped anyway the column
+# would be NULL on every payment row, this rule would reject every one of them, and
+# the only way to load the table would have been to leave the rule out -- a control
+# omitted so that the value it refuses can be written, which is the shape this
+# repository calls a control that disappeared rather than failed.
+#
+# WHAT THE PAYMENTS SET DOES CARRY, and why each earns a place on an ALL-OR-NOTHING
+# gate where every rule is a new way for a run to go red:
+#
+#   - Eight `null_or_empty_*`, one per contract column, DERIVED from
+#     `payments.REQUIRED_COLUMNS` (see REQUIRED_FIELDS above). The contract declares
+#     every v1 column required and the generator makes that true by construction, so
+#     a blank here means something between the generator and bronze emptied a column.
+#   - `bad_payer_cnpj_basico_length` and `bad_payee_cnpj_basico_length`. These are the
+#     integration claim, checked at the gate rather than after the fact: the whole
+#     premise is that payments join to real companies by business key, and the
+#     failure that would break it silently is a numeric round trip eating a leading
+#     zero -- `00000004` becoming `4`. Task 4 measures 100% resolution against
+#     `hub_empresa` AFTER the promote; this refuses the rows BEFORE it, so bronze
+#     cannot come to hold keys that resolve to nothing. They reject nothing the
+#     generator can emit: `cnpj_pool.validated_pool` already refuses a key of any
+#     other width where the pool is built.
+#   - `encoding_replacement_char`, folded over all eight columns, which is the live
+#     control on this phase's central risk -- see `_encoding_check`.
+#
+# WHAT IT DELIBERATELY DOES NOT CARRY: any value-domain rule (`currency IN
+# CURRENCIES`, `payment_method IN PAYMENT_METHODS`, an amount-format regex). The
+# drift class F1b generates is SCHEMA drift, caught by `rescued_data_present` above
+# every rule here; value drift was explicitly deferred by Task 2 ("value drift can
+# follow if it earns its place"). A gate rule for a defect class nothing generates is
+# a control no test exercises, and this gate is all-or-nothing.
+#
+# THE ORDER IS THE SAME ARGUMENT THE CNPJ SETS MAKE: what is MISSING before what is
+# the wrong SHAPE before what is damaged in its BYTES. A row missing its payer is
+# described by the missing payer rather than by that column's length.
 
 
 def rules_for(table: str) -> list[tuple[str, Callable[[], Column]]]:
@@ -265,6 +367,14 @@ def rules_for(table: str) -> list[tuple[str, Callable[[], Column]]]:
             ("bad_cnpj_basico_length", _cnpj_basico_length),
             ("encoding_replacement_char", _encoding_check("socios")),
             (_UNPROVABLE_REF_DATE, _unprovable_ref_date),
+        ],
+        PAYMENTS_CONTRACT: [
+            *_required_rules(PAYMENTS_CONTRACT),
+            *(
+                (f"bad_{column}_length", _basico_length(column))
+                for column in COUNTERPARTY_COLUMNS
+            ),
+            ("encoding_replacement_char", _encoding_check(PAYMENTS_CONTRACT)),
         ],
     }
     return list(tables[table])

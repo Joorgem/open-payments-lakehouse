@@ -34,13 +34,28 @@ from opl.bronze.registry_collisions import (
     _assert_no_two_tables_share_a_checkpoint_namespace,
     _assert_no_two_tables_share_a_delta_name,
 )
-from opl.config import OplConfig
-from opl.contracts.cnpj_schemas import FILE_GROUPS, TABLES
 
-# How a table's raw files reach the Volume.
-LANDING_ZIPS = "zips"    # PUT the zip, unzip in the Volume (multi-part groups)
-LANDING_LOCAL = "local"  # unzip locally, PUT the inner file (the tiny lookups)
-LANDING_MODES = frozenset({LANDING_ZIPS, LANDING_LOCAL})
+# The landing modes, their roots and their two guards moved to `registry_landing.py`
+# in F1b Task 3, when adding a third mode plus a second landing root would have taken
+# this file past 800 lines. RE-EXPORTED HERE ON PURPOSE: `bronze_ingest`,
+# `unzip_table`, `reclaim_landing` and `extract_cnpj` all import `LANDING_*` from this
+# module, and rewriting four live import lines to move a constant is churn that buys
+# nothing. `registry` stays the one module every consumer imports; where a name is
+# DEFINED is this package's business.
+from opl.bronze.registry_landing import (  # noqa: F401  (re-exported for consumers)
+    FILE_FED_LANDING_MODES,
+    LANDING_GENERATED,
+    LANDING_LOCAL,
+    LANDING_MODES,
+    LANDING_ZIPS,
+    _assert_landing_modes_known,
+    _assert_no_generated_table_claims_a_downloader,
+    _assert_prefixes_match_their_file_groups,
+    landing_dir,
+)
+from opl.config import OplConfig
+from opl.contracts import payments
+from opl.contracts.catalogue import CONTRACT_COLUMNS, is_known
 
 # Values that make the derivation below independent of any real table or month --
 # they are joined into a path and the added component is read back out, so they
@@ -271,6 +286,72 @@ REGISTRY: dict[str, BronzeTable] = {
             "ALTER TABLE {table} ALTER COLUMN identificador_socio SET NOT NULL",
         ),
     ),
+    # THE SECOND SOURCE, and the first entry here whose bytes nobody downloads.
+    #
+    # EVERY STRING BELOW IS LIFTED FROM `opl.contracts.payments`, not retyped. F1b
+    # Task 0 pinned the staging/bronze/quarantine triple, the table key and the
+    # landing subdir in one literal block there, asserted them collision-free against
+    # this registry, and left the insertion to Task 3 -- so the lift is an import and
+    # not a fifth place those names are spelled. `name` is the only literal, because
+    # a registry KEY is this dict's own namespace: it is what an operator types as a
+    # job parameter, and it happens to equal the contract for every table here
+    # without anything making it so (`spec_for_contract` exists because of exactly
+    # that coincidence).
+    #
+    # `landing=LANDING_GENERATED` IS WHAT MAKES THE ENTRY LEGAL. Two import-time
+    # guards refuse it under any other mode -- `_assert_prefixes_match_their_file_
+    # groups` because no FILE_GROUPS entry feeds `payments`, and its mirror
+    # `_assert_no_generated_table_claims_a_downloader` because declaring one would
+    # put two producers in one landing directory.
+    #
+    # NO `reclaim_landing` TASK EXISTS FOR THIS TABLE, which is a consequence of the
+    # mode rather than an omission: that task refuses anything that is not
+    # LANDING_ZIPS, because it deletes landed files only where a zip in the sibling
+    # `zips/` dir is still the way back to the source. A generated table's way back
+    # is the SEED -- `opl.generator` reproduces the file byte-for-byte from
+    # (seed, stream_id, pool) -- which is a stronger guarantee than a retained
+    # archive, and it is why the payments job stops at the promote.
+    "payments": BronzeTable(
+        name="payments",
+        contract=payments.CONTRACT,
+        table_key=payments.BRONZE_TABLE_KEY,
+        staging=payments.BRONZE_STAGING_TABLE,
+        bronze=payments.BRONZE_TABLE,
+        quarantine=payments.BRONZE_QUARANTINE_TABLE,
+        subdir=payments.LANDING_SUBDIR,
+        landing=LANDING_GENERATED,
+        # No downloader, so no prefix. Refused as a false statement by
+        # `_assert_no_generated_table_claims_a_downloader` if one is ever pasted in.
+        prefix=None,
+        # `transaction_id` IS THE COLUMN NO OTHER CONTRACT HAS, which is what makes
+        # this tuple satisfy `test_the_new_tables_carry_a_constraint_no_other_
+        # contract_could_have`: a constraint tuple pasted from any CNPJ table would
+        # be missing it, and one pasted FROM here onto a CNPJ table names a column
+        # that table does not have. It is also the right column on its own merits --
+        # the whole duplicate/repeat distinction, and therefore every dedup claim
+        # F1b makes, rests on the identity being present and non-blank.
+        #
+        # SHAPED LIKE THE LOOKUP'S `codigo_not_blank` TRIPLE, deliberately: NOT NULL,
+        # then DROP IF EXISTS, then ADD, so a re-promote re-applies it cleanly. And
+        # `length(trim(...)) > 0` rather than `= 64`: the id is a sha256 hex digest
+        # today, but 64 is a fact of `stream._transaction_id`'s implementation and
+        # spelling it here would be a second copy of an undeclared number that a
+        # change to the derivation would leave behind as a failing promote.
+        #
+        # WHAT IS DELIBERATELY ABSENT, since the gate is all-or-nothing and every
+        # statement here is a new way for a promote to fail over the WHOLE table: no
+        # CHECK on `currency`. `CURRENCIES` holds one member today, and the contract
+        # says plainly that a second currency is meant to be a VALUE change rather
+        # than a schema change -- a CHECK would silently make it a migration.
+        constraints=(
+            "ALTER TABLE {table} ALTER COLUMN transaction_id SET NOT NULL",
+            "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS transaction_id_not_blank",
+            "ALTER TABLE {table} ADD CONSTRAINT transaction_id_not_blank "
+            "CHECK (length(trim(transaction_id)) > 0)",
+            "ALTER TABLE {table} ALTER COLUMN payer_cnpj_basico SET NOT NULL",
+            "ALTER TABLE {table} ALTER COLUMN payee_cnpj_basico SET NOT NULL",
+        ),
+    ),
 }
 
 
@@ -342,12 +423,21 @@ def _assert_contracts_exist() -> None:
     reaches an operator's run log unquoted. A contract typo committed to SOURCE is
     neither -- it is not an unknown *table*, no operator supplied it, and it
     breaks the import of every module that reads the registry rather than one
-    run."""
+    run.
+
+    ASKS `opl.contracts.catalogue`, NOT `cnpj_schemas.TABLES`, since F1b Task 3.
+    This is the third of the four invariants that bound the payments entry: the
+    registry now serves two sources, so the question "does this contract exist?"
+    spans both and the catalogue is where that join is made. Asking one source's
+    module would have made THIS function the place that decides a generated source
+    cannot be registered."""
     for spec in REGISTRY.values():
-        if spec.contract not in TABLES:
+        if not is_known(spec.contract):
             raise ValueError(
-                f"{spec.name} names contract {spec.contract!r}, which is not in "
-                f"cnpj_schemas.TABLES ({', '.join(sorted(TABLES))})"
+                f"{spec.name} names contract {spec.contract!r}, which no source "
+                f"declares ({', '.join(sorted(CONTRACT_COLUMNS))}). Contracts live in "
+                "opl.contracts.cnpj_schemas (the RFB files) and opl.contracts.payments "
+                "(the generated stream), and opl.contracts.catalogue joins them."
             )
 
 
@@ -453,90 +543,6 @@ def _assert_no_masked_contract_declares_a_check_constraint() -> None:
             if _CREATES_A_CHECK.search(statement):
                 raise ValueError(_masked_check_collision(spec, masked, statement))
 
-
-def _file_group_prefixes(contract: str) -> list[str]:
-    """The distinct FILE_GROUPS prefixes whose zips feed `contract`, sorted."""
-    return sorted({g["prefix"] for g in FILE_GROUPS.values() if g["table"] == contract})
-
-
-def _assert_prefixes_match_their_file_groups() -> None:
-    """Fail at import if a spec's `prefix` disagrees with FILE_GROUPS.
-
-    WHY THE FIELD SURVIVES AT ALL, since no production code reads it:
-    `cnpj_source.expected_files` builds the download list from
-    `FILE_GROUPS[g]["prefix"]` and has to, because the lookup's six differently-
-    named files have no single prefix to build from. So `prefix` is a SECOND
-    SPELLING of a live value -- the exact shape of the drift this registry exists
-    to remove -- and the F1.4a review offered two ways out: delete it, or tie it
-    down.
-
-    TIED DOWN, because the field is not dead weight. Carry-forward #10 asked for
-    the prefix to be DECLARED rather than implied by a dict key;
-    `test_no_two_tables_share_a_file_prefix` is one of the three copy-paste locks
-    F1.4b is about to be tested by; and `prefix="Estabelecimento"` (singular) is
-    unique, passes every other check, and under-ingests SILENTLY. Deleting the
-    field would delete that net one commit before the phase that copy-pastes these
-    entries. What this assertion does is convert the duplicate into a CROSS-CHECK:
-    the registry's spelling must agree with the one the downloader uses, so the
-    two can no longer drift -- they can only fail this import.
-
-    THREE CASES, all stated so none is silent. Exactly one group feeding a
-    contract means the prefix is that group's. More than one means no single prefix
-    identifies the files (the lookup: six groups, routed into one table by filename
-    suffix), so `None` is the only correct value -- `None` is a real property here,
-    not a gap to be filled in. NO group feeding a registered contract is refused:
-    that table has no producer at all, so its landing dir would never receive a
-    file and the job built on it would report SUCCESS having ingested zero rows."""
-    for spec in REGISTRY.values():
-        prefixes = _file_group_prefixes(spec.contract)
-        if not prefixes:
-            raise ValueError(
-                f"{spec.name} names contract {spec.contract!r}, which no "
-                "cnpj_schemas.FILE_GROUPS entry feeds. Nothing would ever be "
-                "downloaded or landed for it, and its ingest would report SUCCESS "
-                "having read an empty source dir -- add the RFB file group, or drop "
-                "the registry entry."
-            )
-        expected = prefixes[0] if len(prefixes) == 1 else None
-        if spec.prefix != expected:
-            raise ValueError(
-                f"{spec.name} declares prefix {spec.prefix!r}, but the "
-                f"{len(prefixes)} FILE_GROUPS entry/entries feeding its contract "
-                f"{spec.contract!r} spell it {expected!r} ({', '.join(prefixes)}). "
-                "The download list is built from the FILE_GROUPS prefix, so this "
-                "field is a second spelling of it and is asserted rather than "
-                "trusted: a prefix that is merely a typo (Estabelecimento, singular) "
-                "collides with nothing and under-ingests without erroring. A table "
-                "fed by SEVERAL groups must declare prefix=None -- no single prefix "
-                "identifies its files."
-            )
-
-
-def _assert_landing_modes_known() -> None:
-    """Fail at import if a spec names a landing mode that does not exist.
-
-    AT THE BOUNDARY, not in the consumer that dispatches on it. When this was
-    written nothing read `landing` at all; four consumers do now -- `bronze_ingest`
-    and `unzip_table` refuse anything that is not zips, `reclaim_landing` refuses
-    the same way because a locally-landed table has no archive to recover from, and
-    `extract_cnpj`'s landing resolver refuses anything that is not local -- so it is
-    tempting to argue a bad value would fail loudly in one of them. It would not: a
-    dispatch written as
-    `if landing == LANDING_ZIPS: ... else: ...` swallows a typo into the `else`
-    branch, and a table that should have been unzipped in the Volume gets treated
-    as a tiny local lookup, silently. A value that is wrong is refused where it is
-    DECLARED; leaning on a downstream consumer to notice is exactly the coupling
-    this registry exists to remove.
-
-    A plain ValueError rather than UnknownTable: nothing here is an unknown
-    *table*, and UnknownTable's docstring describes an operator-supplied name at a
-    job boundary, which a mode typo committed to source is not."""
-    for spec in REGISTRY.values():
-        if spec.landing not in LANDING_MODES:
-            raise ValueError(
-                f"{spec.name} names landing mode {spec.landing!r}, which is not one "
-                f"of: {', '.join(sorted(LANDING_MODES))}"
-            )
 
 
 def _malformed_subdir_reason(subdir: str) -> str | None:
@@ -662,12 +668,23 @@ _assert_contracts_exist()
 # resolve FILE_GROUPS entries by `spec.contract`, and neither is meaningful until
 # that contract is known to exist and to name one table only.
 _assert_no_two_tables_share_a_contract()
-_assert_prefixes_match_their_file_groups()
+# THE LANDING MODE IS RESOLVED BEFORE ANYTHING KEYED ON IT, which is a new ordering
+# constraint in F1b Task 3 and is the reason this call moved up two lines. Both prefix
+# guards below now BRANCH on `spec.landing` -- one skips generated tables, the other
+# checks only them -- so a spec carrying a typo'd mode would fall into neither and be
+# exempted from both. Ordered this way, a bad mode is refused before any guard has to
+# ask what it means.
+_assert_landing_modes_known(REGISTRY)
+_assert_prefixes_match_their_file_groups(REGISTRY)
+# The mirror of the line above, and it must stay beside it: the prefix cross-check
+# SKIPS generated tables, so this is the only thing that says anything about them.
+# Split rather than folded in, for the reason the subdir trio is three functions --
+# each refusal is a different sentence about a different mistake.
+_assert_no_generated_table_claims_a_downloader(REGISTRY)
 # Also keyed on the contract, so it belongs in this group: `MASKED_COLUMNS` is
 # keyed by contract, not by table name, and asking whether THIS table is masked is
 # meaningless until its contract is known to exist and to name one table only.
 _assert_no_masked_contract_declares_a_check_constraint()
-_assert_landing_modes_known()
 # Shape before content: the reserved-name check compares exact strings, so it is
 # total only over values already known to be a single directory name.
 _assert_subdirs_are_single_path_components()

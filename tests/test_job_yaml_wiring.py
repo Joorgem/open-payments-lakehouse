@@ -52,6 +52,12 @@ _JOB_OF = {
     "estabelecimentos": "bronze_estabelecimentos_job.yml",
     "empresas": "bronze_empresas_job.yml",
     "socios": "bronze_socios_job.yml",
+    # F1b Task 3, and the first entry here whose job GENERATES its own input: payments
+    # land as `generated`, so where the four above run `unzip_table.py` this one runs
+    # `generate_payments.py`. Every lock in this section is still total over it -- the
+    # paste lock, the gate-verdict routing, the month default and the revision guard --
+    # because what changed is which task fills the landing dir, not the flow.
+    "payments": "bronze_payments_job.yml",
 }
 
 # WHICH JOBS REFUSE A RUN BUILT FROM AN UNEXPECTED REVISION, and which one deliberately
@@ -67,6 +73,14 @@ _GUARDED_JOBS = (
     "bronze_empresas_job.yml",
     "bronze_estabelecimentos_job.yml",
     "bronze_socios_job.yml",
+    # The payments job, and the answer to this list's question is stronger for it than
+    # for any ingestion job above. Those jobs move bytes somebody else produced, so a
+    # wheel from another revision reads the same files with different code. This job's
+    # bytes ARE the deployed wheel's output: `opl.generator` derives them, and a stale
+    # wheel lands a DIFFERENT stream under the same filename -- after which every
+    # pinned digest describes code nobody reviewed, and `emit_stream_file` refuses the
+    # correct stream ever afterwards because a different file already sits there.
+    "bronze_payments_job.yml",
     # The operator job, and its inclusion is a decision rather than completeness: a
     # repromote APPENDS TO BRONZE, the system of record, re-applying whatever DQ rules
     # the deployed wheel happens to carry. Run against a stale wheel it appends rows

@@ -1,0 +1,164 @@
+# databricks/resources/bronze_payments_job.yml
+# One job YAML PER TABLE, deliberately -- not one for_each_task over the registry.
+# Same reason as every other job here: for_each shares a single {{job.run_id}} and
+# therefore one _batch_id across tables, which contradicts the
+# one-batch-is-one-table's-ingest assumption the gate, promote_batch and the
+# repromote operator job all rest on.
+#
+# WRITTEN AS A COPY of the Empresas job, which is the risk every file in this
+# directory carries: `payments` appears in five task parameter lists below and every
+# wrong value it could carry is the name of a table that EXISTS, so a leftover string
+# does not fail the run -- it ingests, gates or promotes Empresas and reports SUCCESS.
+# tests/test_job_yaml_wiring.py refuses any registered table name in this file other
+# than this job's own, and the prose below capitalises table names for that lock's
+# sake: registry keys are lower-case, so a case-sensitive grep of this file counts
+# PARAMETERS only.
+#
+# --- WHAT THIS JOB HAS THAT NO OTHER ONE DOES, AND WHAT IT LACKS ---------------------
+#
+# IT GENERATES ITS OWN INPUT. Payments land as `generated` (opl.bronze.
+# registry_landing), which means nothing downloads them: `generate_payments.py` sits
+# exactly where `unzip_table.py` sits in the CNPJ jobs, deriving the stream from a seed
+# and a pool of real hub_empresa keys and writing it into the Volume. That is the whole
+# difference in the task list, and it is why this job takes a third parameter.
+#
+# IT HAS NO reclaim_landing. That task deletes landed files once bronze proves it holds
+# their rows, and it refuses any table that does not land as zips -- because the zips in
+# the sibling directory are the only way back to the source when a parse defect is found
+# after ingestion. A generated table's way back is the SEED: opl.generator reproduces
+# the file byte-for-byte from (seed, stream_id, pool), which is a stronger guarantee
+# than a retained archive. So there is nothing to reclaim and nothing is deleted.
+#
+# IT HAS NO ensure_masked_table. The payments contract declares no masked column -- both
+# counterparties are cnpj_basico, a public company root, and there is no personal name
+# anywhere in it. tests/test_job_yaml_wiring.py asserts the ABSENCE as well as the
+# presence, because that task is a documented no-op for an unmasked contract and a
+# copied one would tell the next reader these rows are masked when they are not.
+#
+# --- ONE RUN PER PROFILE, AND THE GATE IS WHY --------------------------------------
+#
+# `profile` selects a declared stream in opl.generator.profiles. The three are meant to
+# be run separately, into the same month, and each lands its own file:
+#
+#     profile=clean       zero rejects; the rows reach bronze. The control -- if this
+#                         one goes red the failure is the pipeline, not a defect.
+#     profile=promotable  duplicates + late arrivals. Neither is a DQ reject, so this
+#                         batch promotes and both classes are measurable IN BRONZE.
+#     profile=drifting    schema drift. The gate quarantines the drifted rows and this
+#                         job stops at fail_on_dq: the DQ gate is all-or-nothing, so
+#                         NOTHING of that batch is promoted and the claim is measured
+#                         in the quarantine table. That is the gate working.
+#
+# Auto Loader drains only files its checkpoint has not seen, so a second run in the
+# same month ingests only the new profile's file.
+resources:
+  jobs:
+    bronze_payments:
+      name: opl-bronze-payments
+      parameters:
+        - name: month
+          # The month this run generates into and ingests from; the default is a value
+          # the tasks refuse (opl.config.SENTINEL_MONTH), because a real month here
+          # re-ingests that month against an EMPTY month-scoped checkpoint and silently
+          # doubles the row counts -- the promote's idempotence is keyed on _batch_id
+          # and cannot see it. Estabelecimentos' job carries the full argument.
+          default: "REQUIRED-PASS-A-MONTH"
+        - name: revision
+          # The revision this run is launched for; the default is a value the guard
+          # below refuses, so a run launched without --params stops instead of checking
+          # nothing. Estabelecimentos' job carries the full argument.
+          #
+          #     databricks bundle run bronze_payments -t free \
+          #       --params month=2026-08,revision=$(git rev-parse HEAD),profile=clean
+          default: "REQUIRED-PASS-A-REVISION"
+        - name: profile
+          # Which declared stream to generate. The default is a value
+          # opl.generator.profiles.profile_for refuses, for the same reason the two
+          # above are: a real profile here would make a forgotten --params generate and
+          # land a stream nobody asked for -- and then REFUSE the stream that was
+          # asked for, because emit_stream_file will not overwrite a file whose bytes
+          # differ from the ones it derived.
+          default: "REQUIRED-PASS-A-PROFILE"
+      tasks:
+        # FIRST, AND NOTHING BEFORE IT (ADR 0009). Compares the revision above -- the
+        # operator's HEAD when the run was submitted -- against the revision the
+        # deployed wheel was built from, and refuses a mismatch before this job derives
+        # a single record. It matters more here than for a download: the stream's bytes
+        # ARE the deployed generator's output, so a wheel from another commit lands a
+        # different file under the same name and every pinned digest becomes a claim
+        # about code nobody reviewed.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        - task_key: generate
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/generate_payments.py
+            parameters:
+              [
+                "payments",
+                "{{job.parameters.month}}",
+                "{{job.parameters.profile}}",
+              ]
+
+        - task_key: ingest
+          depends_on: [{ task_key: generate }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/bronze_payments_ingest.py
+            parameters: ["payments", "{{job.run_id}}", "{{job.parameters.month}}"]
+
+        - task_key: dq_gate_batch
+          depends_on: [{ task_key: ingest }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/dq_gate_batch.py
+            parameters: ["payments", "{{job.run_id}}"]
+
+        - task_key: check_bad_rows
+          depends_on: [{ task_key: dq_gate_batch }]
+          condition_task:
+            op: EQUAL_TO
+            left: "{{tasks.dq_gate_batch.values.bad_row_count}}"
+            right: "0"
+
+        - task_key: promote
+          depends_on: [{ task_key: check_bad_rows, outcome: "true" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/promote_batch.py
+            # --in-flow declares "this batch_id is the run executing this task",
+            # which is the ONLY caller that can say so truthfully. It is what lets a
+            # run whose batch is empty (the profile's file was already landed and
+            # already ingested) succeed as a no-op instead of being refused.
+            parameters: ["payments", "{{job.run_id}}", "--in-flow"]
+
+        - task_key: fail_on_dq
+          depends_on: [{ task_key: check_bad_rows, outcome: "false" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/fail_on_dq.py
+            # The TABLE, not a quarantine name -- and no quarantine string is spelled
+            # in this file at all, which is the point rather than a style. fail_on_dq
+            # derives it from the registry, so the one value that could be stale here
+            # does not exist. This is also the task the `drifting` profile is EXPECTED
+            # to reach: schema drift is a reject, so that run ends here, red, with the
+            # quarantine holding the rescued rows.
+            parameters: ["payments"]
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

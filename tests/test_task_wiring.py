@@ -78,6 +78,14 @@ _TABLE_TASKS = [
     # registry does not know -- and the promote would then create the real one,
     # unmasked, on its first append.
     "ensure_masked_table",
+    # F1b Task 3, and both are deliberate additions in this list's own sense. The
+    # ingest is the third spelling of "read a landing dir into staging" and the one
+    # that reads the OTHER landing root; the generator is the first entry point that
+    # WRITES a landing dir, so a literal subdir in it would drop a stream into a
+    # directory no registered table's stream reads -- an ingest that drains nothing
+    # and reports SUCCESS.
+    "bronze_payments_ingest",
+    "generate_payments",
 ]
 
 
@@ -309,6 +317,27 @@ _MONTH_CONSUMERS: dict[str, list[tuple[str, int | None, str | None]]] = {
         ("bronze_lookup_stream", 2, None),
         ("checkpoint_location", None, "month"),
         ("add_audit_columns", None, "snapshot_month"),
+    ],
+    # F1b Task 3. Four consumers again, and the same four FACTS -- the directory read,
+    # the state that records which of its files have been read, and the value stamped
+    # into every row -- reached through the second landing root and the four-column
+    # audit stamp a generated source takes.
+    "bronze_payments_ingest": [
+        ("landing_generated_table", 1, None),
+        ("bronze_stream", None, "month"),
+        ("checkpoint_location", None, "month"),
+        ("add_common_audit_columns", None, "snapshot_month"),
+    ],
+    # The WRITER, and it belongs in this lock for the same reason every reader does:
+    # its month decides which directory the stream is written into, and the ingest task
+    # that follows resolves ITS source dir from the same job parameter. A month that
+    # diverged here would write one month's landing dir and read another's -- a job
+    # whose every task reports SUCCESS having ingested nothing. The staging dir is the
+    # second consumer because a file staged under one month and replaced into another
+    # is a cross-device rename that fails, or worse, does not.
+    "generate_payments": [
+        ("landing_generated_table", 1, None),
+        ("landing_generated_tmp", 1, None),
     ],
 }
 
