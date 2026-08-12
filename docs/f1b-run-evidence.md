@@ -7,8 +7,11 @@ workspace said when they were ingested.
 **Controller-verified** means the controller ran the command and read the output.
 **Reported** means a task's own stdout said it. Both appear below and are labelled.
 
-**Every number in §2 was published before the run that tested it** — computed from the
-profile declarations alone (`opl.generator.profiles`), which is why
+**Every PREDICTION in §2 was published before the run that tested it** — computed from
+the profile declarations alone (`opl.generator.profiles`). The *actual* column is
+post-run by definition, and the CNPJ resolution in row 10 has no pre-run half at all:
+it is a measurement of the extraction and the ingest, not of the declaration. Corrected
+after review of PR #16 caught the sentence claiming more than it could. This is why
 `drifted_row_count` refuses a profile combining drift with duplicates rather than growing
 into something only a Spark session can evaluate.
 
@@ -16,10 +19,31 @@ into something only a Spark session can evaluate.
 
 ## 1. The runs
 
-Job `opl-bronze-payments`, revision `e7a4bf13ab30757a26008364226abd6f4e9e17e1`,
-month `2026-06`. Deploy verified **by artefact** before the first run: deployed wheel
-sha256 `97fc57d3…` identical to local, stamped revision equal to `git rev-parse HEAD`, and
-both new modules present inside the deployed wheel.
+Job `opl-bronze-payments`, month `2026-06`.
+
+**Provenance, recorded rather than asserted** — the previous version of this section said
+"verified by artefact" and left a truncated digest, which review of PR #16 called out as a
+claim without its evidence.
+
+| | value |
+|---|---|
+| revision the runs were launched for | `e7a4bf13ab30757a26008364226abd6f4e9e17e1` |
+| revision stamped in the deployed wheel | `e7a4bf13ab30757a26008364226abd6f4e9e17e1` |
+| deployed wheel sha256 | `97fc57d3789220114a4503b96318c748ad5b328eb9f73e10621a7028c0dcac87` |
+| local wheel sha256 | *identical* — compared byte-for-byte after downloading the deployed artefact |
+| `+dirty` suffix | absent |
+
+The **guard's own output**, not a controller claim (`assert_deployed_revision`, quoted
+verbatim from runs `709375879796911` and `592660596679630` — identical in both):
+
+```
+assert_deployed_revision: OK -- the installed wheel was built from
+e7a4bf13ab30757a26008364226abd6f4e9e17e1, which is the revision this run was
+launched for.
+```
+
+Both new modules (`opl/contracts/payments.py`, `opl/bronze/generated_landing.py`) were
+confirmed present **inside the downloaded wheel**, not merely in the tree.
 
 | profile | run | result | tasks |
 |---|---|---|---|
@@ -27,12 +51,15 @@ both new modules present inside the deployed wheel.
 | `promotable` | `390235151929464` | **SUCCESS** | promote ran, `fail_on_dq` EXCLUDED |
 | `drifting` | `592660596679630` | **FAILED** — *by design* | promote EXCLUDED, `fail_on_dq` FAILED |
 
-**Three profiles, and the count is forced by the gate rather than chosen.** The DQ gate is
-all-or-nothing and drift is a reject, so one stream carrying all three defect classes could
-never get its duplicates and late arrivals into bronze — they would sit in staging behind a
-promote the gate skipped. Proving all three therefore needs **at least two runs**, and a
-plan that expected dup, late and drift all measurable in `bronze_payments` would have found
-only the first two there. That is the gate working.
+**The gate forces TWO runs; the third is a control this validation chose to add.** The DQ
+gate is all-or-nothing and drift is a reject, so one stream carrying all three defect
+classes could never get its duplicates and late arrivals into bronze — they would sit in
+staging behind a promote the gate skipped. So `promotable` and `drifting` are the minimum,
+and a plan expecting dup, late and drift all measurable in `bronze_payments` would have
+found only the first two there. `clean` is **not** forced: it exists so every defect count
+has a zero to be measured against, which is what makes 150 and 100 evidence rather than
+arithmetic. Corrected after review of PR #16 read the original as claiming the gate
+required all three.
 
 ---
 
@@ -122,8 +149,14 @@ non-eight-character key *before* the table holds it.
 | `bronze_payments_quarantine` | 2,000 | 1 | **0.10 MB** |
 
 Task durations, **reported**: generate 27 s, ingest 31 s, gate 24 s, promote 33 s, guard
-35 s. **Under a minute per task at 10,000 events.** Against the vault's 33.13 GB and ~7.7 h,
-this source is free — which is the argument for 10,000 events rather than 50,000: generation
+35 s. **Under a minute per task at 10,000 events.**
+
+**Cost was NOT measured** — these are durations and stored bytes, not compute or storage
+price, and Free Edition exposes no billing figure this project has ever read. The earlier
+wording called this source "free" against the vault's 33.13 GB and ~7.7 h, which is a price
+claim drawn from a duration; review of PR #16 was right to refuse it. What can be said is
+narrower and still useful: **three orders of magnitude less data and two fewer of wall
+clock than the vault**. That is the argument for 10,000 events rather than 50,000: generation
 is pure driver-side Python, measured at 50 s per profile at 50,000, and 10,000 at a 5 s
 interval preserves the same 13.9-hour span and thirteen one-hour windows that make lateness
 mean something.
