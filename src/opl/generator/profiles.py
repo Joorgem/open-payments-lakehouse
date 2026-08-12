@@ -143,7 +143,25 @@ class StreamProfile:
 
         Every emission index from `drift_from_index` onward, PLUS the redeliveries of
         those rows -- a redelivery carries its original's bytes, drift column and
-        all. Zero when the profile declares no drift."""
+        all. Zero when the profile declares no drift.
+
+        THE DOCSTRING AND THE ARITHMETIC USED TO DISAGREE, AND THE TEST AGREED WITH THE
+        BUG. `event_count - start` counts emission INDICES, which excludes the
+        redeliveries the sentence above promises. `drifting` declares
+        `duplicate_count=0`, so the published number was right by accident; a profile
+        declaring BOTH would publish a prediction LOWER than the rows actually carrying
+        the column -- and `tests/test_payment_emit.py` compares this against
+        `drift_positions`, which is index-based too, **so the suite would have stayed
+        GREEN while the prediction was wrong**. Found by review on PR #14.
+
+        THE FIX IS A REFUSAL, NOT A LONGER SUM, and the choice is deliberate. Counting
+        delivered rows needs `duplicate_positions`, which needs a full `StreamSpec`,
+        which needs the CNPJ pool -- so a property that is honest about redeliveries
+        stops being computable from the declaration alone, which is exactly what §4's
+        "publish predictions BEFORE the run" asks of it. `_refuse_drift_beside_duplicates`
+        makes the arithmetic below provably exact instead, and a future profile that
+        genuinely wants both is told, in the refusal, what it has to implement first.
+        This package does not half-support a case it has never tested."""
         start = self.defects.drift_from_index
         if start is None:
             return 0
@@ -329,5 +347,43 @@ def _assert_every_profile_describes_a_stream_that_can_exist() -> None:
         _require_defects_fit(profile.stream_spec(probe), profile.defects)
 
 
+def _refuse_drift_beside_duplicates() -> None:
+    """Fail at import if a profile declares drift AND duplicates in the same stream.
+
+    `drifted_row_count` counts emission INDICES from `drift_from_index` onward. A
+    redelivery carries its original's bytes -- drift column included -- so a profile
+    declaring both would deliver MORE rows carrying the column than it predicts, and
+    `tests/test_payment_emit.py` compares the prediction against `drift_positions`,
+    which is index-based in the same way. **The suite would stay green while the
+    published number was wrong**, which is the one failure this phase's whole method is
+    built to prevent. Found by review on PR #14.
+
+    REFUSED RATHER THAN SUMMED, because the honest sum needs `duplicate_positions`,
+    which needs a full `StreamSpec`, which needs the 69M-row CNPJ pool -- and a
+    prediction that cannot be computed from the declaration alone is no longer the kind
+    of prediction §4 asks to be published before the run. Nothing needs the combination
+    today: the drifting profile ends red at the DQ gate and never promotes, so pairing
+    its rows with duplicates would prove nothing that the promotable profile does not
+    already prove.
+
+    A profile that genuinely wants both must first make `drifted_row_count` count
+    delivered rows, and this message says so rather than leaving the next author to
+    rediscover the trap."""
+    for name, profile in PROFILES.items():
+        drifts = profile.defects.drift_from_index is not None
+        repeats = profile.defects.duplicate_count > 0
+        if drifts and repeats:
+            raise ValueError(
+                f"profile {name!r} declares drift (from index "
+                f"{profile.defects.drift_from_index}) beside "
+                f"{profile.defects.duplicate_count} duplicate(s). `drifted_row_count` "
+                "counts emission indices, so it would under-predict the delivered rows "
+                "carrying the drift column -- and the test that guards it compares "
+                "against index-based positions, so it would not go red. Make "
+                "`drifted_row_count` count DELIVERED rows before declaring both"
+            )
+
+
 _assert_the_profiles_are_declared_consistently()
 _assert_every_profile_describes_a_stream_that_can_exist()
+_refuse_drift_beside_duplicates()
