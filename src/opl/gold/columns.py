@@ -47,35 +47,42 @@ under a load nobody thought was destructive is the worse failure by a wide margi
 
 THE SENTINEL VALUES ARE CHOSEN AGAINST A MEASURED PLATFORM LIMIT, NOT BY CONVENTION.
 Kimball's usual pair is 1900-01-01 and 9999-12-31, and BOTH are unusable in this
-project's test environment: pyspark converts a timestamp back to Python through the C
-runtime, and on this Windows dev box a value outside roughly the epoch..3000 range
-cannot be read back at all. Measured, session timezone America/Sao_Paulo, pyspark
-3.5.9:
+project's test environment: pyspark converts a timestamp between Python and the engine
+through the C runtime, and on this Windows dev box the writable-and-readable window is
+1970-01-01 .. 3000-12-31 and nothing outside it. Measured, pyspark 3.5.9, both
+directions and both paths, one value per year:
 
-    '1900-01-01 00:00:00'          collect -> OSError [Errno 22] Invalid argument
-    '1970-01-01 00:00:00'          collect -> datetime(1970, 1, 1, 0, 0)
-    '2999-12-31 23:59:59.999999'   collect -> datetime(2999, 12, 31, 23, 59, 59, 999999)
-    '9999-12-31 23:59:59.999999'   collect -> OSError [Errno 22] Invalid argument
+    year   F.lit(datetime)                     ISO string cast, then collect
+    1899   OverflowError (time.mktime)         OSError [Errno 22] (fromtimestamp)
+    1900   OverflowError                       OSError [Errno 22]
+    1969   OverflowError                       OSError [Errno 22]
+    1970   round-trips                         round-trips
+    2999   round-trips                         round-trips
+    3000   round-trips                         round-trips
+    3001   OverflowError                       OSError [Errno 22]
+    9999   OverflowError                       OSError [Errno 22]
 
-In-engine comparison works for all four, so a 9999 sentinel would be *writable* and
-*joinable* and would fail only when a test tried to read a row -- i.e. it would make
-every readable assertion about this dimension impossible on the machine the suite runs
-on, for a value that is arbitrary either way. The epoch is the lowest instant this
-stack can round-trip and is 53 years below the RFB's own open-data series (2023-05);
-2999-12-31 is 973 years above anything this star can be asked about.
+THE TWO PATHS FAIL AT THE SAME PLACES, WHICH CORRECTS AN EARLIER READING OF THIS TABLE.
+The ISO-string cast is not a wider range; it moves the failure from the WRITE (`mktime`,
+in the driver) to the READ (`fromtimestamp`, in the driver), and 3000 was never the
+boundary at either end -- 3001 is, and 1970 is. In-engine comparison works for every row
+above, so a 9999 sentinel would be *writable* and *joinable* and would fail only when a
+test tried to read a row: it would make every readable assertion about this dimension
+impossible on the machine the suite runs on, for a value that is arbitrary either way.
+The epoch is the lowest instant this stack can round-trip and is 53 years below the
+RFB's own open-data series (2023-05); 2999-12-31 is 973 years above anything this star
+can be asked about.
 
-THE ONE CAVEAT, RECORDED RATHER THAN GLOSSED: the epoch floor is written as a LOCAL
-instant, so on a Windows box east of Greenwich `1970-01-01 00:00:00` local is a
-negative epoch value and would hit the same OSError. Linux (CI) handles negatives
-fine. If that machine ever appears, the fix is to raise the floor, not to lower it
-below the epoch.
-
-THE SENTINELS ARE `datetime` VALUES AND ARE NEVER PASSED TO `F.lit` DIRECTLY.
-`pyspark.sql.types.TimestampType.toInternal` converts through `time.mktime`, which
-raises `OverflowError: mktime argument out of range` on this box for anything past year
-3000 -- so a literal is built by ISO-formatting the value and casting the STRING, which
-Spark parses in the session timezone with no Python conversion involved.
-`opl.gold.dimensions.instant_literal` is the one place that happens."""
+WHAT THE ISO CAST DOES BUY IS THE ZONE, AND IT IS WHY IT IS STILL THE ONLY WAY THESE TWO
+VALUES REACH SPARK. `pyspark.sql.types.TimestampType.toInternal` converts through
+`time.mktime`, which reads the DRIVER's operating-system zone; the cast is parsed by
+Spark in the SESSION zone, which `opl.config.SESSION_TIMEZONE` pins to UTC. So the floor
+is the epoch itself -- 0 micros -- on every machine, where `F.lit(VALID_FROM_FLOOR)`
+would be midnight in whatever zone the driver's OS happens to be set to. That is a
+NEGATIVE epoch value anywhere east of Greenwich, and the table above shows what the C
+runtime does with one. `opl.gold.dimensions.instant_literal` is the one place these
+literals are built, and every instant this layer writes goes through it -- `load_date`
+included, so that one projection does not mix the two zones."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -89,6 +96,7 @@ __all__ = [
     "CONFORMED_RECORD_SOURCE",
     "DIMENSION_COLUMNS",
     "GHOST_RECORD_SOURCE",
+    "GHOST_ROWS",
     "GHOST_SURROGATE_KEY",
     "IS_CURRENT",
     "LOAD_DATE",
@@ -119,11 +127,26 @@ IS_CURRENT = "is_current"
 VALID_FROM_FLOOR = datetime(1970, 1, 1, 0, 0, 0)
 VALID_TO_CEILING = datetime(2999, 12, 31, 23, 59, 59, 999999)
 
-# THE GHOST ROW'S SURROGATE KEY, and it is negative for a reason beyond convention: no
-# derived key can equal it, because every real key comes out of a hash and this one is
-# reserved by being outside the population the fact resolves. A fact row that failed to
-# resolve reaches it as `COALESCE(<as-of lookup>, GHOST_SURROGATE_KEY)` at build time --
-# never by joining to it, which it cannot do, because the ghost carries no business key.
+# HOW MANY UNKNOWN MEMBERS A GOLD DIMENSION CARRIES: exactly one, in both loaders. Named
+# here rather than in either of them because THREE places now reconcile against it -- the
+# SCD2 loader's own refusal, the conformed loader's member count, and the line each entry
+# point prints -- and `+ 1` written out three times is two edits away from three answers.
+GHOST_ROWS = 1
+
+# THE GHOST ROW'S SURROGATE KEY. Negative because that is the convention, and RESERVED BY
+# MEASUREMENT rather than by arithmetic -- which is the correction this comment is.
+# `xxhash64` returns the full signed 64-bit range, so a versioned row hashing to exactly
+# -1 is an ordinary outcome of a hash function and not an impossible one; nothing about
+# the value being negative puts it outside the population the fact resolves. What makes
+# it safe is that the ghost lives in the SAME table as the versions, so a collision with
+# it drops the table's distinct-key count below its row count and
+# `opl.gold.dimensions._distinct_surrogate_keys` refuses the load -- one number covering
+# a version-to-version collision and a version-onto-ghost collision alike, which is the
+# reason that count is taken over ONE column and includes the ghost.
+#
+# A fact row that failed to resolve reaches it as
+# `COALESCE(<as-of lookup>, GHOST_SURROGATE_KEY)` at build time -- never by joining to
+# it, which it cannot do, because the ghost carries no business key.
 #
 # NOT `'00000000'`, AND THAT IS THE POINT OF SPELLING IT HERE. Keying the unknown member
 # on an all-zeros CNPJ básico is the obvious choice and it is wrong on this data:

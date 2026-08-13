@@ -35,11 +35,20 @@ loaders sit beside each other and only one of them can be re-run against a grown
 THE CALENDAR DAY IS READ OUT OF THE ISO TEXT, WHICH IS THE ONE REAL HAZARD IN THIS FILE.
 `event_time` is a UTC instant stored as a STRING (`opl.contracts.payments`: all-string in
 bronze, `...T00:00:00.000Z`), and `CAST(... AS TIMESTAMP)` resolves it in the SESSION
-timezone. This project's sessions run America/Sao_Paulo, so midnight UTC casts to 21:00 of
+timezone. Under America/Sao_Paulo -- which local Spark inherited from the operating
+system until `opl.config.SESSION_TIMEZONE` was pinned -- midnight UTC casts to 21:00 of
 the PREVIOUS day: every payment's date moves, `dim_date`'s span moves with it, and the
 star's answer becomes a function of a cluster setting. `day_of` takes the first ten
 characters instead -- the day the producer stamped, zone-free -- and `tests/gold/
-test_conformed.py` pins both halves of that, the right answer and the wrong one.
+test_conformed.py` pins both halves of that, the right answer and the wrong one, SETTING
+the wrong zone rather than inheriting it so that the pin cannot make the test vacuous.
+
+THE PIN DOES NOT MAKE `day_of` REDUNDANT, which is the reading to head off. A pinned
+setting is a setting: it is one `spark.conf.set` in a notebook away from being something
+else, and it governs the whole session rather than this column. Reading the day out of
+the text means `dim_date`'s members do not depend on it at all -- what still does is the
+`load_date` stamped on every row, which is a plain instant and is why the entry point
+sets the pin anyway.
 
 THE SURROGATE KEYS ARE TWO MECHANISMS FOR TWO KINDS, DELIBERATELY. `dim_date` is keyed
 `yyyyMMdd` as an int: a day's identity IS its calendar position, the key is readable in
@@ -61,10 +70,18 @@ from pyspark.sql import functions as F
 from opl.gold.columns import (
     CONFORMED_RECORD_SOURCE,
     GHOST_RECORD_SOURCE,
+    GHOST_ROWS,
     GHOST_SURROGATE_KEY,
     LOAD_DATE,
     RECORD_SOURCE,
 )
+
+# ONE TIMESTAMP PATH FOR THE WHOLE LAYER, which is the only reason a conformed loader
+# imports anything of the SCD2 one. `F.lit(datetime)` converts through `time.mktime` --
+# the DRIVER's operating-system zone -- where every other instant gold writes is parsed
+# by Spark in the SESSION zone, so the two would stamp the same run's `load_date` hours
+# apart on a box that is not UTC. `instant_literal` is where that argument lives.
+from opl.gold.dimensions import instant_literal
 from opl.gold.members import (
     calendar_members,
     calendar_schema,
@@ -83,10 +100,6 @@ __all__ = [
     "fact_side_cardinality",
     "load_conformed_dimension",
 ]
-
-# The one unknown member every conformed dimension carries. Named because the entry point
-# reconciles against it and a bare `+ 1` in two files is one edit away from disagreeing.
-GHOST_ROWS = 1
 
 # How many characters of an ISO-8601 instant spell its calendar day. See the module
 # docstring for why this is a substring and not a cast.
@@ -254,7 +267,7 @@ def _keyed(
     return members.select(
         _surrogate_key(dimension).alias(dimension.surrogate_key),
         "*",
-        F.lit(load_date).alias(LOAD_DATE),
+        instant_literal(load_date).alias(LOAD_DATE),
         F.lit(CONFORMED_RECORD_SOURCE).alias(RECORD_SOURCE),
     )
 
@@ -278,7 +291,7 @@ def _ghost_like(
     for `'00000000'`."""
     fixed = {
         dimension.surrogate_key: F.lit(GHOST_SURROGATE_KEY),
-        LOAD_DATE: F.lit(load_date),
+        LOAD_DATE: instant_literal(load_date),
         RECORD_SOURCE: F.lit(GHOST_RECORD_SOURCE),
     }
     return spark.range(1).select(

@@ -24,6 +24,7 @@ from datetime import date, datetime
 import pytest
 from pyspark.sql import functions as F
 
+from opl.config import SESSION_TIMEZONE, SESSION_TIMEZONE_CONFIG
 from opl.contracts import payments
 from opl.generator.profiles import PROFILES
 from opl.gold.columns import CONFORMED_RECORD_SOURCE, GHOST_RECORD_SOURCE, GHOST_SURROGATE_KEY
@@ -214,21 +215,40 @@ def test_the_calendar_day_is_read_from_the_iso_text_and_not_through_the_session_
 ):
     """THE HAZARD THIS PROJECT WOULD OTHERWISE HAVE SHIPPED. `event_time` is a UTC
     instant written as text (`...T00:00:00.000Z`), and `CAST(... AS TIMESTAMP)` resolves
-    it in the SESSION timezone -- America/Sao_Paulo here -- so midnight UTC becomes 21:00
+    it in the SESSION timezone -- so under America/Sao_Paulo midnight UTC becomes 21:00
     of the PREVIOUS day and every payment's date moves. The star's answer would then
-    depend on a cluster setting, which is not a property a calendar may have."""
+    depend on a cluster setting, which is not a property a calendar may have.
+
+    THE WRONG ZONE IS SET HERE RATHER THAN INHERITED, which is the correction the pin
+    forced. This assertion used to rest on the suite's session having happened to inherit
+    America/Sao_Paulo from the operating system: with `opl.config.SESSION_TIMEZONE`
+    pinned to UTC the cast agrees with the text, and the test would have gone green while
+    saying nothing -- exactly the outcome its own failure message predicted. Setting the
+    zone makes both halves hold on any box and under any pin: the text-read day never
+    moves, and the cast moves it whenever the session is not UTC."""
     frame = spark.createDataFrame(
         [_payment("2026-08-01T00:00:00.000Z")], PAYMENTS_SCHEMA
     )
     read = frame.select(day_of(payments.EVENT_TIME_COLUMN).alias("d")).collect()[0][0]
     assert read == date(2026, 8, 1)
-    shifted = frame.select(
-        F.to_date(F.col(payments.EVENT_TIME_COLUMN).cast("timestamp")).alias("d")
-    ).collect()[0][0]
-    assert shifted == date(2026, 7, 31), (
-        "the cast no longer moves the day on this box -- if the session timezone has "
-        "changed, the reason day_of reads the text has changed with it and both this "
-        "assertion and that docstring need revisiting"
+    pinned = spark.conf.get(SESSION_TIMEZONE_CONFIG)
+    assert pinned == SESSION_TIMEZONE, "the suite's session is no longer the pinned one"
+    try:
+        spark.conf.set(SESSION_TIMEZONE_CONFIG, "America/Sao_Paulo")
+        under_the_zone = frame.select(
+            day_of(payments.EVENT_TIME_COLUMN).alias("read"),
+            F.to_date(F.col(payments.EVENT_TIME_COLUMN).cast("timestamp")).alias("cast"),
+        ).collect()[0]
+    finally:
+        spark.conf.set(SESSION_TIMEZONE_CONFIG, pinned)
+    assert under_the_zone["read"] == date(2026, 8, 1), (
+        "day_of moved the day with the session zone, which is the whole thing it exists "
+        "not to do"
+    )
+    assert under_the_zone["cast"] == date(2026, 7, 31), (
+        "the cast no longer moves the day under America/Sao_Paulo -- if that is true, "
+        "the reason day_of reads the text has changed and both this assertion and the "
+        "docstring in opl.gold.conformed need revisiting"
     )
 
 

@@ -44,17 +44,19 @@ import sys
 
 from pyspark.sql import SparkSession
 
-from opl.config import DEFAULT
+from opl.config import DEFAULT, SESSION_TIMEZONE, SESSION_TIMEZONE_CONFIG
+
+# THE STAR'S HEADLINE ARITHMETIC IS ONE ROW PER SATELLITE VERSION PLUS THE UNKNOWN
+# MEMBER, and `GHOST_ROWS` is imported rather than restated here because `load_dimension`
+# now REFUSES a target that is not exactly that. A `+ 1` of this task's own would be a
+# second spelling of the number the loader enforces, and the line below would be able to
+# reconcile against a total the load had already rejected.
+from opl.gold.columns import GHOST_ROWS
 from opl.gold.dimensions import DimensionLoadResult, load_dimension
 from opl.gold.registry import table_spec as gold_table_spec
 from opl.gold.specs import Scd2Dimension
 from opl.vault import domains
 from opl.vault.job_params import required_load_date, required_months
-
-# What the star's headline claim is: one dimension row per satellite version, plus the
-# unknown member. Spelled once, here, because the line below is the only place a reader
-# of the run log can check it without opening two documents.
-GHOST_ROWS = 1
 
 
 def _refuse_a_dimension_this_task_cannot_build(spec) -> Scd2Dimension:
@@ -79,29 +81,42 @@ def _refuse_a_dimension_this_task_cannot_build(spec) -> Scd2Dimension:
 
 
 def _reconciliation_note(result: DimensionLoadResult) -> str:
-    """Whether the rows written are the source's versions plus the ghost, said in words.
+    """Whether the rows the target HOLDS are the source's versions plus the ghost, said
+    in words.
 
-    THE TWO STATES MUST NOT READ ALIKE, which is why this is a function and not an
-    f-string. A shortfall means satellite versions whose hash key matched no hub row --
-    a dangling reference the vault does not error on and this build cannot repair -- and
-    a run that printed only its own row count would leave that invisible. The idempotent
-    re-run is a third state and says so rather than reporting a shortfall of everything."""
+    IT RECONCILES THE TOTAL AND NOT THE APPEND, which is the correction this function is.
+    It used to test `appended` against the expectation and to take the idempotent re-run
+    as a branch that needed no arithmetic at all -- so a re-run over a permanently short
+    dimension printed a clean "the re-run is a no-op" line, `already_present` never being
+    compared to anything. The shortfall it was written to make visible was invisible on
+    exactly the branch a retry lands in, and `max_retries: 0` does not prevent a retry.
+
+    THE THIRD BRANCH IS NOT REACHABLE THROUGH `load_dimension` ANY MORE, and it is kept
+    deliberately. `_refuse_a_count_that_is_not_every_version_plus_the_ghost` raises on
+    that state before a result is ever built, which is where enforcement belongs -- a
+    printed sentence is not a guard. This is a total taken from a frozen dataclass any
+    caller can construct, and the sentence an operator would meet if that refusal were
+    ever relaxed; it costs three lines and it is the one branch whose absence would be
+    invisible."""
     expected = result.source_versions + GHOST_ROWS
+    held = result.already_present + result.appended
+    if held != expected:
+        return (
+            f"which does NOT reconcile: the table holds {held} rows against "
+            f"{result.source_versions} satellite versions + {GHOST_ROWS} ghost = "
+            f"{expected}. The difference is satellite versions whose hash key matched no "
+            "row in the hub -- a dangling reference, which nothing in the vault errors "
+            "on and which this build drops rather than inventing a key for"
+        )
     if result.appended == 0 and result.already_present:
         return (
-            f"nothing was appended: the target already held {result.already_present} "
-            f"rows and this build reproduces them exactly, so the re-run is a no-op"
-        )
-    if result.appended == expected:
-        return (
-            f"which reconciles: {result.source_versions} satellite versions + "
-            f"{GHOST_ROWS} ghost"
+            f"nothing was appended: the target already held {held} rows, which IS "
+            f"{result.source_versions} satellite versions + {GHOST_ROWS} ghost, and this "
+            "build reproduces them exactly -- so the re-run is a no-op"
         )
     return (
-        f"which does NOT reconcile against {result.source_versions} satellite versions "
-        f"+ {GHOST_ROWS} ghost = {expected}. The difference is satellite versions whose "
-        "hash key matched no row in the hub -- a dangling reference, which nothing in "
-        "the vault errors on and which this build drops rather than inventing a key for"
+        f"which reconciles: {result.source_versions} satellite versions + "
+        f"{GHOST_ROWS} ghost"
     )
 
 
@@ -115,6 +130,10 @@ def main(argv: list[str] | None = None) -> None:
     satellite = domains.table_spec(spec.source_satellite)
     hub = domains.parent_hub(satellite)
     spark = SparkSession.builder.getOrCreate()
+    # BEFORE ANY TABLE IS READ. This build turns a DATE into an instant, and that
+    # conversion resolves through the session zone -- so the setting decides where every
+    # version boundary lands relative to the UTC `event_time` the fact asks with.
+    spark.conf.set(SESSION_TIMEZONE_CONFIG, SESSION_TIMEZONE)
     result = load_dimension(
         spark,
         spec,

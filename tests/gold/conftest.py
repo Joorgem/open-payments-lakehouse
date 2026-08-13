@@ -41,7 +41,7 @@ import pytest
 
 from opl.contracts.cnpj_schemas import columns_for
 from opl.gold import registry as gold_registry
-from opl.gold.dimensions import load_dimension
+from opl.gold.dimensions import instant_literal, load_dimension
 from opl.vault import domains
 from opl.vault.hubs import load_hub
 from opl.vault.observation import ObservationGrain
@@ -203,6 +203,25 @@ def load_vault(spark, source, names, *, months=WINDOW):
         load_date=BUILT_AT, grain=source.grain, months=list(months),
     )
     return names
+
+
+def as_collected(spark, value: datetime) -> datetime:
+    """`value` as `collect()` hands it back -- which is NOT `value` on a box whose
+    operating system is not on the session's timezone.
+
+    MEASURED, AND IT IS TWO ZONES MEETING IN THE DRIVER RATHER THAN A BUG IN EITHER.
+    `opl.gold.dimensions.instant_literal` writes an instant by casting ISO text, which
+    Spark parses in the SESSION zone (`opl.config.SESSION_TIMEZONE`, pinned to UTC);
+    pyspark converts a TIMESTAMP back to Python through `datetime.fromtimestamp`, which
+    reads the OPERATING SYSTEM's. On this UTC-3 dev box the two differ by three hours, so
+    `row[VALID_FROM] == VALID_FROM_FLOOR` is FALSE about a dimension that is perfectly
+    correct, and would have been true only by the accident of the session having
+    inherited the OS zone.
+
+    Round-tripping the expected value through the same two conversions is what keeps the
+    assertion about the DATA. It is a Spark call per use and the tests that need it are
+    few; a cached constant would be one more thing to keep in step with the session."""
+    return spark.range(1).select(instant_literal(value).alias("v")).collect()[0]["v"]
 
 
 def vault_names(db: str, suffix: str) -> SimpleNamespace:

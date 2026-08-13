@@ -186,6 +186,37 @@ def is_month(value: str) -> bool:
 SENTINEL_MONTH = "REQUIRED-PASS-A-MONTH"
 
 
+# THE SESSION TIMEZONE, PINNED, AND IT IS A CORRECTNESS SETTING RATHER THAN A
+# PREFERENCE. A Spark `TIMESTAMP` is an INSTANT stored as UTC micros, and every
+# conversion into or out of one -- `CAST(date AS timestamp)`, `CAST('1970-01-01
+# 00:00:00' AS timestamp)`, `date_format` -- resolves through this setting. Nothing
+# declares it today: local Spark inherits the operating system's zone (America/Sao_Paulo
+# on this project's dev box) and Databricks serverless defaults to UTC, so the SAME code
+# over the SAME rows writes instants three hours apart in the two places.
+#
+# WHAT THAT COSTS, MEASURED. `opl.gold.dimensions` turns an RFB `applied_date` (a DATE)
+# into a version's `valid_from`, and the fact asks for a version as of an `event_time`
+# the payment contract stamps in UTC (`...T00:00:00.000Z`). Under a UTC-3 session the
+# 2026-06-13 boundary is written as 2026-06-13T03:00:00Z, so every payment in those
+# three hours resolves to the version BEFORE the one it belongs to -- a wrong answer
+# with nothing to see in any log. The RFB publishes a day, not an hour, and the only
+# reading that agrees with the payment stream's own clock is midnight UTC.
+#
+# IT ALSO FIXES THE FLOOR AT EXACTLY THE EPOCH. `opl.gold.columns.VALID_FROM_FLOOR` is
+# 1970-01-01 00:00:00, which under this pin is 0 micros on every machine. Written in the
+# driver's own zone instead it is a NEGATIVE epoch value anywhere east of Greenwich, and
+# both halves of pyspark's Python conversion refuse one on Windows -- measured, this
+# box: `F.lit(datetime(1969, 6, 15))` raises `OverflowError` from `time.mktime`, and
+# collecting a negative timestamp raises `OSError [Errno 22]` from
+# `datetime.fromtimestamp`. See `opl.gold.dimensions.instant_literal`.
+#
+# TWO CONSTANTS AND NOT ONE, because both halves are spelled in more than one file: the
+# key is set on a session in `opl.spark.local_session` and in each gold entry point, and
+# a typo in it is a `conf.set` that silently configures nothing.
+SESSION_TIMEZONE_CONFIG = "spark.sql.session.timeZone"
+SESSION_TIMEZONE = "UTC"
+
+
 def require_month(month: str | None, *, action: str) -> str:
     """The month `action` will work in, or refuse: absent and malformed both.
 

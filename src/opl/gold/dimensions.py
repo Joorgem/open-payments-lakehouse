@@ -5,9 +5,13 @@ the versions.
 
 NO MERGE, AND THE ALTERNATIVE IS NOT "A CHEAPER MERGE". The textbook SCD2 load writes
 the new version and then UPDATEs the previous one's end date, which needs a MERGE or an
-UPDATE -- and there is none in this repository: `grep -rin "MERGE INTO|\\.merge\\(|
-DeltaTable"` over `src/`, `databricks/src/` and `tests/` returns zero, because every
-loader here is `mode("append")`. Proving a new write pattern on Free Edition serverless
+UPDATE -- and there is none in this repository. Measured, and the spelling matters
+because the first one written here did not do what it said: `git grep -lEi "MERGE
+INTO|\\.merge\\(|DeltaTable" -- src databricks/src tests` matches this file and nothing
+else, and it matches this file because of the sentence you are reading. (It was written
+as `grep -rin`, where `|` is a LITERAL under basic regular expressions and the pattern
+therefore matches nothing anywhere -- a claim that could not fail.) Every loader here is
+`mode("append")`. Proving a new write pattern on Free Edition serverless
 against 69.2M rows is not a cost this phase pays to save one window function the vault
 already runs at that scale (`opl.vault.loading.changed_rows` partitions by key and
 orders by `applied_date` with `F.lag`). So `valid_to` is `F.lead(applied_date)` over
@@ -47,8 +51,11 @@ THE SURROGATE KEY IS A HASH, AND THE TWO OBVIOUS GENERATORS ARE BOTH WRONG HERE.
 assignment, so a rebuild re-keys the dimension -- and the fact stores `company_sk`, so
 every fact row would then point at a row that no longer means what it did, with the
 join still resolving. `row_number()` over an unpartitioned window is a single-partition
-sort of 69.2M rows. A hash of (business key, `valid_from`) is deterministic, needs no
-coordination, and is stable under a rebuild.
+sort of 69.2M rows. A hash of (business key, `applied_date`) is deterministic, needs no
+coordination, and is stable under a rebuild -- under a rebuild in ANOTHER TIMEZONE
+included, which the first spelling of this key was not: it hashed `valid_from`, a
+TIMESTAMP, and three session zones produced three different keys for one version.
+`_versioned` argues that change where it is made.
 
 WHAT A HASH COSTS AND HOW IT IS PAID. `xxhash64` is 64 bits, so over 69,202,818 rows the
 birthday probability of ANY collision is about 1.3e-4 -- small, not zero, and a collision
@@ -81,8 +88,10 @@ from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
+from opl.config import SESSION_TIMEZONE, SESSION_TIMEZONE_CONFIG
 from opl.gold.columns import (
     GHOST_RECORD_SOURCE,
+    GHOST_ROWS,
     GHOST_SURROGATE_KEY,
     IS_CURRENT,
     LOAD_DATE,
@@ -98,6 +107,7 @@ from opl.vault.loading import rows_in
 from opl.vault.registry import Hub, Satellite
 
 __all__ = [
+    "COLLISION_CAUSES",
     "DimensionLoadResult",
     "dimension_rows",
     "instant_literal",
@@ -142,14 +152,28 @@ class DimensionLoadResult:
 
 def instant_literal(value: datetime) -> Column:
     """`value` as a timestamp Column, built from its ISO text rather than from the
-    `datetime` itself.
+    `datetime` itself. EVERY instant this module writes goes through here.
 
-    `F.lit(datetime)` GOES THROUGH `time.mktime`, which is a C-runtime call and which
-    raises `OverflowError: mktime argument out of range` on this project's Windows dev
-    box for anything past year 3000. Casting the ISO string instead is parsed by Spark
-    in the session timezone with no Python conversion involved, so the sentinel values
-    in `opl.gold.columns` are chosen for what can be READ BACK rather than for what can
-    be written."""
+    IT IS ABOUT THE ZONE AND NOT ABOUT THE RANGE, which corrects what this docstring
+    used to say. `F.lit(datetime)` goes through `time.mktime`, and the range half of that
+    is real but SYMMETRIC: measured on this Windows box, `F.lit` raises `OverflowError`
+    outside 1970-01-01 .. 3000-12-31 -- at BOTH ends, `datetime(1900, 1, 1)` and
+    `datetime(3001, 1, 1)` alike -- and collecting a cast ISO string raises `OSError
+    [Errno 22]` for exactly the same values. The cast buys no range at all for a value
+    Python has to read back; `opl.gold.columns` tabulates both directions.
+
+    WHAT IT BUYS IS WHICH ZONE THE TEXT IS READ IN. `mktime` uses the DRIVER's
+    operating-system zone; a cast string is parsed by Spark in the SESSION zone, which
+    `opl.config.SESSION_TIMEZONE` pins to UTC in both gold entry points and in
+    `opl.spark.local_session`. So `VALID_FROM_FLOOR` is the epoch itself on every
+    machine. Through `F.lit` it would be midnight in the driver's own zone, which is a
+    NEGATIVE epoch value east of Greenwich -- and `mktime` refuses one, so the floor
+    would fail to be written at all on such a box rather than being written differently.
+
+    THE ONE THING IT CANNOT FIX is the other direction: `collect()` converts back through
+    `datetime.fromtimestamp`, which reads the operating system's zone whatever the
+    session is set to. A test comparing a collected bound against a Python `datetime`
+    is comparing across those two zones, not asserting anything about the dimension."""
     return F.lit(value.isoformat(sep=" ")).cast(_TIMESTAMP)
 
 
@@ -236,14 +260,27 @@ def _bounded(satellite: Satellite, hub: Hub, source: DataFrame, keys: DataFrame)
     the business key is eight characters against the digest's sixty-four -- the same
     partition, a narrower shuffle.
 
-    `applied_date` IS CAST TO AN INSTANT HERE, ONCE. The vault stores it as a DATE, the
-    fact will ask as of a TIMESTAMP, and leaving the two to meet in a predicate would
-    make every as-of join rest on an implicit widening nobody wrote down. Midnight of
-    the snapshot's own date is the only reading available: the RFB tells us the day, not
-    the hour."""
+    `applied_date` IS CAST TO AN INSTANT HERE, ONCE, AND IS ALSO CARRIED THROUGH AS THE
+    DATE IT IS. The vault stores it as a DATE, the fact will ask as of a TIMESTAMP, and
+    leaving the two to meet in a predicate would make every as-of join rest on an
+    implicit widening nobody wrote down. Midnight of the snapshot's own date is the only
+    reading available: the RFB tells us the day, not the hour. The uncast column survives
+    beside it because `_versioned` hashes THAT -- a DATE has no timezone and the instant
+    derived from it does; see the surrogate-key paragraph there.
+
+    NO TIEBREAKER ON THE ORDER, AND TWO LAYERS BELOW THIS ONE ARE WHY. A tie needs one
+    key with two rows on one `applied_date`, which `opl.vault.satellites` cannot produce
+    (`keyed.groupBy(hub.hash_key, APPLIED_DATE)` is its grain) and `opl.vault.loading
+    ._without_persisted` cannot re-add (it anti-joins on the same pair). Stated rather
+    than assumed because `load_dimension` accepts an arbitrary `source_table`: handed a
+    table that is not a satellite, a tie would make `lag`/`lead` pick a neighbour
+    non-deterministically, and a third row on one date would put a ZERO-WIDTH interval in
+    the chain -- one that no as-of query can ever return, since the predicate is
+    half-open."""
     business = hub.business_key_columns
     joined = source.join(keys, on=hub.hash_key, how="inner").select(
         *(F.col(column) for column in business),
+        F.col(APPLIED_DATE),
         F.col(APPLIED_DATE).cast(_TIMESTAMP).alias(_OBSERVED_AT),
         *(F.col(column) for column in satellite.payload_columns),
         F.col(RECORD_SOURCE),
@@ -270,23 +307,36 @@ def _versioned(
     POSITIONALLY unless `mergeSchema` says otherwise, so two builds projecting the same
     columns in two orders would write each other's values without failing.
 
-    THE SURROGATE KEY IS TAKEN OVER (business key..., `valid_from`) IN THAT ORDER, and
-    the order is part of the key: permuting it re-keys the whole table. `valid_from` and
-    not `applied_date`, so that the first version's key is derived from the value the
-    row actually carries."""
+    THE SURROGATE KEY IS TAKEN OVER (business key..., `applied_date`) IN THAT ORDER, and
+    the order is part of the key: permuting it re-keys the whole table.
+
+    `applied_date` AND NOT `valid_from`, WHICH IS A CHANGE. `valid_from` is a TIMESTAMP,
+    i.e. UTC micros, and the DATE it derives from resolves through
+    `spark.sql.session.timeZone` -- so the key MOVED with a cluster setting: measured,
+    one business key on one `applied_date` under three session zones produced three
+    different `company_sk` values. The fact stores this key.
+    `opl.config.SESSION_TIMEZONE` pins the zone; hashing the DATE, which has none, is
+    what makes the key stand still when nobody is holding the setting.
+
+    IT COSTS re-derivability from a dimension row, since `applied_date` is not a column
+    of one, and BUYS two things: the key is now over the pair the VAULT keys a version on
+    (`opl.vault.satellites`' grain is exactly (hash key, `applied_date`)), and it is
+    stable under a backfill, where the old key was not -- an earlier snapshot landing
+    makes a previously-first version stop being floored, moving its `valid_from` and so
+    its key while the row was the same row."""
     valid_from = F.when(
         F.col(_PRECEDING).isNull(), instant_literal(VALID_FROM_FLOOR)
     ).otherwise(F.col(_OBSERVED_AT))
     valid_to = F.coalesce(F.col(_FOLLOWING), instant_literal(VALID_TO_CEILING))
     business = [F.col(column) for column in hub.business_key_columns]
     return bounded.select(
-        F.xxhash64(*business, valid_from).alias(dimension.surrogate_key),
+        F.xxhash64(*business, F.col(APPLIED_DATE)).alias(dimension.surrogate_key),
         *business,
         *(F.col(column) for column in satellite.payload_columns),
         valid_from.alias(VALID_FROM),
         valid_to.alias(VALID_TO),
         (valid_to == instant_literal(VALID_TO_CEILING)).alias(IS_CURRENT),
-        F.lit(load_date).alias(LOAD_DATE),
+        instant_literal(load_date).alias(LOAD_DATE),
         F.col(RECORD_SOURCE),
     )
 
@@ -311,7 +361,7 @@ def _ghost_like(
         VALID_FROM: instant_literal(VALID_FROM_FLOOR),
         VALID_TO: instant_literal(VALID_TO_CEILING),
         IS_CURRENT: F.lit(True),
-        LOAD_DATE: F.lit(load_date),
+        LOAD_DATE: instant_literal(load_date),
         RECORD_SOURCE: F.lit(GHOST_RECORD_SOURCE),
     }
     return spark.range(1).select(
@@ -349,19 +399,25 @@ def _refuse_a_target_the_source_has_outgrown(
 
     THE LIMIT OF AN APPEND-ONLY SCD2, MADE LOUD. The check is on (surrogate key,
     `valid_to`): the surrogate key does not move when a company gains a version -- it is
-    hashed over `valid_from`, which is unchanged -- so what a new snapshot changes is
-    exactly the previously-open row's END. A row of that pair missing from the target is
-    therefore the signal that the source has moved on, and appending it would put two
-    intervals on one surrogate key.
+    hashed over that version's own `applied_date`, which is unchanged -- so what a new
+    snapshot changes is exactly the previously-open row's END. A row of that pair missing
+    from the target is therefore the signal that the source has moved on, and appending
+    it would put two intervals on one surrogate key.
+
+    `valid_to` IS AN INSTANT AND SO THIS HALF OF THE PAIR STILL MOVES WITH THE SESSION
+    ZONE, where the key no longer does. `opl.config.SESSION_TIMEZONE` is pinned in both
+    gold entry points and in `opl.spark.local_session` precisely so that it cannot, and
+    the refusal below names the zone among its causes rather than leaving an operator to
+    read "a new snapshot in the source" and drop a 69.2M-row table for the wrong reason.
 
     BEFORE THE FIRST WRITE, per master protocol section 4.4, because `max_retries: 0`
     does not prevent a retry and this is the branch a retry lands in.
 
-    WHAT IT DOES NOT COVER, stated rather than implied: a target holding rows the
-    derivation no longer produces -- a company deleted from the vault by hand -- passes
-    this check, because every derived row is still present. Nothing in this project
-    deletes from a satellite, and the surrogate-key uniqueness measurement would not see
-    it either; a MERGE-based rebuild is what closes it."""
+    WHAT IT DOES NOT COVER: a target holding rows the derivation no longer produces
+    passes, every derived row still being present.
+    `_refuse_a_count_that_is_not_every_version_plus_the_ghost` catches that as a count
+    too high; what stays uncovered is a target short and long by the same number, which
+    a MERGE-based rebuild is what closes."""
     existing = spark.read.table(target_table).select(dimension.surrogate_key, VALID_TO)
     revised = (
         rows.select(dimension.surrogate_key, VALID_TO)
@@ -376,9 +432,67 @@ def _refuse_a_target_the_source_has_outgrown(
             "interval on a surrogate key it already has and every as-of lookup for that "
             "company would return two rows. An append-only SCD2 cannot revise an "
             "interval it already closed -- which is what a new snapshot in the source "
-            "does to the open version. Drop the table and rebuild it; nothing has been "
-            "written by this run"
+            "does to the open version, and it is the likely cause. The other one is a "
+            f"session timezone that is not {SESSION_TIMEZONE}: `valid_to` is an INSTANT, "
+            "so a rebuild under a moved zone reproduces every row with its bounds shifted "
+            "and is refused here saying this. Check "
+            f"`spark.conf.get({SESSION_TIMEZONE_CONFIG!r})` before dropping anything; if "
+            "it is right, drop the table and rebuild it -- nothing has been written by "
+            "this run"
         )
+
+
+# THE THREE WAYS ONE SURROGATE KEY LANDS ON TWO ROWS, EACH WITH THE REPAIR IT NEEDS --
+# and they do NOT share one. This refusal named the first alone and closed on "the repair
+# is a wider key, not a re-run", which is right for that cause and wrong for the other
+# two: both are defects in the SOURCE, where the key is fine and a re-run over a repaired
+# vault is exactly what fixes them. Telling an operator to widen a key would leave the
+# duplicate in place and re-key a 69.2M-row dimension for nothing.
+#
+# A TUPLE THE MESSAGE IS RENDERED FROM rather than three sentences written into it, so
+# `tests/gold/test_dim_company.py` can drive one case per cause without restating the
+# prose -- the shape `opl.contracts.payments` uses for its declared domains.
+COLLISION_CAUSES: tuple[tuple[str, str], ...] = (
+    (
+        "a genuine xxhash64 collision between two versions -- 64 bits over 69.2M rows "
+        "is roughly a 1.3e-4 birthday chance, which is the outcome this count was "
+        "measured for rather than an impossible one",
+        "a WIDER KEY. A re-run reproduces the same digest from the same inputs",
+    ),
+    (
+        "two hub rows carrying one business key, so the join to the hub FANS OUT and "
+        "emits one satellite version twice with identical inputs to the hash",
+        "FIX THE HUB and re-run. The key is not the problem and widening it changes "
+        "nothing",
+    ),
+    (
+        "two satellite rows for one hash key on one `applied_date`, which the vault's "
+        "own grain forbids -- the key IS (business key, `applied_date`), so two such "
+        "rows hash to one value by construction",
+        "FIX THE SATELLITE and re-run, for the cause above's reason",
+    ),
+)
+
+
+def _surrogate_key_collision(
+    *, target_table: str, surrogate_key: str, rows: int, distinct: int
+) -> str:
+    """The refusal text for a surrogate key that is not unique, in one place.
+
+    Extracted like `opl.bronze.registry_collisions._delta_name_collision` and for its
+    two reasons: enumerating three causes inline takes the guard past the fifty lines
+    this project gives a function, and a refusal text is its own thing to grep for."""
+    causes = "".join(
+        f" ({number}) {cause}; the repair is {repair}."
+        for number, (cause, repair) in enumerate(COLLISION_CAUSES, start=1)
+    )
+    return (
+        f"{target_table} holds {rows} rows and only {distinct} distinct {surrogate_key} "
+        "values. Two dimension rows share a surrogate key, so every fact joining on it "
+        "would match both -- silently. THREE THINGS PRODUCE THIS AND THEY DO NOT SHARE A "
+        f"REPAIR:{causes} THE TABLE ON DISK IS ALREADY WRITTEN and must be dropped "
+        "whichever it was."
+    )
 
 
 def _distinct_surrogate_keys(
@@ -393,19 +507,71 @@ def _distinct_surrogate_keys(
     of anything is a value, and the ghost's is a literal -- so a single-column distinct
     count is total over the table, the ghost included. That totality is what lets ONE
     number cover both hazards: a collision between two versions, and the astronomically
-    unlikely versioned row that hashed onto the ghost's reserved key."""
+    unlikely versioned row that hashed onto the ghost's reserved key -- which is what
+    RESERVES that key, since `xxhash64` returns the full signed 64-bit range and -1 is an
+    ordinary value in it (`opl.gold.columns`)."""
     distinct = spark.read.table(target_table).select(dimension.surrogate_key).distinct().count()
     if distinct != rows:
         raise ValueError(
-            f"{target_table} holds {rows} rows and only {distinct} distinct "
-            f"{dimension.surrogate_key} values. Two dimension versions share a surrogate "
-            "key, so every fact joining on it would match both -- silently. The key is a "
-            "64-bit hash and a collision has roughly a 1.3e-4 chance at this row count, "
-            "so this is the outcome that was measured for rather than an impossible one. "
-            "THE TABLE ON DISK IS ALREADY WRITTEN and must be dropped; the repair is a "
-            "wider key, not a re-run, which would reproduce the same collision"
+            _surrogate_key_collision(
+                target_table=target_table,
+                surrogate_key=dimension.surrogate_key,
+                rows=rows,
+                distinct=distinct,
+            )
         )
     return distinct
+
+
+def _refuse_a_count_that_is_not_every_version_plus_the_ghost(
+    hub: Hub,
+    *,
+    target_table: str,
+    source_table: str,
+    hub_table: str,
+    held: int,
+    source_versions: int,
+) -> None:
+    """Refuse unless the target holds exactly one row per satellite version plus the
+    ghost. THE PHASE'S HEADLINE NUMBER, ENFORCED INSTEAD OF OBSERVED.
+
+    `_bounded` joins `how="inner"`, so a satellite version whose hash key matches no hub
+    row -- what a hub loaded over a narrower window than its satellite produces, and what
+    nothing in the vault errors on -- is DROPPED. Measured: with one hub key deleted the
+    load succeeded, reporting `appended = 4` against `source_versions = 4`.
+    `_distinct_surrogate_keys` cannot catch it: it compares distinct keys against the row
+    count that was WRITTEN, never against the one that was expected.
+
+    CHECKED ON THE COUNT HELD AND NOT ON THE COUNT APPENDED, because it is an invariant
+    of every state this loader accepts -- fresh build, idempotent re-run, and a target
+    this run did not write. The re-run is the state that was reporting a clean no-op over
+    a permanently short dimension. It also catches a count that is too HIGH, which is the
+    gap `_refuse_a_target_the_source_has_outgrown` names as its own.
+
+    AFTER THE WRITE, like `_distinct_surrogate_keys` and for its reason: counting before
+    means deriving the whole frame twice, and serverless has no `persist()`. So the
+    message says the rows are on disk."""
+    expected = source_versions + GHOST_ROWS
+    if held == expected:
+        return
+    diagnosis = (
+        "satellite versions whose hash key matched no row in the hub -- a dangling "
+        "reference the vault does not error on and this build's inner join drops"
+        if held < expected
+        else "rows the derivation no longer produces -- a satellite row removed after "
+        "this table was built, which no other check in this loader can see"
+    )
+    raise ValueError(
+        f"refusing to accept {target_table}: it holds {held} rows and {source_table} "
+        f"holds {source_versions} satellite versions, which with {GHOST_ROWS} ghost is "
+        f"{expected}. The difference is {diagnosis}. This layer's whole claim is one "
+        "dimension row per satellite version, so the table is a wrong answer that every "
+        "later re-run would report as a clean no-op. List the offending rows with "
+        f"spark.read.table({source_table!r}).join(spark.read.table({hub_table!r}).select("
+        f"{hub.hash_key!r}), on={hub.hash_key!r}, how='left_anti'), load the hub over the "
+        "window the satellite covers, then DROP THIS TABLE -- the short chain is already "
+        "on disk -- and rebuild it"
+    )
 
 
 def load_dimension(
@@ -423,24 +589,20 @@ def load_dimension(
     """Build `dimension` from `source_table`'s versions and `hub_table`'s business keys,
     and append it -- once, whole, with every interval already closed.
 
-    `load_date` is an argument with no default, for `opl.vault.hubs.load_hub`'s reason:
-    a loader that stamps its own clock cannot be asserted against, and in the data it
-    would make the LDTS a record of when the pipeline ran rather than a value the job's
-    own parameters pin.
-
-    Idempotent: a re-run over an unchanged source writes nothing and reports 0 appended.
-    A re-run over a source that GAINED a snapshot is refused before its first write --
-    `_refuse_a_target_the_source_has_outgrown` is where that limit is argued."""
+    `load_date` is an argument with no default, for `opl.vault.hubs.load_hub`'s reason: a
+    loader that stamps its own clock cannot be asserted against. Idempotent: a re-run over
+    an unchanged source writes nothing and reports 0 appended. A source that GAINED a
+    snapshot is refused before the first write; a target that is not one row per version
+    plus the ghost is refused in every state."""
     _refuse_a_mismatched_source(dimension, satellite, hub)
     source = spark.read.table(source_table)
     _refuse_a_window_that_is_not_the_snapshots_the_source_holds(source, months, dimension)
-    # PROJECTED DOWN TO (hash key, business key) BEFORE THE JOIN, so the hub's own
-    # `load_date` and `record_source` never reach it -- they would collide by name with
-    # the satellite's and make every column reference ambiguous.
+    # PROJECTED DOWN TO (hash key, business key) BEFORE THE JOIN: the hub's own
+    # `load_date` and `record_source` would collide by name with the satellite's.
     keys = spark.read.table(hub_table).select(hub.hash_key, *hub.business_key_columns)
     rows = dimension_rows(
-        spark, dimension, satellite=satellite, hub=hub, source=source, keys=keys,
-        load_date=load_date,
+        spark, dimension, satellite=satellite, hub=hub, source=source,
+        keys=keys, load_date=load_date,
     )
     before = rows_in(spark, target_table)
     if before:
@@ -449,10 +611,15 @@ def load_dimension(
     else:
         rows.write.format("delta").mode("append").saveAsTable(target_table)
         after = rows_in(spark, target_table)
+    source_versions = rows_in(spark, source_table)
+    _refuse_a_count_that_is_not_every_version_plus_the_ghost(
+        hub, target_table=target_table, source_table=source_table,
+        hub_table=hub_table, held=after, source_versions=source_versions,
+    )
     return DimensionLoadResult(
         table=target_table,
         appended=after - before,
         already_present=before,
-        source_versions=rows_in(spark, source_table),
+        source_versions=source_versions,
         distinct_keys=_distinct_surrogate_keys(spark, dimension, target_table, after),
     )

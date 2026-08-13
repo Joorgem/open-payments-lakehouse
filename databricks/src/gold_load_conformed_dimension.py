@@ -42,7 +42,7 @@ import sys
 from pyspark.sql import SparkSession
 
 from opl.bronze.registry import table_spec as bronze_table_spec
-from opl.config import DEFAULT
+from opl.config import DEFAULT, SESSION_TIMEZONE, SESSION_TIMEZONE_CONFIG
 from opl.contracts import payments
 from opl.gold.conformed import GHOST_ROWS, ConformedLoadResult, load_conformed_dimension
 from opl.gold.registry import table_spec as gold_table_spec
@@ -101,6 +101,11 @@ def main(argv: list[str] | None = None) -> None:
         else None
     )
     spark = SparkSession.builder.getOrCreate()
+    # THE SAME PIN ITS SIBLING SETS, AND NOT BECAUSE THE TWO TASKS SHOULD LOOK ALIKE.
+    # `day_of` already reads the calendar day out of the ISO TEXT, so this dimension's
+    # members do not move with the zone -- what does move is the `load_date` stamped on
+    # every row, which is a plain instant. One run, one LDTS, whichever task wrote it.
+    spark.conf.set(SESSION_TIMEZONE_CONFIG, SESSION_TIMEZONE)
     result = load_conformed_dimension(
         spark,
         spec,
