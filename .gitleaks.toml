@@ -1,0 +1,43 @@
+# gitleaks configuration.
+#
+# THIS FILE EXTENDS THE DEFAULT RULES, IT DOES NOT REPLACE THEM. `useDefault = true` is
+# the load-bearing line: without it, declaring a config here silently swaps gitleaks'
+# entire ruleset for whatever is written below, and a scanner that reports nothing because
+# it was asked nothing is indistinguishable from a clean repository. CI's own debug log
+# names the config it loaded, which is the only place that substitution would be visible.
+[extend]
+useDefault = true
+
+# --- the one declared false positive, identified by measurement -----------------------
+#
+# `tests/gold/test_registry.py` asserts that a conformed dimension whose surrogate key and
+# natural key are THE SAME NAME is refused at construction. Expressing that needs one name
+# reaching two keyword parameters, and gitleaks' `generic-api-key` rule fires on it.
+#
+# WHAT IT ACTUALLY CAPTURED, AND THIS TOOK TWO WRONG FIXES TO ESTABLISH. The rule does not
+# flag the fixture VALUE. Under `--redact` the finding renders as
+#
+#     ...(natural_key="probe_key", REDACTED"probe_key")
+#
+# so the redacted span -- the captured "secret" -- is the PARAMETER NAME between the two
+# quoted values, not either value. The reported entropy settles it: 3.521641 is the
+# Shannon entropy of that fourteen-character keyword to four decimal places. An earlier
+# attempt allowlisted the fixture value and changed nothing, because the fixture value was
+# never what was captured.
+#
+# WHY THE REPAIR IS HERE AND NOT IN THE TEST. gitleaks scans a COMMIT RANGE, not a working
+# tree. The string is in this branch's history, so editing the test cannot remove it from
+# what CI scans -- only rewriting history could, and that would destroy the commit-by-commit
+# record this project's evidence depends on. The test was still reworded, because a fixture
+# that reads as one name reaching two parameters is clearer anyway; but the reword alone
+# left the finding, and briefly ADDED a second one when the explanatory comment quoted the
+# offending string verbatim.
+#
+# WHAT IS DELIBERATELY NOT ALLOWLISTED. No path is listed, so no file is exempt -- a real
+# credential in this same test file is still caught. What is exempted is one Python keyword
+# argument name that cannot be a credential in any repository.
+[allowlist]
+description = "A keyword argument name captured as a secret: see the block above."
+regexes = [
+    '''surrogate_key''',
+]
