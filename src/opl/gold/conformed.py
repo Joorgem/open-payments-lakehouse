@@ -286,7 +286,26 @@ def fact_surrogate_key(dimension: ConformedDimension) -> Column:
     `opl.gold.facts` measures referential integrity per conformed dimension AFTER the
     write instead -- the orphan is found by counting, not by joining, and the two
     enumerated dimensions cannot produce one at all while the generator picks from the
-    domains the contract declares."""
+    domains the contract declares.
+
+    AN ABSENT VALUE IS THE CASE THAT LAST CLAUSE DOES NOT COVER, AND IT PRODUCES A KEY
+    RATHER THAN A NULL. `xxhash64(NULL)` is **42** -- measured, and 42 whatever the NULL's
+    type, because Spark seeds the hash at 42 and a NULL field contributes nothing to it.
+    So a payment whose `payment_method` or `currency` is absent derives key 42, which no
+    declared member holds and which is not `GHOST_SURROGATE_KEY` either. It is COUNTED AS
+    AN ORPHAN AND REPORTED, exactly like a day outside `dim_date`'s span, and that is the
+    intended outcome: the row is written, the fact says one lookup does not resolve, and
+    nothing is silently attributed to a member.
+
+    IT IS DELIBERATELY NOT A REFUSAL, WHICH IS THE ASYMMETRY WORTH NAMING.
+    `opl.gold.facts._refuse_payments_no_instant_can_be_read` STOPS the build over a NULL
+    `event_time` or a NULL measure, because those are silent in a way this is not -- a
+    NULL instant matches no half-open interval and ghosts BOTH role keys while the run
+    reports a merely lower resolution rate, and a NULL measure lowers every SUM by an
+    amount nobody can name. An absent enumerated value costs one row one dimension lookup
+    and says so in a number. `tests/gold/test_conformed.py` pins that 42 is held by no
+    declared member of either enumerated dimension, which is what makes "reported" and not
+    "silently attributed" true."""
     return _member_key(dimension, _fact_member(dimension))
 
 
@@ -395,8 +414,19 @@ def _distinct_surrogate_keys(
     ONE COLUMN, NOT A TUPLE, per `opl.gold.dimensions._distinct_surrogate_keys`. The
     enumerated key is a 64-bit hash over a handful of members, so a collision is not the
     hazard here that it is at 69.2M rows -- what this catches is a member declared twice
-    reaching the table anyway, and the day `yyyyMMdd` overflows an int (year 2148), which
-    is a silent wrong answer rather than an error."""
+    reaching the table anyway, and the day whose `yyyyMMdd` no longer fits an int.
+
+    THAT SECOND ONE IS MEASURED, AND THE YEAR IS NOT THE ONE THIS DOCSTRING FIRST NAMED.
+    `_member_key` renders the day with `date_format` and parses it with `cast("int")`, so
+    the ceiling is 2,147,483,647 READ AS A `yyyyMMdd`: 21480101 fits, 99990101 fits,
+    2147481231 fits, and the first day that does not is 214749-01-01 -- which Spark
+    renders `+2147490101`, having prefixed a `+` to every year of five digits or more
+    since 10000. The cast returns NULL rather than raising. NULL is a VALUE to `distinct`,
+    so ONE overflowed day still counts once and passes here; TWO collapse into one and
+    this refuses. "Year 2148" was the int ceiling misread as a date key, and the
+    correction is recorded rather than deleted because the MECHANISM is real and silent
+    even though no span this star derives can reach the year. Pinned by
+    `tests/gold/test_conformed.py::test_the_day_key_ceiling_is_the_int_read_as_a_date`."""
     distinct = spark.read.table(target_table).select(dimension.surrogate_key).distinct().count()
     if distinct != rows:
         raise ValueError(

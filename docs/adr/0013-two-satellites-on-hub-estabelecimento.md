@@ -14,6 +14,15 @@ was narrower than the payloads it was quoted against, Task 7's correction pass
 caught it, and the controller re-ran it over the full payloads. Both figures are
 below, because which one you are reading matters.
 
+**Amended in F3** with the consequence this decision has downstream: two
+satellites on one hub is exactly the condition a **PIT table** exists for, and
+`gold.pit_estabelecimento` (`src/opl/gold/pit.py`) is built over these two. That
+ruling is recorded here rather than in a third ADR because this file already owns
+the two-satellite argument and the PIT is its consequence, not a separate
+decision. See *The PIT table is this decision's consequence* below — where the
+correlation this ADR left as an open question is finally **measured**, and F3's
+own plan is falsified by it.
+
 ## Context
 
 ### Why payload composition is a decision and not a layout preference
@@ -178,6 +187,66 @@ subdivision.
   for it disappears — the split would still be harmless, but it would no longer be
   justified, and this ADR should be updated rather than left as a rationale
   nobody re-checked.
+
+### The PIT table is this decision's consequence, and the collapse is measured
+
+**Added in F3.** Splitting one payload into two satellites gives them **two
+independent timelines on one hub**, and a reader who wants both payloads as of a
+date now has to reconcile them. The naive reconciliation — join both satellites on
+`(hub_estabelecimento_hk, applied_date)` — is wrong, and F3 measured how wrong
+(`docs/f3-run-evidence.md` §P10–P11):
+
+```
+naive (hk, applied_date) equi-join at 2026-07-11   =      514,504   measured
+the as-of answer                                   =   72,318,968
+the PIT table earns its keep by                       71,804,464   rows
+```
+
+An equi-join returns only the establishments whose **two satellites happen to
+have moved on the same date**. Everything else falls out of the answer entirely:
+
+- **1,141,850** establishments (1,656,354 − 514,504) whose registration data
+  changed in July while their address did not. A naive join hands them a **NULL
+  address** — one that is sitting in a June row and is still in force.
+- **499,630** (1,014,134 − 514,504) the other way round: moved in July, registration
+  data unchanged since June.
+
+That is what "timeline collapse" costs, in rows, on this data. A PIT table stores
+one pointer per satellite per key and turns the reconciliation into a lookup.
+
+**And both sides of the gap are now measured on a BUILT table rather than
+derived.** `gold.pit_estabelecimento` exists in the workspace and holds
+**144,193,416** rows — 71,874,448 June keys + 72,318,968 July keys, the two
+months' grains summed, reconciling exactly. The 72,318,968 above is therefore the
+PIT's own July answer and not an arithmetic expectation of one. **It built in
+168 s**, against an extrapolation of 0.5–3 hours: the extrapolation was
+**falsified**, and it is the measurement that belongs in an ADR.
+
+> Workspace figures reported by the controller from the F3 run; at the time this
+> amendment was written they were not yet in `docs/f3-run-evidence.md`, and they
+> are attributed rather than presented as this file's own measurement. Each was
+> checked for internal consistency against numbers that ARE in the repository —
+> which is what the row decomposition above is.
+
+**And the correlation this ADR could not answer is now measured, against F3's own
+prediction.** `B` — keys whose two satellites **both** carry a 2026-07-11 row — was
+predicted at **9,604** on an explicit independence assumption
+(1,211,834 × 569,614 / 71,874,444) and measured at **69,984**: **7.3× too low**,
+measured twice by two different queries because 69,984 is suspiciously close to
+half of 139,968. The two satellites' changes are **positively correlated** — an
+establishment whose address moved is far likelier than chance to have also had a
+registration change — and F3's plan describing their change rates as
+"independent" is measured **false**.
+
+This does not disturb the split. It *supports* it in one direction and complicates
+the sizing in another: correlated changes mean a single sixteen-column satellite
+would have written closer to the union than to the sum of the two rates, so the
+saving is smaller than the ~2.13× ratio suggests — and it means a PIT table is
+more necessary, not less. The changed population is the UNION of the two rates,
+1,211,834 + 569,614 − 69,984 = **1,711,464** keys, of which the 69,984 co-moving
+ones are **4.1%**: the other **96%** carry a timeline mismatch, which is precisely
+what a naive equi-join drops. (`514,504 = 444,520 July-only keys + 69,984`, which
+is how the equi-join and `B` reconcile against each other.)
 
 ### What would change this decision
 

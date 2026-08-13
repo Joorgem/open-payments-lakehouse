@@ -330,7 +330,7 @@ def test_every_conformed_dimension_carries_one_ghost_no_fact_row_can_join_to(
     by matching on the key it does not have.
 
     AND ALL THREE ARE PREDICTED TO REPORT ZERO ROWS IN TASK 4, which is the honest thing
-    to say rather than counting the row as an exercised path (master protocol §A6). Every
+    to say rather than counting the row as an exercised path (master protocol §4.6). Every
     contract column these dimensions draw from is REQUIRED and drawn from the declared
     domain by the generator, and `dim_date`'s span is derived from the fact itself, so no
     payment in `bronze_payments` can fail to resolve. `dim_date`'s ghost is the only one
@@ -397,3 +397,89 @@ def test_the_conformed_loader_refuses_the_scd2_dimension_it_cannot_build(
     here it must be refused by kind, before a frame is derived."""
     with pytest.raises(ValueError, match="is not a conformed dimension"):
         build(spark, DIM_COMPANY, fact_table=payments_bronze, target=gold_target.dim)
+
+
+# --- the two ceilings the docstrings name, and the numbers they name them with --------
+
+
+def test_the_day_key_ceiling_is_the_int_read_as_a_date(
+    spark, vault_loaded, payments_bronze, gold_target
+):
+    """`opl.gold.conformed._distinct_surrogate_keys` says the day key stops fitting an int
+    at year 214749, and it said 2148 before this test existed -- 2,147,483,647 read as a
+    year rather than as a `yyyyMMdd`. The real year is a DEDUCTION from two properties,
+    both asserted below from the written table: the key IS the day's `yyyyMMdd`, and the
+    column is a 32-bit int. Nothing private is imported and `"yyyyMMdd"` is not respelled
+    here -- a second spelling of the mechanism is the defect this module argues against.
+
+    THE OVERFLOW IS NOT MEASURED AT YEAR 214749, DELIBERATELY. No span this star derives
+    can reach it, and such a date cannot be `collect`ed at all (`daysToMicros` overflows a
+    long first). What IS measured is what makes the overflow SILENT, and it holds at any
+    year: a decimal string above the ceiling casts to NULL rather than raising, and NULL is
+    a VALUE to `distinct` -- so ONE overflowed day passes this check and TWO collapse into
+    one and are refused."""
+    build(spark, DIM_DATE, fact_table=payments_bronze, target=gold_target.dim,
+          vault=vault_loaded.sat)
+    written = spark.read.table(gold_target.dim)
+    assert dict(written.dtypes)[DIM_DATE.surrogate_key] == "int", (
+        "the day key is not a 32-bit int, so the ceiling this test computes is the wrong "
+        "one and the docstring naming it is stale"
+    )
+    keyed = {
+        row[DIM_DATE.natural_key]: row[DIM_DATE.surrogate_key]
+        for row in written.where(F.col(DIM_DATE.natural_key).isNotNull()).collect()
+    }
+    assert keyed[date(2026, 6, 13)] == 20260613 and keyed[date(2026, 8, 1)] == 20260801
+    # 214748-12-31 is the last day whose `yyyyMMdd` fits; 214749-01-01 is the first
+    # that does not, and 214749-01-02 is the second -- two of them are needed below.
+    below, above, next_day = "2147481231", "2147490101", "2147490102"
+    assert int(below) <= 2147483647 < int(above)
+    cast = spark.createDataFrame([(below,), (above,), (next_day,)], "k string").select(
+        F.col("k").cast("int").alias(DIM_DATE.surrogate_key)
+    )
+    # As a multiset, never as a list: `collect()` order is not a promise, and a test
+    # that reads one from a three-row frame passes for a reason nobody chose.
+    cast_back = [row[0] for row in cast.collect()]
+    assert (sorted(v for v in cast_back if v is not None), cast_back.count(None)) == (
+        [2147481231], 2
+    ), (
+        "the cast raised or wrapped instead of returning NULL, which turns a silent "
+        "wrong answer into a loud one and dates this docstring"
+    )
+    overflowed = cast.where(F.col(DIM_DATE.surrogate_key).isNull())
+    assert (overflowed.count(), overflowed.distinct().count()) == (2, 1), (
+        "two overflowed days must COLLAPSE under distinct -- that is what makes "
+        "_distinct_surrogate_keys refuse them, and why ONE of them would pass"
+    )
+
+
+@pytest.mark.parametrize("dimension", [DIM_CHANNEL, DIM_CURRENCY], ids=lambda d: d.name)
+def test_an_absent_enumerated_value_derives_a_key_no_declared_member_holds(
+    spark, payments_bronze, gold_target, dimension
+):
+    """`xxhash64(NULL)` is 42, and `opl.gold.conformed.fact_surrogate_key` now says so.
+    The claim that rests on it is that 42 is held by NO member -- which is what makes an
+    absent `payment_method` or `currency` a REPORTED orphan rather than a payment silently
+    attributed to whichever member happened to collide.
+
+    THE HAZARD IS REAL EVEN THOUGH THE PROBABILITY IS NOT. A 64-bit hash landing on 42 for
+    a declared member is a 2^-64 event per member and would never be noticed; but the
+    dimension's members are a value the CONTRACT declares and can be edited, and the day
+    one of them hashed to 42 every NULL-carrying payment would join to it and the orphan
+    count would read 0. That is a silent wrong answer, so it is locked rather than
+    reasoned about."""
+    absent = spark.range(1).select(F.xxhash64(F.lit(None).cast("string")).alias("k"))
+    assert absent.collect()[0]["k"] == 42
+    assert 42 != GHOST_SURROGATE_KEY, "a NULL would resolve to the ghost instead"
+    build(spark, dimension, fact_table=payments_bronze, target=gold_target.dim)
+    keys = {
+        row[dimension.surrogate_key]
+        for row in spark.read.table(gold_target.dim)
+        .where(F.col(dimension.natural_key).isNotNull())
+        .select(dimension.surrogate_key)
+        .collect()
+    }
+    assert 42 not in keys, (
+        f"a declared member of {dimension.name} hashes to xxhash64(NULL), so a payment "
+        "with no value for it would join to that member and be counted resolved"
+    )
