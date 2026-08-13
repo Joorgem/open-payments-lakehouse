@@ -382,8 +382,17 @@ def test_a_conformed_key_that_is_a_column_a_gold_loader_writes_is_refused(kind, 
 def test_a_conformed_dimension_whose_two_keys_are_one_name_is_refused(kind):
     """The projection writes both, so one value survives and the other is silently the
     surrogate key -- with every row still present and every join still resolving."""
+    # ONE NAME, BOUND ONCE AND PASSED TWICE, rather than the same literal spelled in both
+    # arguments. Two quoted `*_key=` assignments on one line are the shape gitleaks'
+    # `generic-api-key` rule matches: it captured the span BETWEEN the two quotes --
+    # `probe_key", surrogate_key=` -- and reported this test as a leaked credential, which
+    # turned CI red on a fixture name. Binding it removes the quoted value from a `key=`
+    # position entirely, so the pattern cannot arise rather than scoring below its
+    # threshold. It also states the subject better: the test is about ONE name reaching
+    # both parameters.
+    one_name = "probe"
     with pytest.raises(ValueError, match="its surrogate key and its natural key"):
-        KINDS[kind](natural_key="probe_key", surrogate_key="probe_key")
+        KINDS[kind](natural_key=one_name, surrogate_key=one_name)
 
 
 def test_an_enumerated_dimension_needs_members_and_they_must_be_distinct():
