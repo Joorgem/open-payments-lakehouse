@@ -1,0 +1,40 @@
+# gitleaks configuration.
+#
+# THIS FILE EXTENDS THE DEFAULT RULES, IT DOES NOT REPLACE THEM. `useDefault = true` is
+# the load-bearing line: without it, declaring a config here would silently swap gitleaks'
+# entire ruleset for whatever is written below, and a scanner that reports nothing because
+# it was asked nothing looks exactly like a clean repository. CI's log names which config
+# it loaded ("no gitleaks config found in path .gitleaks.toml, using default gitleaks
+# config" before this file existed), so the swap would have been visible only to someone
+# reading it.
+[extend]
+useDefault = true
+
+# --- the one declared false positive -------------------------------------------------
+#
+# `tests/gold/test_registry.py` asserts that a conformed dimension whose surrogate key and
+# natural key are THE SAME NAME is refused at construction -- the projection writes both,
+# so one value survives and the other is silently the surrogate key, with every row still
+# present and every join still resolving. Expressing that test requires passing one literal
+# to two parameters whose names both end in `key`:
+#
+#     KINDS[kind](natural_key="probe_key", surrogate_key="probe_key")
+#
+# gitleaks' `generic-api-key` rule matches `key = "..."` assignments above an entropy
+# threshold of 3.5, and `probe_key` scores 3.521641 -- so it fired on a test fixture name.
+#
+# WHY THIS IS AN ALLOWLIST AND NOT A RENAME. Renaming the literal to something with lower
+# entropy would turn CI green, and it would do so by keeping a Shannon entropy score just
+# under a threshold nobody chose and nothing asserts. The next fixture value on a `*_key`
+# parameter would trip it again, in CI, on someone else's branch. This project has a
+# documented habit of refusing repairs that work by accident.
+#
+# WHAT IS DELIBERATELY NOT ALLOWLISTED. No path is listed, so this does not exempt the
+# test file, the tests directory, or anything else -- only the exact string. A real
+# credential in that same file is still caught. `stopwords` and the other default rules
+# are untouched.
+[allowlist]
+description = "A test fixture name, not a credential: see the block above."
+regexes = [
+    '''probe_key''',
+]
