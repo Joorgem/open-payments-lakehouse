@@ -216,7 +216,7 @@ repository that is public.
     the 1,600 legitimate repeats** a "natural key" over the business attributes would
     delete while every number still looked plausible.
 12. **No cost prediction for a 69.2M-row dimension.** One was written before the run, and
-    it was falsified by 17–50× (companion document, §5).
+    it was falsified by 17–50× (`docs/f3-workspace-run-evidence.md` §9.1).
 
 #### And one about provenance, which is the one that repeated
 
