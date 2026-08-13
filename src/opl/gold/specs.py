@@ -22,8 +22,14 @@ single-table check written there, after a session has started).
 
 NOTHING HERE IMPORTS PYSPARK, and that is load-bearing rather than tidy: a spec must be
 constructible and refusable in a plain `python -c`, so an operator who mistyped a table
-name is told so before a serverless session starts costing money. The one non-stdlib
-import is `opl.contracts.payments`, which is pure by its own decision."""
+name is told so before a serverless session starts costing money. The non-stdlib imports
+are `opl.contracts.payments` and `opl.vault.columns`, both of which are pure by their own
+decision -- the second one states it as its own property ("PURE: NOTHING HERE IMPORTS
+ANYTHING"), and it is read here for the same reason `opl.gold.columns` re-exports two of
+its names: `PointInTimeTable`'s pointer columns are named after `applied_date`, and a
+second spelling of that name in gold would be a name that drifts. (This paragraph said
+"the one non-stdlib import" until the PIT kind arrived, which is what a claim about an
+import list does when the import list grows.)"""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -31,12 +37,14 @@ from dataclasses import dataclass
 
 from opl.contracts import payments
 from opl.gold.columns import DIMENSION_COLUMNS
+from opl.vault.columns import APPLIED_DATE
 
 __all__ = [
     "CalendarDimension",
     "ConformedDimension",
     "EnumeratedDimension",
     "GoldTable",
+    "PointInTimeTable",
     "Scd2Dimension",
 ]
 
@@ -295,6 +303,131 @@ class CalendarDimension:
         )
 
 
+def _assert_the_satellites_are_a_set_of_at_least_two(name: str, satellites: tuple) -> None:
+    """Refuse a PIT over fewer than two satellites, or over one satellite named twice.
+
+    TWO IS THE MINIMUM AND IT IS A STATEMENT ABOUT WHAT A PIT TABLE IS FOR, not a
+    defensive bound. A point-in-time table exists to defeat TIMELINE COLLAPSE: two
+    satellites of one hub change on independent dates, so a query that equi-joins both on
+    `applied_date` sees only the keys that happen to have moved in both on the same day.
+    Over ONE satellite there is nothing to collapse -- the equi-join on that satellite's
+    own `applied_date` already IS the as-of answer -- so the table would be a copy of the
+    satellite's (hash key, date) pairs under a name that promises a mechanism it does not
+    perform, and every reader who trusted the name would believe a timeline had been
+    reconciled.
+
+    THE REPEAT IS THE SAME DEFECT WEARING TWO IS. `satellites=(x, x)` declares two and has
+    one: both pointer columns would be named after `x`, the second overwriting the first
+    in the projection, and the table would be well-formed, correctly sized and wrong."""
+    if len(satellites) < 2:
+        raise ValueError(
+            f"point-in-time table {name!r} declares {list(satellites)} -- a PIT needs at "
+            "least TWO satellites of one hub. Over one satellite there is no timeline to "
+            "collapse: the naive equi-join on that satellite's own applied_date is "
+            "already the as-of answer, so this table would promise a mechanism it does "
+            "not perform"
+        )
+    seen: set[str] = set()
+    for satellite in satellites:
+        if not isinstance(satellite, str) or not satellite.strip():
+            raise ValueError(
+                f"point-in-time table {name!r} declares a blank satellite: {satellites!r}"
+            )
+        if satellite in seen:
+            raise ValueError(
+                f"point-in-time table {name!r} declares {satellite!r} twice: "
+                f"{satellites!r}. Both pointer columns would be named after it and the "
+                "second would overwrite the first, leaving a table of the right size "
+                "carrying one satellite's pointers under two satellites' names"
+            )
+        seen.add(satellite)
+
+
+@dataclass(frozen=True, kw_only=True)
+class PointInTimeTable:
+    """A DV2 point-in-time table: one row per (hub key, `as_of_date`), carrying the
+    `applied_date` of the version IN FORCE in each satellite at that instant.
+
+    IT IS NOT A DIMENSION AND CARRIES NO ATTRIBUTE AT ALL. Every other kind in this file
+    projects values a reader consumes; a PIT projects POINTERS -- (hash key, date) pairs
+    that turn a two-satellite as-of query into two plain equi-joins. That is why it has no
+    surrogate key, no natural key and no `fact_column`: nothing joins TO it and nothing
+    groups BY it. `opl.gold.pit` argues what it is worth on this vault and what it is not
+    (Task 0 measured the collapse it defeats at 71,804,464 rows, and no fact or dimension
+    in this star reaches it).
+
+    THE POINTER COLUMN NAMES ARE DERIVED AND NEVER DECLARED, which is `Scd2Dimension`'s
+    decision applied to a different column. `<satellite>_applied_date` is computable from
+    the satellite name, so declaring it would be a second spelling that goes stale on a
+    rename -- and a PIT whose pointer column names disagree with the satellites it points
+    at is a table every join silently misses.
+
+    `as_of_column` IS DECLARED, AND IT IS THE ONE NAME A READER WRITES. It is refused if
+    it is spelled `applied_date`: the pointers are `<satellite>_applied_date`, so a bare
+    `applied_date` here invites `pit.applied_date = sat.applied_date`, which is precisely
+    the naive equi-join this table exists to replace -- one character of ambiguity
+    reconstructing the defect.
+
+    `kw_only`, like every spec here: `name`, `hub` and `as_of_column` are three adjacent
+    strings, and a positional construction that permuted them would type-check and
+    register a PIT over a hub called `as_of_date`."""
+
+    name: str
+    hub: str
+    satellites: tuple[str, ...]
+    as_of_column: str
+
+    def __post_init__(self) -> None:
+        _assert_every_field_is_named(
+            "point-in-time table",
+            self.name,
+            {"name": self.name, "hub": self.hub, "as-of column": self.as_of_column},
+        )
+        object.__setattr__(self, "satellites", tuple(self.satellites))
+        _assert_the_satellites_are_a_set_of_at_least_two(self.name, self.satellites)
+        self._assert_the_as_of_column_is_the_tables_own()
+
+    def pointer_column(self, satellite: str) -> str:
+        """What this table calls the pointer into `satellite` -- derived, never declared,
+        so a rename in the vault cannot leave a stale column name here."""
+        return f"{satellite}_{APPLIED_DATE}"
+
+    @property
+    def pointer_columns(self) -> tuple[str, ...]:
+        """The pointer columns in DECLARATION order, which is the order the loader
+        projects them in -- and a Delta append matches POSITIONALLY, so it is
+        load-bearing for `opl.gold.dimensions._versioned`'s reason."""
+        return tuple(self.pointer_column(satellite) for satellite in self.satellites)
+
+    def _assert_the_as_of_column_is_the_tables_own(self) -> None:
+        """Refuse an as-of column the loader would overwrite, or that reads as a pointer."""
+        if self.as_of_column == APPLIED_DATE:
+            raise ValueError(
+                f"point-in-time table {self.name!r} names its as-of column "
+                f"{APPLIED_DATE!r}, which is what its POINTERS are named after "
+                f"({', '.join(self.pointer_columns)}). A reader would write "
+                f"`pit.{APPLIED_DATE} = sat.{APPLIED_DATE}`, which is the naive equi-join "
+                "this table exists to replace -- and it would return an answer"
+            )
+        collisions = {self.as_of_column} & (set(self.pointer_columns) | DIMENSION_COLUMNS)
+        if collisions:
+            raise ValueError(
+                f"point-in-time table {self.name!r} names {self.as_of_column!r} as its "
+                "as-of column, and that is already a pointer column or one the loader "
+                f"writes itself ({', '.join(sorted(DIMENSION_COLUMNS))}). One projection "
+                "would write two values into one column, so the as-of date is silently a "
+                "pointer or a timestamp and every as-of read resolves the wrong version"
+            )
+        if self.hub in self.satellites:
+            raise ValueError(
+                f"point-in-time table {self.name!r} names {self.hub!r} as both its hub "
+                "and one of its satellites. The hub carries no `applied_date`, so the "
+                "pointer taken over it would fail inside Spark's analysis naming a column "
+                "rather than a table -- and if it did resolve it would point at a table "
+                "that has no versions to point at"
+            )
+
+
 # THE TWO CONFORMED KINDS, AS ONE NAME. `opl.gold.conformed`'s loader takes either and
 # branches once, on the kind, where the members come from -- so its signature is written
 # against this union rather than against a `|` repeated at every function.
@@ -304,4 +437,12 @@ ConformedDimension = EnumeratedDimension | CalendarDimension
 # each refusal in one edit. It is a union rather than a bare alias exactly so that adding
 # `dim_date`'s kind was a word here and not a rewrite of five signatures -- which is what
 # it turned out to be.
-GoldTable = Scd2Dimension | ConformedDimension
+#
+# `PointInTimeTable` IS IN IT AND IS NOT A DIMENSION, which is the first time this union
+# has held a table nothing groups by. Every whole-set guard in `opl.gold.registry` reads
+# this name, so the kind acquired the cross-layer collision refusal and the
+# two-tables-one-name refusal for free -- and exactly ONE of those guards had to change,
+# because it was written as an EXCLUSION (`if isinstance(table, Scd2Dimension): continue`)
+# rather than as an inclusion. See `_assert_no_two_dimensions_draw_from_one_payment_
+# column` for what that cost and why the direction was inverted.
+GoldTable = Scd2Dimension | ConformedDimension | PointInTimeTable

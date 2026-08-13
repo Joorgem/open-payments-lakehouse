@@ -119,6 +119,15 @@ _GUARDED_JOBS = (
     # conformed dimension that is individually well-formed and that a fact built from
     # this revision joins to incorrectly -- with both runs reporting success.
     "gold_conformed_dimensions_job.yml",
+    # THE THIRD GOLD JOB (F3 Task 2), and this list's question gains a COST dimension
+    # here that no entry above has. `pit_estabelecimento` is a ~144M-row append whose
+    # every column is a function of the deployed wheel: the as-of set is derived by one
+    # function in `opl.gold.pit`, the pointer semantics are one window frame, and the
+    # pointer COLUMN NAMES are derived from the satellite names in `opl.gold.specs`. A
+    # wheel from another revision writes a table that is individually well-formed and
+    # that every as-of read misses -- and because the loader is append-only, the repair
+    # is dropping ~144M rows by hand rather than re-running.
+    "gold_pit_estabelecimento_job.yml",
 )
 
 _UNGUARDED_JOBS = {

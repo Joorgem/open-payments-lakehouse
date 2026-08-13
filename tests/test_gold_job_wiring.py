@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -47,9 +48,13 @@ _RESOURCES = _REPO / "databricks" / "resources"
 # behaviour it happened to inherit, and the totality lock below -- every registered gold
 # table built by exactly one task -- is only a claim about gold if this list is the whole
 # of it. `test_the_gold_jobs_are_the_gold_yamls_on_disk` closes the other direction.
-_GOLD_JOBS = ("gold_dim_company_job.yml", "gold_conformed_dimensions_job.yml")
+_GOLD_JOBS = (
+    "gold_dim_company_job.yml",
+    "gold_conformed_dimensions_job.yml",
+    "gold_pit_estabelecimento_job.yml",
+)
 
-_ENTRY_POINTS = ("gold_load_dimension", "gold_load_conformed_dimension")
+_ENTRY_POINTS = ("gold_load_dimension", "gold_load_conformed_dimension", "gold_load_pit")
 
 # NAMED `gold_*` AND NOT `vault_*`, AND THAT IS A DECISION RATHER THAN A LABEL.
 # `test_vault_job_wiring.py::test_the_four_vault_jobs_are_the_vault_yamls_on_disk` globs
@@ -77,20 +82,33 @@ _LOAD_DATE_REFERENCE = "{{job.start_time.iso_datetime}}"
 # input at all, and a snapshot `dim_date` did not know about is days to APPEND with no
 # surrogate key moving. A parameter the task ignored would be decoration, and a lock that
 # demanded one of every gold task would be a lock forcing it.
+#
+# THE THIRD TAKES NO `months` EITHER, AND FOR A THIRD REASON. A PIT pointer is
+# `max(applied_date <= as_of_date)`, so a snapshot loaded AFTER every one the table was
+# built over moves nothing already written -- it is a layer to append. The one case that
+# IS a revision, a snapshot backfilled BETWEEN two the table holds, is refused by
+# `opl.gold.pit` from the dates on disk; a parameter would state an intention where the
+# refusal reads the table.
 _TASK_PARAMETERS = {
     "gold_load_dimension": ("table", "months", "load_date"),
     "gold_load_conformed_dimension": ("table", "load_date"),
+    "gold_load_pit": ("table", "load_date"),
 }
 
 # The two `{{...}}` references no task may spell for itself, and which position each one
 # occupies is read from `_TASK_PARAMETERS` rather than hardcoded.
 _REFERENCES = {"months": _MONTHS_PARAMETER, "load_date": _LOAD_DATE_REFERENCE}
 
-# How many names each entry point qualifies through `opl.config.DEFAULT.table`. Both
-# qualify three, for different threes: the SCD2 task qualifies the dimension, its source
-# satellite and that satellite's parent hub; the conformed task qualifies the dimension,
-# the fact source whose members it measures against, and the satellite a calendar spans.
-_QUALIFIED_NAMES = {"gold_load_dimension": 3, "gold_load_conformed_dimension": 3}
+# How many names each entry point qualifies through `opl.config.DEFAULT.table`. All three
+# qualify three, for three different threes: the SCD2 task qualifies the dimension, its
+# source satellite and that satellite's parent hub; the conformed task qualifies the
+# dimension, the fact source whose members it measures against, and the satellite a
+# calendar spans; the PIT task qualifies the table, its hub, and its satellites -- the
+# last of those in ONE call inside a comprehension over the declared list, which is why
+# the number is three and not four.
+_QUALIFIED_NAMES = {
+    "gold_load_dimension": 3, "gold_load_conformed_dimension": 3, "gold_load_pit": 3,
+}
 
 
 def _job_of(job_yml: str, root: Path = _RESOURCES) -> dict:
@@ -451,20 +469,31 @@ def test_the_entry_point_refuses_a_vault_table_handed_where_the_dimension_belong
     ("script", "wrong_kind"),
     [
         ("gold_load_dimension", "dim_date"),
+        ("gold_load_dimension", "pit_estabelecimento"),
         ("gold_load_conformed_dimension", "dim_company"),
+        ("gold_load_conformed_dimension", "pit_estabelecimento"),
+        ("gold_load_pit", "dim_company"),
+        ("gold_load_pit", "dim_date"),
     ],
 )
 def test_each_gold_entry_point_refuses_the_kind_the_other_one_builds(script, wrong_kind):
-    """THE PASTE THE SECOND GOLD JOB MADE POSSIBLE, and it is the likeliest one now that
-    two entry points take a gold table as their first parameter. Both names are
-    registered, both are spelled correctly, and either would be refused only after a
-    serverless session had started if the kind were not checked here.
+    """THE PASTE THE SECOND GOLD JOB MADE POSSIBLE, and the THIRD one makes six pairings
+    of it. Every name here is registered, every one is spelled correctly, `table` is the
+    only parameter two of the three tasks take, and each would be refused only after a
+    serverless session had started if the kind were not checked on the driver.
 
     IT IS NOT A THEORETICAL SWAP. `gold_load_dimension` resolves its source through
     `spec.source_satellite`; `CalendarDimension` deliberately spells its own satellite
-    field `applied_date_source` for exactly this reason, so the wrong kind cannot walk
-    far enough into that task to build something plausible out of a spec that is not
-    one."""
+    field `applied_date_source` and `PointInTimeTable` spells its own `satellites` for
+    exactly this reason, so the wrong kind cannot walk far enough into that task to build
+    something plausible out of a spec that is not one.
+
+    THE PIT IS BOTH DIRECTIONS AND THAT IS WHY IT IS THREE PAIRS AND NOT ONE. A kind added
+    to the registry acquires the OTHER tasks' refusals for free only if those refusals are
+    inclusions (`isinstance(spec, Scd2Dimension)`) rather than exclusions -- and this
+    parametrisation is what proves they are, on the one file where an exclusion was
+    actually found (see `opl.gold.registry
+    ._assert_no_two_dimensions_draw_from_one_payment_column`)."""
     task = _load(script)
     with pytest.raises(ValueError):
         task.main([wrong_kind, "2026-06+2026-07", "2026-08-12T12:00:00"][: len(
@@ -486,6 +515,56 @@ def test_the_conformed_entry_point_validates_its_timestamp_before_the_session():
     task = _load("gold_load_conformed_dimension")
     with pytest.raises(ValueError, match="ISO-8601"):
         task.main(["dim_channel", ""])
+
+
+def test_the_pit_entry_point_refuses_a_table_no_gold_registry_registers():
+    """Refused before Spark, naming the alternatives, exactly as its two siblings are."""
+    task = _load("gold_load_pit")
+    with pytest.raises(ValueError, match="unknown gold table"):
+        task.main(["pit_estabeleciment", "2026-08-12T12:00:00"])
+
+
+def test_the_pit_entry_point_validates_its_timestamp_before_the_session():
+    """The only argument it takes besides the table, checked ahead of
+    `SparkSession.builder.getOrCreate()` -- a guard after the session would start one to
+    reject an argument, and this job's session is the most expensive in the repository."""
+    task = _load("gold_load_pit")
+    with pytest.raises(ValueError, match="ISO-8601"):
+        task.main(["pit_estabelecimento", ""])
+
+
+@pytest.mark.parametrize(
+    ("appended", "already_present", "last_layer", "hub_keys", "expected"),
+    [
+        (144_193_416, 0, 72_318_968, 72_318_968, "which reconciles"),
+        (144_193_416, 0, 72_318_960, 72_318_968, "does NOT reconcile"),
+        (0, 144_193_416, 72_318_968, 72_318_968, "the re-run is a no-op"),
+    ],
+    ids=["reconciles", "hub keys with no history", "idempotent re-run"],
+)
+def test_the_pit_reconciliation_note_tells_three_states_apart(
+    appended, already_present, last_layer, hub_keys, expected
+):
+    """THE THREE STATES MUST NOT READ ALIKE, which is why the note is a function.
+
+    A shortfall means hub keys for which NO satellite ever wrote a row: they are absent
+    from every layer of this table, and a run that printed only its own row count would
+    leave that invisible -- the failure `gold_load_dimension.py` records for the mirror
+    case, a satellite version whose hash key matched no hub row. The idempotent re-run is
+    the third state and must not report a shortfall of everything.
+
+    The numbers are Task 0's published ones, so this test also pins the reconciliation
+    the job YAML predicts (`docs/f3-run-evidence.md` §0.5)."""
+    task = _load("gold_load_pit")
+    result = task.PitLoadResult(
+        table="workspace.default.pit_estabelecimento",
+        appended=appended,
+        already_present=already_present,
+        as_of_dates=(date(2026, 6, 13), date(2026, 7, 11)),
+        hub_keys=hub_keys,
+        rows_per_as_of=((date(2026, 6, 13), 71_874_448), (date(2026, 7, 11), last_layer)),
+    )
+    assert expected in task._reconciliation_note(result)
 
 
 def test_the_window_and_the_timestamp_are_validated_before_the_session():
