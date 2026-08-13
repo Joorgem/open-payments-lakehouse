@@ -300,7 +300,25 @@ happen to carry a row **in both satellites on that exact date**, while every one
 **Timeline collapse is not a hypothetical in this vault, and the PIT table is not
 unexercised.** The plan was one query away from recording the opposite.
 
-### 0.6 What Task 0 decided
+### 0.6 The "before" baseline, recorded so the build is a measured transition
+
+**Controller-verified** (`01f1973c-331c-101d-8b85-dec1f1121f4f`), taken before any gold
+job was deployed or run:
+
+```sql
+SELECT table_name FROM workspace.information_schema.tables
+WHERE table_schema='default'
+  AND (table_name LIKE 'dim_%' OR table_name LIKE 'fact_%' OR table_name LIKE 'pit_%')
+```
+
+**Zero rows.** No dimension, no fact and no PIT table existed in `workspace.default` at
+this point. §9's first condition is that every artefact the phase promised exists **built
+by its own code**; a phase that never records the empty "before" can only assert that,
+where this makes it a transition somebody can check. It is also the reason the gold
+loaders' idempotence claims mean something later: every table they write, they write onto
+nothing.
+
+### 0.7 What Task 0 decided
 
 | question | answer | consequence |
 |---|---|---|
