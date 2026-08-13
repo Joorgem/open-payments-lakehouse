@@ -47,9 +47,9 @@ _RESOURCES = _REPO / "databricks" / "resources"
 # behaviour it happened to inherit, and the totality lock below -- every registered gold
 # table built by exactly one task -- is only a claim about gold if this list is the whole
 # of it. `test_the_gold_jobs_are_the_gold_yamls_on_disk` closes the other direction.
-_GOLD_JOBS = ("gold_dim_company_job.yml",)
+_GOLD_JOBS = ("gold_dim_company_job.yml", "gold_conformed_dimensions_job.yml")
 
-_ENTRY_POINTS = ("gold_load_dimension",)
+_ENTRY_POINTS = ("gold_load_dimension", "gold_load_conformed_dimension")
 
 # NAMED `gold_*` AND NOT `vault_*`, AND THAT IS A DECISION RATHER THAN A LABEL.
 # `test_vault_job_wiring.py::test_the_four_vault_jobs_are_the_vault_yamls_on_disk` globs
@@ -63,10 +63,34 @@ _PYTHON_FILE_PREFIX = "../src/"
 _MONTHS_PARAMETER = "{{job.parameters.months}}"
 _LOAD_DATE_REFERENCE = "{{job.start_time.iso_datetime}}"
 
-# [table, months, load_date] -- and there is NO source parameter, which is the point.
-# A gold dimension declares the satellite it derives from, so the pairing cannot be got
-# wrong by a copied YAML the way a vault task's (vault table, bronze source) pair can.
-_TASK_PARAMETERS = ("table", "months", "load_date")
+# WHAT EACH GOLD ENTRY POINT IS HANDED, BY SCRIPT -- and in neither case is there a
+# SOURCE parameter, which is the point. A gold dimension declares what it derives from, so
+# the pairing cannot be got wrong by a copied YAML the way a vault task's (vault table,
+# bronze source) pair can.
+#
+# THE SECOND ONE TAKES NO `months` AND THAT IS THE DECISION THIS MAPPING RECORDS. Every
+# other build job in this repository takes a month window: a bronze ingest STAMPS it, a
+# vault load NARROWS to it, and the SCD2 build DECLARES it so a build refuses when the
+# vault has gained a snapshot the launch did not name -- it must, because a version's end
+# date is the next version's start and an append cannot revise a closed interval. A
+# conformed dimension has no interval: `dim_channel` and `dim_currency` have no snapshot
+# input at all, and a snapshot `dim_date` did not know about is days to APPEND with no
+# surrogate key moving. A parameter the task ignored would be decoration, and a lock that
+# demanded one of every gold task would be a lock forcing it.
+_TASK_PARAMETERS = {
+    "gold_load_dimension": ("table", "months", "load_date"),
+    "gold_load_conformed_dimension": ("table", "load_date"),
+}
+
+# The two `{{...}}` references no task may spell for itself, and which position each one
+# occupies is read from `_TASK_PARAMETERS` rather than hardcoded.
+_REFERENCES = {"months": _MONTHS_PARAMETER, "load_date": _LOAD_DATE_REFERENCE}
+
+# How many names each entry point qualifies through `opl.config.DEFAULT.table`. Both
+# qualify three, for different threes: the SCD2 task qualifies the dimension, its source
+# satellite and that satellite's parent hub; the conformed task qualifies the dimension,
+# the fact source whose members it measures against, and the satellite a calendar spans.
+_QUALIFIED_NAMES = {"gold_load_dimension": 3, "gold_load_conformed_dimension": 3}
 
 
 def _job_of(job_yml: str, root: Path = _RESOURCES) -> dict:
@@ -109,9 +133,14 @@ def _build_tasks(job_yml: str, root: Path = _RESOURCES) -> dict[str, tuple[str, 
             continue
         parameters = task["spark_python_task"]["parameters"]
         script = _script_of(task, f"{job_yml}:{key}")
-        assert len(parameters) == len(_TASK_PARAMETERS), (
+        assert script in _TASK_PARAMETERS, (
+            f"{job_yml}:{key} runs {script}.py, which is not a gold entry point this "
+            f"file knows the parameters of ({', '.join(sorted(_TASK_PARAMETERS))})"
+        )
+        expected = _TASK_PARAMETERS[script]
+        assert len(parameters) == len(expected), (
             f"{job_yml}:{key} runs {script}.py and is handed {parameters}; that entry "
-            f"point takes exactly {list(_TASK_PARAMETERS)}"
+            f"point takes exactly {list(expected)}"
         )
         found[key] = (script, parameters[0])
     return found
@@ -232,25 +261,66 @@ def test_every_task_is_handed_a_gold_table_and_no_other(job_yml):
 
 @pytest.mark.parametrize("job_yml", _GOLD_JOBS)
 def test_every_task_is_handed_the_jobs_own_window_and_the_runs_start_time(job_yml):
-    """The two parameters no task may spell for itself.
+    """The parameters no task may spell for itself, in the positions its own entry point
+    declares them.
 
-    THE WINDOW, because it is a DECLARATION checked against the source rather than a
-    filter applied to it (`opl.gold.dimensions`): an SCD2 build cannot be narrowed, so
-    the parameter's whole job is to make a build refuse when the vault holds snapshots
-    the launch did not name. A literal here would make it unsettable at launch, which is
-    the one thing that would turn it back into decoration.
+    THE WINDOW, wherever a task takes one, because it is a DECLARATION checked against
+    the source rather than a filter applied to it (`opl.gold.dimensions`): an SCD2 build
+    cannot be narrowed, so the parameter's whole job is to make a build refuse when the
+    vault holds snapshots the launch did not name. A literal here would make it
+    unsettable at launch, which is the one thing that would turn it back into decoration.
 
-    THE LOAD TIMESTAMP, because `load_dimension` gives `load_date` no default precisely
-    so it is a value the job's own parameters pin rather than a clock reading inside a
-    task -- and `{{job.start_time.iso_datetime}}` is one value for every task of one run
-    and survives a retry."""
+    THE LOAD TIMESTAMP, on every build task of every gold job, because both loaders give
+    `load_date` no default precisely so it is a value the job's own parameters pin rather
+    than a clock reading inside a task -- and `{{job.start_time.iso_datetime}}` is one
+    value for every task of one run and survives a retry.
+
+    DRIVEN OFF `_TASK_PARAMETERS` rather than off fixed positions, so the conformed
+    task's missing `months` is a declared difference and not a hole: this lock still
+    demands its `load_date` reference, in the position that task's argv puts it."""
     for key, task in _tasks_of(job_yml).items():
         if key == _GUARD:
             continue
         parameters = task["spark_python_task"]["parameters"]
-        assert parameters[1:3] == [_MONTHS_PARAMETER, _LOAD_DATE_REFERENCE], (
-            f"{job_yml}:{key} is handed {parameters}: the second and third must be "
-            f"{_MONTHS_PARAMETER} and {_LOAD_DATE_REFERENCE}"
+        declared = _TASK_PARAMETERS[_script_of(task, f"{job_yml}:{key}")]
+        expected = [_REFERENCES[name] for name in declared[1:]]
+        assert parameters[1:] == expected, (
+            f"{job_yml}:{key} is handed {parameters}: after the table it takes "
+            f"{list(declared[1:])}, which must be spelled {expected}"
+        )
+
+
+def _months_taking_jobs() -> tuple[str, ...]:
+    """The gold jobs at least one of whose tasks takes a month window.
+
+    THE EXEMPTION IS DERIVED, NOT LISTED, which is what stops it becoming a way to opt
+    out. A job is excused the `months` default lock exactly when no task of it takes a
+    `months` argument at all -- read from `_TASK_PARAMETERS`, the same mapping the
+    position lock above reads -- so a job that grows a month-taking task acquires the
+    lock in the same edit, and a second list nobody updates cannot exist."""
+    return tuple(
+        job_yml
+        for job_yml in _GOLD_JOBS
+        if any(
+            "months" in _TASK_PARAMETERS[script]
+            for script, _table in _build_tasks(job_yml).values()
+        )
+    )
+
+
+def test_a_gold_job_whose_tasks_take_no_window_declares_no_window_parameter():
+    """A `months` parameter nothing reads is a parameter an operator would pass and a
+    build would ignore -- which reads, in a run log, exactly like a window that was
+    applied. The conformed job declares none, and this asserts the absence rather than
+    letting it be inferred from a lock that simply skipped the file."""
+    for job_yml in set(_GOLD_JOBS) - set(_months_taking_jobs()):
+        names = {
+            parameter["name"] for parameter in _job_of(job_yml).get("parameters", [])
+        }
+        assert "months" not in names, (
+            f"{job_yml} declares a months parameter and no task of it takes one, so an "
+            "operator passing --params months=... would change nothing and the run log "
+            "would still name the window they chose"
         )
 
 
@@ -278,7 +348,7 @@ def _assert_the_months_default_cannot_pass(job_yml: str, root: Path = _RESOURCES
     )
 
 
-@pytest.mark.parametrize("job_yml", _GOLD_JOBS)
+@pytest.mark.parametrize("job_yml", _months_taking_jobs())
 def test_the_months_default_refuses_rather_than_naming_a_window_nobody_chose(job_yml):
     _assert_the_months_default_cannot_pass(job_yml)
 
@@ -319,9 +389,9 @@ def test_no_gold_entry_point_spells_a_catalog_or_a_schema(script):
 
     `opl.gold.registry` states the division this task is the other half of: a spec
     carries an unqualified name and the loader takes qualified tables as arguments. Gold
-    is where that division is most easily broken, because this task qualifies THREE
-    names -- the dimension, the satellite it reads and that satellite's hub -- and Free
-    Edition's single catalog is what would make a hardcoded one invisible."""
+    is where that division is most easily broken, because a gold task qualifies THREE
+    names -- and Free Edition's single catalog is what would make a hardcoded one
+    invisible."""
     qualification = f"{DEFAULT.catalog}.{DEFAULT.schema}."
     spelled = [
         value for value in _non_docstring_strings(_tree(script)) if qualification in value
@@ -340,10 +410,12 @@ def test_no_gold_entry_point_spells_a_catalog_or_a_schema(script):
         and isinstance(node.func.value, ast.Name)
         and node.func.value.id == "DEFAULT"
     ]
-    assert len(qualifies) == 3, (
-        f"{script}.py calls DEFAULT.table(...) {len(qualifies)} times; a gold build "
-        "qualifies exactly three names -- the dimension, its source satellite and that "
-        "satellite's parent hub"
+    assert len(qualifies) == _QUALIFIED_NAMES[script], (
+        f"{script}.py calls DEFAULT.table(...) {len(qualifies)} times, not "
+        f"{_QUALIFIED_NAMES[script]}. The SCD2 task qualifies the dimension, its source "
+        "satellite and that satellite's parent hub; the conformed task qualifies the "
+        "dimension, the fact source it measures against and the satellite a calendar "
+        "spans"
     )
 
 
@@ -373,6 +445,47 @@ def test_the_entry_point_refuses_a_vault_table_handed_where_the_dimension_belong
     task = _load("gold_load_dimension")
     with pytest.raises(ValueError, match="unknown gold table"):
         task.main(["sat_empresa_dados", "2026-06+2026-07", "2026-08-12T12:00:00"])
+
+
+@pytest.mark.parametrize(
+    ("script", "wrong_kind"),
+    [
+        ("gold_load_dimension", "dim_date"),
+        ("gold_load_conformed_dimension", "dim_company"),
+    ],
+)
+def test_each_gold_entry_point_refuses_the_kind_the_other_one_builds(script, wrong_kind):
+    """THE PASTE THE SECOND GOLD JOB MADE POSSIBLE, and it is the likeliest one now that
+    two entry points take a gold table as their first parameter. Both names are
+    registered, both are spelled correctly, and either would be refused only after a
+    serverless session had started if the kind were not checked here.
+
+    IT IS NOT A THEORETICAL SWAP. `gold_load_dimension` resolves its source through
+    `spec.source_satellite`; `CalendarDimension` deliberately spells its own satellite
+    field `applied_date_source` for exactly this reason, so the wrong kind cannot walk
+    far enough into that task to build something plausible out of a spec that is not
+    one."""
+    task = _load(script)
+    with pytest.raises(ValueError):
+        task.main([wrong_kind, "2026-06+2026-07", "2026-08-12T12:00:00"][: len(
+            _TASK_PARAMETERS[script]
+        )])
+
+
+def test_the_conformed_entry_point_refuses_a_table_no_gold_registry_registers():
+    """Refused before Spark, naming the alternatives, exactly as its sibling is."""
+    task = _load("gold_load_conformed_dimension")
+    with pytest.raises(ValueError, match="unknown gold table"):
+        task.main(["dim_dat", "2026-08-12T12:00:00"])
+
+
+def test_the_conformed_entry_point_validates_its_timestamp_before_the_session():
+    """The only argument it takes besides the table, and it is checked ahead of
+    `SparkSession.builder.getOrCreate()` -- a guard after the session would start one to
+    reject an argument."""
+    task = _load("gold_load_conformed_dimension")
+    with pytest.raises(ValueError, match="ISO-8601"):
+        task.main(["dim_channel", ""])
 
 
 def test_the_window_and_the_timestamp_are_validated_before_the_session():

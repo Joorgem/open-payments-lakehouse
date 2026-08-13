@@ -110,6 +110,15 @@ _GUARDED_JOBS = (
     # refuses a target it did not write in the same run, the repair is dropping a
     # 69.2M-row table by hand rather than re-running.
     "gold_dim_company_job.yml",
+    # THE SECOND GOLD JOB (F3 Task 3), and the answer is the same one with nothing
+    # softened by the tables being small. These three dimensions have no upstream at all
+    # in the sense the four ingestion jobs do: `dim_channel`'s members ARE
+    # `opl.contracts.payments.PAYMENT_METHODS`, its keys are `xxhash64` over them, and
+    # `dim_date`'s span is derived by one function in `opl.gold.conformed`. Every row is
+    # a function of the deployed wheel, so a wheel from another revision writes a
+    # conformed dimension that is individually well-formed and that a fact built from
+    # this revision joins to incorrectly -- with both runs reporting success.
+    "gold_conformed_dimensions_job.yml",
 )
 
 _UNGUARDED_JOBS = {

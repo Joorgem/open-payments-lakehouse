@@ -86,6 +86,7 @@ from opl.vault.columns import LOAD_DATE, RECORD_SOURCE
 # so the two that come from `opl.vault.columns` are visibly the same values that module
 # defines rather than restated strings. `ruff` would flag them unused otherwise.
 __all__ = [
+    "CONFORMED_RECORD_SOURCE",
     "DIMENSION_COLUMNS",
     "GHOST_RECORD_SOURCE",
     "GHOST_SURROGATE_KEY",
@@ -139,6 +140,22 @@ GHOST_SURROGATE_KEY = -1
 # contract is that it carries a value somebody else delivered. Same distinction
 # `opl.vault.columns` draws between `data_entrada_sociedade` and `last_observed_on`.
 GHOST_RECORD_SOURCE = "opl.gold.dimensions:ghost"
+
+# The RSRC every CONFORMED member carries, and it is a different question from the one
+# above. `dim_company`'s rows carry `sat_empresa_dados`' own `record_source` -- the RFB
+# delivered those values and the dimension is passing them on. A `dim_channel` row
+# carries `PIX` because `opl.contracts.payments` DECLARES that rail, and a `dim_date` row
+# exists because a span of days was derived here: there is no upstream to name, and
+# naming the bronze table the span was measured from would claim the members came from
+# it, which is exactly what they do not do (see `opl.gold.specs.EnumeratedDimension` for
+# why the members are the contract's domain rather than the observed values).
+#
+# THE GHOST STILL USES `GHOST_RECORD_SOURCE` ABOVE, ACROSS BOTH LOADERS. Its value names
+# `opl.gold.dimensions` because that is where the first ghost was written, and one
+# spelling of "this row was manufactured, nobody delivered it" is worth more to a triager
+# than a per-module string -- the ghost's meaning does not change with the loader that
+# emitted it, and a triager filtering on it wants all of them.
+CONFORMED_RECORD_SOURCE = "opl.gold.conformed"
 
 # Refused as a surrogate key, a business key or a payload column by the registry's
 # guards. A frozen set rather than a list so no caller can extend it in place.

@@ -47,6 +47,7 @@ from pyspark.sql import SparkSession
 from opl.config import DEFAULT
 from opl.gold.dimensions import DimensionLoadResult, load_dimension
 from opl.gold.registry import table_spec as gold_table_spec
+from opl.gold.specs import Scd2Dimension
 from opl.vault import domains
 from opl.vault.job_params import required_load_date, required_months
 
@@ -54,6 +55,27 @@ from opl.vault.job_params import required_load_date, required_months
 # unknown member. Spelled once, here, because the line below is the only place a reader
 # of the run log can check it without opening two documents.
 GHOST_ROWS = 1
+
+
+def _refuse_a_dimension_this_task_cannot_build(spec) -> Scd2Dimension:
+    """Refuse a conformed dimension handed where an SCD2 one belongs, BEFORE the session.
+
+    ADDED WHEN THE SECOND KIND ARRIVED (F3 Task 3), because until then the gold registry
+    held one kind and this check would have refused nothing. `dim_date`, `dim_channel`
+    and `dim_currency` are registered gold tables spelled correctly, they sit in a job
+    beside this one, and `table` is the only parameter either task takes -- so a copied
+    YAML puts one here. Without this the run fails on an `AttributeError` several lines
+    into `main`, after a serverless session has started; `opl.gold.specs` gives the two
+    kinds different field names for their satellites so that it can only ever be an
+    AttributeError and never a plausible dimension built from the wrong spec."""
+    if isinstance(spec, Scd2Dimension):
+        return spec
+    raise ValueError(
+        f"gold table {spec.name!r} is not an SCD2 dimension: this task builds a "
+        "satellite's version chain with a half-open interval on it. A conformed "
+        "dimension is a declared value domain or a calendar and is built by "
+        "gold_load_conformed_dimension.py, which takes no months window"
+    )
 
 
 def _reconciliation_note(result: DimensionLoadResult) -> str:
@@ -87,7 +109,7 @@ def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     # The gold table first and BEFORE the window, so a mistyped name is refused by a
     # registry naming the valid alternatives rather than by a message about months.
-    spec = gold_table_spec(args[0] if args else "")
+    spec = _refuse_a_dimension_this_task_cannot_build(gold_table_spec(args[0] if args else ""))
     months = required_months(args[1] if len(args) > 1 else "", action=f"build {spec.name}")
     load_date = required_load_date(args[2] if len(args) > 2 else "")
     satellite = domains.table_spec(spec.source_satellite)
