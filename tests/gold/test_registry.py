@@ -97,6 +97,17 @@ def _calendar(**overrides) -> CalendarDimension:
 # would be a guard the second kind walks past.
 KINDS = {"scd2": _dimension, "enumerated": _enumerated, "calendar": _calendar}
 
+# HOW THE COLLIDING NAME IS SPELLED, and the second entry is the whole point. Unity
+# Catalog and Spark resolve identifiers CASE-INSENSITIVELY, so `SAT_EMPRESA_DADOS` and
+# `sat_empresa_dados` are ONE Delta table -- and the sweeps below iterate the registries'
+# own strings, which are all lower case, so a byte comparison passes every one of them
+# while the upper-cased spelling of the same table walks straight through. Measured
+# before the guard was casefolded: `sat_empresa_dados` refused, `SAT_EMPRESA_DADOS`
+# ACCEPTED, same for `ref_pais` and `bronze_cnpj_empresas`. It is the exact defect
+# `opl.bronze.registry_collisions` fixed in F1.4b, reintroduced at the one boundary no
+# other file polices.
+SPELLINGS = {"as declared": str, "upper-cased": str.upper}
+
 
 def test_the_registered_star_is_dim_company_and_the_three_conformed_dimensions():
     """The pin. `dim_company` is derived from ONE satellite and that satellite's name is
@@ -212,9 +223,10 @@ def test_a_source_column_colliding_with_a_column_the_loader_writes_is_refused():
         build_registry((_dimension(),), vault_tables={satellite.name: collided})
 
 
+@pytest.mark.parametrize("spelling", sorted(SPELLINGS))
 @pytest.mark.parametrize("kind", sorted(KINDS))
 @pytest.mark.parametrize("vault_table", sorted(domains.REGISTRY))
-def test_a_gold_table_named_like_a_vault_table_is_refused(vault_table, kind):
+def test_a_gold_table_named_like_a_vault_table_is_refused(vault_table, kind, spelling):
     """ONE FLAT SCHEMA. `opl.config.OplConfig.table` puts every layer's Delta tables in
     `workspace.default`, so a gold name equal to a vault name is one `mode("append")`
     away from writing dimension rows into a satellite.
@@ -224,34 +236,65 @@ def test_a_gold_table_named_like_a_vault_table_is_refused(vault_table, kind):
     likely to acquire a short, generic name -- `dim_date` is one word away from a lookup
     somebody adds later -- and a guard that had only ever been driven through
     `Scd2Dimension` would be a guard the new kind walks past with the suite still
-    green."""
+    green.
+
+    OVER EVERY SPELLING, because until this parameter existed the sweep inherited the
+    guard's own blind spot: it fed the guard the registry's own lower-case strings, which
+    a byte comparison catches, and never the upper-cased spelling of the same physical
+    table, which it did not. See `SPELLINGS`."""
     with pytest.raises(ValueError, match="already owned by the vault"):
-        build_registry((KINDS[kind](name=vault_table),))
+        build_registry((KINDS[kind](name=SPELLINGS[spelling](vault_table)),))
 
 
+@pytest.mark.parametrize("spelling", sorted(SPELLINGS))
 @pytest.mark.parametrize("kind", sorted(KINDS))
 @pytest.mark.parametrize("bronze_table", sorted(BRONZE_REGISTRY))
 def test_a_gold_table_named_like_any_of_a_bronze_tables_three_delta_names_is_refused(
-    bronze_table, kind
+    bronze_table, kind, spelling
 ):
     """All THREE names, not just the bronze one. A promote appends into staging and the
     DQ gate appends into quarantine, so a dimension sitting on either is reached by a
     job nobody would think to look at -- and the quarantine is the documented case
     (`opl.bronze.registry`: a quarantine name hardcoded in a job YAML "sent estab
-    triagers to a table full of unrelated F1.2 lookup rows")."""
+    triagers to a table full of unrelated F1.2 lookup rows").
+
+    Over every spelling for the test above's reason."""
     spec = BRONZE_REGISTRY[bronze_table]
     for name in (spec.staging, spec.bronze, spec.quarantine):
         with pytest.raises(ValueError, match="already owned by bronze"):
-            build_registry((KINDS[kind](name=name),))
+            build_registry((KINDS[kind](name=SPELLINGS[spelling](name)),))
 
 
+@pytest.mark.parametrize("spelling", sorted(SPELLINGS))
 @pytest.mark.parametrize("kind", sorted(KINDS))
-def test_two_gold_tables_of_any_kind_claiming_one_name_are_refused(kind):
+def test_two_gold_tables_of_any_kind_claiming_one_name_are_refused(kind, spelling):
     """One Delta name, two specs: one of them would load into the other's table with both
-    runs reporting success. Over every kind for the two tests above's reason."""
+    runs reporting success. Over every kind for the two tests above's reason, and over
+    every spelling because two gold tables differing only in case are also one table."""
     make = KINDS[kind]
+    other = make(surrogate_key="other_key")
     with pytest.raises(ValueError, match="both declare a gold table"):
-        build_registry((make(), make(surrogate_key="other_key")))
+        build_registry((make(), make(name=SPELLINGS[spelling](other.name),
+                                     surrogate_key="other_key")))
+
+
+def test_a_refusal_over_two_spellings_of_one_name_reports_both_of_them():
+    """THE MESSAGE, and it is why the guard cannot simply casefold in silence. The two
+    strings it reports are not equal, so an operator handed only the normalised one would
+    search the source for a name nobody wrote. `opl.bronze.registry_collisions
+    ._delta_name_collision` draws the same distinction and adds the case explanation ONLY
+    when the spellings differ -- a plain duplicate annotated with one sends the reader
+    looking for a difference that is not there."""
+    vault_table = sorted(domains.REGISTRY)[0]
+    with pytest.raises(ValueError, match="CASE-INSENSITIVE") as refused:
+        build_registry((_dimension(name=vault_table.upper()),))
+    assert vault_table in str(refused.value) and vault_table.upper() in str(refused.value)
+    with pytest.raises(ValueError) as plain:
+        build_registry((_dimension(name=vault_table),))
+    assert "CASE-INSENSITIVE" not in str(plain.value), (
+        "an ordinary duplicate carries a case explanation, which sends the operator "
+        "looking for a difference that is not there"
+    )
 
 
 def test_two_conformed_dimensions_drawing_from_one_fact_column_are_refused():

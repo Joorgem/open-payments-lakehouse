@@ -97,23 +97,43 @@ class UnknownGoldTable(ValueError):
 
 
 
-def _bronze_delta_names() -> Mapping[str, str]:
-    """Every Delta name bronze owns, mapped to what it is -- staging, bronze table or
-    quarantine -- so a refusal can say which one was collided with.
+def _same_table_note(name: str, other: str) -> str:
+    """Why two names that are not equal are nonetheless one Delta table -- and NOTHING
+    when they are equal.
+
+    `opl.bronze.registry_collisions._delta_name_collision`'s shape, verbatim in intent:
+    the comparison is casefolded, so the two strings a refusal reports may differ, and an
+    operator handed only a normalised name would search the source for a string nobody
+    wrote. Conditional because the ordinary duplicate is the case that actually happens,
+    and annotating it with a case explanation sends the reader looking for a difference
+    that is not there."""
+    if name == other:
+        return ""
+    return (
+        f" -- spelled {other!r} there, and Unity Catalog and Spark identifiers are "
+        "CASE-INSENSITIVE, so two spellings that differ only in case name ONE physical "
+        "table"
+    )
+
+
+def _bronze_delta_names() -> Mapping[str, tuple[str, str]]:
+    """Every Delta name bronze owns, by its CASEFOLDED spelling, mapped to that name as
+    bronze writes it and to what it is -- staging, bronze table or quarantine -- so a
+    refusal can say which one was collided with and in whose words.
 
     ALL THREE AND NOT ONLY THE BRONZE ONE. A promote appends into staging and the DQ
     gate appends into quarantine, so a dimension sitting on either is reached by a job
     nobody would think to look at -- and the quarantine is the documented case, the one
     `opl.bronze.registry`'s own docstring records as having "sent estab triagers to a
     table full of unrelated F1.2 lookup rows"."""
-    owners: dict[str, str] = {}
+    owners: dict[str, tuple[str, str]] = {}
     for spec in BRONZE_REGISTRY.values():
         for role, name in (
             ("staging table", spec.staging),
             ("bronze table", spec.bronze),
             ("quarantine", spec.quarantine),
         ):
-            owners[name] = f"{spec.name}'s {role}"
+            owners[name.casefold()] = (name, f"{spec.name}'s {role}")
     return owners
 
 
@@ -126,40 +146,64 @@ def _assert_no_gold_name_is_owned_by_another_layer(
     in this repository can hold it. Ordered FIRST among the whole-set guards for
     `opl.bronze.registry`'s "individually wrong before collectively wrong" reason: a
     name another layer owns is wrong on its own, and reporting a duplicate first would
-    tell the operator to rename one of two tables that both must be renamed."""
+    tell the operator to rename one of two tables that both must be renamed.
+
+    CASEFOLDED, WHICH IS THE WHOLE POINT AND WAS MISSING. UC and Spark resolve
+    identifiers case-insensitively, so `SAT_EMPRESA_DADOS` IS the satellite -- and under
+    the byte comparison this used until now it was ACCEPTED while `sat_empresa_dados` was
+    refused, with every consequence below intact. Measured, on `sat_empresa_dados`,
+    `ref_pais` and `bronze_cnpj_empresas` alike. It is exactly the defect
+    `opl.bronze.registry_collisions` fixed in F1.4b, and this is the one boundary no
+    other file in this repository polices."""
     bronze = _bronze_delta_names()
+    vault = {name.casefold(): name for name in vault_tables}
     for table in tables:
-        if table.name in vault_tables:
+        folded = table.name.casefold()
+        if folded in vault:
             raise ValueError(
-                f"gold table {table.name!r} is a name already owned by the vault. "
+                f"gold table {table.name!r} is a name already owned by the vault"
+                f"{_same_table_note(table.name, vault[folded])}. "
                 "Free Edition ships ONE catalog and ONE schema, so both would resolve "
                 "to the same Delta table -- and every loader in this repository writes "
                 "with mode('append'), which does not refuse a name it does not own: it "
                 "appends dimension rows into the satellite, or merges two populations "
                 "where the shapes happen to agree, with both runs reporting success"
             )
-        if table.name in bronze:
+        if folded in bronze:
+            owned, role = bronze[folded]
             raise ValueError(
                 f"gold table {table.name!r} is a name already owned by bronze "
-                f"({bronze[table.name]}). One catalog, one schema, and every writer in "
-                "this repository appends -- so the promote or the DQ gate would append "
-                "into this dimension, or this loader into theirs, without failing"
+                f"({role}){_same_table_note(table.name, owned)}. One catalog, one "
+                "schema, and every writer in this repository appends -- so the promote "
+                "or the DQ gate would append into this dimension, or this loader into "
+                "theirs, without failing"
             )
 
 
 def _assert_no_two_gold_tables_share_a_name(tables: Iterable[GoldTable]) -> dict[str, GoldTable]:
-    """Every gold table by name, refusing a name two of them claim.
+    """Every gold table by name, refusing a name two of them claim -- IN ANY CASE.
 
     Returns the mapping rather than only checking, so there is no second loop that could
-    build a different one -- `opl.vault.registry._collected_tables`' shape."""
+    build a different one -- `opl.vault.registry._collected_tables`' shape. The returned
+    mapping is keyed by the DECLARED spelling, because that is what a job parameter names
+    and what `table_spec` must answer to; only the collision check is casefolded, which
+    is the same split `opl.bronze.registry_collisions` makes.
+
+    CASEFOLDED for the guard above's reason, and needed here too: two gold specs called
+    `dim_x` and `DIM_X` are one Delta table, so one of them loads into the other with
+    both runs reporting success -- and this file is where a second kind gets declared."""
     collected: dict[str, GoldTable] = {}
+    seen: dict[str, str] = {}
     for table in tables:
-        if table.name in collected:
+        folded = table.name.casefold()
+        if folded in seen:
             raise ValueError(
-                f"two specs both declare a gold table called {table.name!r}. One of "
+                f"two specs both declare a gold table called {table.name!r}"
+                f"{_same_table_note(table.name, seen[folded])}. One of "
                 "them would load into the other's Delta table, with both runs "
                 "reporting success"
             )
+        seen[folded] = table.name
         collected[table.name] = table
     return collected
 
