@@ -50,11 +50,21 @@
 #     wall clock   0.5-3 h, central ~1.5 h
 #     storage      ~5.0 GB (4-7)
 #
-# THE INTERVAL IS SET BY A DISAGREEMENT IN THE MEASUREMENTS, not by an estimate's
-# precision, and that is the honest way to publish it. `docs/f2-wave-1-workspace-run-
-# evidence.md` §4 holds two loads at 72.3M rows each on Free Edition serverless that
-# differ by 11x: `link_empresa_estabelecimento` took 499 s and `sat_estabelecimento_dados`
-# took 5,630 s. This job's shape sits between them -- it hashes nothing (the link's cost)
+# >>> FALSIFIED BY THE RUN. Measured 168 s and this block predicted 1,800-10,800 s, so it
+# >>> was wrong by 11-64x. The reason is in the block below, which cites a source whose own
+# >>> conclusion it then ignored: F2 measured that cost here lives in HASHING WIDTH x row
+# >>> count, and this extrapolation scaled on row count alone. The satellites it anchors on
+# >>> hash every source row into a new digest; this job hashes nothing and compares DATEs.
+# >>> Kept rather than rewritten -- a prediction wrong by 64x in the harmless direction is
+# >>> still wrong, and the next phase extrapolating gold cost from vault cost repeats it.
+# >>> See `docs/f3-workspace-run-evidence.md` §9.1.
+#
+# THE INTERVAL IS ANCHORED ON MEASUREMENTS AND THEN JUDGED, and the judgement is the part
+# that was wrong. `docs/f2-wave-1-workspace-run-evidence.md` §2.4 holds two loads at
+# 72.3M and 73.5M rows on Free Edition serverless that differ by 11x:
+# `link_empresa_estabelecimento` took 499 s and `sat_estabelecimento_dados` took 5,630 s --
+# 0.14-1.56 h, so NEITHER published endpoint is a measurement. This job's shape sits
+# between them -- it hashes nothing (the link's cost)
 # and makes no ledger grid or second full scan (the satellite's), but it shuffles 291M
 # rows, which NEITHER of them does and which nothing in this repository has measured. Any
 # central value narrower than that spread would be invented.

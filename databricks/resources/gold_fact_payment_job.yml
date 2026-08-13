@@ -99,8 +99,17 @@
 # the payment's own columns rather than looked up, so there is no ghost to fall back on.
 # `dim_channel` and `dim_currency` hold the contract's declared domains and the generator
 # picks from those same tuples by index, so an unheld value is not expressible;
-# `dim_date`'s span is measured from this very table (2026-06-13 .. 2026-08-01, 50 days),
-# so it covers every payment day it was built over.
+# `dim_date`'s span is measured from `bronze_payments`' own days AND from
+# `sat_empresa_dados`' `applied_date`s (2026-06-13 .. 2026-08-01, 50 days), so it covers
+# every payment day the fact can carry.
+#
+# NOT "FROM THIS VERY TABLE", WHICH IS WHAT THIS LINE USED TO SAY. `covered_span` takes
+# TWO sources and `gold_load_conformed_dimension.py` states the reason in capitals: the
+# fact source is `bronze_payments`, because `fact_payment` DOES NOT EXIST when the calendar
+# is built. The fact alone could not produce the low end either -- before the fourth stream
+# every payment was 2026-08-01, so 2026-06-13 comes entirely from the satellite. The
+# conformed job's own header had this right and these two published predictions disagreed
+# about the derivation of one number.
 #
 # --- (B) AFTER THE `between-snapshots` STREAM LANDS ----------------------------------
 #
@@ -152,12 +161,24 @@
 #     wall clock   5-40 min, central ~15 min
 #     storage      < 5 MB
 #
+# >>> UNMARKABLE, AND THAT IS ITSELF A FINDING. This run's per-task durations were never
+# >>> captured, so there is no measurement to mark the interval against -- and the interval
+# >>> could not have been marked honestly anyway, because its two stated anchors do not
+# >>> produce it (see below). `docs/f3-workspace-run-evidence.md` §9 records it unmarked
+# >>> rather than compared against a number that does not reconcile with its own derivation.
+#
 # CALIBRATED ON `link_empresa_estabelecimento`, which is the cheapest 72M-row operation
-# measured on Free Edition serverless (`docs/f2-wave-1-workspace-run-evidence.md` section
-# 4: 499 s, and it WRITES 7.2 GB where this job writes about one megabyte). The upper end
-# of the interval is the same file's `sat_estabelecimento_dados` at 5,630 s, kept because
-# the spread between two 72M-row loads on this platform is 11x and a narrower central value
-# would be invented.
+# measured on Free Edition serverless (`docs/f2-wave-1-workspace-run-evidence.md` §2.4:
+# 499 s, and it WRITES 7.2 GB where this job writes about one megabyte).
+#
+# THE UPPER END DOES NOT FOLLOW FROM THE ANCHOR THIS BLOCK NAMES, and the arithmetic is
+# left visible rather than quietly repaired. It cites `sat_estabelecimento_dados` at
+# 5,630 s, which is 94 minutes, not the 40 published above; and it calls 5-40 min an "11x
+# spread" when 40/5 is 8x. The published interval is therefore a JUDGEMENT -- the 72M-row
+# scan here is two projected broadcast-filtered passes rather than a hashed write, so the
+# satellite's 5,630 s was scaled down by a factor nobody wrote down. A prediction whose
+# stated derivation does not close is a guess wearing a derivation's clothes, which is the
+# thing this file's own header spends fifty lines refusing.
 resources:
   jobs:
     opl_gold_fact_payment:
