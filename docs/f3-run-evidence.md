@@ -170,6 +170,38 @@ question (`.plans/HANDOFF.md`: "check `result_from_cache` or you will measure th
 
 **Nine confirmed, three falsified. Nothing was adjusted to agree.**
 
+#### The establishment key population, and where each number actually comes from
+
+Several derivations above lean on a three-way split of `hub_estabelecimento`'s keys. **It
+was not measured by any statement in this section**, and saying so is the point: the
+controller quoted it in a Task 2 dispatch attributed to the four statement ids above, an
+implementer checked and found those statements do not carry it. That is the same defect
+this phase struck from the plan — six values wearing an id that did not measure them —
+**committed a second time by the same controller, three hours after writing the correction.**
+
+| | keys | source |
+|---|---|---|
+| observed in 2026-06 | **71,874,448** | P9 above, measured — both satellites' row count at 2026-06-13 |
+| observed in both months | **71,874,444** | `f2-wave-1-run-evidence.md` §12, F2-era |
+| June-only | **4** | 71,874,448 − 71,874,444 |
+| July-only | **444,520** | derived, and cross-checked twice below |
+| observed in 2026-07 | **72,318,964** | 71,874,444 + 444,520 |
+| **hub total** | **72,318,968** | P12 above, measured |
+
+**The derivation is not circular and it closes three ways**, which is why it is trustworthy
+even though it is a derivation rather than a measurement:
+
+```
+71,874,448 + 444,520 = 72,318,968   ✓ equals the measured hub
+P7: 1,656,354 − 1,211,834 = 444,520 ✓ from the _dados layer
+P8: 1,014,134 −   569,614 = 444,520 ✓ from the _endereco layer, independently
+```
+
+**The 4 June-only establishments are still in force at 2026-07-11** — the RFB retains
+baixadas and F2 measured **zero** candidate departures on every satellite — which is why
+P12's "keys in force" is the hub's whole key set (72,318,968) and not July's observed count
+(72,318,964). A PIT table that used the observed count would silently drop those four.
+
 #### T3 is achievable, and the plan's premise about why is retired
 
 P1–P5 confirm the audit rather than the plan. **Every payment sits on 2026-08-01, after
