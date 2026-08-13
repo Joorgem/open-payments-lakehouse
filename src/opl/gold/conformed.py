@@ -98,6 +98,7 @@ __all__ = [
     "covered_span",
     "day_of",
     "fact_side_cardinality",
+    "fact_surrogate_key",
     "load_conformed_dimension",
 ]
 
@@ -243,16 +244,50 @@ def _member_frame(
     )
 
 
-def _surrogate_key(dimension: ConformedDimension) -> Column:
-    """`dimension`'s surrogate key, over its own natural key column.
+def _member_key(dimension: ConformedDimension, member: Column) -> Column:
+    """`member`'s surrogate key under `dimension`'s own mechanism, whichever column the
+    member arrived in.
 
     TWO MECHANISMS FOR TWO KINDS -- see the module docstring. `yyyyMMdd` for a day,
     because a date HAS a canonical integer identity and the fact can derive the key
-    without a join; `xxhash64` for a member that has none."""
-    natural = F.col(dimension.natural_key)
+    without a join; `xxhash64` for a member that has none.
+
+    THE COLUMN IS AN ARGUMENT PRECISELY SO THE DIMENSION AND THE FACT CANNOT DRIFT. The
+    same member arrives here as `full_date` when the dimension is built and as
+    `to_date(substring(event_time, 1, 10))` when the fact is, and as `channel_code` against
+    `payment_method`. Two spellings of the mechanism would be two keys for one member --
+    silently, since both are integers and the join simply returns nothing -- so there is
+    one, and `tests/gold/test_fact_payment.py` pins that the two call sites agree on every
+    declared member."""
     if isinstance(dimension, CalendarDimension):
-        return F.date_format(natural, _DATE_KEY_FORMAT).cast("int")
-    return F.xxhash64(natural)
+        return F.date_format(member, _DATE_KEY_FORMAT).cast("int")
+    return F.xxhash64(member)
+
+
+def _surrogate_key(dimension: ConformedDimension) -> Column:
+    """`dimension`'s surrogate key, over its own natural key column."""
+    return _member_key(dimension, F.col(dimension.natural_key))
+
+
+def fact_surrogate_key(dimension: ConformedDimension) -> Column:
+    """The key a FACT row derives for `dimension`, from the fact's OWN column and with no
+    join at all.
+
+    NO JOIN, WHICH IS A PRE-DECISION OF THIS MODULE RATHER THAN A SHORTCUT TAKEN BY THE
+    FACT. The module docstring above states it as the reason the two key mechanisms are
+    what they are: a day's key IS its calendar position, so `fact_payment` can derive it
+    from `event_time`; an enumerated member's key is `xxhash64` of the member itself,
+    "computable on the fact side without a join". Resolving these three by joining would
+    be three shuffles to look up a value the row already carries.
+
+    WHAT IT COSTS, STATED BECAUSE IT IS REAL: a derived key cannot fall back on the ghost.
+    An `event_time` outside the span `dim_date` was built over yields a key no member
+    holds, where a LEFT JOIN would have yielded NULL and been coalesced. That is why
+    `opl.gold.facts` measures referential integrity per conformed dimension AFTER the
+    write instead -- the orphan is found by counting, not by joining, and the two
+    enumerated dimensions cannot produce one at all while the generator picks from the
+    domains the contract declares."""
+    return _member_key(dimension, _fact_member(dimension))
 
 
 def _keyed(
