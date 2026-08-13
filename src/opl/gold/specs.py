@@ -14,7 +14,8 @@ table declares about itself, a REGISTRY is what the set of them must satisfy tog
 WHICH GUARD LIVES WHERE, because the seam is the whole value of the split. Everything
 here is answerable from one spec and nothing else: is the surrogate key a column the
 loader writes, is the fact column one the payment contract carries, does the member list
-repeat. Everything that needs to see the OTHER tables -- a name two specs claim, a name
+repeat, does every counterparty the contract declares play a role in the fact. Everything
+that needs to see the OTHER tables -- a name two specs claim, a name
 another layer owns, a satellite that must resolve against the vault registry -- stays in
 `opl.gold.registry.build_registry`. A guard on the wrong side of that line is either
 unreachable at import (a whole-set check written here) or reached too late (a
@@ -44,6 +45,7 @@ __all__ = [
     "ConformedDimension",
     "EnumeratedDimension",
     "GoldTable",
+    "PaymentFact",
     "PointInTimeTable",
     "Scd2Dimension",
 ]
@@ -252,6 +254,13 @@ class EnumeratedDimension:
             "enumerated dimension", self.name, "member", self.members
         )
 
+    @property
+    def fact_key(self) -> str:
+        """What the FACT calls its foreign key into this dimension -- the surrogate key
+        itself, because a value domain plays exactly one role and has no other name to
+        take. `CalendarDimension.fact_key` is the one that differs, and says why."""
+        return self.surrogate_key
+
 
 @dataclass(frozen=True, kw_only=True)
 class CalendarDimension:
@@ -301,6 +310,32 @@ class CalendarDimension:
         _assert_the_declared_values_are_a_set(
             "calendar dimension", self.name, "role", self.roles
         )
+
+    @property
+    def fact_key(self) -> str:
+        """What the FACT calls its foreign key into this calendar -- the ROLE, and never
+        the surrogate key.
+
+        `dim_date`'s own key is `date_key` and the fact's column is `event_date_key`,
+        because a date dimension is the one kind a fact reaches under a name that says
+        WHICH date. `EnumeratedDimension.fact_key` is the surrogate key itself, for the
+        mirror reason.
+
+        ONE ROLE OR A REFUSAL, because a fact derives this key from ONE `fact_column`. A
+        second role is a second business date -- an `authorized_at` or a `settled_at` in
+        `opl.contracts.payments` -- and it needs a second `fact_column` beside it, which is
+        a change to this KIND rather than a longer tuple. Taking `roles[0]` instead would
+        give the fact one date key silently named after the first role and derived from a
+        column that is not that role's."""
+        if len(self.roles) != 1:
+            raise ValueError(
+                f"calendar dimension {self.name!r} declares {list(self.roles)} and a fact "
+                f"derives its date key from ONE column ({self.fact_column!r}). A second "
+                "role is a second business date and needs a second fact column declared "
+                "beside it; until then every role but one would be a key derived from the "
+                "wrong column and named after the right one"
+            )
+        return self.roles[0]
 
 
 def _assert_the_satellites_are_a_set_of_at_least_two(name: str, satellites: tuple) -> None:
@@ -429,6 +464,226 @@ class PointInTimeTable:
             )
 
 
+def _assert_the_grain_is_the_events_own_identity(name: str, grain_key: str) -> None:
+    """Refuse a fact grain the contract does not carry, and refuse a BUSINESS ATTRIBUTE
+    outright -- which is a 1,600-payment deletion declared in one field.
+
+    THE ARITHMETIC, ON TODAY'S BRONZE. Both promoted streams carry `_REPEAT_COUNT = 800`
+    LEGITIMATE REPEATS: a DIFFERENT `transaction_id` under an IDENTICAL business-attribute
+    tuple, emitted on purpose so a duplicate has something to be confused with
+    (`opl.contracts.payments`). 20,150 rows hold 20,000 distinct `transaction_id` and
+    18,400 distinct tuples -- so a fact grained on the attributes, or on a "natural key"
+    built from (payer, payee, amount, currency, payment_method), which is the obvious
+    thing to reach for, silently deletes 1,600 real payments and returns a plausible
+    18,400.
+
+    THE DEDUP ACCEPTANCE CANNOT CATCH IT, which is why this is a refusal at declaration
+    and not a test over a load. "The build removed 150 duplicates" is
+    `COUNT(*) - COUNT(DISTINCT <grain>)` BY DEFINITION OF THE OPERATION: it re-measures
+    bronze's own arithmetic and comes out right whichever column the dedup was taken
+    over."""
+    if grain_key not in payments.COLUMNS:
+        raise ValueError(
+            f"payment fact {name!r} is grained on {grain_key!r}, which is no column the "
+            f"payment contract declares ({', '.join(payments.COLUMNS)}). The projection "
+            "would fail inside Spark's analysis, after a session has started"
+        )
+    if grain_key in payments.BUSINESS_ATTRIBUTE_COLUMNS:
+        raise ValueError(
+            f"payment fact {name!r} is grained on {grain_key!r}, which is a BUSINESS "
+            f"ATTRIBUTE ({', '.join(payments.BUSINESS_ATTRIBUTE_COLUMNS)}). A legitimate "
+            "repeat is a different transaction_id under an identical attribute tuple, so "
+            "this grain deletes every one of them: 1,600 real payments on today's bronze, "
+            "leaving a plausible 18,400 and a dedup count that still reports 150"
+        )
+
+
+def _assert_the_measure_is_one_the_payment_carries(
+    name: str, measure: str, grain_key: str
+) -> None:
+    """Refuse a measure that is not a business attribute of the payment.
+
+    A FACT'S MEASURE IS WHAT THE EVENT WAS WORTH, and the contract's own partition is the
+    check: `BUSINESS_ATTRIBUTE_COLUMNS` is what the payment WAS, as opposed to which
+    delivery of it a row is. A measure taken from outside it would be a number summed over
+    a property of the DELIVERY -- `emitted_at` aggregates to something, and it means
+    nothing."""
+    if measure not in payments.BUSINESS_ATTRIBUTE_COLUMNS:
+        raise ValueError(
+            f"payment fact {name!r} measures {measure!r}, which is not a business "
+            f"attribute of a payment ({', '.join(payments.BUSINESS_ATTRIBUTE_COLUMNS)}). "
+            "A measure outside that tuple is a property of the DELIVERY, and a SUM over "
+            "one is a number with no business meaning"
+        )
+    if measure == grain_key:
+        raise ValueError(
+            f"payment fact {name!r} spells {measure!r} as both its grain and its measure. "
+            "One projection writes both into one column, so one value survives and every "
+            "row is still there"
+        )
+
+
+def _assert_every_counterparty_plays_exactly_one_role(
+    name: str, roles: tuple[tuple[str, str], ...]
+) -> None:
+    """Refuse a fact that does not carry a foreign key for EVERY counterparty the
+    contract declares -- one per role, both roles, into ONE dimension.
+
+    THE PHASE PLAN'S CLOSING TEST IS ILL-FORMED AND ITS DANGEROUS READING IS REFUSED
+    HERE. It asks that "every `fact_payment` row resolve to exactly one `dim_company`
+    version". A correct row resolves to TWO, one per role; the reading that IS satisfiable
+    is a fact that joins on the PAYER alone and never builds the payee's key, and nothing
+    about that fails -- the row count is right, the resolution rate is a clean 100%, and
+    every report grouping by payee returns nothing.
+
+    `COUNTERPARTY_COLUMNS` AND NOT A COUNT OF TWO. `opl.contracts.payments` names the two
+    as their own tuple and refuses at import any member of it that is not also a business
+    attribute; a check for "two roles" would accept a fact that played the payer twice."""
+    counterparties = tuple(counterparty for counterparty, _key in roles)
+    keys = tuple(key for _counterparty, key in roles)
+    if len(set(counterparties)) != len(counterparties) or set(counterparties) != set(
+        payments.COUNTERPARTY_COLUMNS
+    ):
+        raise ValueError(
+            f"payment fact {name!r} declares roles for {list(counterparties)}, and the "
+            f"contract's counterparties are {list(payments.COUNTERPARTY_COLUMNS)}. Every "
+            "one of them must play exactly one role: a fact that resolves the payer alone "
+            "is a star in which half of every payment is invisible, with the row count "
+            "right and the resolution rate a clean 100%"
+        )
+    if len(set(keys)) != len(keys):
+        raise ValueError(
+            f"payment fact {name!r} gives two roles the same foreign key column: "
+            f"{list(keys)}. One projection writes both, so one role's key survives and "
+            "every payment appears to have paid itself"
+        )
+
+
+def _assert_the_facts_own_columns_are_its_own(
+    name: str, keys: tuple[str, ...], grain_key: str, measure: str
+) -> None:
+    """Refuse a role key the loader would overwrite, or that is already a column of the
+    payment this fact projects.
+
+    THE RESERVED SET IS GOLD'S WHOLE ONE, for `_assert_the_key_columns_are_the_dimensions
+    _own`'s reason -- one namespace, one reserved set. The CONTRACT set is this kind's own
+    addition: a fact projects the grain, the measure and `event_time` under the names the
+    contract gives them, so a role key spelled `amount` is one projection writing two
+    values into one column, with every row present and the measure silently a hash."""
+    for key in keys:
+        if key in DIMENSION_COLUMNS:
+            raise ValueError(
+                f"payment fact {name!r} names {key!r} as a role's foreign key, and the "
+                f"gold loaders write that column themselves "
+                f"({', '.join(sorted(DIMENSION_COLUMNS))}). One projection, two values, "
+                "and the key is silently a timestamp -- every join on it matches nothing"
+            )
+        if key in payments.COLUMNS or key in (grain_key, measure):
+            raise ValueError(
+                f"payment fact {name!r} names {key!r} as a role's foreign key, and the "
+                f"fact already projects that name from the payment "
+                f"({', '.join(payments.COLUMNS)}). One projection writes both, so the "
+                "delivered value disappears and the column is full of plausible numbers"
+            )
+
+
+def _assert_the_conformed_dimensions_are_a_set(name: str, conformed: tuple[str, ...]) -> None:
+    """Refuse an empty or repeating conformed list -- NOT `_assert_the_declared_values
+    _are_a_set`, whose two messages are about a DIMENSION's members and would misdiagnose
+    both of these.
+
+    EMPTY is a fact that reaches no conformed dimension at all: `dim_date`, `dim_channel`
+    and `dim_currency` would each be a table nothing joins to, which is the "decorative in
+    a star schema" charge `opl.gold.pit` levels at itself and the one thing a FACT can
+    stop being true. REPEATED is a column projected twice under one name: the second
+    overwrites the first, and both happen to be the same value, so the table is correct
+    and one column wide of what its schema says."""
+    if not conformed:
+        raise ValueError(
+            f"payment fact {name!r} declares no conformed dimension. Every conformed "
+            "dimension in this star exists to be reached by this fact; a fact that "
+            "reaches none leaves all of them decorative, with every build reporting "
+            "success"
+        )
+    if len(set(conformed)) != len(conformed):
+        raise ValueError(
+            f"payment fact {name!r} declares a conformed dimension twice: {conformed}. "
+            "Its foreign key would be projected twice under one name, and the second "
+            "would overwrite the first with the same value -- a table one column narrower "
+            "than its own declaration, and nothing fails"
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
+class PaymentFact:
+    """The star's fact: ONE ROW PER PAYMENT EVENT, a degenerate `transaction_id`, and a
+    foreign key per counterparty ROLE into one shared `dim_company`.
+
+    TWO ROLE-PLAYING KEYS INTO ONE DIMENSION, WHICH IS WHAT `roles` IS FOR AND WHAT THE
+    PHASE PLAN NEVER SAID. `opl.contracts.payments.COUNTERPARTY_COLUMNS` is two columns;
+    conformance means ONE `dim_company` answers for both, so the fact carries
+    `payer_company_sk` and `payee_company_sk` and both resolve against the same table.
+    `_assert_every_counterparty_plays_exactly_one_role` argues why that is a refusal
+    rather than a convention.
+
+    THE COUNTERPARTY HALF OF EACH PAIR IS THE CONTRACT'S; THE KEY HALF IS THIS LAYER'S.
+    That is why the pairs are DECLARED and not derived: `payer_company_sk` is a name gold
+    invents, and deriving it by string surgery on `payer_cnpj_basico` would be a rename
+    away from silently producing a column nothing joins. The counterparty half cannot
+    drift, because the guard above refuses any spelling the contract does not carry.
+
+    `conformed` IS DECLARED IN PROJECTION ORDER, exactly as `PointInTimeTable.satellites`
+    is and for the same reason: a Delta append matches POSITIONALLY, so the order is the
+    table's shape. It is also what makes "no conformed dimension is decorative" checkable
+    -- `opl.gold.registry` refuses a registry whose conformed dimensions are not exactly
+    the set this fact reaches.
+
+    NO `source_satellite` AND NO `hub`. A fact reads BRONZE, not the vault: its rows are
+    payments, and the only vault-derived thing it touches is `dim_company`, which it names
+    through `company_dimension` -- a GOLD table, resolved against this registry rather
+    than against `opl.vault.domains`. That is the field that makes this kind refusable in
+    an entry point before a session exists.
+
+    `kw_only`, like every spec here: `name`, `grain_key`, `measure` and
+    `company_dimension` are four adjacent strings, and a positional construction that
+    permuted them would type-check perfectly and register a fact grained on `amount`."""
+
+    name: str
+    grain_key: str
+    measure: str
+    company_dimension: str
+    roles: tuple[tuple[str, str], ...]
+    conformed: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _assert_every_field_is_named(
+            "payment fact",
+            self.name,
+            {
+                "name": self.name,
+                "grain key": self.grain_key,
+                "measure": self.measure,
+                "company dimension": self.company_dimension,
+            },
+        )
+        object.__setattr__(self, "roles", tuple(tuple(role) for role in self.roles))
+        object.__setattr__(self, "conformed", tuple(self.conformed))
+        _assert_the_grain_is_the_events_own_identity(self.name, self.grain_key)
+        _assert_the_measure_is_one_the_payment_carries(self.name, self.measure, self.grain_key)
+        _assert_every_counterparty_plays_exactly_one_role(self.name, self.roles)
+        _assert_the_facts_own_columns_are_its_own(
+            self.name, self.role_keys, self.grain_key, self.measure
+        )
+        _assert_the_conformed_dimensions_are_a_set(self.name, self.conformed)
+
+    @property
+    def role_keys(self) -> tuple[str, ...]:
+        """The foreign-key columns this fact carries into `company_dimension`, in
+        DECLARATION order -- which is the order they are projected in, and a Delta append
+        matches positionally."""
+        return tuple(key for _counterparty, key in self.roles)
+
+
 # THE TWO CONFORMED KINDS, AS ONE NAME. `opl.gold.conformed`'s loader takes either and
 # branches once, on the kind, where the members come from -- so its signature is written
 # against this union rather than against a `|` repeated at every function.
@@ -446,4 +701,12 @@ ConformedDimension = EnumeratedDimension | CalendarDimension
 # because it was written as an EXCLUSION (`if isinstance(table, Scd2Dimension): continue`)
 # rather than as an inclusion. See `_assert_no_two_dimensions_draw_from_one_payment_
 # column` for what that cost and why the direction was inverted.
-GoldTable = Scd2Dimension | ConformedDimension | PointInTimeTable
+#
+# `PaymentFact` IS THE FIFTH AND THE FIRST ONE NOTHING JOINS *TO*, which is the mirror of
+# what the PIT is. It was checked against that same inverted guard DELIBERATELY rather
+# than by running the suite: `_assert_no_two_dimensions_draw_from_one_payment_column`
+# reads `isinstance(table, ConformedDimension)`, and a `PaymentFact` -- which has no
+# `fact_column`, exactly as `PointInTimeTable` has none -- is simply not asked. Had that
+# line still been the exclusion the PIT found, adding this kind would have raised
+# `AttributeError` at import of every gold module for the second time.
+GoldTable = Scd2Dimension | ConformedDimension | PointInTimeTable | PaymentFact

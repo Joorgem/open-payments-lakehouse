@@ -26,8 +26,8 @@ inline, in `opl.bronze.registry`'s shape, and runs its guards in its own foot.
 
 WHAT LIVES HERE, so the next task knows where to put a table rather than deciding again.
 (THIS LIST NAMED THREE MODULES AND PREDICTED A FOURTH until F3 Tasks 2 and 3; the split it
-predicted has happened and three loaders exist, so it is restated rather than annotated --
-a "where things live" list that is not where things live is worse than none.)
+predicted has happened and FOUR loaders now exist, so it is restated rather than annotated
+-- a "where things live" list that is not where things live is worse than none.)
 
   - `opl.gold.columns`  -- the names every dimension carries and the two interval
     sentinels. Pure: imports nothing but `opl.vault.columns`, which itself imports
@@ -46,4 +46,16 @@ a "where things live" list that is not where things live is worse than none.)
   - `opl.gold.pit`        -- the point-in-time loader: one row per (hub key, as-of date),
     pointing at the satellite version in force. The one table here that is NOT a
     dimension and that nothing in the star joins to; its docstring says so at length.
+  - `opl.gold.facts`      -- the fact loader: one row per payment EVENT, a degenerate
+    `transaction_id`, and TWO role-playing foreign keys into ONE `dim_company`, each
+    resolved as of that payment's own `event_time`. It is the only module here that reads
+    BRONZE, and the only one that reads another gold table.
+
+AND THE ARROWS NOW POINT SOMEWHERE, WHICH IS THE ONE THING THIS PACKAGE COULD NOT SAY
+UNTIL TASK 4. Every dimension above existed to be reached by a fact that did not exist, so
+"conformed" was a property nothing could check -- `opl.gold.registry` now states it as an
+EQUALITY (the registry's conformed dimensions are exactly the set `fact_payment` reaches)
+and refuses at import a dimension no fact joins to. Exactly one table in this package is
+still outside the star, `pit_estabelecimento`, and it says so itself rather than being
+found out.
 """

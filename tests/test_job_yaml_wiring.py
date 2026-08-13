@@ -128,6 +128,15 @@ _GUARDED_JOBS = (
     # that every as-of read misses -- and because the loader is append-only, the repair
     # is dropping ~144M rows by hand rather than re-running.
     "gold_pit_estabelecimento_job.yml",
+    # THE FOURTH GOLD JOB (F3 Task 4), and this list's question has its sharpest answer
+    # here because this table's columns are a function of code deployed EARLIER as well as
+    # of the wheel that builds it. Its two role keys ARE `dim_company`'s surrogate keys --
+    # `xxhash64` over a business key and an `applied_date` -- and its three conformed keys
+    # are DERIVED by `opl.gold.conformed` rather than looked up, so a wheel whose key
+    # mechanism differs by one line writes a fact that is individually well-formed, joins
+    # to nothing at all, and reports success. Every other job in this list writes rows that
+    # are wrong; this one writes rows that are unreachable.
+    "gold_fact_payment_job.yml",
 )
 
 _UNGUARDED_JOBS = {

@@ -20,6 +20,16 @@ one kind short of the fact Task 4 adds. `opl.gold.specs` argues the seam; the sh
 version is that a check answerable about ONE table belongs beside its dataclass and a
 check that needs the other tables, or the other layers, belongs in `build_registry`.
 
+AND THE HEADROOM IS NOW SIXTEEN LINES, WHICH IS THE NEXT TASK'S PROBLEM AND IS SAID HERE
+SO IT IS NOT DISCOVERED. F3 Task 4's fact added two whole-set guards and one declaration
+and took this file to 784 against the project's 800-line cap (master protocol section
+4.12: whoever touches a file at the cap splits it FIRST). The split that is already argued
+is the one the kinds took: the whole-set guards are an `opl.gold.registry_guards` waiting
+to happen, in `opl.bronze.registry_collisions`' shape, leaving the declarations and
+`build_registry`'s call order here. It is not made now because a split of eight guards to
+gain sixteen lines would be a diff nobody can review beside a task that also builds a
+fact -- and the next table this file gains cannot say that.
+
 WHY THE THREE CONFORMED TABLES ARE TWO KINDS AND NOT THREE. `dim_channel` and
 `dim_currency` are a value domain the payment contract already declares, written out one
 row per member: one kind, differing only in which tuple they name. `dim_date` is not --
@@ -55,12 +65,13 @@ from types import MappingProxyType
 
 from opl.bronze.registry import REGISTRY as BRONZE_REGISTRY
 from opl.contracts import payments
-from opl.gold.columns import DIMENSION_COLUMNS
+from opl.gold.columns import DIMENSION_COLUMNS, LOAD_DATE, RECORD_SOURCE
 from opl.gold.specs import (
     CalendarDimension,
     ConformedDimension,
     EnumeratedDimension,
     GoldTable,
+    PaymentFact,
     PointInTimeTable,
     Scd2Dimension,
 )
@@ -72,6 +83,7 @@ __all__ = [
     "DIM_COMPANY",
     "DIM_CURRENCY",
     "DIM_DATE",
+    "FACT_PAYMENT",
     "PIT_ESTABELECIMENTO",
     "REGISTRY",
     "TABLES",
@@ -79,6 +91,7 @@ __all__ = [
     "ConformedDimension",
     "EnumeratedDimension",
     "GoldTable",
+    "PaymentFact",
     "PointInTimeTable",
     "Scd2Dimension",
     "UnknownGoldTable",
@@ -453,6 +466,95 @@ def _assert_the_satellite_hangs_off_this_pits_hub(
         )
 
 
+def _facts(tables: Iterable[GoldTable]) -> Iterable[PaymentFact]:
+    """The facts among `tables`. AN INCLUSION, like `_scd2` and unlike the guard this
+    repository has already been bitten by -- see
+    `_assert_no_two_dimensions_draw_from_one_payment_column`."""
+    return (table for table in tables if isinstance(table, PaymentFact))
+
+
+def _assert_every_fact_reaches_every_dimension_this_star_holds(
+    tables: Iterable[GoldTable], by_name: Mapping[str, GoldTable]
+) -> None:
+    """Refuse a fact whose company dimension is missing or is the wrong kind, and refuse a
+    registry whose CONFORMED dimensions are not exactly the set the fact reaches.
+
+    THE SECOND HALF IS THE ONE WORTH HAVING, and it is the only mechanical answer this
+    repository has to the charge it levels at `pit_estabelecimento`. A conformed dimension
+    exists to be reached by a fact: `dim_channel` costs a job task and a table and buys
+    nothing at all unless `fact_payment` carries a key into it. Left as a convention, a
+    dimension added later is a dimension the fact silently does not reach, with both
+    builds reporting success and every report over it returning one row per member and no
+    facts. Stated as an equality, adding a conformed dimension without adding it to the
+    fact turns the import of every gold module red.
+
+    IT IS AN EQUALITY AND NOT A SUBSET IN BOTH DIRECTIONS ON PURPOSE. A fact naming a
+    conformed dimension the registry does not hold would fail in Spark's analysis on a
+    column; a registry holding one the fact does not name fails nowhere, which is exactly
+    why the check has to be written from the registry's side as well.
+
+    THE SCD2 SIDE IS RESOLVED AGAINST *THIS* REGISTRY AND NOT THE VAULT'S, which is the
+    difference between this kind and every other one here: a fact reads BRONZE and joins to
+    a GOLD table, so `company_dimension` is a gold name. Handed a conformed dimension it
+    would look for a satellite's version chain in a table that has no interval at all --
+    every as-of predicate over a missing column, caught by Spark and only after a session
+    has started."""
+    conformed = {
+        name for name, table in by_name.items() if isinstance(table, ConformedDimension)
+    }
+    for fact in _facts(tables):
+        dimension = by_name.get(fact.company_dimension)
+        if not isinstance(dimension, Scd2Dimension):
+            raise ValueError(
+                f"payment fact {fact.name!r} resolves its counterparties against "
+                f"{fact.company_dimension!r}, which is not a registered SCD2 dimension of "
+                f"this star ({', '.join(sorted(by_name))}). Both role keys are as-of "
+                "lookups over a half-open interval, and only an SCD2 dimension has one"
+            )
+        if set(fact.conformed) != conformed:
+            raise ValueError(
+                f"payment fact {fact.name!r} reaches {sorted(fact.conformed)} and this "
+                f"registry holds the conformed dimensions {sorted(conformed)}. A conformed "
+                "dimension no fact reaches is a table nothing joins to -- it builds, it is "
+                "well-formed, and every report over it returns its members and no facts"
+            )
+
+
+def _assert_no_two_columns_of_one_fact_share_a_name(
+    tables: Iterable[GoldTable], by_name: Mapping[str, GoldTable]
+) -> None:
+    """Refuse a fact whose projected columns are not distinct.
+
+    A WHOLE-SET GUARD BECAUSE HALF THE COLUMN LIST IS OTHER TABLES'. The role keys, the
+    grain and the measure are the fact's own and `opl.gold.specs` refuses a collision among
+    them; the conformed foreign keys are DERIVED from the dimensions the fact reaches
+    (`fact_key`), so the collision that this catches is one nobody can see from either spec
+    alone -- two enumerated dimensions sharing a `surrogate_key`, which nothing else in
+    this file refuses, or a calendar whose role is spelled like a role key.
+
+    ORDERED AFTER THE GUARD ABOVE, which is load-bearing rather than tidy: that one
+    establishes that every name in `fact.conformed` is a registered conformed dimension, so
+    the lookup below cannot raise a `KeyError` from a mistyped name and hide behind it."""
+    for fact in _facts(tables):
+        columns = [
+            *fact.role_keys,
+            *(by_name[name].fact_key for name in fact.conformed),
+            fact.grain_key,
+            fact.measure,
+            payments.EVENT_TIME_COLUMN,
+            LOAD_DATE,
+            RECORD_SOURCE,
+        ]
+        repeated = sorted({name for name in columns if columns.count(name) > 1})
+        if repeated:
+            raise ValueError(
+                f"payment fact {fact.name!r} projects {repeated} more than once "
+                f"({columns}). One projection writes two values into one column, so one "
+                "of them survives, every row is still present and every join on the lost "
+                "key matches nothing"
+            )
+
+
 def build_registry(
     tables: Iterable[GoldTable],
     *,
@@ -473,6 +575,8 @@ def build_registry(
     _assert_no_gold_name_is_owned_by_another_layer(collected, known)
     by_name = _assert_no_two_gold_tables_share_a_name(collected)
     _assert_no_two_dimensions_draw_from_one_payment_column(collected)
+    _assert_every_fact_reaches_every_dimension_this_star_holds(collected, by_name)
+    _assert_no_two_columns_of_one_fact_share_a_name(collected, by_name)
     _assert_every_dimension_reads_a_registered_satellite(collected, known)
     _assert_every_pit_resolves_its_hub_and_its_satellites(collected, known)
     _assert_no_surrogate_key_collides_with_its_source(collected, known)
@@ -626,8 +730,52 @@ PIT_ESTABELECIMENTO = PointInTimeTable(
     as_of_column="as_of_date",
 )
 
+# `fact_payment`, AND IT IS WHY EVERY TABLE ABOVE EXISTS. One row per payment EVENT --
+# `opl.contracts.payments`' own grain sentence, unchanged by this layer -- with the
+# processor's `transaction_id` carried as a DEGENERATE dimension (a key with no dimension
+# table, because there is nothing to say about a transaction id that the fact row does not
+# already say) and five foreign keys.
+#
+# TWO OF THOSE FIVE ARE THE SAME DIMENSION PLAYED TWICE, WHICH THE PHASE PLAN NEVER SAID.
+# `opl.contracts.payments.COUNTERPARTY_COLUMNS` is two columns, and conformance means ONE
+# `dim_company` answers for both -- so the fact carries `payer_company_sk` AND
+# `payee_company_sk`, both resolved AS OF the payment's own `event_time`, and the plan's
+# closing test ("every row resolves to exactly one `dim_company` version") is ill-formed:
+# a correct row resolves to TWO. `opl.gold.specs._assert_every_counterparty_plays_exactly
+# _one_role` refuses the reading that is satisfiable, which is a fact that joins on the
+# payer alone.
+#
+# THE KEY HALF OF EACH PAIR IS A NAME THIS LAYER INVENTS AND IS THEREFORE DECLARED; the
+# counterparty half is the CONTRACT's and is refused at import if it is not. Deriving
+# `payer_company_sk` from `payer_cnpj_basico` by string surgery would be one rename away
+# from a column nothing joins to, with the load reporting success.
+#
+# `amount` IS SPELLED OUT for `dim_channel.fact_column`'s reason: the payment contract
+# names it only as a member of `BUSINESS_ATTRIBUTE_COLUMNS`, not as a constant, and the
+# guard that refuses a measure v1 does not carry is what stops this copy drifting behind a
+# rename -- it turns the import of every gold module red instead.
+FACT_PAYMENT = PaymentFact(
+    name="fact_payment",
+    grain_key=payments.IDENTITY_COLUMN,
+    measure="amount",
+    company_dimension="dim_company",
+    roles=(
+        ("payer_cnpj_basico", "payer_company_sk"),
+        ("payee_cnpj_basico", "payee_company_sk"),
+    ),
+    # IN PROJECTION ORDER, and a Delta append matches POSITIONALLY -- the same property
+    # `PIT_ESTABELECIMENTO.satellites` carries. Permuting these three re-writes each key
+    # into another's column, and all three are integers, so nothing fails.
+    #
+    # ALL THREE, AND THE REGISTRY REFUSES ANYTHING LESS. `_assert_every_fact_reaches_every
+    # _dimension_this_star_holds` states it as an EQUALITY against the registry's conformed
+    # set, so a conformed dimension added later without a key here turns the import red
+    # rather than quietly becoming a table nothing joins to.
+    conformed=("dim_date", "dim_channel", "dim_currency"),
+)
+
 TABLES: tuple[GoldTable, ...] = (
-    DIM_COMPANY, DIM_DATE, DIM_CHANNEL, DIM_CURRENCY, PIT_ESTABELECIMENTO,
+    DIM_COMPANY, DIM_DATE, DIM_CHANNEL, DIM_CURRENCY, PIT_ESTABELECIMENTO, FACT_PAYMENT,
 )
 
 # AT IMPORT, in this module's own foot, for the reason both sibling registries state:

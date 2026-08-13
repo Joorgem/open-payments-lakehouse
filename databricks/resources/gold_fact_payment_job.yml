@@ -1,0 +1,212 @@
+# databricks/resources/gold_fact_payment_job.yml
+# THE FACT THE WHOLE STAR EXISTS TO DEMONSTRATE: one row per payment EVENT, a degenerate
+# `transaction_id`, and TWO role-playing foreign keys into ONE `dim_company`, each resolved
+# AS OF that payment's own `event_time`.
+#
+# A FOURTH GOLD YAML RATHER THAN A TASK IN ANY OF THE THREE, and the argument is the one
+# each of the others made in turn. `gold_dim_company_job.yml` takes a `months` window this
+# task must not be given. `gold_conformed_dimensions_job.yml` builds three tables that cost
+# seconds and is the job you re-run after a payment batch lands. `gold_pit_estabelecimento
+# _job.yml` is a multi-hour build whose output nothing here reads. This job is the one that
+# READS all of them, so it is also the one an operator re-runs on its own, and
+# `databricks bundle run` has no task filter. The cost of the fourth file is the same two
+# list edits the second and third paid: `_GUARDED_JOBS` in `tests/test_job_yaml_wiring.py`
+# and `_GOLD_JOBS` in `tests/test_gold_job_wiring.py`, both enumerated rather than globbed
+# precisely so a job added later cannot inherit a behaviour nobody chose.
+#
+# WHAT MUST HAVE RUN FIRST, AND IT IS NOT EXPRESSIBLE IN THIS FILE. `dim_company` and the
+# three conformed dimensions are inputs: this build reads `dim_company`'s version chain and
+# checks its own derived keys against the three conformed tables. Databricks Asset Bundles
+# have no cross-JOB dependency, so the order is operational and is written here rather than
+# implied:
+#
+#     opl_gold_dim_company  ->  opl_gold_conformed_dimensions  ->  opl_gold_fact_payment
+#
+# Running it early does not corrupt anything -- a missing table fails the read, and stale
+# conformed dimensions are REPORTED as orphaned keys rather than refused, because the
+# repair is to re-run the conformed build, which APPENDS.
+#
+# NAMED `gold_*` AND NOT `vault_*`, for all three other gold jobs' reason:
+# `tests/test_vault_job_wiring.py` globs `vault_*.yml`, asserts the result equals its own
+# four-entry list, and demands every table in `opl.vault.domains.REGISTRY` be loaded by
+# exactly one task of those files. A gold job under that prefix turns both locks red.
+#
+# NO `months` PARAMETER, FOR THE THIRD DISTINCT REASON IN THIS DIRECTORY. The SCD2 build
+# DECLARES a window so it can refuse a snapshot the launch did not name; the PIT takes none
+# because a later snapshot cannot move a pointer already written; this one takes none
+# because a month window is a property of the RFB's SNAPSHOTS and this table is grained on
+# PAYMENTS. A payment batch that landed since the last build is a set of new
+# `transaction_id` values, and `opl.gold.facts._new_rows` finds them by reading the target.
+#
+# ------------------------------------------------------------------------------------
+# PREDICTIONS, PUBLISHED BEFORE THE RUN THAT TESTS THEM (master protocol section 4.5).
+# Every number below is DERIVED from declarations in this repository and from counts
+# already published in `docs/f3-run-evidence.md` section 0.5; none of them needed a
+# session. Two states are given because bronze is about to gain a stream.
+#
+# --- (A) AGAINST TODAY'S BRONZE: two promoted streams, `clean` and `promotable` ------
+#
+#   bronze rows                                   20,150   f3-run-evidence.md 0.5, P5
+#   DISTINCT transaction_id                       20,000   20,150 - 150 redeliveries
+#   COUNT(*) - COUNT(DISTINCT transaction_id)        150   `promotable`'s duplicate_count
+#   DISTINCT business-attribute tuples            18,400   2 x (10,000 - 800), below
+#
+#   fact_payment rows                             20,000   one per distinct identity
+#   COUNT(*) - DISTINCT tuples, IN THE FACT         1,600   the LEGITIMATE REPEATS
+#   (row, role) references                        40,000   2 roles x 20,000 rows
+#   references resolving to the ghost, per role         0   T-E, and see below
+#   rows orphaned in dim_date/channel/currency          0   see below
+#   DISTINCT event_date_key reached                     1   every payment on 2026-08-01
+#
+# WHERE 18,400 COMES FROM AND WHY IT IS A DEDUCTION RATHER THAN AN ESTIMATE.
+# `opl.generator.stream` states `DISTINCT business-attribute tuple == event_count -
+# repeat_count` as a property it BUILDS -- a base event whose tuple has already been
+# emitted is re-derived under an incremented salt, and the generator refuses rather than
+# emitting a collision. `_EVENT_COUNT = 10,000` and `_REPEAT_COUNT = 800` are shared by
+# every profile, so each stream carries exactly 9,200. Across two streams the only way the
+# total is below 18,400 is a CROSS-stream collision, which the guard does not cover: the
+# tuple space is 1024 x 1023 ordered counterparty pairs x 4,999,901 amounts x 1 currency x
+# 5 methods = 2.62e13, so the expected number of collisions between two 9,200-member draws
+# is 9,200^2 / 2.62e13 = 3.2e-6. 18,400 is therefore a prediction that can fail, and its
+# failure would be a finding about the generator's independence rather than about gold.
+#
+# WHY 1,600 IS THE ONLY ONE OF THESE THAT CAN FALSIFY THE DESIGN. "The build removed 150
+# duplicates" is `COUNT(*) - COUNT(DISTINCT transaction_id)` BY DEFINITION OF THE
+# OPERATION: it re-measures bronze's own arithmetic and comes out right whichever column
+# the deduplication was taken over, so it is published above as bronze's number and is
+# never used as an acceptance. A fact deduplicated on the business attributes -- or on a
+# "natural key" built from (payer, payee, amount, currency, payment_method), which is the
+# obvious thing to reach for -- returns 18,400 rows, 0 legitimate repeats, and a duplicate
+# count that still reads 150. The loader refuses the row count and prints the repeat count.
+#
+# WHY THE GHOST IS PREDICTED AT ZERO AND WHY THAT IS NOT A SUCCESS (section A6). F1b
+# measured 1,024 of 1,024 counterparties resolving to `hub_empresa`, `dim_company` carries
+# one version chain per hub key with a floored `valid_from`, and every payment's instant
+# therefore falls inside some version's half-open interval. `COALESCE(<as-of lookup>,
+# GHOST)` CANNOT FIRE on this data. It is reported as an UNEXERCISED path; no unresolvable
+# payment is manufactured to make the number non-zero.
+#
+# WHY THE ORPHAN COUNTS ARE PREDICTED AT ZERO. The three conformed keys are DERIVED from
+# the payment's own columns rather than looked up, so there is no ghost to fall back on.
+# `dim_channel` and `dim_currency` hold the contract's declared domains and the generator
+# picks from those same tuples by index, so an unheld value is not expressible;
+# `dim_date`'s span is measured from this very table (2026-06-13 .. 2026-08-01, 50 days),
+# so it covers every payment day it was built over.
+#
+# --- (B) AFTER THE `between-snapshots` STREAM LANDS ----------------------------------
+#
+# It has NOT been run. It carries no defect, delivers 10,000 rows, and must be launched
+# with `month=2026-08` -- its event window is June and the ingest reads the month
+# directory, so any other month leaves it out of `bronze_payments` entirely.
+#
+#   bronze rows                                   30,150   20,150 + 10,000
+#   DISTINCT transaction_id                       30,000   the stream carries no duplicate
+#   COUNT(*) - COUNT(DISTINCT transaction_id)        150   UNCHANGED: no new redeliveries
+#   DISTINCT business-attribute tuples            27,600   18,400 + 9,200
+#
+#   fact_payment rows                             30,000
+#   COUNT(*) - DISTINCT tuples, IN THE FACT         2,400   1,600 + 800
+#   (row, role) references                        60,000
+#   references resolving to the ghost, per role         0   unchanged, and still unexercised
+#   rows orphaned in dim_date/channel/currency          0   2026-06-20 is ALREADY inside
+#                                                          dim_date's 50-day span, so the
+#                                                          calendar needs no rebuild
+#   DISTINCT event_date_key reached                     2   20260620 and 20260801
+#
+# AND THIS IS THE STATE IN WHICH THE AS-OF JOIN CHANGES ITS ANSWER. Task 0 measured THREE
+# pool companies carrying two `sat_empresa_dados` versions (P6, predicted 2, falsified at
+# 3). Each role reference draws a company uniformly from the 1,024-key pool, so the
+# 20,000 references of the June stream are EXPECTED to hit a two-version company
+# 20,000 x 3/1024 = 58.6 times and the 40,000 references of the August streams
+# 117.2 times. Those two are EXPECTATIONS OF A RANDOM DRAW and not deductions -- but
+# P(zero hits) = (1 - 3/1024)^20000 = 3e-26, so the demonstration itself is not in doubt.
+# The headline company is `47070968` (`natureza_juridica` 2062, a sociedade empresaria
+# limitada rather than a natural person), whose `capital_social` moved 50000,00 ->
+# 370000,00 between the two snapshots; `44822028` is the control at 5000,00 -> 15000,00.
+# `30115555` changes ONLY its razao social and MUST NOT be quoted -- it is an empresario
+# individual, and that field is a private individual's name.
+#
+# THE FIXTURE PROOF EXISTS NOW AND IS LABELLED AS A FIXTURE.
+# `tests/gold/test_fact_payment.py` builds one company with three versions and two payments
+# straddling a boundary, and asserts they resolve to two DIFFERENT `company_sk` values
+# carrying two different `capital_social` values. That is a local Delta fixture; the
+# workspace proof is the run above, and neither is offered as the other.
+#
+# --- COST: AN EXTRAPOLATION AND NOT A MEASUREMENT ------------------------------------
+#
+# Labelled as such because nothing of this shape has been run on this platform. The build
+# scans `dim_company` (~69.2M rows) ONCE PER ROLE, projected to four columns and filtered
+# by a BROADCAST semi-join against at most 1,024 counterparty keys, so the dimension is
+# never shuffled; everything else is 20,150 rows through one window, three broadcast joins
+# and a ~20,000-row write.
+#
+#     wall clock   5-40 min, central ~15 min
+#     storage      < 5 MB
+#
+# CALIBRATED ON `link_empresa_estabelecimento`, which is the cheapest 72M-row operation
+# measured on Free Edition serverless (`docs/f2-wave-1-workspace-run-evidence.md` section
+# 4: 499 s, and it WRITES 7.2 GB where this job writes about one megabyte). The upper end
+# of the interval is the same file's `sat_estabelecimento_dados` at 5,630 s, kept because
+# the spread between two 72M-row loads on this platform is 11x and a narrower central value
+# would be invented.
+resources:
+  jobs:
+    opl_gold_fact_payment:
+      name: opl-gold-fact-payment
+      parameters:
+        - name: revision
+          # The revision this run is launched for; the default is a value the guard
+          # below refuses, so a run launched without --params stops instead of checking
+          # nothing.
+          #
+          #     databricks bundle run opl_gold_fact_payment -t free \
+          #       --params revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
+      tasks:
+        # FIRST, AND NOTHING BEFORE IT (ADR 0009). This job is in
+        # `tests/test_job_yaml_wiring.py::_GUARDED_JOBS`, and the question that list asks
+        # -- does a run against a wheel built from another revision matter? -- has its
+        # sharpest answer here. This table's every column is a function of the deployed
+        # code AND of code deployed EARLIER: the role keys are `dim_company`'s surrogate
+        # keys, which are `xxhash64` over a business key and an `applied_date`, and the
+        # three conformed keys are derived by `opl.gold.conformed` rather than looked up.
+        # A wheel whose key mechanism differs by one line writes a fact that is
+        # individually well-formed and joins to NOTHING, with the run reporting success --
+        # and because the loader is append-only, the repair is dropping the table.
+        #
+        # Side-effect-free, which is required rather than incidental: `max_retries: 0`
+        # does not prevent a retry on INTERNAL_ERROR, so a guard that touched a table
+        # could touch it twice.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        # THE ONE BUILD TASK, HANDED ONE TABLE NAME. There is no dimension parameter and no
+        # source parameter: `opl.gold.specs.PaymentFact` declares the dimension its roles
+        # resolve against, the conformed dimensions it reaches and the ORDER it projects
+        # their keys in, and the entry point resolves each against the gold registry. The
+        # conformed tables reach the loader as a mapping KEYED BY DIMENSION NAME, so the
+        # one paste that would be silent -- two of them transposed -- is not expressible.
+        - task_key: fact_payment
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/gold_load_fact.py
+            # [gold table, load_date].
+            parameters:
+              - "fact_payment"
+              # ONE BUILD TIMESTAMP FOR THE WHOLE RUN. `opl.gold.facts` gives `load_date`
+              # no default precisely so that a loader cannot stamp its own clock; this is
+              # the value the job's own parameters pin, and it survives a task retry.
+              - "{{job.start_time.iso_datetime}}"
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

@@ -30,12 +30,15 @@ from opl.contracts import payments
 from opl.gold.columns import IS_CURRENT, VALID_FROM, VALID_TO
 from opl.gold.registry import (
     DIM_CHANNEL,
+    DIM_COMPANY,
     DIM_CURRENCY,
     DIM_DATE,
+    FACT_PAYMENT,
     PIT_ESTABELECIMENTO,
     REGISTRY,
     CalendarDimension,
     EnumeratedDimension,
+    PaymentFact,
     PointInTimeTable,
     Scd2Dimension,
     UnknownGoldTable,
@@ -110,6 +113,31 @@ def _pit(**overrides) -> PointInTimeTable:
     return PointInTimeTable(**fields)
 
 
+def _fact(**overrides) -> PaymentFact:
+    """A well-formed payment fact, same shape and purpose as `_dimension`.
+
+    ITS `company_dimension` AND `conformed` NAME THE REAL TABLES, for `_pit`'s reason: the
+    whole-set guards resolve both against this registry, so a probe pointing at invented
+    names would be refused by the fact guard before the cross-layer guard under test could
+    fire, and the sweep would then be measuring the wrong refusal. The sweeps below hand
+    `build_registry` a single spec, and the cross-layer and duplicate-name guards run
+    FIRST -- which is the "individually wrong before collectively wrong" order
+    `opl.bronze.registry` states and which is what keeps this factory usable there."""
+    fields = {
+        "name": "fact_probe",
+        "grain_key": payments.IDENTITY_COLUMN,
+        "measure": "amount",
+        "company_dimension": "dim_company",
+        "roles": (
+            ("payer_cnpj_basico", "probe_payer_sk"),
+            ("payee_cnpj_basico", "probe_payee_sk"),
+        ),
+        "conformed": ("dim_date", "dim_channel", "dim_currency"),
+    }
+    fields.update(overrides)
+    return PaymentFact(**fields)
+
+
 # Every kind the gold registry knows, with a factory that builds a well-formed one. The
 # cross-layer guards below are parametrised over this rather than over `Scd2Dimension`
 # alone: a name collision is a property of the NAME, so a guard that only saw one kind
@@ -120,7 +148,18 @@ def _pit(**overrides) -> PointInTimeTable:
 # `_assert_no_two_dimensions_draw_from_one_payment_column` into an `AttributeError` at
 # import of every gold module -- that guard skipped `Scd2Dimension` and assumed everything
 # else had a `fact_column`. A sweep parametrised over one kind would not have found it.
-KINDS = {"scd2": _dimension, "enumerated": _enumerated, "calendar": _calendar, "pit": _pit}
+#
+# `fact` IS THE FIFTH AND IT IS IN HERE FOR THE SAME REASON, CHECKED THE SAME WAY. It has
+# no `fact_column` either, so it walks the same line the PIT broke; the difference is that
+# this time the direction was checked before the kind was added rather than after, and the
+# guard was already an inclusion.
+KINDS = {
+    "scd2": _dimension,
+    "enumerated": _enumerated,
+    "calendar": _calendar,
+    "pit": _pit,
+    "fact": _fact,
+}
 
 # HOW THE COLLIDING NAME IS SPELLED, and the second entry is the whole point. Unity
 # Catalog and Spark resolve identifiers CASE-INSENSITIVELY, so `SAT_EMPRESA_DADOS` and
@@ -134,20 +173,21 @@ KINDS = {"scd2": _dimension, "enumerated": _enumerated, "calendar": _calendar, "
 SPELLINGS = {"as declared": str, "upper-cased": str.upper}
 
 
-def test_the_registered_star_is_dim_company_the_three_conformed_and_one_pit():
+def test_the_registered_star_is_one_fact_four_dimensions_and_one_pit():
     """The pin. `dim_company` is derived from ONE satellite and that satellite's name is
     the whole of what the loader is told -- the payload, the parent hub and the business
     key are all read from the vault registry rather than restated here, so a second
     spelling of any of them cannot exist to drift.
 
-    FIVE ENTRIES AND ONLY FOUR OF THEM ARE IN THE STAR. `pit_estabelecimento` is a
+    SIX ENTRIES AND ONLY FIVE OF THEM ARE IN THE STAR. `pit_estabelecimento` is a
     navigation table nothing in this star joins to: `dim_company` is at empresa grain,
     `dim_merchant` at estabelecimento grain is deferred until payments carry a 14-digit
     CNPJ, and `dim_geography` is skipped. It is registered because it is BUILT, and the
     registry's job is to hold every gold table this repository writes -- but it is named
-    apart here so nobody reads five and counts a five-table star."""
+    apart here so nobody reads six and counts a six-table star."""
     assert set(REGISTRY) == {
         "dim_company", "dim_date", "dim_channel", "dim_currency", "pit_estabelecimento",
+        "fact_payment",
     }
     spec = table_spec("dim_company")
     assert (spec.surrogate_key, spec.source_satellite) == ("company_sk", "sat_empresa_dados")
@@ -519,6 +559,161 @@ def test_a_pit_needs_a_name_a_hub_and_an_as_of_column():
     for blank in ({"name": " "}, {"hub": ""}, {"as_of_column": None}):
         with pytest.raises(ValueError):
             _pit(**blank)
+
+
+# --- the fact kind -------------------------------------------------------------------
+
+
+def test_the_fact_carries_a_role_key_for_every_counterparty_the_contract_declares():
+    """T-A's DECLARATION half. The acceptance this phase inherited -- "every
+    `fact_payment` row resolves to exactly one `dim_company` version" -- is ill-formed: a
+    correct row resolves to TWO, one per role. This pins that both roles exist, that both
+    resolve against the SAME dimension (which is what "conformed" means), and that the
+    counterparty half of each pair is the contract's own column and not a copy."""
+    assert FACT_PAYMENT.roles == (
+        ("payer_cnpj_basico", "payer_company_sk"),
+        ("payee_cnpj_basico", "payee_company_sk"),
+    )
+    assert tuple(c for c, _k in FACT_PAYMENT.roles) == payments.COUNTERPARTY_COLUMNS
+    assert FACT_PAYMENT.company_dimension == DIM_COMPANY.name
+    assert FACT_PAYMENT.role_keys == ("payer_company_sk", "payee_company_sk")
+    assert FACT_PAYMENT.grain_key == payments.IDENTITY_COLUMN
+
+
+@pytest.mark.parametrize(
+    "roles",
+    [
+        (("payer_cnpj_basico", "payer_company_sk"),),
+        (("payee_cnpj_basico", "payee_company_sk"),),
+        (("payer_cnpj_basico", "a"), ("payer_cnpj_basico", "b")),
+    ],
+    ids=["payer only", "payee only", "payer twice"],
+)
+def test_a_fact_that_does_not_resolve_every_counterparty_is_refused(roles):
+    """THE READING OF THE PLAN'S CLOSING TEST THAT IS ACTUALLY SATISFIABLE, refused at
+    declaration. A fact joining on the payer alone has the right row count, a clean 100%
+    resolution rate, and no payee at all -- so every report grouped by payee returns
+    nothing and nothing about the build fails. "Payer twice" is the same defect wearing two
+    roles, which is why the guard reads `COUNTERPARTY_COLUMNS` rather than counting."""
+    with pytest.raises(ValueError, match="must play exactly one role|declares roles for"):
+        _fact(roles=roles)
+
+
+@pytest.mark.parametrize("attribute", payments.BUSINESS_ATTRIBUTE_COLUMNS)
+def test_a_fact_grained_on_a_business_attribute_is_refused(attribute):
+    """T-D AT DECLARATION, over every business attribute rather than over the one somebody
+    would reach for first. A legitimate repeat is a DIFFERENT `transaction_id` under an
+    IDENTICAL attribute tuple, so a grain taken from that tuple deletes 1,600 real payments
+    on today's bronze and returns a plausible 18,400 -- with the duplicate count still
+    reporting 150, because that number is `COUNT(*) - COUNT(DISTINCT <grain>)` by
+    definition of the operation and cannot fail."""
+    with pytest.raises(ValueError, match="BUSINESS ATTRIBUTE"):
+        _fact(grain_key=attribute)
+
+
+def test_a_fact_grained_or_measured_on_a_column_the_contract_does_not_declare():
+    """The other half of the grain refusal, and the reason gold may spell a contract column
+    name at all: a name v1 does not carry turns the import of every gold module red rather
+    than failing inside Spark's analysis after a session has started."""
+    with pytest.raises(ValueError, match="no column the payment contract declares"):
+        _fact(grain_key="transaction_di")
+    with pytest.raises(ValueError, match="not a business attribute of a payment"):
+        _fact(measure=payments.EMITTED_AT_COLUMN)
+
+
+@pytest.mark.parametrize("column", [VALID_FROM, VALID_TO, IS_CURRENT, "load_date"])
+def test_a_role_key_that_is_a_column_a_gold_loader_writes_is_refused(column):
+    """One gold namespace, one reserved set -- the collision every other kind here refuses,
+    over the two column names a fact declares for itself."""
+    with pytest.raises(ValueError, match="the gold loaders write that column"):
+        _fact(roles=(("payer_cnpj_basico", column), ("payee_cnpj_basico", "b")))
+
+
+@pytest.mark.parametrize("column", ["amount", "event_time", "transaction_id"])
+def test_a_role_key_that_is_a_column_the_fact_projects_from_the_payment_is_refused(column):
+    """The collision no other kind has, because no other kind projects contract columns. A
+    fact carries the grain, the measure and `event_time` under the contract's own names, so
+    a role key spelled `amount` is one projection writing two values into one column -- the
+    measure survives or the key does, every row is present, and the join matches nothing."""
+    with pytest.raises(ValueError, match="already projects that name from the payment"):
+        _fact(roles=(("payer_cnpj_basico", column), ("payee_cnpj_basico", "b")))
+
+
+def test_a_fact_whose_company_dimension_is_missing_or_is_not_an_scd2_dimension():
+    """Resolved against THIS registry and not the vault's, which is what makes this kind
+    different from every other one here: a fact reads bronze and joins to a GOLD table.
+    Handed a conformed dimension it would look for a half-open interval in a table that has
+    none -- caught by Spark, and only after a serverless session had started."""
+    star = (DIM_COMPANY, DIM_DATE, DIM_CHANNEL, DIM_CURRENCY)
+    with pytest.raises(ValueError, match="not a registered SCD2 dimension"):
+        build_registry((_fact(company_dimension="dim_compnay"), *star))
+    with pytest.raises(ValueError, match="not a registered SCD2 dimension"):
+        build_registry((_fact(company_dimension="dim_date"), *star))
+
+
+def test_a_conformed_dimension_the_fact_does_not_reach_is_refused():
+    """THE ONLY MECHANICAL ANSWER THIS REPOSITORY HAS TO "DECORATIVE IN A STAR SCHEMA".
+    A conformed dimension exists to be reached by a fact; one the fact does not name builds
+    fine, is well-formed, and returns its members and no facts in every report. Stated as an
+    EQUALITY against the registry's conformed set, so the omission turns the import red
+    rather than being a convention somebody has to remember."""
+    with pytest.raises(ValueError, match="reaches .* and this registry holds"):
+        build_registry(
+            (_fact(conformed=("dim_date", "dim_channel")), DIM_COMPANY, DIM_DATE,
+             DIM_CHANNEL, DIM_CURRENCY)
+        )
+    with pytest.raises(ValueError, match="reaches .* and this registry holds"):
+        build_registry((_fact(), DIM_COMPANY, DIM_DATE, DIM_CHANNEL))
+
+
+def test_two_of_the_facts_projected_columns_sharing_a_name_are_refused():
+    """A WHOLE-SET GUARD BECAUSE HALF THE COLUMN LIST IS OTHER TABLES'. Two enumerated
+    dimensions sharing a `surrogate_key` are legal on their own -- nothing in this registry
+    refuses it, and their NAMES differ -- and the fact then projects one foreign key where
+    it declares two. Both are integers, so nothing fails and one dimension is simply
+    unreachable."""
+    collided = EnumeratedDimension(
+        name=DIM_CURRENCY.name,
+        surrogate_key=DIM_CHANNEL.surrogate_key,
+        natural_key=DIM_CURRENCY.natural_key,
+        fact_column=DIM_CURRENCY.fact_column,
+        members=DIM_CURRENCY.members,
+    )
+    with pytest.raises(ValueError, match="projects .* more than once"):
+        build_registry((_fact(), DIM_COMPANY, DIM_DATE, DIM_CHANNEL, collided))
+
+
+def test_the_facts_conformed_keys_are_the_role_and_never_the_dimensions_own_key():
+    """`dim_date`'s own key is `date_key` and the fact's column is `event_date_key`,
+    because a date dimension is the one kind a fact reaches under a name saying WHICH date.
+    The other two have no second name to take, so their fact key IS their surrogate key --
+    and the fact's declared order is the order those keys are projected in, which a Delta
+    append matches positionally."""
+    assert [DIM_DATE.fact_key, DIM_CHANNEL.fact_key, DIM_CURRENCY.fact_key] == [
+        "event_date_key", "channel_key", "currency_key",
+    ]
+    assert DIM_DATE.fact_key == DIM_DATE.roles[0] != DIM_DATE.surrogate_key
+    assert FACT_PAYMENT.conformed == ("dim_date", "dim_channel", "dim_currency")
+
+
+def test_a_calendar_with_two_roles_cannot_hand_a_fact_one_date_key():
+    """The derivation is only total under a stated condition, so it refuses rather than
+    taking the first role. A second role is a second BUSINESS DATE -- an `authorized_at` or
+    a `settled_at` in the payment contract -- and it needs a second `fact_column` beside it;
+    without one, every role but the first would be a key derived from the wrong column and
+    named after the right one."""
+    two_roles = _calendar(roles=("event_date_key", "settled_date_key"))
+    with pytest.raises(ValueError, match="derives its date key from ONE column"):
+        assert two_roles.fact_key
+
+
+def test_a_fact_needs_a_name_a_grain_a_measure_a_dimension_and_a_conformed_set():
+    for blank in (
+        {"name": " "}, {"grain_key": ""}, {"measure": None},
+        {"company_dimension": ""}, {"conformed": ()},
+    ):
+        with pytest.raises(ValueError):
+            _fact(**blank)
 
 
 def test_a_dimension_needs_a_name_a_surrogate_key_and_a_source():

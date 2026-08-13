@@ -22,29 +22,26 @@ leftover SOURCE (there is no source parameter to leave behind) but a leftover TA
 task handed `sat_empresa_dados`, or `bronze_cnpj_empresas`, names a table that EXISTS in
 another layer's registry and would be refused only at run time, after a serverless start.
 
-Nothing here starts Spark. The entry point is loaded by path with the importlib pattern
-the other task tests use -- `databricks/src` scripts are job entry points, not part of
-the opl wheel."""
+AND IT IS NOW HALF A FILE, WHICH F3 TASK 4 HAD NO CHOICE ABOUT. It stood at 805 lines --
+already past the project's 800-line cap, and the master protocol's own rule is that
+whoever touches such a file splits it FIRST -- and a fourth gold entry point took it to
+946. The split runs along the section comment this file already carried: everything about
+a YAML declaring a TASK stayed here, everything about a PYTHON MODULE under
+`databricks/src` moved to `tests/test_gold_entry_points.py`. Nothing crosses the seam but
+`_REPO` and `_SRC`; `_TASK_PARAMETERS` below in particular did NOT go with it, because one
+mapping in two files is the defect this repository keeps paying for.
+
+Nothing here starts Spark, and nothing here loads a script: this file reads YAML and
+asserts it against the registries."""
 from __future__ import annotations
 
-import ast
-import importlib.util
-from datetime import date
 from pathlib import Path
 
 import pytest
 import yaml
 
 from opl.bronze.registry import REGISTRY as BRONZE_REGISTRY
-from opl.config import (
-    DEFAULT,
-    SENTINEL_MONTH,
-    SESSION_TIMEZONE,
-    SESSION_TIMEZONE_CONFIG,
-    is_month,
-)
-from opl.gold.columns import GHOST_ROWS
-from opl.gold.dimensions import DimensionLoadResult
+from opl.config import SENTINEL_MONTH, is_month
 from opl.gold.registry import REGISTRY as GOLD_REGISTRY
 from opl.vault import domains
 
@@ -60,9 +57,8 @@ _GOLD_JOBS = (
     "gold_dim_company_job.yml",
     "gold_conformed_dimensions_job.yml",
     "gold_pit_estabelecimento_job.yml",
+    "gold_fact_payment_job.yml",
 )
-
-_ENTRY_POINTS = ("gold_load_dimension", "gold_load_conformed_dimension", "gold_load_pit")
 
 # NAMED `gold_*` AND NOT `vault_*`, AND THAT IS A DECISION RATHER THAN A LABEL.
 # `test_vault_job_wiring.py::test_the_four_vault_jobs_are_the_vault_yamls_on_disk` globs
@@ -97,32 +93,22 @@ _LOAD_DATE_REFERENCE = "{{job.start_time.iso_datetime}}"
 # IS a revision, a snapshot backfilled BETWEEN two the table holds, is refused by
 # `opl.gold.pit` from the dates on disk; a parameter would state an intention where the
 # refusal reads the table.
+#
+# AND THE FOURTH FOR A FOURTH, WHICH IS THE ONE THAT IS ABOUT THE GRAIN RATHER THAN ABOUT
+# THE MECHANISM. `months` names a window over the RFB's SNAPSHOTS; `fact_payment` is
+# grained on PAYMENTS, whose arrival has nothing to do with a snapshot month. A batch that
+# landed since the last build is a set of new `transaction_id` values, and
+# `opl.gold.facts._new_rows` finds them by reading the target.
 _TASK_PARAMETERS = {
     "gold_load_dimension": ("table", "months", "load_date"),
     "gold_load_conformed_dimension": ("table", "load_date"),
     "gold_load_pit": ("table", "load_date"),
+    "gold_load_fact": ("table", "load_date"),
 }
 
 # The two `{{...}}` references no task may spell for itself, and which position each one
 # occupies is read from `_TASK_PARAMETERS` rather than hardcoded.
 _REFERENCES = {"months": _MONTHS_PARAMETER, "load_date": _LOAD_DATE_REFERENCE}
-
-# The two `opl.config` names every session pin is written from. Spelled as the IDENTIFIER
-# and not as the value, because that is what the AST locks below look for: a task that
-# hardcoded `"UTC"` would satisfy a check on the value and would be the second spelling.
-SESSION_TIMEZONE_CONFIG_NAME = "SESSION_TIMEZONE_CONFIG"
-SESSION_TIMEZONE_NAME = "SESSION_TIMEZONE"
-
-# How many names each entry point qualifies through `opl.config.DEFAULT.table`. All three
-# qualify three, for three different threes: the SCD2 task qualifies the dimension, its
-# source satellite and that satellite's parent hub; the conformed task qualifies the
-# dimension, the fact source whose members it measures against, and the satellite a
-# calendar spans; the PIT task qualifies the table, its hub, and its satellites -- the
-# last of those in ONE call inside a comprehension over the declared list, which is why
-# the number is three and not four.
-_QUALIFIED_NAMES = {
-    "gold_load_dimension": 3, "gold_load_conformed_dimension": 3, "gold_load_pit": 3,
-}
 
 
 def _job_of(job_yml: str, root: Path = _RESOURCES) -> dict:
@@ -176,40 +162,6 @@ def _build_tasks(job_yml: str, root: Path = _RESOURCES) -> dict[str, tuple[str, 
         )
         found[key] = (script, parameters[0])
     return found
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(f"{name}_task", _SRC / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _tree(script: str) -> ast.Module:
-    return ast.parse((_SRC / f"{script}.py").read_text(encoding="utf-8"), filename=script)
-
-
-def _non_docstring_strings(tree: ast.Module) -> list[str]:
-    """Every string literal in `tree` that is not a docstring -- this repository's prose
-    names the thing a module must NOT do in order to explain why, so a check over the raw
-    text would refuse the explanation along with the thing."""
-    docstrings = {
-        id(node.body[0].value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Module | ast.FunctionDef | ast.ClassDef)
-        and node.body
-        and isinstance(node.body[0], ast.Expr)
-        and isinstance(node.body[0].value, ast.Constant)
-        and isinstance(node.body[0].value.value, str)
-    }
-    return [
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and id(node) not in docstrings
-    ]
 
 
 # --- the locks -----------------------------------------------------------------------
@@ -412,356 +364,6 @@ def test_every_gold_task_runs_unretried_in_the_declared_serverless_environment(j
         spec = environments[task["environment_key"]]
         assert spec["environment_version"] == "3"
         assert spec["dependencies"] == ["../../dist/*.whl"]
-
-
-# --- the entry point itself ----------------------------------------------------------
-
-
-@pytest.mark.parametrize("script", _ENTRY_POINTS)
-def test_no_gold_entry_point_spells_a_catalog_or_a_schema(script):
-    """The qualification comes from `opl.config.DEFAULT.table` and from nowhere else.
-
-    `opl.gold.registry` states the division this task is the other half of: a spec
-    carries an unqualified name and the loader takes qualified tables as arguments. Gold
-    is where that division is most easily broken, because a gold task qualifies THREE
-    names -- and Free Edition's single catalog is what would make a hardcoded one
-    invisible."""
-    qualification = f"{DEFAULT.catalog}.{DEFAULT.schema}."
-    spelled = [
-        value for value in _non_docstring_strings(_tree(script)) if qualification in value
-    ]
-    assert not spelled, (
-        f"{script}.py spells {qualification!r} in {spelled}. Catalog and schema come from "
-        "opl.config.DEFAULT.table(name); a second spelling is a coordinate that drifts "
-        "the day this project is on a workspace with more than one catalog"
-    )
-    qualifies = [
-        node
-        for node in ast.walk(_tree(script))
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "table"
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "DEFAULT"
-    ]
-    assert len(qualifies) == _QUALIFIED_NAMES[script], (
-        f"{script}.py calls DEFAULT.table(...) {len(qualifies)} times, not "
-        f"{_QUALIFIED_NAMES[script]}. The SCD2 task qualifies the dimension, its source "
-        "satellite and that satellite's parent hub; the conformed task qualifies the "
-        "dimension, the fact source it measures against and the satellite a calendar "
-        "spans"
-    )
-
-
-def _timezone_pins(tree: ast.Module) -> list[tuple[str, ...]]:
-    """Every `<something>.conf.set(A, B)` in `tree`, as the pair of NAMES it was handed.
-
-    Names and not values, because the point of the lock is that neither half is spelled
-    here: a task that wrote `"UTC"` inline would pass a check on the value and would be
-    the second spelling this repository keeps paying for."""
-    return [
-        tuple(argument.id for argument in node.args if isinstance(argument, ast.Name))
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "set"
-        and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == "conf"
-    ]
-
-
-def test_the_pinned_session_timezone_is_utc_and_is_spelled_once():
-    """The two values every pin below is made of, asserted where they are DECLARED.
-
-    A `TIMESTAMP` is UTC micros and every conversion into or out of one resolves through
-    `spark.sql.session.timeZone`; local Spark inherits the OS zone and serverless
-    defaults to UTC, so an unpinned gold build writes `dim_company`'s version boundaries
-    three hours apart in the two places while the fact asks as of an `event_time` the
-    payment contract stamps in UTC. `opl.config` argues it at length."""
-    assert (SESSION_TIMEZONE_CONFIG, SESSION_TIMEZONE) == ("spark.sql.session.timeZone", "UTC")
-
-
-@pytest.mark.parametrize("script", _ENTRY_POINTS)
-def test_every_gold_entry_point_pins_the_session_timezone_after_it_gets_the_session(script):
-    """THE PIN, ON THE ONE OBJECT THAT CAN CARRY IT.
-
-    Serverless hands the task a session that already exists, so this cannot be a builder
-    option the way `opl.spark.local_session` spells it -- it has to be set on the session
-    the task was given, and it has to be set BEFORE anything reads a table, because the
-    setting decides what `CAST(applied_date AS TIMESTAMP)` means.
-
-    ASSERTED AS THE TWO IMPORTED NAMES rather than as a string: `opl.config` owns both
-    halves for the reason it owns the catalog and the schema, and a task spelling `"UTC"`
-    for itself is a coordinate that drifts."""
-    tree = _tree(script)
-    pins = _timezone_pins(tree)
-    assert (SESSION_TIMEZONE_CONFIG_NAME, SESSION_TIMEZONE_NAME) in pins, (
-        f"{script}.py does not call spark.conf.set({SESSION_TIMEZONE_CONFIG_NAME}, "
-        f"{SESSION_TIMEZONE_NAME}); it found {pins}. Without it the build inherits "
-        "whatever zone the cluster defaults to, and every interval bound it writes moves "
-        "with it"
-    )
-    def line_of(matches) -> int:
-        found = [node.lineno for node in ast.walk(tree) if matches(node)]
-        assert len(found) == 1, f"{script}.py has {len(found)} of the call, expected 1"
-        return found[0]
-
-    got_session = line_of(
-        lambda node: isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "getOrCreate"
-    )
-    pinned = line_of(
-        lambda node: isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "set"
-        and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == "conf"
-    )
-    assert got_session < pinned, (
-        f"{script}.py pins the session timezone on line {pinned}, before it has a "
-        f"session on line {got_session}"
-    )
-
-
-def test_the_local_session_factory_pins_the_same_timezone_the_entry_points_do():
-    """The other half, and it must be the SAME two names.
-
-    `opl.spark.local_session` is what every Spark test in this repository runs against,
-    so a local session left on the operating system's zone means the suite asserts one
-    set of instants and the workspace writes another -- which is exactly the gap this
-    lock exists to close. It is a builder `.config(...)` there rather than a `conf.set`
-    because that factory CREATES the session; the values are the same."""
-    source = (_REPO / "src" / "opl" / "spark.py").read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="spark.py")
-    configured = [
-        tuple(argument.id for argument in node.args if isinstance(argument, ast.Name))
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "config"
-    ]
-    assert (SESSION_TIMEZONE_CONFIG_NAME, SESSION_TIMEZONE_NAME) in configured, (
-        "opl/spark.py does not pass "
-        f"({SESSION_TIMEZONE_CONFIG_NAME}, {SESSION_TIMEZONE_NAME}) to .config(...); it "
-        f"passes {configured}"
-    )
-
-
-@pytest.mark.parametrize("script", _ENTRY_POINTS)
-def test_no_gold_entry_point_raises_system_exit(script):
-    """Serverless runs these under IPython, where an uncaught `SystemExit` reports a
-    SUCCESSFUL run as FAILED. Every task under databricks/src calls a bare `main()`."""
-    source = (_SRC / f"{script}.py").read_text(encoding="utf-8")
-    assert "SystemExit" not in source
-    assert source.rstrip().endswith('if __name__ == "__main__":\n    main()')
-
-
-def test_the_entry_point_refuses_a_table_no_gold_registry_registers_before_spark():
-    """`opl.gold.registry.table_spec` refuses before a session, naming the alternatives
-    -- an operator who mistyped a table should not wait for a serverless start to be
-    told so."""
-    task = _load("gold_load_dimension")
-    with pytest.raises(ValueError, match="unknown gold table"):
-        task.main(["dim_compnay", "2026-06+2026-07", "2026-08-12T12:00:00"])
-
-
-def test_the_entry_point_refuses_a_vault_table_handed_where_the_dimension_belongs():
-    """The paste this layer actually produces. `sat_empresa_dados` is a real table, in a
-    real registry, and it is the very table `dim_company` derives from -- so it is the
-    single most plausible string to end up in that parameter. It is not a gold table, and
-    the refusal has to say so before a session."""
-    task = _load("gold_load_dimension")
-    with pytest.raises(ValueError, match="unknown gold table"):
-        task.main(["sat_empresa_dados", "2026-06+2026-07", "2026-08-12T12:00:00"])
-
-
-@pytest.mark.parametrize(
-    ("script", "wrong_kind"),
-    [
-        ("gold_load_dimension", "dim_date"),
-        ("gold_load_dimension", "pit_estabelecimento"),
-        ("gold_load_conformed_dimension", "dim_company"),
-        ("gold_load_conformed_dimension", "pit_estabelecimento"),
-        ("gold_load_pit", "dim_company"),
-        ("gold_load_pit", "dim_date"),
-    ],
-)
-def test_each_gold_entry_point_refuses_the_kind_the_other_one_builds(script, wrong_kind):
-    """THE PASTE THE SECOND GOLD JOB MADE POSSIBLE, and the THIRD one makes six pairings
-    of it. Every name here is registered, every one is spelled correctly, `table` is the
-    only parameter two of the three tasks take, and each would be refused only after a
-    serverless session had started if the kind were not checked on the driver.
-
-    IT IS NOT A THEORETICAL SWAP. `gold_load_dimension` resolves its source through
-    `spec.source_satellite`; `CalendarDimension` deliberately spells its own satellite
-    field `applied_date_source` and `PointInTimeTable` spells its own `satellites` for
-    exactly this reason, so the wrong kind cannot walk far enough into that task to build
-    something plausible out of a spec that is not one.
-
-    THE PIT IS BOTH DIRECTIONS AND THAT IS WHY IT IS THREE PAIRS AND NOT ONE. A kind added
-    to the registry acquires the OTHER tasks' refusals for free only if those refusals are
-    inclusions (`isinstance(spec, Scd2Dimension)`) rather than exclusions -- and this
-    parametrisation is what proves they are, on the one file where an exclusion was
-    actually found (see `opl.gold.registry
-    ._assert_no_two_dimensions_draw_from_one_payment_column`)."""
-    task = _load(script)
-    with pytest.raises(ValueError):
-        task.main([wrong_kind, "2026-06+2026-07", "2026-08-12T12:00:00"][: len(
-            _TASK_PARAMETERS[script]
-        )])
-
-
-def test_the_conformed_entry_point_refuses_a_table_no_gold_registry_registers():
-    """Refused before Spark, naming the alternatives, exactly as its sibling is."""
-    task = _load("gold_load_conformed_dimension")
-    with pytest.raises(ValueError, match="unknown gold table"):
-        task.main(["dim_dat", "2026-08-12T12:00:00"])
-
-
-def test_the_conformed_entry_point_validates_its_timestamp_before_the_session():
-    """The only argument it takes besides the table, and it is checked ahead of
-    `SparkSession.builder.getOrCreate()` -- a guard after the session would start one to
-    reject an argument."""
-    task = _load("gold_load_conformed_dimension")
-    with pytest.raises(ValueError, match="ISO-8601"):
-        task.main(["dim_channel", ""])
-
-
-def test_the_pit_entry_point_refuses_a_table_no_gold_registry_registers():
-    """Refused before Spark, naming the alternatives, exactly as its two siblings are."""
-    task = _load("gold_load_pit")
-    with pytest.raises(ValueError, match="unknown gold table"):
-        task.main(["pit_estabeleciment", "2026-08-12T12:00:00"])
-
-
-def test_the_pit_entry_point_validates_its_timestamp_before_the_session():
-    """The only argument it takes besides the table, checked ahead of
-    `SparkSession.builder.getOrCreate()` -- a guard after the session would start one to
-    reject an argument, and this job's session is the most expensive in the repository."""
-    task = _load("gold_load_pit")
-    with pytest.raises(ValueError, match="ISO-8601"):
-        task.main(["pit_estabelecimento", ""])
-
-
-@pytest.mark.parametrize(
-    ("appended", "already_present", "last_layer", "hub_keys", "expected"),
-    [
-        (144_193_416, 0, 72_318_968, 72_318_968, "which reconciles"),
-        (144_193_416, 0, 72_318_960, 72_318_968, "does NOT reconcile"),
-        (0, 144_193_416, 72_318_968, 72_318_968, "the re-run is a no-op"),
-    ],
-    ids=["reconciles", "hub keys with no history", "idempotent re-run"],
-)
-def test_the_pit_reconciliation_note_tells_three_states_apart(
-    appended, already_present, last_layer, hub_keys, expected
-):
-    """THE THREE STATES MUST NOT READ ALIKE, which is why the note is a function.
-
-    A shortfall means hub keys for which NO satellite ever wrote a row: they are absent
-    from every layer of this table, and a run that printed only its own row count would
-    leave that invisible -- the failure `gold_load_dimension.py` records for the mirror
-    case, a satellite version whose hash key matched no hub row. The idempotent re-run is
-    the third state and must not report a shortfall of everything.
-
-    The numbers are Task 0's published ones, so this test also pins the reconciliation
-    the job YAML predicts (`docs/f3-run-evidence.md` §0.5)."""
-    task = _load("gold_load_pit")
-    result = task.PitLoadResult(
-        table="workspace.default.pit_estabelecimento",
-        appended=appended,
-        already_present=already_present,
-        as_of_dates=(date(2026, 6, 13), date(2026, 7, 11)),
-        hub_keys=hub_keys,
-        rows_per_as_of=((date(2026, 6, 13), 71_874_448), (date(2026, 7, 11), last_layer)),
-    )
-    assert expected in task._reconciliation_note(result)
-
-
-def test_the_window_and_the_timestamp_are_validated_before_the_session():
-    """BOTH HALVES IN ONE RUN, and neither is reachable any other way without Spark: a
-    good window and a load date that cannot parse must fail on the LOAD DATE, which
-    proves the window was accepted -- and that both guards stand ahead of
-    `SparkSession.builder.getOrCreate()`, because a guard after the session would start
-    one to reject an argument."""
-    task = _load("gold_load_dimension")
-    with pytest.raises(ValueError, match="ISO-8601"):
-        task.main(["dim_company", "2026-06+2026-07", ""])
-    with pytest.raises(ValueError, match="no months were given"):
-        task.main(["dim_company", SENTINEL_MONTH, "2026-08-12T12:00:00"])
-
-
-# --- the line the run log actually carries -------------------------------------------
-
-
-def _dimension_result(*, appended: int, already_present: int, versions: int = 4):
-    """A `DimensionLoadResult` with the two counts a caller controls.
-
-    Hand-built, in `tests/vault/test_satellite_diagnostics.py::_result`'s shape and for
-    its reason: the note is a pure function of a frozen dataclass, and driving it through
-    a real 69.2M-row load to see one sentence would test the loader instead."""
-    return DimensionLoadResult(
-        table="workspace.default.dim_company",
-        appended=appended,
-        already_present=already_present,
-        source_versions=versions,
-        distinct_keys=appended + already_present,
-    )
-
-
-def test_the_idempotent_re_run_line_cannot_be_printed_over_a_short_dimension():
-    """THE DEFECT IN ITS EXACT SHAPE. `_reconciliation_note`'s re-run branch fired on
-    `appended == 0 and already_present` and compared `already_present` to NOTHING -- so a
-    dimension permanently short of a dangling satellite version printed a clean "the
-    re-run is a no-op" on every later run, and the shortfall the function exists to make
-    visible was invisible on the one branch a retry lands in.
-
-    THE TWO INPUTS DIFFER BY ONE ROW AND MUST NOT READ ALIKE: four versions plus the
-    ghost is five, and a target holding four is the state the old branch called a no-op.
-
-    `main` IS ASSERTED TO PRINT THROUGH IT, which is what keeps this from being
-    self-referential -- a test of the note alone stays green while `main` prints the old
-    sentence beside it. Same closing assertion as the vault's."""
-    task = _load("gold_load_dimension")
-    expected = 4 + GHOST_ROWS
-
-    short_rerun = task._reconciliation_note(
-        _dimension_result(appended=0, already_present=4)
-    )
-    whole_rerun = task._reconciliation_note(
-        _dimension_result(appended=0, already_present=expected)
-    )
-    fresh = task._reconciliation_note(
-        _dimension_result(appended=expected, already_present=0)
-    )
-    short_fresh = task._reconciliation_note(
-        _dimension_result(appended=4, already_present=0)
-    )
-
-    assert "does NOT reconcile" in short_rerun and "no-op" not in short_rerun
-    assert "does NOT reconcile" in short_fresh
-    assert "no-op" in whole_rerun and "does NOT reconcile" not in whole_rerun
-    assert str(expected) in whole_rerun, (
-        "the re-run line names no total, so it reconciles against nothing -- which is "
-        "the defect this test exists for"
-    )
-    assert "which reconciles" in fresh and "no-op" not in fresh
-    assert "_reconciliation_note(result)" in Path(task.__file__).read_text(
-        encoding="utf-8"
-    ), "main no longer prints through _reconciliation_note, so this test measures nothing"
-
-
-def test_the_ghost_row_count_is_one_constant_across_the_loader_and_the_task():
-    """`GHOST_ROWS` is `opl.gold.columns`', and both gold entry points and both loaders
-    read it. It was spelled twice -- once in `opl.gold.conformed`, once in this task --
-    while `load_dimension` enforced nothing, so the two could disagree and the run log
-    would print the arithmetic that agreed with itself. The loader now REFUSES a target
-    that is not `source_versions + GHOST_ROWS`, which makes a second spelling a way to
-    print a reconciliation against a total the load rejected."""
-    task = _load("gold_load_dimension")
-    assert task.GHOST_ROWS is GHOST_ROWS == 1
-    source = (_SRC / "gold_load_dimension.py").read_text(encoding="utf-8")
-    assert "GHOST_ROWS = " not in source, "the task declares a GHOST_ROWS of its own"
 
 
 # --- mutation probes: the locks above, proved able to fail ---------------------------
