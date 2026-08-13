@@ -99,6 +99,17 @@ _GUARDED_JOBS = (
     "vault_estabelecimento_job.yml",
     "vault_partner_job.yml",
     "vault_reference_job.yml",
+    # THE FIRST GOLD JOB (F3 Task 1), and this list's question has a sharper answer for
+    # it than for any entry above. An ingestion job moves bytes somebody else produced
+    # and a vault load appends rows keyed on a digest; a gold build's ENTIRE OUTPUT is a
+    # function of the deployed code -- the surrogate key is a hash whose input order is
+    # one line of `opl.gold.dimensions`, and both interval bounds are sentinels declared
+    # in `opl.gold.columns`. A wheel from another revision writes a dimension that is
+    # individually well-formed, that a fact built from this revision joins to
+    # incorrectly, and that reports success; and because the loader is append-only and
+    # refuses a target it did not write in the same run, the repair is dropping a
+    # 69.2M-row table by hand rather than re-running.
+    "gold_dim_company_job.yml",
 )
 
 _UNGUARDED_JOBS = {
