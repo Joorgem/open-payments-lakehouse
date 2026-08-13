@@ -652,7 +652,7 @@ exist and is not reconstructed here.
 |---|---|---|
 | 1 | every artefact the phase promised exists, built by its own code | ✅ six gold tables, built onto the empty baseline of §0.6 |
 | 2 | every prediction marked, the falsified ones kept | ✅ §9 — two falsified, kept, and both are the cost ones |
-| 3 | **CI green on the MERGED PR** | ⏳ **open** — PR #18's checks pass, the PR is not merged |
+| 3 | **CI green on the MERGED PR** | ✅ **closed** — PR #18 merged 2026-08-13T20:47:42Z as `abee2bb`; final CI at `8fc6fc7` passed all three checks (`test` **14 m 45 s**, `secret-scan`, CodeRabbit) |
 | 4 | `docs/<phase>-run-evidence.md` exists, controller-verified separated from reported | ✅ this file and `docs/f3-run-evidence.md` |
 | 5 | `.plans/HANDOFF.md` updated, including deleting what the phase made false | ✅ |
 | 6 | what remains unexercised is listed as unexercised | ✅ §9.4 |
