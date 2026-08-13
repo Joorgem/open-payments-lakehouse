@@ -38,10 +38,21 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pyspark.sql import functions as F
 
+from opl.contracts import payments
 from opl.contracts.cnpj_schemas import columns_for
 from opl.gold import registry as gold_registry
+from opl.gold.conformed import load_conformed_dimension
 from opl.gold.dimensions import instant_literal, load_dimension
+from opl.gold.facts import load_fact
+from opl.gold.registry import (
+    DIM_CHANNEL,
+    DIM_COMPANY,
+    DIM_CURRENCY,
+    DIM_DATE,
+    FACT_PAYMENT,
+)
 from opl.vault import domains
 from opl.vault.hubs import load_hub
 from opl.vault.observation import ObservationGrain
@@ -267,3 +278,224 @@ def gold_target(spark, empresas_bronze):
     """A fresh vault AND a fresh dimension name per test, for the tests that write --
     sharing one would make idempotence pass for the wrong reason."""
     return vault_names(empresas_bronze.db, uuid4().hex[:8])
+
+
+# --- THE OTHER HALF OF THE STAR: the payments, the conformed dimensions, and the fact ---
+#
+# WHY THESE LIVE IN THE CONFTEST AND NOT BESIDE THE TESTS THAT ASSERT ON THEM. Two reasons,
+# and the second is the one that decided it. First, this file is already "a vault in
+# miniature and the gold tables derived from it" -- the fact is the last of those, and a
+# star whose fixture is split across two files is a star nobody can read at once. Second,
+# `tests/gold/test_fact_payment.py` reached 894 lines with them inline, against the
+# project's 800-line cap, and the master protocol's remedy for that is a SPLIT rather than
+# a condensation: "a previous condensation to hit exactly 800 lost two real arguments while
+# claiming it had not". Moving the fixtures is the split that costs nothing, because they
+# are module-scoped either way and no second vault gets built.
+#
+# THE PAYMENT FIXTURE IS NOT `test_conformed.py`'s. That module defines its own
+# `payments_bronze` at module level, which shadows anything here; this one is called
+# `fact_source` so the two cannot be confused, and it carries redeliveries and a legitimate
+# repeat that the conformed tests have no use for.
+
+# Bronze stores every contract column as a STRING and adds the seven audit columns the
+# ingest stamps; the loader reads one of those (`_record_source`), so the fixture carries
+# all of them rather than the one -- a table shaped like the real one cannot pass for the
+# wrong reason.
+PAYMENTS_SCHEMA = (
+    ", ".join(f"{column} string" for column in payments.COLUMNS) + ", " + AUDIT_DDL
+)
+
+NATURAL_KEY = HUB.business_key_columns[0]
+
+# THE THREE INSTANTS THE FIXTURE IS BUILT AROUND. `BOUNDARY` is the July snapshot to the
+# microsecond, which is what makes the half-open interval testable: inclusive at both ends,
+# it would match the version that closed there AND the one that opened there.
+BEFORE = "2026-06-20T00:00:00.000Z"
+BOUNDARY = f"{REF_DATES[JUL].isoformat()}T00:00:00.000Z"
+AFTER = "2026-08-01T13:53:15.000Z"
+
+# The capital figures `C_THREE_VERSIONS` carries in the fixture's three snapshots. The July
+# one is `47070968`'s real value (`docs/f3-run-evidence.md` section 0.5, P6).
+CAPITAL_IN_JUNE = "5000,00"
+CAPITAL_IN_JULY = "370000,00"
+
+
+def payment(
+    identity: str,
+    event_time: str,
+    *,
+    payer: str = C_THREE_VERSIONS,
+    payee: str = C_ONE_VERSION,
+    amount: str = "100.00",
+    method: str = "PIX",
+    currency: str = "BRL",
+) -> tuple:
+    """One bronze payment row: the whole contract plus every audit column the ingest
+    stamps. `emitted_at` equals `event_time` -- lateness is a property of the DELIVERY and
+    this layer reads neither."""
+    return (
+        identity, event_time, event_time, payer, payee, amount, currency, method,
+        None,
+        "/Volumes/x/generated/2026-08/payments/part-0.jsonl",
+        INGESTED_AT,
+        RECORD_SOURCE_VALUE,
+        "batch-1",
+        "2026-08",
+        REF_DATES[JUL],
+    )
+
+
+def _payment_rows() -> list[tuple]:
+    """Seven deliveries of five payments over four business-attribute tuples.
+
+    READ TOP TO BOTTOM -- the shape IS the argument, and it is the smallest fixture in
+    which every one of the three counts differs from the other two:
+
+        7 rows delivered
+        5 distinct transaction_id   (two byte-identical redeliveries)
+        4 distinct attribute tuples (one LEGITIMATE REPEAT: tx-b repeats tx-a's payment
+                                     under its own id, at a different instant)
+
+    A fixture in which any two of those agree is a fixture that cannot tell a duplicate
+    from a repeat, which is `opl.contracts.payments`' own sentence about the stream."""
+    return [
+        # tx-a and tx-b are the SAME payment made twice -- the legitimate repeat -- and
+        # they straddle the July snapshot, which is what makes T-B's assertion possible.
+        payment("tx-a", BEFORE),
+        payment("tx-b", AFTER),
+        # Exactly ON the boundary, to the microsecond.
+        payment("tx-c", BOUNDARY, amount="200.00", method="TED"),
+        # The reversed pair: the three-version company is the PAYEE here, so the two roles
+        # cannot borrow each other's answer.
+        payment("tx-d", AFTER, payer=C_ONE_VERSION, payee=C_THREE_VERSIONS,
+                amount="300.00", method="BOLETO"),
+        payment("tx-e", BEFORE, amount="400.00", method="TED"),
+        # The two redeliveries: byte-identical to tx-a and tx-d, as `opl.generator.defects`
+        # emits them ("the same bytes again: a redelivery, not a repeat").
+        payment("tx-a", BEFORE),
+        payment("tx-d", AFTER, payer=C_ONE_VERSION, payee=C_THREE_VERSIONS,
+                amount="300.00", method="BOLETO"),
+    ]
+
+
+DELIVERED_ROWS = 7
+DISTINCT_IDENTITIES = 5
+DISTINCT_TUPLES = 4
+
+
+@pytest.fixture(scope="module")
+def fact_source(spark, empresas_bronze):
+    """The bronze payments this star is built from."""
+    table = f"{empresas_bronze.db}.bronze_payments_fact"
+    (
+        spark.createDataFrame(_payment_rows(), PAYMENTS_SCHEMA)
+        .write.format("delta").mode("append").saveAsTable(table)
+    )
+    return table
+
+
+@pytest.fixture(scope="module")
+def conformed_tables(spark, empresas_bronze, vault_loaded, fact_source):
+    """`dim_date`, `dim_channel` and `dim_currency` over that same payment population, by
+    the real conformed loader -- keyed by dimension name, which is how the fact loader
+    takes them."""
+    tables = {}
+    for dimension in (DIM_DATE, DIM_CHANNEL, DIM_CURRENCY):
+        target = f"{empresas_bronze.db}.{dimension.name}_fact_fixture"
+        load_conformed_dimension(
+            spark,
+            dimension,
+            fact_table=fact_source,
+            target_table=target,
+            load_date=BUILT_AT,
+            applied_date_table=vault_loaded.sat if dimension is DIM_DATE else None,
+        )
+        tables[dimension.name] = target
+    return tables
+
+
+def build_fact(spark, *, dim_loaded, fact_source, conformed_tables, target, **overrides):
+    """`fact_payment` over the fixture star, with the loader's own arguments overridable --
+    so a test that needs a mismatched spec passes one rather than reaching into the
+    loader."""
+    arguments = {
+        "dimension": DIM_COMPANY,
+        "hub": HUB,
+        "conformed": (DIM_DATE, DIM_CHANNEL, DIM_CURRENCY),
+        "source_table": fact_source,
+        "dimension_table": dim_loaded.table,
+        "conformed_tables": conformed_tables,
+        "target_table": target,
+        "load_date": BUILT_AT,
+    }
+    arguments.update(overrides)
+    return load_fact(spark, FACT_PAYMENT, **arguments)
+
+
+@pytest.fixture
+def fact_target(empresas_bronze):
+    """A fresh fact table name per test -- sharing one would make idempotence pass for the
+    wrong reason."""
+    return f"{empresas_bronze.db}.fact_payment_{uuid4().hex[:8]}"
+
+
+@pytest.fixture(scope="module")
+def fact_loaded(spark, empresas_bronze, dim_loaded, fact_source, conformed_tables):
+    """One `fact_payment` build over that star, and its result. Module-scoped because
+    every test below it only reads; the tests that LOAD AGAIN take `fact_target`."""
+    target = f"{empresas_bronze.db}.fact_payment_shared"
+    result = build_fact(
+        spark, dim_loaded=dim_loaded, fact_source=fact_source,
+        conformed_tables=conformed_tables, target=target,
+    )
+    return result, target
+
+
+def recovered(spark, fact_table, dim_company_table, conformed_tables):
+    """The fact with every BUSINESS ATTRIBUTE recovered through the dimensions it keys.
+
+    THIS IS THE STAR WORKING, AND IT IS ALSO THE ONLY WAY TO ASK THE FACT WHAT A PAYMENT
+    WAS. A Kimball fact carries surrogate keys, not natural ones, so the tuple bronze holds
+    as five columns lives here as two `company_sk`, one `channel_key`, one `currency_key`
+    and one `amount`. The recovery joins on the SURROGATE key, which the dimension load
+    measures to be unique, so it is exactly 1:1 and cannot fan out -- unlike a join on
+    `cnpj_basico`, which would match every version and is the reason the fact does not
+    carry it."""
+    frame = spark.read.table(fact_table)
+    company = spark.read.table(dim_company_table)
+    for counterparty, key in FACT_PAYMENT.roles:
+        frame = frame.join(
+            company.select(
+                F.col(DIM_COMPANY.surrogate_key).alias(key),
+                F.col(NATURAL_KEY).alias(counterparty),
+            ),
+            on=key,
+            how="left",
+        )
+    for dimension in (DIM_CHANNEL, DIM_CURRENCY):
+        frame = frame.join(
+            spark.read.table(conformed_tables[dimension.name]).select(
+                F.col(dimension.surrogate_key).alias(dimension.fact_key),
+                F.col(dimension.natural_key).alias(dimension.fact_column),
+            ),
+            on=dimension.fact_key,
+            how="left",
+        )
+    return frame
+
+
+def version_of(spark, dim_company_table, surrogate_key: int):
+    """The one `dim_company` row a surrogate key names."""
+    return (
+        spark.read.table(dim_company_table)
+        .where(F.col(DIM_COMPANY.surrogate_key) == surrogate_key)
+        .collect()
+    )
+
+
+def row_of(spark, fact_table, identity: str):
+    return (
+        spark.read.table(fact_table)
+        .where(F.col(FACT_PAYMENT.grain_key) == identity)
+        .collect()
+    )
