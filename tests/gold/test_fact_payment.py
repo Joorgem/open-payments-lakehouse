@@ -35,6 +35,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
+from pyspark.errors import AnalysisException
 from pyspark.sql import functions as F
 
 from opl.config import SESSION_TIMEZONE, SESSION_TIMEZONE_CONFIG
@@ -331,6 +332,41 @@ def test_a_payment_whose_amount_is_not_a_number_is_refused(
             spark, dim_loaded=dim_loaded, fact_source=table,
             conformed_tables=conformed_tables, target=fact_target,
         )
+
+
+def test_a_conformed_table_that_does_not_exist_stops_the_build_before_it_writes(
+    spark, dim_loaded, fact_source, conformed_tables, fact_target
+):
+    """THE OPERATIONAL ORDER THIS JOB CANNOT DECLARE, caught in the loader instead.
+    `gold_fact_payment_job.yml` states the order `dim_company -> conformed -> fact`
+    because Databricks Asset Bundles have no cross-JOB dependency, and it says a missing
+    table fails the read. That sentence was true of `dim_company` -- read inside
+    `fact_rows` -- and FALSE of the three conformed tables, which were read only by the
+    orphan count. The orphan count runs AFTER the append, so this job launched before the
+    conformed one wrote `fact_payment` in full and THEN failed table-not-found: an
+    operator saw a FAILED task against a correct table, and the repair that shape suggests
+    -- drop it -- was the wrong one.
+
+    THE ASSERTION THAT MATTERS IS THE SECOND. That the build raises proves little; a build
+    that raised at the orphan count would raise too. That the TARGET DOES NOT EXIST is the
+    property, and it is the one that was false. `dim_currency` is used rather than
+    `dim_date` deliberately: it is the LAST of the three, so a resolution that ran per
+    dimension somewhere after the write would still let the first two through.
+
+    NOTHING IS CREATED TO MAKE THIS FAIL -- the name is simply a table that was never
+    built, which is exactly the state of the star before the conformed job's first run."""
+    never_built = f"{fact_source}_no_such_conformed_table"
+    assert not spark.catalog.tableExists(never_built), "the fixture name is not free"
+    with pytest.raises(AnalysisException, match="TABLE_OR_VIEW_NOT_FOUND"):
+        build_fact(
+            spark, dim_loaded=dim_loaded, fact_source=fact_source,
+            conformed_tables={**conformed_tables, DIM_CURRENCY.name: never_built},
+            target=fact_target,
+        )
+    assert not spark.catalog.tableExists(fact_target), (
+        "the fact was written and the task then failed on a table it had not read yet -- "
+        "which is a FAILED run against a correct table, and the defect this test closes"
+    )
 
 
 # --- T-D: the 1,600 legitimate repeats ------------------------------------------------

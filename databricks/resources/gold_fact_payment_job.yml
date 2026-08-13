@@ -22,9 +22,18 @@
 #
 #     opl_gold_dim_company  ->  opl_gold_conformed_dimensions  ->  opl_gold_fact_payment
 #
-# Running it early does not corrupt anything -- a missing table fails the read, and stale
-# conformed dimensions are REPORTED as orphaned keys rather than refused, because the
-# repair is to re-run the conformed build, which APPENDS.
+# Running it early does not corrupt anything -- a missing table fails the read BEFORE THE
+# FIRST WRITE, and stale conformed dimensions are REPORTED as orphaned keys rather than
+# refused, because the repair is to re-run the conformed build, which APPENDS.
+#
+# "BEFORE THE FIRST WRITE" IS LOAD-BEARING AND WAS NOT TRUE WHEN THIS FILE FIRST SAID IT.
+# `dim_company` is read inside `fact_rows` and so fails before anything is appended, but
+# the three conformed tables were read only by the orphan count, which runs AFTER the
+# append: launched before the conformed job, this task wrote `fact_payment` in full and
+# THEN failed table-not-found, so an operator saw FAILED against a correct table and the
+# obvious repair -- drop it -- was the wrong one. `opl.gold.facts._conformed_members` now
+# resolves all three up front (three catalog lookups, no scan) so the failure lands where
+# this sentence claims. The old order was harmless only because the conformed job had run.
 #
 # NAMED `gold_*` AND NOT `vault_*`, for all three other gold jobs' reason:
 # `tests/test_vault_job_wiring.py` globs `vault_*.yml`, asserts the result equals its own
@@ -79,7 +88,7 @@
 # obvious thing to reach for -- returns 18,400 rows, 0 legitimate repeats, and a duplicate
 # count that still reads 150. The loader refuses the row count and prints the repeat count.
 #
-# WHY THE GHOST IS PREDICTED AT ZERO AND WHY THAT IS NOT A SUCCESS (section A6). F1b
+# WHY THE GHOST IS PREDICTED AT ZERO AND WHY THAT IS NOT A SUCCESS (section 4.6). F1b
 # measured 1,024 of 1,024 counterparties resolving to `hub_empresa`, `dim_company` carries
 # one version chain per hub key with a floored `valid_from`, and every payment's instant
 # therefore falls inside some version's half-open interval. `COALESCE(<as-of lookup>,

@@ -609,11 +609,44 @@ def _unresolved_per_role(written: DataFrame, fact: PaymentFact) -> tuple[tuple[s
     return tuple((key, counted[key]) for key in fact.role_keys)
 
 
-def _orphaned_per_conformed_dimension(
+def _conformed_members(
     spark: SparkSession,
-    written: DataFrame,
     conformed: Sequence[ConformedDimension],
     conformed_tables: Mapping[str, str],
+) -> tuple[tuple[ConformedDimension, DataFrame], ...]:
+    """Each conformed dimension paired with its surrogate keys, aliased to the column the
+    FACT spells them in -- resolved BEFORE the fact is written.
+
+    THE READ IS THE PROBE, AND ITS POSITION IS THE WHOLE POINT OF THE FUNCTION.
+    `spark.read.table` and the `select` under it are ANALYSED EAGERLY, so a conformed
+    table that does not exist -- or that exists without its surrogate-key column -- raises
+    here. Called from `load_fact` before the append, it makes
+    `gold_fact_payment_job.yml`'s "a missing table fails the read" true of every input
+    that file names. Resolved where the orphan count needed it, which is where it used to
+    be, that sentence was true of `dim_company` alone: run before the conformed job, the
+    fact was FULLY WRITTEN and the task then failed table-not-found, so an operator met a
+    FAILED run against a correct table and the obvious repair -- drop it -- was the wrong
+    one. The ordering was harmless in practice only because the conformed job had run.
+
+    MOVING IT COSTS NOTHING. These are three catalog lookups and no scan; the frames stay
+    lazy and are consumed once, after the write, by the anti-join below.
+
+    KEYED BY DIMENSION NAME, which is what stops two tables being swapped: the tables
+    arrive as a MAPPING and the lookup is by `item.name`, so a positional pairing that
+    transposed two of them is not expressible here."""
+    return tuple(
+        (
+            item,
+            spark.read.table(conformed_tables[item.name]).select(
+                F.col(item.surrogate_key).alias(item.fact_key)
+            ),
+        )
+        for item in conformed
+    )
+
+
+def _orphaned_per_conformed_dimension(
+    written: DataFrame, members: Sequence[tuple[ConformedDimension, DataFrame]]
 ) -> tuple[tuple[str, int], ...]:
     """Rows whose DERIVED conformed key matches no member of the dimension it names.
 
@@ -623,26 +656,24 @@ def _orphaned_per_conformed_dimension(
     legitimate state of a correct fact built at the wrong moment -- the repair is to re-run
     the conformed build, which APPENDS -- so it is reported and not refused.
 
-    KEYED BY DIMENSION NAME, which is what stops two tables being swapped: the keys are
-    named after the dimensions, so a positional pairing that transposed them would compare
-    each fact key against another dimension's members and report every row as an orphan.
+    KEYED BY DIMENSION NAME, and `_conformed_members` above is where that keying happens:
+    a positional pairing that transposed two tables would compare each fact key against
+    another dimension's members and report every row as an orphan.
 
-    A BROADCAST ANTI-JOIN PER DIMENSION, against 51, 5 and 1 members: three passes over the
-    fact and no shuffle."""
+    A BROADCAST ANTI-JOIN PER DIMENSION, against 51, 6 and 2 ROWS -- three passes over the
+    fact and no shuffle. Those are ROWS and not the 50, 5 and 1 MEMBERS
+    `gold_conformed_dimensions_job.yml` predicts, because the whole table is broadcast and
+    each carries its ghost. Nothing derived can equal `GHOST_SURROGATE_KEY`, so the ghost's
+    presence changes no count -- but the numbers in this sentence are what is broadcast,
+    and mixing the two units is how a reader reconciles against the wrong side."""
     return tuple(
         (
             item.name,
             written.join(
-                F.broadcast(
-                    spark.read.table(conformed_tables[item.name]).select(
-                        F.col(item.surrogate_key).alias(item.fact_key)
-                    )
-                ),
-                on=item.fact_key,
-                how="left_anti",
+                F.broadcast(frame), on=item.fact_key, how="left_anti"
             ).count(),
         )
-        for item in conformed
+        for item, frame in members
     )
 
 
@@ -707,6 +738,7 @@ def load_fact(
     payment batch appends that batch alone, and the grain check holds in every one of those
     states."""
     _refuse_a_mismatched_source(fact, dimension, hub, conformed)
+    members = _conformed_members(spark, conformed, conformed_tables)
     source, source_tuples, retained_tuples = _bronze(spark, fact, source_table)
     rows = fact_rows(
         fact, dimension=dimension, hub=hub, conformed=conformed, source=source,
@@ -730,7 +762,5 @@ def load_fact(
         retained_tuples=retained_tuples,
         legitimate_repeats=held - retained_tuples,
         unresolved=_unresolved_per_role(written, fact),
-        orphaned=_orphaned_per_conformed_dimension(
-            spark, written, conformed, conformed_tables
-        ),
+        orphaned=_orphaned_per_conformed_dimension(written, members),
     )

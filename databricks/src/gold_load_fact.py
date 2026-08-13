@@ -38,7 +38,7 @@ the three numbers that separate a working star from a plausible one -- resolutio
 role) grain, the legitimate repeats that survived deduplication, and the referential
 integrity of the three DERIVED conformed keys. Each has a state that must not read like
 success: zero unresolved is an UNEXERCISED path and not a triumph (master protocol section
-A6), zero legitimate repeats means the fact ate 1,600 real payments, and a non-zero orphan
+4.6), zero legitimate repeats means the fact ate 1,600 real payments, and a non-zero orphan
 count means a conformed dimension is older than the payments.
 
     databricks bundle run opl_gold_fact_payment -t free \\
@@ -88,7 +88,7 @@ def _resolution_note(result: FactLoadResult, roles: int) -> str:
     total would hide the asymmetric failure -- a fact that resolved payers and not payees
     reads as a 50% data-quality problem rather than as a missing foreign key.
 
-    ZERO IS AN UNEXERCISED PATH AND SAYS SO (master protocol section A6). F1b measured
+    ZERO IS AN UNEXERCISED PATH AND SAYS SO (master protocol section 4.6). F1b measured
     1,024/1,024 counterparties resolving to `hub_empresa` and `dim_company` covers every
     hub key, so `COALESCE(<as-of lookup>, GHOST)` cannot fire on this data. That is a
     prediction, not an achievement, and a run log that printed "0 unresolved" beside a
