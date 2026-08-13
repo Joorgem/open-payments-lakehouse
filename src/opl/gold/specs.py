@@ -316,9 +316,10 @@ def _assert_the_satellites_are_a_set_of_at_least_two(name: str, satellites: tupl
     perform, and every reader who trusted the name would believe a timeline had been
     reconciled.
 
-    THE REPEAT IS THE SAME DEFECT WEARING TWO IS. `satellites=(x, x)` declares two and has
-    one: both pointer columns would be named after `x`, the second overwriting the first
-    in the projection, and the table would be well-formed, correctly sized and wrong."""
+    THE REPEAT IS THE SAME DEFECT WEARING TWO NAMES. `satellites=(x, x)` declares two and
+    has one: both pointer columns would be named after `x`, the second overwriting the
+    first in the projection, and the table would be well-formed, correctly sized and
+    wrong."""
     if len(satellites) < 2:
         raise ValueError(
             f"point-in-time table {name!r} declares {list(satellites)} -- a PIT needs at "
