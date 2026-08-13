@@ -85,8 +85,25 @@ required all three.
 
 ### 2.1 Duplicates — and why the number means something
 
-`COUNT(*) − COUNT(DISTINCT transaction_id)` = **150** across both promoted streams, which
-is exactly the injected count. **Legitimate repeats do not appear in it**: the clean stream
+`COUNT(*) − COUNT(DISTINCT transaction_id)` = **150** across the promoted streams, which
+is exactly the injected count.
+
+> **CORRECTION, 2026-08-13 — this said "across BOTH promoted streams" and there are now
+> three.** F3 added a fourth payment profile, `between-snapshots`, so that the star's
+> as-of join had a "before" side of 2026-07-11 to find; it promotes, and
+> `bronze_payments` is now **30,150 rows over 3 batches**
+> (`docs/f3-workspace-run-evidence.md` §5). **Only the sentence moves. The number does
+> not:** `COUNT(*) − COUNT(DISTINCT transaction_id)` is **150** over all four declared
+> profiles and over the three that promote — verified by review at full length before the
+> fourth stream ran, and consistent with the run's own `30,150 − 30,000 = 150`.
+>
+> **The correction waited for the run deliberately.** Written earlier it would have been a
+> prediction about a stream that had not landed, published in a document whose whole
+> contract is that it records what was measured. Written later it would have been lost:
+> the fourth stream is what makes the old sentence false, so the moment it landed was the
+> moment the sentence had to change.
+
+**Legitimate repeats do not appear in it**: the clean stream
 carries repeats — different `transaction_id`, identical business attributes — and
 contributes **0** to this figure. A `transaction_id` derived from a hash of the business
 attributes would have collapsed the two and made this number unfalsifiable; the contract
