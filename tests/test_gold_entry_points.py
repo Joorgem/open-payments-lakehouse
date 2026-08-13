@@ -107,6 +107,23 @@ _WRONG_KINDS = tuple(
     if not isinstance(spec, kind)
 )
 
+# WHAT EACH TASK'S KIND REFUSAL SAYS, AND THE SWEEP BELOW IS RED WITHOUT IT. Measured, by
+# stubbing all four guards to the identity function and re-running: `pytest.raises(
+# ValueError)` alone kept 13 of the 18 pairings GREEN, because argv[1] is a months window
+# and the three tasks that read it as a `load_date` raise their own ValueError -- "is not
+# an ISO-8601 timestamp" -- from the very next line. An unfalsifiable assertion is worth
+# less than no assertion, because it is counted.
+#
+# A FRAGMENT PER SCRIPT AND NOT ONE SHARED WORD. "is not" would match the ISO-8601 message
+# too and re-open the hole at the first re-wording; each of these names the KIND the task
+# builds, which is the thing under test and the one sentence only that guard can produce.
+_REFUSED_AS = {
+    "gold_load_dimension": "is not an SCD2 dimension",
+    "gold_load_conformed_dimension": "is not a conformed dimension",
+    "gold_load_pit": "is not a point-in-time table",
+    "gold_load_fact": "is not the payment fact",
+}
+
 
 def _load(name: str):
     spec = importlib.util.spec_from_file_location(f"{name}_task", _SRC / f"{name}.py")
@@ -330,14 +347,27 @@ def test_each_gold_entry_point_refuses_the_kind_the_other_one_builds(script, wro
     found (see `opl.gold.registry
     ._assert_no_two_dimensions_draw_from_one_payment_column`).
 
-    THE FULL ARGV IS PASSED TO EVERY TASK, INCLUDING THE TWO THAT TAKE TWO ARGUMENTS, and
-    that is what let `_TASK_PARAMETERS` stay in the YAML half of the split rather than be
-    spelled twice. Each `main` reads its arguments positionally and refuses the KIND before
-    it reads the second one, so a task handed one argument too many is refused for the
-    reason under test -- which is also, on its own, a statement about where the guard
-    stands."""
+    THE FULL ARGV IS PASSED TO EVERY TASK, INCLUDING THE THREE THAT TAKE TWO ARGUMENTS,
+    and that is what let `_TASK_PARAMETERS` stay in the YAML half of the split rather than
+    be spelled twice.
+
+    AND THE MESSAGE IS MATCHED, WHICH IS THE CORRECTION THIS DOCSTRING IS. It used to claim
+    that a task handed one argument too many "is refused for the reason under test", as a
+    statement about where the guard stands. The claim about `main` is true -- every one of
+    the four refuses the kind before reading argv[1] -- but the ASSERTION could not see it:
+    argv[1] is a months window, and for the three tasks that read argv[1] as a `load_date`
+    it is itself a ValueError. Stubbing all four guards to the identity function left 13 of
+    these 18 pairings GREEN. `match=` is what closes that: with the guard gone the error is
+    an ISO-8601 ValueError (three tasks) or an `AttributeError` (the SCD2 one), and neither
+    carries `_REFUSED_AS`'s fragment, so all 18 go red.
+
+    IT NOW ASSERTS THE ORDER AS WELL AS THE REFUSAL, and that is why argv[1] stays a months
+    window rather than being made a valid timestamp. A guard moved below `required_load_date`
+    would still raise ValueError on this argv, but it would raise the WRONG one -- so the
+    ordering claim above is now the thing the match is measuring rather than a remark
+    beside it."""
     task = _load(script)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=_REFUSED_AS[script]):
         task.main([wrong_kind, "2026-06+2026-07", "2026-08-12T12:00:00"])
 
 

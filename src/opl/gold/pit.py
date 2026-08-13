@@ -100,6 +100,13 @@ from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
 from opl.gold.columns import LOAD_DATE, RECORD_SOURCE
+
+# ONE TIMESTAMP PATH FOR THE WHOLE LAYER, and this module is the one that had a second.
+# `opl.gold.conformed` imports it for the same reason and states the same argument:
+# `F.lit(datetime)` converts through `time.mktime` -- the DRIVER's operating-system zone --
+# where every other instant gold writes is parsed by Spark in the SESSION zone. This module
+# writes exactly one TIMESTAMP, `load_date`, and it wrote it the other way.
+from opl.gold.dimensions import instant_literal
 from opl.gold.specs import PointInTimeTable
 from opl.vault.columns import APPLIED_DATE
 from opl.vault.loading import rows_in
@@ -277,6 +284,10 @@ def pit_rows(
     instant, which for a key that exists is exactly an as-of date before its first
     observation, and for a hub key with no satellite row at all is every instant.
 
+    `load_date` GOES THROUGH `instant_literal` LIKE EVERY OTHER INSTANT GOLD WRITES. It is
+    the only TIMESTAMP in this projection and it was the one place in the layer that still
+    used `F.lit(datetime)`; see the import above, and its test for the measurement.
+
     Public for `opl.gold.dimensions.dimension_rows`' reason -- the frame is worth having
     without the write."""
     pointers = pit.pointer_columns
@@ -297,7 +308,7 @@ def pit_rows(
         F.col(hub.hash_key),
         F.col(pit.as_of_column),
         *(F.max(pointer).over(in_force).alias(pointer) for pointer in pointers),
-        F.lit(load_date).alias(LOAD_DATE),
+        instant_literal(load_date).alias(LOAD_DATE),
         F.lit(PIT_RECORD_SOURCE).alias(RECORD_SOURCE),
     ).where(F.coalesce(*(F.col(pointer) for pointer in pointers)).isNotNull())
 

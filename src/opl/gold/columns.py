@@ -82,7 +82,27 @@ would be midnight in whatever zone the driver's OS happens to be set to. That is
 NEGATIVE epoch value anywhere east of Greenwich, and the table above shows what the C
 runtime does with one. `opl.gold.dimensions.instant_literal` is the one place these
 literals are built, and every instant this layer writes goes through it -- `load_date`
-included, so that one projection does not mix the two zones."""
+included, so that one projection does not mix the two zones.
+
+THAT LAST SENTENCE WAS FALSE WHEN IT WAS COMMITTED, AND IT IS RECORDED HERE RATHER THAN
+QUIETLY REPAIRED. `opl.gold.pit` wrote its `load_date` with `F.lit(datetime)` and did not
+import `instant_literal` at all, so the totality this paragraph claimed was three modules
+out of four. What made it invisible is that `F.lit` is CONSTANT across session zones --
+`mktime` reads the DRIVER's OS zone, not the session's -- so `pit_estabelecimento`'s LDTS
+was the one value in gold that a `SESSION_TIMEZONE` pin could not reach, and the test that
+should have caught it compared the collected value against a raw Python `datetime`, which
+is the same round trip and therefore agreed with the defect. Measured, driver OS
+`America/Sao_Paulo`, `load_date` 2027-03-01 09:30, in `unix_micros`:
+
+    session zone         F.lit(load_date)    instant_literal(load_date)
+    UTC                  1803904200000000    1803893400000000
+    America/Sao_Paulo    1803904200000000    1803904200000000
+    Asia/Tokyo           1803904200000000    1803861000000000
+
+One run, one `{{job.start_time.iso_datetime}}`, a driver that is not on UTC, and
+`dim_company.load_date` and `pit_estabelecimento.load_date` were three hours apart. The
+claim is true now because the fourth module was changed to match it, not because it was
+re-worded to fit what the code did."""
 from __future__ import annotations
 
 from datetime import datetime

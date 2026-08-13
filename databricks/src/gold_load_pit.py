@@ -112,8 +112,16 @@ def main(argv: list[str] | None = None) -> None:
     # TIMESTAMP is UTC micros and every conversion into or out of one resolves through the
     # session zone, which is UTC on serverless and the OS zone locally. This table's
     # `as_of_date` and its pointers are DATEs and so are already immune -- but `load_date`
-    # is not, and a task that left the zone unpinned would be the one gold task whose
-    # behaviour depended on where it ran.
+    # is not.
+    #
+    # THIS COMMENT USED TO END "a task that left the zone unpinned would be the one gold
+    # task whose behaviour depended on where it ran", AND THAT WAS BACKWARDS. `opl.gold.pit`
+    # built its `load_date` with `F.lit(datetime)`, which converts through `time.mktime` --
+    # the DRIVER's OPERATING-SYSTEM zone -- so this line changed nothing this task wrote and
+    # the LDTS depended on where it ran WITH the pin. It was the one gold task of which that
+    # was true, which is the opposite of what the sentence claimed. The fix is in the loader
+    # (`instant_literal`, the layer's one instant path) and not here; the pin is still
+    # required, because it is now the thing that decides the value.
     spark.conf.set(SESSION_TIMEZONE_CONFIG, SESSION_TIMEZONE)
     result = load_pit(
         spark,

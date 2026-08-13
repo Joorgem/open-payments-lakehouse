@@ -44,7 +44,16 @@ from opl.vault.hubs import load_hub
 from opl.vault.observation import ObservationGrain
 from opl.vault.satellites import load_satellite
 
-from .conftest import AUDIT_DDL, BUILT_AT, INGESTED_AT, JUL, JUN, RECORD_SOURCE_VALUE, REF_DATES
+from .conftest import (
+    AUDIT_DDL,
+    BUILT_AT,
+    INGESTED_AT,
+    JUL,
+    JUN,
+    RECORD_SOURCE_VALUE,
+    REF_DATES,
+    as_collected,
+)
 
 PIT = PIT_ESTABELECIMENTO
 HUB = domains.table_spec(PIT.hub)
@@ -411,12 +420,22 @@ def test_every_row_carries_this_modules_own_record_source_and_the_builds_load_da
 ):
     """A PIT row carries no delivered value -- only a pointer this module computed -- so
     the RSRC it names is this module and not the RFB, which is the distinction
-    `opl.gold.columns` draws for the conformed dimensions and for the ghost."""
+    `opl.gold.columns` draws for the conformed dimensions and for the ghost.
+
+    THE STAMP IS COMPARED THROUGH `as_collected`, AND THAT IS A CORRECTION RATHER THAN A
+    TIDY-UP. This line read `== {BUILT_AT}` -- a raw Python `datetime` -- where its twin in
+    `test_dim_company.py` reads `== {as_collected(spark, BUILT_AT)}`. It passed only because
+    the value went out through `time.mktime` and came back through `datetime.fromtimestamp`
+    in the SAME operating-system zone, which is precisely the round trip this layer does not
+    use: `instant_literal` writes through the SESSION zone. The old assertion was green
+    exactly while this module was wrong, and red the moment it was fixed."""
     written = spark.read.table(pit_loaded.table)
     assert {row[0] for row in written.select(RECORD_SOURCE).distinct().collect()} == {
         PIT_RECORD_SOURCE
     }
-    assert {row[0] for row in written.select(LOAD_DATE).distinct().collect()} == {BUILT_AT}
+    assert {row[0] for row in written.select(LOAD_DATE).distinct().collect()} == {
+        as_collected(spark, BUILT_AT)
+    }
 
 
 def test_the_projection_order_is_the_specs_own(spark, pit_loaded):
@@ -451,10 +470,12 @@ def test_the_as_of_dates_and_the_pointers_do_not_move_with_the_session_timezone(
     whole table under three zones and asserts the (key, as-of, pointer, pointer) tuples
     are identical.
 
-    `load_date` IS DELIBERATELY NOT COMPARED, and that is a statement rather than an
-    omission: it IS a TIMESTAMP, it DOES move with the session zone, and it is a record of
-    when we ran rather than an answer the star gives. The columns this test covers are
-    every column a reader joins or filters on."""
+    `load_date` IS NOT COMPARED HERE -- the test below it does that, and the split is the
+    point. It IS a TIMESTAMP, it DOES move with the session zone, and it is a record of when
+    we ran rather than an answer the star gives; the columns THIS test covers are every
+    column a reader joins or filters on, and they must not move at all. Because the two
+    properties are opposite, this test could not see the defect the next one closes: every
+    column it reads was already immune."""
     original = spark.conf.get("spark.sql.session.timeZone")
     try:
         spark.conf.set("spark.sql.session.timeZone", zone)
@@ -471,6 +492,54 @@ def test_the_as_of_dates_and_the_pointers_do_not_move_with_the_session_timezone(
     assert {as_of for _key, as_of, _a, _b in read} == {JUN_REF, JUL_REF}
     named = hash_key_of(spark, vault_loaded, _KEYS["dados only"])
     assert (named, JUL_REF, JUL_REF, JUN_REF) in read
+
+
+@pytest.mark.parametrize("zone", ["UTC", "Asia/Tokyo"])
+def test_the_load_date_is_the_one_the_rest_of_the_layer_writes_under_any_session_zone(
+    spark, vault_loaded, pit_target, zone
+):
+    """T-C's OTHER closing test, and the one the sweep above could not be: it is the only
+    TIMESTAMP this table writes, and it was the only column here built by `F.lit(datetime)`.
+
+    THE DEFECT IT CLOSES, MEASURED. `F.lit(datetime)` converts through
+    `pyspark.sql.types.TimestampType.toInternal`, which is `time.mktime` -- the DRIVER's
+    OPERATING-SYSTEM zone. So it is CONSTANT under every session zone, and pinning
+    `spark.sql.session.timeZone` in `databricks/src/gold_load_pit.py` changed nothing this
+    task wrote. Measured on this box (OS `America/Sao_Paulo`, `load_date` 2027-03-01 09:30),
+    in `unix_micros`:
+
+        session zone         F.lit(load_date)    instant_literal(load_date)
+        UTC                  1803904200000000    1803893400000000
+        America/Sao_Paulo    1803904200000000    1803904200000000
+        Asia/Tokyo           1803904200000000    1803861000000000
+
+    WHAT THAT COST IN THE STAR: one run, one `{{job.start_time.iso_datetime}}`, a driver
+    that is not on UTC -- and `dim_company.load_date` and `pit_estabelecimento.load_date`
+    are three hours apart, from the same parameter. An LDTS is how a triager asks "what did
+    this run write", and two answers to that question is the whole defect.
+
+    IT ASSERTS THE INSTANT MOVES WITH THE SESSION AND NOT WITH THE OS, which is why
+    `as_collected` is re-measured INSIDE each zone rather than once outside. `instant_literal`
+    parses ISO text in the SESSION zone, so the correct value is a different instant under
+    UTC than under Tokyo; `F.lit` would give one value under both. Comparing against a
+    constant would therefore have been green for the broken code under at least one zone --
+    and on a driver whose OS is already UTC, green under UTC for both."""
+    original = spark.conf.get("spark.sql.session.timeZone")
+    try:
+        spark.conf.set("spark.sql.session.timeZone", zone)
+        build(spark, vault_loaded, target=pit_target.pit)
+        stamps = {
+            row[0]
+            for row in spark.read.table(pit_target.pit).select(LOAD_DATE).distinct().collect()
+        }
+        expected = as_collected(spark, BUILT_AT)
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", original)
+    assert stamps == {expected}, (
+        f"under session zone {zone!r} the PIT stamped {stamps} where every other gold table "
+        f"stamps {expected} for the same load_date -- the LDTS is a function of the "
+        "DRIVER's OS zone, so the entry point's session pin does not reach it"
+    )
 
 
 # --- T-E: the joins, and the NULL that has cost this repository before ---------------
