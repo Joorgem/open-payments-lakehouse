@@ -425,13 +425,12 @@ def load_dimension(
 
     `load_date` is an argument with no default, for `opl.vault.hubs.load_hub`'s reason:
     a loader that stamps its own clock cannot be asserted against, and in the data it
-    would make the LDTS a record of when the pipeline happened to run rather than a
-    value the job's own parameters pin.
+    would make the LDTS a record of when the pipeline ran rather than a value the job's
+    own parameters pin.
 
-    Idempotent: a re-run over an unchanged source finds every (surrogate key,
-    `valid_to`) pair already persisted, writes nothing and reports 0 appended. A re-run
-    over a source that has GAINED a snapshot is refused before its first write -- see
-    `_refuse_a_target_the_source_has_outgrown`, which is where that limit is argued."""
+    Idempotent: a re-run over an unchanged source writes nothing and reports 0 appended.
+    A re-run over a source that GAINED a snapshot is refused before its first write --
+    `_refuse_a_target_the_source_has_outgrown` is where that limit is argued."""
     _refuse_a_mismatched_source(dimension, satellite, hub)
     source = spark.read.table(source_table)
     _refuse_a_window_that_is_not_the_snapshots_the_source_holds(source, months, dimension)
