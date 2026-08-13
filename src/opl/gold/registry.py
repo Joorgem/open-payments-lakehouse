@@ -61,22 +61,25 @@ from opl.gold.specs import (
     ConformedDimension,
     EnumeratedDimension,
     GoldTable,
+    PointInTimeTable,
     Scd2Dimension,
 )
 from opl.vault import domains
-from opl.vault.registry import Satellite, VaultTable
+from opl.vault.registry import Hub, Satellite, VaultTable
 
 __all__ = [
     "DIM_CHANNEL",
     "DIM_COMPANY",
     "DIM_CURRENCY",
     "DIM_DATE",
+    "PIT_ESTABELECIMENTO",
     "REGISTRY",
     "TABLES",
     "CalendarDimension",
     "ConformedDimension",
     "EnumeratedDimension",
     "GoldTable",
+    "PointInTimeTable",
     "Scd2Dimension",
     "UnknownGoldTable",
     "build_registry",
@@ -273,10 +276,20 @@ def _assert_no_two_dimensions_draw_from_one_payment_column(
     for every fact that asks it. Two dimensions over `payment_method` are two answers:
     the fact would carry two foreign keys resolving to the same five members, and
     nothing about it fails -- both build, both are well-formed, and a report joining one
-    agrees with a report joining the other right up until their member sets diverge."""
+    agrees with a report joining the other right up until their member sets diverge.
+
+    THE FILTER IS AN INCLUSION AND WAS AN EXCLUSION, WHICH IS THE CORRECTION F3 TASK 2
+    HAD TO MAKE BEFORE IT COULD REGISTER ANYTHING. It read `if isinstance(table,
+    Scd2Dimension): continue` -- "everything that is not SCD2 has a `fact_column`" -- a
+    claim that was true of the three kinds that existed and that nothing checked. Adding
+    `PointInTimeTable`, which has no `fact_column` because nothing joins to it, turned
+    this line into an `AttributeError` raised at IMPORT of `opl.gold.registry`, i.e. at
+    import of every gold module and every gold job. An exclusion list is a guard that
+    assumes the shape of the kinds it has not met; the inclusion below names the two
+    kinds this question is actually about, so the next kind is simply not asked."""
     drawn: dict[str, str] = {}
     for table in tables:
-        if isinstance(table, Scd2Dimension):
+        if not isinstance(table, ConformedDimension):
             continue
         if table.fact_column in drawn:
             raise ValueError(
@@ -352,6 +365,94 @@ def _assert_no_source_column_collides_with_a_column_the_loader_writes(
                 )
 
 
+def _pit_hub(table: PointInTimeTable, vault_tables: Mapping[str, VaultTable]) -> Hub:
+    """`table`'s hub, resolved against the vault registry, or refuse naming it.
+
+    `_source_satellite`'s shape and its reason: one resolution shared by the guard and by
+    everything that follows it, so a resolver cannot repeat the guard's conditions in a
+    weaker form."""
+    hub = vault_tables.get(table.hub)
+    if hub is None:
+        raise ValueError(
+            f"point-in-time table {table.name!r} is built over {table.hub!r}, which no "
+            f"vault domain registers. Registered: {', '.join(sorted(vault_tables))}"
+        )
+    if not isinstance(hub, Hub):
+        raise ValueError(
+            f"point-in-time table {table.name!r} is built over {table.hub!r}, which is "
+            "not a hub. A PIT's spine is a hub's KEY SET -- one row per key per as-of "
+            "date -- and every other vault kind either has no key set of its own or has "
+            "one at a grain the satellites below it do not share"
+        )
+    return hub
+
+
+def _assert_every_pit_resolves_its_hub_and_its_satellites(
+    tables: Iterable[GoldTable], vault_tables: Mapping[str, VaultTable]
+) -> None:
+    """Refuse a PIT whose hub or satellites are missing, are the wrong kind, or -- the
+    one that matters -- do not belong together.
+
+    THE PARENTAGE CHECK IS THIS GUARD'S WHOLE POINT AND IT IS SILENT WHEN IT FAILS. A PIT
+    joins nothing: it UNIONS the hub's keys with each satellite's (hash key, applied_date)
+    pairs and groups them. Handed a satellite of ANOTHER hub, the union is between a
+    column called `hub_estabelecimento_hk` and one called `hub_empresa_hk` -- which
+    `unionByName` refuses loudly ONLY while the two hubs spell their hash keys
+    differently. They do today, and nothing in `opl.vault.specs` requires it: two hubs may
+    name their hash key the same string, at which point the union succeeds, the group-by
+    merges two key spaces, and every pointer for a key that exists in both is taken over
+    the wrong satellite's history. The refusal is here so it cannot depend on a naming
+    accident in another package.
+
+    THE HASH KEY AND THE AS-OF COLUMN ARE CHECKED TOGETHER FOR THE SAME REASON THE SPEC
+    COULD NOT DO IT: `as_of_date` is a perfectly good column name until you know which
+    hub this table is over, and a hub whose hash key is spelled that way would have both
+    written into one column by one projection."""
+    for table in tables:
+        if not isinstance(table, PointInTimeTable):
+            continue
+        hub = _pit_hub(table, vault_tables)
+        _assert_the_as_of_column_is_not_the_hubs_hash_key(table, hub)
+        for declared in table.satellites:
+            _assert_the_satellite_hangs_off_this_pits_hub(table, declared, hub, vault_tables)
+
+
+def _assert_the_as_of_column_is_not_the_hubs_hash_key(
+    table: PointInTimeTable, hub: Hub
+) -> None:
+    if table.as_of_column == hub.hash_key:
+        raise ValueError(
+            f"point-in-time table {table.name!r} names {table.as_of_column!r} as its "
+            f"as-of column, and that is {hub.name!r}'s hash key. One projection writes "
+            "both into one column, so every row's key is a date or every row's as-of is a "
+            "digest -- and the table is still the right size"
+        )
+
+
+def _assert_the_satellite_hangs_off_this_pits_hub(
+    table: PointInTimeTable,
+    declared: str,
+    hub: Hub,
+    vault_tables: Mapping[str, VaultTable],
+) -> None:
+    source = vault_tables.get(declared)
+    if not isinstance(source, Satellite):
+        raise ValueError(
+            f"point-in-time table {table.name!r} points at {declared!r}, which is not a "
+            f"registered satellite. Registered: {', '.join(sorted(vault_tables))}. A PIT "
+            "points at version chains; a hub has no `applied_date` and a link's chain is "
+            "at another grain"
+        )
+    if source.parent != hub.name:
+        raise ValueError(
+            f"point-in-time table {table.name!r} is built over {hub.name!r} and points at "
+            f"{declared!r}, which hangs off {source.parent!r}. The two are unioned on the "
+            "hash key, so this is caught by name today only because the two hubs spell "
+            "their hash keys differently -- nothing requires that. Where they agree, the "
+            "union succeeds and every pointer is taken over another hub's history"
+        )
+
+
 def build_registry(
     tables: Iterable[GoldTable],
     *,
@@ -373,6 +474,7 @@ def build_registry(
     by_name = _assert_no_two_gold_tables_share_a_name(collected)
     _assert_no_two_dimensions_draw_from_one_payment_column(collected)
     _assert_every_dimension_reads_a_registered_satellite(collected, known)
+    _assert_every_pit_resolves_its_hub_and_its_satellites(collected, known)
     _assert_no_surrogate_key_collides_with_its_source(collected, known)
     _assert_no_source_column_collides_with_a_column_the_loader_writes(collected, known)
     return MappingProxyType(by_name)
@@ -493,7 +595,40 @@ DIM_CURRENCY = EnumeratedDimension(
     members=payments.CURRENCIES,
 )
 
-TABLES: tuple[GoldTable, ...] = (DIM_COMPANY, DIM_DATE, DIM_CHANNEL, DIM_CURRENCY)
+# `pit_estabelecimento`, AND IT IS THE ONLY TABLE IN THIS REGISTRY NOTHING IN THE STAR
+# REACHES. `dim_company` is at empresa grain, `dim_merchant` at estabelecimento grain is
+# deferred until payments carry a 14-digit CNPJ, and `dim_geography` is skipped -- so no
+# fact and no dimension joins to this table. That is the same "decorative in a star
+# schema" charge the phase plan levels at `dim_merchant`, and it is recorded here rather
+# than left for a reader to notice: `opl.gold.pit`'s docstring states it at length and
+# names the ONE change that would pull it in.
+#
+# IT IS BUILT ANYWAY, ON A MEASUREMENT AND NOT ON COMPLETENESS. This is the only place in
+# this vault where two satellites with different change rates hang off one hub, and Task 0
+# measured the timeline collapse they cause: the naive `(hash key, applied_date)` join at
+# 2026-07-11 returns 514,504 keys where the as-of answer is 72,318,968
+# (`docs/f3-run-evidence.md` §0.5). 1,141,850 establishments would be handed a NULL
+# address that is sitting in the June row, still in force, and 499,630 the other way
+# round. A mechanism with a 71,804,464-row consequence is worth demonstrating even where
+# the demonstration sits outside the star.
+#
+# THE TWO SATELLITES ARE DECLARED IN THE VAULT'S OWN ORDER (`_dados` then `_endereco`),
+# which is the order the pointer columns are projected in and therefore the order a Delta
+# append matches POSITIONALLY. Permuting them re-writes each pointer into the other's
+# column, and every read still returns two dates.
+PIT_ESTABELECIMENTO = PointInTimeTable(
+    name="pit_estabelecimento",
+    hub="hub_estabelecimento",
+    satellites=("sat_estabelecimento_dados", "sat_estabelecimento_endereco"),
+    # `as_of_date` AND NOT `applied_date`, which the spec refuses -- the pointers ARE
+    # named `<satellite>_applied_date`, so a bare `applied_date` here would invite
+    # `pit.applied_date = sat.applied_date`, the naive equi-join this table replaces.
+    as_of_column="as_of_date",
+)
+
+TABLES: tuple[GoldTable, ...] = (
+    DIM_COMPANY, DIM_DATE, DIM_CHANNEL, DIM_CURRENCY, PIT_ESTABELECIMENTO,
+)
 
 # AT IMPORT, in this module's own foot, for the reason both sibling registries state:
 # a malformed registry must break the import of every module that reads it rather than

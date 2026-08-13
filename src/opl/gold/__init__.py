@@ -24,16 +24,26 @@ its tables are conformed by definition -- one `dim_date`, one `dim_currency`, on
 a decomposition Kimball's own model refuses. `opl.gold.registry` holds the table list
 inline, in `opl.bronze.registry`'s shape, and runs its guards in its own foot.
 
-WHAT LIVES HERE, so the next task knows where to put a table rather than deciding again:
+WHAT LIVES HERE, so the next task knows where to put a table rather than deciding again.
+(THIS LIST NAMED THREE MODULES AND PREDICTED A FOURTH until F3 Tasks 2 and 3; the split it
+predicted has happened and three loaders exist, so it is restated rather than annotated --
+a "where things live" list that is not where things live is worse than none.)
 
   - `opl.gold.columns`  -- the names every dimension carries and the two interval
     sentinels. Pure: imports nothing but `opl.vault.columns`, which itself imports
     nothing, so a spec can be declared and refused without pyspark.
-  - `opl.gold.registry` -- the `Scd2Dimension` kind, the registered tables, and the
-    guards. A NEW KIND (`dim_date` and `dim_channel` are not SCD2; `fact_payment` is
-    not a dimension) lands there beside `Scd2Dimension` until that file approaches this
-    project's 800-line cap, at which point the kinds move to `opl.gold.specs` exactly
-    as `opl.vault.specs` was split out of `opl.vault.registry` -- that split's own
-    docstring argues the shape and there is no reason to re-derive it here.
-  - `opl.gold.dimensions` -- the loader.
+  - `opl.gold.specs`    -- the KINDS a gold table may be, one dataclass each, with every
+    guard answerable about ONE table in isolation. Split out of `opl.gold.registry` at
+    the moment that file's own docstring said to, in `opl.vault.specs`' shape. A NEW KIND
+    lands here; that module's docstring argues the seam.
+  - `opl.gold.registry` -- the registered tables and the WHOLE-SET guards: a name two
+    specs claim, a name another layer owns, a source that must resolve against the vault.
+  - `opl.gold.members`  -- what each conformed dimension CONTAINS, as plain Python rows.
+    Pure, for `columns`' reason and because a calendar's arithmetic asserted through a
+    Spark session is arithmetic asserted at seconds per case.
+  - `opl.gold.dimensions` -- the SCD2 loader, over one satellite's version chain.
+  - `opl.gold.conformed`  -- the loader for a declared value domain and for the calendar.
+  - `opl.gold.pit`        -- the point-in-time loader: one row per (hub key, as-of date),
+    pointing at the satellite version in force. The one table here that is NOT a
+    dimension and that nothing in the star joins to; its docstring says so at length.
 """

@@ -32,9 +32,11 @@ from opl.gold.registry import (
     DIM_CHANNEL,
     DIM_CURRENCY,
     DIM_DATE,
+    PIT_ESTABELECIMENTO,
     REGISTRY,
     CalendarDimension,
     EnumeratedDimension,
+    PointInTimeTable,
     Scd2Dimension,
     UnknownGoldTable,
     build_registry,
@@ -91,11 +93,34 @@ def _calendar(**overrides) -> CalendarDimension:
     return CalendarDimension(**fields)
 
 
+def _pit(**overrides) -> PointInTimeTable:
+    """A well-formed point-in-time table, same shape and purpose as `_dimension`.
+
+    ITS HUB AND SATELLITES ARE THE REAL ONES, because `build_registry` resolves them
+    against the live vault registry -- a probe pointing at invented names would be refused
+    by the PIT guard before the cross-layer guard under test could fire, and the sweep
+    would then be measuring the wrong refusal."""
+    fields = {
+        "name": "pit_probe",
+        "hub": "hub_estabelecimento",
+        "satellites": ("sat_estabelecimento_dados", "sat_estabelecimento_endereco"),
+        "as_of_column": "probe_as_of",
+    }
+    fields.update(overrides)
+    return PointInTimeTable(**fields)
+
+
 # Every kind the gold registry knows, with a factory that builds a well-formed one. The
 # cross-layer guards below are parametrised over this rather than over `Scd2Dimension`
 # alone: a name collision is a property of the NAME, so a guard that only saw one kind
 # would be a guard the second kind walks past.
-KINDS = {"scd2": _dimension, "enumerated": _enumerated, "calendar": _calendar}
+#
+# `pit` IS THE KIND THAT PROVED THE ARGUMENT RATHER THAN ILLUSTRATING IT. It is the first
+# entry here with no `surrogate_key` and no `fact_column`, and adding it turned
+# `_assert_no_two_dimensions_draw_from_one_payment_column` into an `AttributeError` at
+# import of every gold module -- that guard skipped `Scd2Dimension` and assumed everything
+# else had a `fact_column`. A sweep parametrised over one kind would not have found it.
+KINDS = {"scd2": _dimension, "enumerated": _enumerated, "calendar": _calendar, "pit": _pit}
 
 # HOW THE COLLIDING NAME IS SPELLED, and the second entry is the whole point. Unity
 # Catalog and Spark resolve identifiers CASE-INSENSITIVELY, so `SAT_EMPRESA_DADOS` and
@@ -109,12 +134,21 @@ KINDS = {"scd2": _dimension, "enumerated": _enumerated, "calendar": _calendar}
 SPELLINGS = {"as declared": str, "upper-cased": str.upper}
 
 
-def test_the_registered_star_is_dim_company_and_the_three_conformed_dimensions():
+def test_the_registered_star_is_dim_company_the_three_conformed_and_one_pit():
     """The pin. `dim_company` is derived from ONE satellite and that satellite's name is
     the whole of what the loader is told -- the payload, the parent hub and the business
     key are all read from the vault registry rather than restated here, so a second
-    spelling of any of them cannot exist to drift."""
-    assert set(REGISTRY) == {"dim_company", "dim_date", "dim_channel", "dim_currency"}
+    spelling of any of them cannot exist to drift.
+
+    FIVE ENTRIES AND ONLY FOUR OF THEM ARE IN THE STAR. `pit_estabelecimento` is a
+    navigation table nothing in this star joins to: `dim_company` is at empresa grain,
+    `dim_merchant` at estabelecimento grain is deferred until payments carry a 14-digit
+    CNPJ, and `dim_geography` is skipped. It is registered because it is BUILT, and the
+    registry's job is to hold every gold table this repository writes -- but it is named
+    apart here so nobody reads five and counts a five-table star."""
+    assert set(REGISTRY) == {
+        "dim_company", "dim_date", "dim_channel", "dim_currency", "pit_estabelecimento",
+    }
     spec = table_spec("dim_company")
     assert (spec.surrogate_key, spec.source_satellite) == ("company_sk", "sat_empresa_dados")
 
@@ -270,12 +304,15 @@ def test_a_gold_table_named_like_any_of_a_bronze_tables_three_delta_names_is_ref
 def test_two_gold_tables_of_any_kind_claiming_one_name_are_refused(kind, spelling):
     """One Delta name, two specs: one of them would load into the other's table with both
     runs reporting success. Over every kind for the two tests above's reason, and over
-    every spelling because two gold tables differing only in case are also one table."""
+    every spelling because two gold tables differing only in case are also one table.
+
+    THE TWO SPECS DIFFER ONLY IN THE SPELLING OF THE NAME, and they used to differ in
+    their surrogate key as well -- which made this sweep unable to reach a kind that has
+    no surrogate key. What the guard refuses is the NAME being claimed twice, so the
+    second key was never part of the subject."""
     make = KINDS[kind]
-    other = make(surrogate_key="other_key")
     with pytest.raises(ValueError, match="both declare a gold table"):
-        build_registry((make(), make(name=SPELLINGS[spelling](other.name),
-                                     surrogate_key="other_key")))
+        build_registry((make(), make(name=SPELLINGS[spelling](make().name))))
 
 
 def test_a_refusal_over_two_spellings_of_one_name_reports_both_of_them():
@@ -367,6 +404,114 @@ def test_a_calendar_dimension_needs_at_least_one_role_and_no_repeats():
         _calendar(roles=())
     with pytest.raises(ValueError, match="declares .* twice"):
         _calendar(roles=("event_date_key", "event_date_key"))
+
+
+# --- the point-in-time kind ----------------------------------------------------------
+
+
+def test_the_pit_points_at_two_satellites_of_one_hub_and_names_its_pointers_after_them():
+    """The pin, and the pointer names are DERIVED rather than declared -- a second
+    spelling of a satellite name would be a column name that goes stale on a rename, and a
+    PIT whose pointer columns disagree with the satellites they point at is a table every
+    as-of join silently misses."""
+    assert PIT_ESTABELECIMENTO.hub == "hub_estabelecimento"
+    assert PIT_ESTABELECIMENTO.satellites == (
+        "sat_estabelecimento_dados", "sat_estabelecimento_endereco",
+    )
+    assert PIT_ESTABELECIMENTO.pointer_columns == (
+        "sat_estabelecimento_dados_applied_date",
+        "sat_estabelecimento_endereco_applied_date",
+    )
+    for satellite in PIT_ESTABELECIMENTO.satellites:
+        assert domains.table_spec(satellite).parent == PIT_ESTABELECIMENTO.hub
+
+
+@pytest.mark.parametrize(
+    "satellites",
+    [(), ("sat_estabelecimento_dados",), ("sat_estabelecimento_dados",) * 2],
+    ids=["none", "one", "one twice"],
+)
+def test_a_pit_over_fewer_than_two_distinct_satellites_is_refused(satellites):
+    """WHAT A PIT IS FOR, made checkable. It exists to defeat timeline collapse between
+    two satellites that change on independent dates. Over ONE there is nothing to
+    collapse -- the naive equi-join on that satellite's own `applied_date` already IS the
+    as-of answer -- so the table would promise a mechanism it does not perform. The repeat
+    is the same defect wearing two names: both pointer columns would be named after one
+    satellite and the second would overwrite the first."""
+    with pytest.raises(ValueError, match="at least TWO satellites|twice"):
+        _pit(satellites=satellites)
+
+
+def test_a_pit_whose_as_of_column_is_spelled_applied_date_is_refused():
+    """One character of ambiguity reconstructing the defect. The pointers ARE
+    `<satellite>_applied_date`, so a bare `applied_date` here invites
+    `pit.applied_date = sat.applied_date` -- the naive equi-join this table replaces --
+    and that join RETURNS AN ANSWER, which is why it has to be refused at declaration."""
+    with pytest.raises(ValueError, match="the naive equi-join this table exists to"):
+        _pit(as_of_column="applied_date")
+
+
+@pytest.mark.parametrize("column", [VALID_FROM, VALID_TO, IS_CURRENT, "load_date"])
+def test_a_pit_as_of_column_that_is_a_column_the_loader_writes_is_refused(column):
+    """One gold namespace, one reserved set -- the collision `Scd2Dimension` and both
+    conformed kinds refuse, over the one column name a PIT declares for itself."""
+    with pytest.raises(ValueError, match="the loader writes itself"):
+        _pit(as_of_column=column)
+
+
+def test_a_pit_whose_as_of_column_is_its_hubs_hash_key_is_refused():
+    """A WHOLE-SET GUARD AND NOT A `__post_init__` CHECK, for the same reason
+    `_assert_no_surrogate_key_collides_with_its_source` is one: `hub_estabelecimento_hk`
+    is a perfectly good column name until you know which hub this table is over."""
+    hub = domains.table_spec("hub_estabelecimento")
+    with pytest.raises(ValueError, match="is .*'s hash key"):
+        build_registry((_pit(as_of_column=hub.hash_key),))
+
+
+def test_a_pit_whose_hub_is_unregistered_or_is_not_a_hub_is_refused():
+    """A PIT's spine is a hub's KEY SET. Handed a satellite instead, the frame it would
+    cross with the as-of dates is a version chain, so every key appears once per version
+    and the grain is silently wrong rather than absent.
+
+    THE WRONG-KIND PROBE IS A SATELLITE OF ANOTHER HUB, not one of this PIT's own: the
+    spec refuses a hub that is also one of its satellites at declaration, so a probe using
+    `sat_estabelecimento_dados` would be refused before `build_registry` ran and this test
+    would be measuring the other guard."""
+    with pytest.raises(ValueError, match="which no vault domain registers"):
+        build_registry((_pit(hub="hub_estabeleciment"),))
+    with pytest.raises(ValueError, match="is not a hub"):
+        build_registry((_pit(hub="sat_empresa_dados"),))
+
+
+def test_a_pit_pointing_at_a_satellite_of_another_hub_is_refused():
+    """THE GUARD THAT IS SILENT WITHOUT IT, and the argument is about what a PIT does
+    rather than what it joins: the keys and the pointers are UNIONED on the hash key, so a
+    satellite of another hub is caught by column name TODAY only because the two hubs
+    spell their hash keys differently. Nothing in `opl.vault.specs` requires that; where
+    two hubs agree, the union succeeds and every pointer is taken over another hub's
+    history."""
+    with pytest.raises(ValueError, match="hangs off"):
+        build_registry(
+            (_pit(satellites=("sat_estabelecimento_dados", "sat_empresa_dados")),)
+        )
+    with pytest.raises(ValueError, match="not a registered satellite"):
+        build_registry(
+            (_pit(satellites=("sat_estabelecimento_dados", "hub_empresa")),)
+        )
+
+
+def test_a_pit_naming_its_own_hub_as_a_satellite_is_refused():
+    """The hub carries no `applied_date`, so the pointer over it would fail inside Spark's
+    analysis naming a column rather than a table -- and if a hub ever grew one, it would
+    point at a table that has no versions to point at."""
+    with pytest.raises(ValueError, match="both its hub and one of its satellites"):
+        _pit(satellites=("hub_estabelecimento", "sat_estabelecimento_dados"))
+
+
+def test_a_pit_needs_a_name_a_hub_and_an_as_of_column():
+    for blank in ({"name": " "}, {"hub": ""}, {"as_of_column": None}):
+        with pytest.raises(ValueError):
+            _pit(**blank)
 
 
 def test_a_dimension_needs_a_name_a_surrogate_key_and_a_source():
