@@ -16,7 +16,7 @@ below and need no session -- so F1b Task 4 can state them with statement ids ahe
 launching anything, which is this project's standing rule about predictions. Only the
 digest needs the run, because only the pool does.
 
---- WHY THERE ARE THREE, AND WHY THAT IS FORCED RATHER THAN CHOSEN -----------------
+--- WHY THERE ARE THREE DEFECT PROFILES, AND WHY THAT IS FORCED RATHER THAN CHOSEN --
 
 The DQ gate is ALL-OR-NOTHING: any rejected row in a batch sends the job down the
 `fail_on_dq` branch and the promote never runs. Schema drift is a rejection --
@@ -37,19 +37,41 @@ and late arrivals from ever reaching bronze.
                 the 8,000 undrifted rows of that batch stay in staging unpromoted.
                 That is the gate working, not a failure to design around.
 
+--- AND A FOURTH, WHICH CARRIES NO DEFECT AND EXISTS TO PLACE PAYMENTS IN TIME ------
+
+F3's headline is a fact-to-dimension join AS OF THE PAYMENT'S EVENT TIME, and a join
+that cannot give two answers proves nothing. F3 Task 0 measured the payments already
+in bronze: every one of the 20,150 rows sits on 2026-08-01, AFTER both of the CNPJ
+vault's `applied_date`s (2026-06-13 and 2026-07-11), so every as-of lookup resolves to
+the LAST version and the join is bit-identical to `WHERE valid_to = <sentinel>` --
+which is the worse of the two possible failures, because nothing distinguishes its
+answer from the naive one.
+
+    BETWEEN-SNAPSHOTS  the same shape, the same pool and the same absence of defects
+                       as CLEAN, moved to a window lying ENTIRELY between the two
+                       `applied_date`s. The three above are the "after" side; this one
+                       is the "before" side, and only the two together make the as-of
+                       answer differ from the naive one. It carries no defect on
+                       purpose: it exists to place payments in time, not to add a
+                       fourth defect class, so every count F1b published about
+                       `bronze_payments` survives its arrival unchanged.
+
 THEIR STREAM IDS AND SEEDS DIFFER, WHICH IS LOAD-BEARING. `stream._transaction_id`
-folds the stream id into its derivation purpose, so three profiles produce three
-disjoint identity spaces -- and `COUNT(*) - COUNT(DISTINCT transaction_id)` over the
+folds the stream id into its derivation purpose, so each profile produces its own
+disjoint identity space -- and `COUNT(*) - COUNT(DISTINCT transaction_id)` over the
 whole bronze table therefore still equals the injected redelivery count, instead of
 counting collisions between two streams that happened to share a seed.
 
 --- ONE COMPANY UNIVERSE, SHARED ---------------------------------------------------
 
 `POOL_SIZE` and `POOL_SEED` are module constants rather than profile fields. A
-profile describes a DELIVERY -- what was sent and how badly -- not a different
-economy: the same companies pay each other across all three streams, which is what
+profile describes a DELIVERY -- what was sent, how badly, and when -- not a different
+economy: the same companies pay each other across every stream, which is what
 makes a cross-profile join mean anything and what lets the 100%-resolution
-measurement be one claim about one pool rather than three.
+measurement be one claim about one pool rather than one per stream. It is also the
+whole force of `between-snapshots`: an as-of join across the four streams compares
+the SAME companies at two different times, which a fourth pool would turn into a
+comparison of two populations.
 """
 from __future__ import annotations
 
@@ -62,6 +84,7 @@ from opl.generator.defects import (
     DefectSpec,
     _require_defects_fit,
 )
+from opl.generator.instants import from_text, to_text
 from opl.generator.stream import StreamSpec
 
 # How many real `hub_empresa` keys every generated stream draws its counterparties
@@ -167,6 +190,25 @@ class StreamProfile:
             return 0
         return self.event_count - start
 
+    @property
+    def last_event_time(self) -> str:
+        """The `event_time` of this stream's final event, before any run happens.
+
+        `window_start` is the FIRST `event_time` by construction -- `stream._event_at`
+        adds whole intervals to it and never subtracts -- so this and that field are
+        the stream's event window, exactly. `event_count - 1` intervals rather than
+        `event_count`, because index 0 sits ON the window start.
+
+        WHY A PROFILE PUBLISHES ITS LAST INSTANT AT ALL. Where a stream sits in time is
+        the only thing `between-snapshots` varies, and the only thing that makes it
+        worth generating; a placement that can be asserted from the declaration is a
+        placement that can be refused at import rather than discovered in a workspace
+        as a join that quietly agreed with the naive one. Lateness moves `emitted_at`
+        and never `event_time`, so this bound holds whatever a profile's defects
+        say."""
+        span = (self.event_count - 1) * self.event_interval_ms
+        return to_text(from_text(self.window_start) + span)
+
     def pool_query(self) -> str:
         """The SQL that extracts this stream's counterparty pool. Not executed here."""
         return pool_query(size=POOL_SIZE, seed=POOL_SEED)
@@ -197,20 +239,69 @@ _EVENT_INTERVAL_MS = 5_000
 _EMISSION_LAG_MS = 1_500
 
 
-def _profile(name: str, stream_id: str, seed: int, defects: DefectSpec) -> StreamProfile:
-    """One profile over the shared window. Only the four arguments differ.
+# THE FOURTH WINDOW, AND THE INTERVAL IT HAS TO SIT INSIDE.
+#
+# The vault holds two `applied_date`s and nothing between them, so an as-of lookup has
+# exactly two answers to choose from and a payment chooses the earlier one only by
+# happening before the later date. 2026-06-20 puts the whole stream seven days after
+# the first snapshot and twenty days before the second: 10,000 events 5,000 ms apart
+# span 13 h 53 m 15 s, which is the F1b span unchanged, so the profile is CLEAN moved
+# in time and nothing else. The containment is asserted at import by the guard at the
+# foot of this file rather than left to this comment.
+#
+# WHY BETWEEN AND NOT ACROSS, AND THE REASON IS NOT A REFUSAL. A stream straddling the
+# two dates would need `event_interval_ms = 241,944` (28 days over 9,999 intervals),
+# and it would NOT be rejected: `_require_defects_fit` asks only that `late_by_ms`
+# EXCEED the interval, and one lateness window is 3,600,000 ms -- fourteen times
+# larger -- so a straddle could carry every defect class. What it would actually cost
+# is the shared shape: 48x the other profiles' interval means the fourth stream is no
+# longer the same delivery moved in time, and any difference an as-of join showed
+# between it and them would have two candidate causes. Task 0 pre-decided the
+# between-window on that basis (`docs/f3-run-evidence.md` 0.3) and the existing streams
+# already supply the "after" side, so nothing needs the straddle. The arithmetic is
+# recorded because the plan's own stated reason was a refusal that does not fire, and
+# `tests/test_payment_emit.py` pins both halves.
+BETWEEN_SNAPSHOTS = "between-snapshots"
+_BETWEEN_SNAPSHOTS_WINDOW_START = "2026-06-20T00:00:00.000Z"
+_VAULT_APPLIED_DATES = ("2026-06-13T00:00:00.000Z", "2026-07-11T00:00:00.000Z")
 
-    Written as a factory rather than three literal constructions, so that "these
-    three streams differ ONLY in their id, their seed and their defects" is a
-    property of the code rather than a claim about three blocks a reader has to
-    diff. The shared fields are what makes the three comparable at all."""
+
+def _profile(
+    name: str,
+    stream_id: str,
+    seed: int,
+    defects: DefectSpec,
+    window_start: str = _WINDOW_START,
+) -> StreamProfile:
+    """One profile over the shared shape. Only the parameters above differ.
+
+    THE INVARIANT, SPELLED SO IT CAN BE CHECKED RATHER THAN BELIEVED: the declared
+    profiles differ in `name`, `stream_id`, `seed`, `defects` and `window_start`, and
+    share `event_count`, `repeat_count`, `event_interval_ms` and `emission_lag_ms`.
+    Written as a factory rather than four literal constructions so that sentence is a
+    property of the code -- the shared four cannot vary, because no argument exists
+    that would let them -- rather than a claim about four blocks a reader has to diff.
+    The shared shape is what makes the profiles comparable at all.
+
+    `window_start` BECAME A PARAMETER AND THIS DOCSTRING CHANGED IN THE SAME COMMIT,
+    deliberately. It was hardcoded while the sentence above read "differ ONLY in their
+    id, their seed and their defects", and both halves were true; F3's
+    `between-snapshots` profile makes that sentence false, and a factory whose
+    docstring still described the old invariant is precisely the drift that let
+    `drifted_row_count` promise redeliveries its arithmetic did not count while the
+    suite stayed green (found by review on PR #14).
+
+    THE DEFAULT IS WHAT KEEPS F1b's BYTES WHERE THEY ARE. Not passing `window_start` is
+    the identical construction the three F1b profiles already had, so their
+    `StreamSpec`s -- and therefore their files, digests and every count published
+    against them -- are untouched by the parameter existing."""
     return StreamProfile(
         name=name,
         stream_id=stream_id,
         seed=seed,
         event_count=_EVENT_COUNT,
         repeat_count=_REPEAT_COUNT,
-        window_start=_WINDOW_START,
+        window_start=window_start,
         event_interval_ms=_EVENT_INTERVAL_MS,
         emission_lag_ms=_EMISSION_LAG_MS,
         defects=defects,
@@ -242,6 +333,27 @@ PROFILES: dict[str, StreamProfile] = {
         # would silently drop, this repository's own 8,761-row defect very nearly to
         # the row.
         DefectSpec(drift_from_index=8_000),
+    ),
+    BETWEEN_SNAPSHOTS: _profile(
+        BETWEEN_SNAPSHOTS,
+        # `F3-` rather than `F1B-` because the phase that needs this stream is the one
+        # that names it, and no month suffix: the F1b ids carry one because their
+        # window month and their landing month coincided, and this stream's do not --
+        # its events are in June and it lands wherever the run's `--params month=...`
+        # says. A suffix that agreed with only one of the two would misdirect an
+        # operator listing the Volume, which is the same class of harm
+        # `_assert_the_profiles_are_declared_consistently` refuses for a wrong `name`.
+        "F3-BETWEEN-SNAPSHOTS",
+        20260816,
+        # NO DEFECTS, DECLARED RATHER THAN OMITTED. This profile exists to place
+        # payments in time. A fourth defect class would move F1b's published totals --
+        # 150 redeliveries, 100 late arrivals, 2,000 drifted rows, every one of them
+        # stated against `bronze_payments` as a whole -- so those sentences would
+        # start describing a table they no longer describe, for no claim F3 makes. It
+        # also keeps `delivered_row_count` equal to `event_count`, and a clean batch
+        # promotes: a drifted one would stop at `fail_on_dq` and never reach the fact.
+        NO_DEFECTS,
+        window_start=_BETWEEN_SNAPSHOTS_WINDOW_START,
     ),
 }
 
@@ -384,6 +496,43 @@ def _refuse_drift_beside_duplicates() -> None:
             )
 
 
+def _refuse_a_window_that_leaves_the_interval_it_was_declared_for() -> None:
+    """Fail at import if `between-snapshots` stops sitting between the two snapshots.
+
+    ITS PLACEMENT IN TIME IS ITS ONLY REASON TO EXIST. Its shape, its pool and its
+    absence of defects are `clean`'s; move its window and it becomes a fourth copy of
+    the other three that lands under its own filename, promotes without complaint, and
+    makes the as-of join it was added for resolve to the same version the naive join
+    does. Nothing goes red -- the phase simply publishes a join whose answer does not
+    change, which is the exact failure F3 Task 0 measured and this profile answers.
+
+    STRICTLY INSIDE, at both ends, and neither bound is decoration. Past the LATER date
+    the stream joins the 20,150 rows that already resolve to the last version, which is
+    the failure above. Before the EARLIER one it resolves through
+    `opl.gold.columns.VALID_FROM_FLOOR` to the first version -- a different answer, but
+    one produced by the sentinel rather than by the version chain, so it would prove
+    the floor works and say nothing about as-of joining at all.
+
+    FROM THE DECLARATION ALONE AND AT IMPORT, for the reason
+    `_assert_every_profile_describes_a_stream_that_can_exist` gives: `window_start` and
+    `last_event_time` are arithmetic, so this costs no session, no pool and no
+    generated byte, and the alternative is discovering it after a deploy, a run and an
+    ingest have all succeeded."""
+    earlier, later = _VAULT_APPLIED_DATES
+    profile = PROFILES[BETWEEN_SNAPSHOTS]
+    first, last = from_text(profile.window_start), from_text(profile.last_event_time)
+    if not from_text(earlier) < first or not last < from_text(later):
+        raise ValueError(
+            f"profile {BETWEEN_SNAPSHOTS!r} runs {profile.window_start} .. "
+            f"{profile.last_event_time}, which is not strictly inside the vault's "
+            f"applied_date interval ({earlier} .. {later}). Every payment outside it "
+            "resolves to the same company version the existing streams already do, so "
+            "the as-of join stops being distinguishable from `WHERE valid_to = "
+            "<sentinel>` and this profile proves nothing it was added to prove."
+        )
+
+
 _assert_the_profiles_are_declared_consistently()
 _assert_every_profile_describes_a_stream_that_can_exist()
 _refuse_drift_beside_duplicates()
+_refuse_a_window_that_leaves_the_interval_it_was_declared_for()
