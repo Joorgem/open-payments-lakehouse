@@ -96,7 +96,13 @@ def _report(profile: StreamProfile, landed: EmittedFile) -> None:
     in, so this line and a local assertion compare directly with nothing re-derived.
     The predicted counts are printed BESIDE the measured row count rather than
     asserted, because they are properties of the declaration and this task's job is to
-    show that what landed is what was declared."""
+    show that what landed is what was declared.
+
+    THE EVENT WINDOW IS THE THIRD LINE BECAUSE IT IS THE ONLY THING `between-snapshots`
+    VARIES. Its rows, bytes and defect counts are `clean`'s, so the first two lines
+    cannot tell the two streams apart; where the payments SIT is the whole claim, and
+    an evidence document should be able to quote it from the run rather than re-derive
+    it from `profiles.py`."""
     state = "already present, byte-identical" if landed.was_already_there else "written"
     print(
         f"generate_payments: profile={profile.name} stream_id={profile.stream_id} "
@@ -106,6 +112,11 @@ def _report(profile: StreamProfile, landed: EmittedFile) -> None:
         f"generate_payments: rows={landed.row_count} (declared "
         f"{profile.delivered_row_count}) drifted={profile.drifted_row_count} "
         f"bytes={landed.byte_count} sha256={landed.sha256}"
+    )
+    print(
+        f"generate_payments: event_time {profile.window_start} .. "
+        f"{profile.last_event_time} ({profile.event_count} events, "
+        f"{profile.event_interval_ms} ms apart)"
     )
 
 

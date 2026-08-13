@@ -24,8 +24,10 @@ property those refusals exist to have.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import importlib.util
+import inspect
 from pathlib import Path
 
 import pytest
@@ -45,16 +47,20 @@ from opl.generator.defects import (
     LATENESS_WINDOW_MS,
     NO_DEFECTS,
     DefectSpec,
+    _require_defects_fit,
     delivered_records,
     drift_positions,
     duplicate_positions,
     late_positions,
 )
+from opl.generator.instants import from_text
 from opl.generator.profiles import (
+    BETWEEN_SNAPSHOTS,
     POOL_SEED,
     POOL_SIZE,
     PROFILES,
     SENTINEL_PROFILE,
+    StreamProfile,
     profile_for,
 )
 from opl.generator.stream import StreamSpec
@@ -233,19 +239,27 @@ def test_a_different_stream_under_the_same_name_is_refused_not_overwritten(tmp_p
 # --- THE DECLARED PROFILES ---------------------------------------------------------
 
 
+# The three streams F1b landed, ingested and published evidence about. Named as a
+# group because F3 added a fourth profile whose window is deliberately elsewhere, and
+# every claim below that is about the SHARED WINDOW is about these three only -- while
+# every claim about the shared SHAPE is still about all four.
+_F1B_PROFILES = ("clean", "promotable", "drifting")
+
+
 def test_the_profiles_are_the_ones_declared_today():
     """Golden pin. Every number here is an input to a stream that will be landed in a
     Volume and ingested into bronze, so a change to any of them re-generates a file
     the workspace already holds -- which `emit_stream_file` then refuses. Pinned so
     that is a deliberate act."""
-    assert sorted(PROFILES) == ["clean", "drifting", "promotable"]
+    assert sorted(PROFILES) == ["between-snapshots", "clean", "drifting", "promotable"]
     assert (POOL_SIZE, POOL_SEED) == (1024, 20260812)
     for profile in PROFILES.values():
         assert (profile.event_count, profile.repeat_count) == (10_000, 800)
         assert (profile.event_interval_ms, profile.emission_lag_ms) == (5_000, 1_500)
-        assert profile.window_start == "2026-08-01T00:00:00.000Z"
+    for name in _F1B_PROFILES:
+        assert PROFILES[name].window_start == "2026-08-01T00:00:00.000Z"
 
-    clean, promotable, drifting = (PROFILES[n] for n in ("clean", "promotable", "drifting"))
+    clean, promotable, drifting = (PROFILES[n] for n in _F1B_PROFILES)
     assert clean.defects == NO_DEFECTS
     assert promotable.defects == DefectSpec(
         duplicate_count=150, late_count=100, late_by_ms=LATENESS_WINDOW_MS
@@ -291,13 +305,15 @@ def test_every_declared_profile_asks_for_defects_its_stream_can_carry():
         assert len(drift_positions(spec, profile.defects)) == profile.drifted_row_count
 
 
-def test_the_three_profiles_derive_disjoint_identities():
+def test_the_declared_profiles_derive_disjoint_identities():
     """WHY EACH PROFILE HAS ITS OWN SEED AND STREAM ID.
 
-    All three land in one month and promote into one bronze table, so a shared
-    identity space would make `COUNT(*) - COUNT(DISTINCT transaction_id)` over that
-    table count collisions BETWEEN streams as if they were injected redeliveries --
-    the one number F1b's duplicate claim is stated in.
+    All of them promote into one bronze table, so a shared identity space would make
+    `COUNT(*) - COUNT(DISTINCT transaction_id)` over that table count collisions
+    BETWEEN streams as if they were injected redeliveries -- the one number F1b's
+    duplicate claim is stated in. This quantifies over `PROFILES` rather than over
+    three names, so the fourth profile is covered by the same assertion instead of by
+    a second one somebody has to remember to write.
 
     Measured over 24 indices rather than 10,000, and that is a proxy stated as one:
     `stream._transaction_id` is a function of (seed, stream_id, index), so
@@ -359,6 +375,211 @@ def test_the_drifting_profile_actually_drifts_and_the_others_do_not():
     carriers = [i for i, record in enumerate(records) if DRIFT_COLUMN in record]
     assert carriers == list(range(80, 100))
     assert all(DRIFT_COLUMN not in record for record in records[:80])
+
+
+# --- THE FOURTH PROFILE: THE "BEFORE" SIDE OF F3's AS-OF JOIN ----------------------
+#
+# The two `applied_date`s the CNPJ vault holds, spelled as LITERALS here rather than
+# imported from `opl.generator.profiles`. That module's import guard compares the
+# declared window against its own copy of these two dates; a test that imported the
+# same constant would agree with it forever -- including on the day someone widened
+# the constant to make a moved window legal. Measured in F2 wave 1 and restated in
+# `docs/f3-run-evidence.md` section 0.5.
+_EARLIER_APPLIED_DATE = "2026-06-13T00:00:00.000Z"
+_LATER_APPLIED_DATE = "2026-07-11T00:00:00.000Z"
+
+
+def test_the_fourth_profiles_whole_window_lies_strictly_inside_the_vault_interval():
+    """THE CLAIM THE FOURTH PROFILE EXISTS TO MAKE, AND THE ONLY ONE ONLY IT CAN.
+
+    F3 Task 0 measured that all 20,150 payments in bronze sit on 2026-08-01, after
+    both `applied_date`s, so every as-of lookup resolves to the LAST version and the
+    join is bit-identical to `WHERE valid_to = <sentinel>`. The existing three streams
+    are the "after" side; this profile is the "before" side, and it is only that if
+    its whole event window falls between the two dates.
+
+    COMPUTED FROM THE DECLARATION ALONE. `window_start` is the first `event_time` --
+    `stream._event_at` adds whole intervals to it -- and `last_event_time` is that
+    plus `(event_count - 1) * event_interval_ms`. No pool, no session, no generated
+    byte, so this is a prediction in the sense section 4.5 of the master protocol
+    means.
+
+    ASSERTED RATHER THAN REASONED ABOUT, because the reasoning is only true at today's
+    numbers: 10,000 events 5,000 ms apart span 13 h 53 m 15 s against an interval 28
+    days wide, which is enormous margin right up until `_EVENT_COUNT` or
+    `_EVENT_INTERVAL_MS` moves. The day it stops fitting is the day the profile
+    silently becomes a fourth copy of the other three."""
+    profile = PROFILES[BETWEEN_SNAPSHOTS]
+    first, last = from_text(profile.window_start), from_text(profile.last_event_time)
+
+    assert from_text(_EARLIER_APPLIED_DATE) < first
+    assert last < from_text(_LATER_APPLIED_DATE)
+    assert (profile.window_start, profile.last_event_time) == (
+        "2026-06-20T00:00:00.000Z", "2026-06-20T13:53:15.000Z"
+    )
+    assert last - first == (profile.event_count - 1) * profile.event_interval_ms
+    assert last - first == 49_995_000  # 13 h 53 m 15 s, the F1b span unchanged
+
+
+def test_a_window_moved_out_of_the_interval_is_refused_at_import(monkeypatch):
+    """THE PROBE THAT MAKES THE GUARD WORTH HAVING.
+
+    Without it the refusal is a branch nothing has ever taken, which is how a refusal
+    path stays green and wrong. The doctored profile is the declaration with its window
+    moved back onto F1b's -- the single most likely wrong edit, because it is what
+    `_profile`'s default gives anyone who deletes the keyword argument."""
+    moved = dataclasses.replace(
+        PROFILES[BETWEEN_SNAPSHOTS], window_start="2026-08-01T00:00:00.000Z"
+    )
+    monkeypatch.setitem(profiles_module.PROFILES, BETWEEN_SNAPSHOTS, moved)
+    with pytest.raises(ValueError, match="not strictly inside"):
+        profiles_module._refuse_a_window_that_leaves_the_interval_it_was_declared_for()
+
+
+def test_the_fourth_profiles_predicted_counts_are_arithmetic_on_the_declaration():
+    """IT CARRIES NO DEFECT, AND THAT IS A DECLARATION RATHER THAN AN OMISSION.
+
+    The profile exists to place payments in time. A fourth defect class would add a
+    number to F1b's published totals -- 150 redeliveries, 100 late arrivals, 2,000
+    drifted rows, all stated against `bronze_payments` as a whole -- and every one of
+    those sentences would then be describing a table it no longer describes. The three
+    sums below are the assertion that none of them moved.
+
+    `delivered_row_count` equals `event_count` exactly because a duplicate is the only
+    thing that adds a row; `drifted_row_count` is zero because `drift_from_index` is
+    None. Both are arithmetic on the declaration, which is what lets Task 4 publish
+    them before the run."""
+    profile = PROFILES[BETWEEN_SNAPSHOTS]
+    assert profile.defects == NO_DEFECTS and profile.defects.is_clean
+    assert profile.delivered_row_count == profile.event_count == 10_000
+    assert profile.drifted_row_count == 0
+
+    assert sum(p.defects.duplicate_count for p in PROFILES.values()) == 150
+    assert sum(p.defects.late_count for p in PROFILES.values()) == 100
+    assert sum(p.drifted_row_count for p in PROFILES.values()) == 2_000
+    assert sum(p.delivered_row_count for p in PROFILES.values()) == 40_150
+
+
+def test_the_fourth_profile_lands_under_its_own_name_and_its_own_identities():
+    """THE STREAM ID IS THE LANDING FILENAME AND HALF OF EVERY DERIVATION PURPOSE.
+
+    A duplicated one would write two streams to one path -- the second run refused,
+    loudly, but only after the first had landed and been ingested -- and would fold two
+    profiles into one identity space, which is what
+    `test_the_declared_profiles_derive_disjoint_identities` measures on the other side.
+    The key/name agreement is the third: `profile_for("between-snapshots")` returning
+    something that logs itself as "clean" is misdirection at the exact moment an
+    operator is reading a log to find out what landed."""
+    filenames = [filename_for(p.stream_spec(_POOL)) for p in PROFILES.values()]
+    assert filename_for(PROFILES[BETWEEN_SNAPSHOTS].stream_spec(_POOL)) == (
+        f"F3-BETWEEN-SNAPSHOTS{STREAM_FILE_SUFFIX}"
+    )
+    assert len(set(filenames)) == len(PROFILES) == 4
+    assert all(profile.name == key for key, profile in PROFILES.items())
+    assert profile_for(BETWEEN_SNAPSHOTS) is PROFILES[BETWEEN_SNAPSHOTS]
+    profiles_module._assert_the_profiles_are_declared_consistently()
+
+
+def test_the_three_f1b_streams_are_the_same_input_to_the_generator_as_before():
+    """BYTE-IDENTITY, PINNED WHERE IT IS CHEAP TO PIN.
+
+    F1b's published evidence -- 20,150 rows, 150 duplicates, 100 late arrivals, 2,000
+    drifted rows, 1,024/1,024 CNPJ resolution -- rests on three files that must not
+    move. `delivered_records` is a pure function of `(StreamSpec, DefectSpec)`, so
+    pinning that PAIR is the whole input to the derivation and therefore the whole
+    input to the bytes; generating the three 10,000-event streams to digest them would
+    cost half a minute for a strictly weaker statement (it would also depend on the
+    real pool, which needs a 69M-row table).
+
+    Written as literal constructions rather than as a loop over `PROFILES`, because a
+    pin that reads its expectation from the thing it is pinning is not a pin. The
+    fourth profile is deliberately absent: adding it must not touch these three."""
+    probe = validated_pool(("00000001", "00000002"))
+    shape = {
+        "event_count": 10_000, "repeat_count": 800,
+        "window_start": "2026-08-01T00:00:00.000Z",
+        "event_interval_ms": 5_000, "emission_lag_ms": 1_500, "cnpj_pool": probe,
+    }
+    expected = {
+        "clean": (StreamSpec(seed=20260813, stream_id="F1B-CLEAN-2026-08", **shape),
+                  NO_DEFECTS),
+        "promotable": (StreamSpec(seed=20260814, stream_id="F1B-PROMOTABLE-2026-08", **shape),
+                       DefectSpec(duplicate_count=150, late_count=100,
+                                  late_by_ms=LATENESS_WINDOW_MS)),
+        "drifting": (StreamSpec(seed=20260815, stream_id="F1B-DRIFTING-2026-08", **shape),
+                     DefectSpec(drift_from_index=8_000)),
+    }
+    for name, (spec, defects) in expected.items():
+        assert PROFILES[name].stream_spec(probe) == spec
+        assert PROFILES[name].defects == defects
+
+
+def test_the_factory_varies_exactly_the_fields_its_docstring_names():
+    """THE DOCSTRING AND THE CODE, CHECKED AGAINST EACH OTHER RATHER THAN BOTH READ.
+
+    `_profile` used to hardcode `window_start` while its docstring said the streams
+    "differ ONLY in their id, their seed and their defects". Both halves were true, and
+    the fourth profile makes the second one false -- so the parameter and the sentence
+    had to move together. This repository has a documented case of exactly that pair
+    drifting apart with the suite green: `drifted_row_count`'s docstring promised
+    redeliveries its arithmetic did not count, and the test that guarded it was
+    index-based in the same way (found by review on PR #14).
+
+    THE ASSERTION IS STRUCTURAL, NOT TEXTUAL. The factory's parameters are the fields
+    that MAY differ; every `StreamProfile` field that is not a parameter therefore
+    cannot differ, and the third block proves that is what the declarations actually
+    do. The docstring check is last and is the weakest of the three: it only catches a
+    sentence that stopped naming a field, which is the half a structural check cannot
+    see."""
+    varying = set(inspect.signature(profiles_module._profile).parameters)
+    assert varying == {"name", "stream_id", "seed", "defects", "window_start"}
+
+    shared = {field.name for field in dataclasses.fields(StreamProfile)} - varying
+    assert shared == {"event_count", "repeat_count", "event_interval_ms", "emission_lag_ms"}
+    for field in shared:
+        held = {getattr(profile, field) for profile in PROFILES.values()}
+        assert len(held) == 1, f"{field} is no factory parameter and yet differs: {held}"
+
+    doc = profiles_module._profile.__doc__
+    for field in varying | shared:
+        assert field in doc, f"the factory's docstring no longer names {field}"
+
+
+def test_a_straddling_window_would_have_cost_the_shared_shape_and_is_not_refused():
+    """WHY THE WINDOW SITS BETWEEN THE TWO DATES RATHER THAN ACROSS THEM.
+
+    THE REASON IS NOT THE ONE IT LOOKS LIKE, AND THE ARITHMETIC IS HERE SO NOBODY HAS
+    TO TAKE IT ON TRUST. A stream spanning the 28 days would need an interval of
+    241,944 ms, and `_require_defects_fit` would NOT refuse lateness on it: that guard
+    asks only that `late_by_ms` EXCEED the interval, and one lateness window is
+    3,600,000 ms -- fourteen times larger. A straddle could carry all three defect
+    classes.
+
+    WHAT IT WOULD ACTUALLY COST IS THE SHARED SHAPE. 241,944 ms is 48x the interval the
+    other three profiles run at, so the fourth stream would no longer be the same
+    delivery moved in time; any difference an as-of join showed between it and them
+    would have two candidate causes, which is the same argument
+    `opl.generator.defects` makes for switching one defect class at a time. F3 Task 0
+    pre-decided the between-window on that basis (`docs/f3-run-evidence.md` 0.3), and
+    the existing streams already supply the "after" side, so nothing needs a straddle.
+
+    ASSERTED IN BOTH DIRECTIONS: that the straddle is legal (so the false reason cannot
+    survive here as folklore) and that the declared profile did not take it."""
+    span = from_text(_LATER_APPLIED_DATE) - from_text(_EARLIER_APPLIED_DATE)
+    profile = PROFILES[BETWEEN_SNAPSHOTS]
+    straddling_interval = span // (profile.event_count - 1)
+    assert (span, straddling_interval) == (28 * 24 * 3_600_000, 241_944)
+
+    straddle = dataclasses.replace(
+        profile.stream_spec(_POOL),
+        window_start=_EARLIER_APPLIED_DATE,
+        event_interval_ms=straddling_interval,
+    )
+    _require_defects_fit(straddle, DefectSpec(late_count=1, late_by_ms=LATENESS_WINDOW_MS))
+    assert LATENESS_WINDOW_MS > straddling_interval
+
+    assert profile.event_interval_ms == PROFILES["clean"].event_interval_ms == 5_000
+    assert straddling_interval == 48 * profile.event_interval_ms + 1_944
 
 
 # --- THE TWO JOB ENTRY POINTS, REFUSING BEFORE SPARK ------------------------------
