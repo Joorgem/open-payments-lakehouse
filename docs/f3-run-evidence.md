@@ -84,10 +84,26 @@ incomplete.
 - **If P4 holds (0 payments before 2026-07-11)**, Task 4 gets **one additional profile
   whose window sits entirely between the two `applied_date`s** — `window_start =
   2026-06-20T00:00:00.000Z`. The existing streams already supply the "after" side, so no
-  straddling window is needed. A straddle is not merely unnecessary, it is **refused**:
-  spanning the 28 days with 10,000 events needs `event_interval_ms ≈ 242,000`, and
-  `defects._require_defects_fit` (`defects.py:230-236`) rejects any `late_by_ms` that does
-  not exceed the event interval. This is a small **code** change — `_profile()` hardcodes
+  straddling window is needed.
+
+  > **CORRECTION — this bullet originally claimed a straddle was *refused*, and that was
+  > false. Authored by this phase's controller.** It said: "spanning the 28 days with
+  > 10,000 events needs `event_interval_ms ≈ 242,000`, and `defects._require_defects_fit`
+  > rejects any `late_by_ms` that does not exceed the event interval." The guard is
+  > `late_by_ms <= event_interval_ms → raise`. One lateness window is
+  > `LATENESS_WINDOW_MS = 3,600,000` ms and the straddling interval is
+  > `2,419,200,000 // 9,999 = 241,944` ms, so **3,600,000 exceeds it by 14.9× and the
+  > guard passes**. Falsified by Task 4's implementer, who called
+  > `_require_defects_fit` on exactly that spec and watched it not raise; re-verified
+  > independently by the controller before this correction was written. **A straddling
+  > profile could carry all three defect classes.**
+  >
+  > **The decision stands on a different argument**, which is now the one in the code: a
+  > straddle needs **48×** the other profiles' `event_interval_ms`, so the fourth stream
+  > stops being *the same delivery moved in time*, and any difference the as-of join
+  > showed would have two candidate causes instead of one.
+
+  This is a small **code** change — `_profile()` hardcodes
   `window_start=_WINDOW_START` and its docstring asserts the three streams differ only in
   id, seed and defects — not the pure-data change the phase plan implied.
 - **If P6 comes back 0**, the fourth profile gets **its own stratified pool** drawn from
@@ -103,9 +119,21 @@ incomplete.
   event at exactly a version boundary matches two versions — the multi-match T1's own
   acceptance forbids, manufactured by the operator the plan prescribed.
 - **Both sentinels, not one.** The open version's `valid_to` gets a high sentinel *and*
-  the first version's `valid_from` gets a low one. Flooring only the top leaves a payment
-  before 2026-06-13 resolving to no version of a perfectly well-known company — which
-  cannot fire today, and which the T3 remedy above is precisely the thing that would arm.
+  the first version's `valid_from` gets a low one.
+
+  > **CORRECTION — the reason originally given for the floor was wrong. Authored by this
+  > phase's controller.** It said flooring only the top "cannot fire today, and the T3
+  > remedy above is precisely the thing that would arm" it. **It is not**: the T3 profile
+  > sits at 2026-06-20, which is *after* the earliest `applied_date` of 2026-06-13, so
+  > every one of its payments resolves to version 1 whether or not a floor exists. The
+  > floor matters only below 2026-06-13, and nothing plans to go there. Falsified by
+  > Task 1's implementer.
+  >
+  > **The floor stays, on a stronger argument the controller did not have.** The tempting
+  > conditional version — floor only the versions sitting on the earliest `applied_date` —
+  > makes `valid_from`, and therefore any surrogate key hashed over it, **move under a
+  > backfill of an earlier snapshot**, silently re-keying a dimension that facts already
+  > reference. The unconditional floor is what makes the surrogate key stable.
 - **The ghost row is `company_sk = -1` with a NULL `cnpj_basico`, and is never a join
   target.** It is reached as `COALESCE(<as-of lookup>, GHOST_SK)` at fact-build time. It
   must **not** be keyed on `'00000000'`: that is `hub_empresa`'s real lowest key
