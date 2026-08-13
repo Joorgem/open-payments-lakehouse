@@ -1,7 +1,19 @@
 # src/opl/gold/__init__.py
 """The Kimball star this lakehouse derives from the Data Vault, and the FIRST gold
-layer in this repository -- until this package existed,
-`grep -ril "kimball|dim_|fact_" src/ databricks/ docs/adr/ tests/` returned nothing.
+layer in this repository.
+
+WHAT "FIRST" IS WORTH, MEASURED, BECAUSE THE CLAIM THAT USED TO STAND HERE WAS FALSE
+UNDER EITHER READING. It said `grep -ril "kimball|dim_|fact_" src/ databricks/ docs/adr/
+tests/` returned nothing. As written that is a BASIC regular expression, where `|` is a
+literal: the pattern matches nothing anywhere, so the sentence asserted nothing. Read as
+intended -- `git grep -lEi "kimball|dim_|fact_" d9efae0 -- src databricks docs/adr tests`,
+at the commit this branch was cut from -- it matches FIVE files. Four are the word
+"arteFACT_" catching `fact_` as a substring (`tests/bronze/test_provenance.py`,
+`tests/test_assert_deployed_revision_task.py`, `tests/test_revision_stamp.py`,
+`tests/test_vault_job_wiring.py`). The fifth is real and is worth the correction:
+`docs/adr/0011-...md:337` says "The dimensional layer must not build a `dim_socio`" -- an
+instruction to a layer that did not exist, which is a better statement of where this
+repository stood than a grep that returned nothing.
 
 EMPTY ON PURPOSE, WHICH IS THE OPPOSITE OF `opl.vault.domains.__init__`. That module
 runs `discover_domains` and `build_registry` at import because the vault stakes an

@@ -1,7 +1,13 @@
 # databricks/resources/gold_dim_company_job.yml
-# THE FIRST JOB IN THIS REPOSITORY THAT BUILDS A GOLD TABLE. Until this file existed,
-# `grep -ril "kimball|dim_|fact_" src/ databricks/ docs/adr/ tests/` returned nothing:
-# four ADRs about the vault, fourteen vault tables loaded and RUN, and no star at all.
+# THE FIRST JOB IN THIS REPOSITORY THAT BUILDS A GOLD TABLE: four ADRs about the vault,
+# fourteen vault tables loaded and RUN, and no star at all.
+#
+# THE GREP THAT USED TO BE QUOTED HERE SAID NOTHING. It was `grep -ril "kimball|dim_|
+# fact_"`, a BASIC regular expression in which `|` is a literal, so the pattern matched
+# nothing anywhere and the claim could not fail. Under `git grep -lEi` at the commit this
+# branch was cut from it matches five files, four of them the word "arteFACT_" and the
+# fifth ADR 0011 forbidding a `dim_socio` to a layer that did not exist.
+# `src/opl/gold/__init__.py` records the measurement in full.
 #
 # NAMED `gold_*` AND NOT `vault_*`, AND THAT IS A DECISION RATHER THAN A LABEL.
 # `tests/test_vault_job_wiring.py` globs `vault_*.yml`, asserts the result equals its own
