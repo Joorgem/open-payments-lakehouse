@@ -37,7 +37,7 @@
 #
 # --- ONE RUN PER PROFILE, AND THE GATE IS WHY --------------------------------------
 #
-# `profile` selects a declared stream in opl.generator.profiles. The three are meant to
+# `profile` selects a declared stream in opl.generator.profiles. The four are meant to
 # be run separately, into the same month, and each lands its own file:
 #
 #     profile=clean       zero rejects; the rows reach bronze. The control -- if this
@@ -48,6 +48,19 @@
 #                         job stops at fail_on_dq: the DQ gate is all-or-nothing, so
 #                         NOTHING of that batch is promoted and the claim is measured
 #                         in the quarantine table. That is the gate working.
+#
+#     profile=between-snapshots
+#                         F3's addition, and the only one whose event window is NOT the
+#                         F1b window. Its events sit at 2026-06-20, strictly between the
+#                         vault's two applied_dates, so the gold as-of join has a "before"
+#                         side to resolve. No defects: it places payments in TIME, and a
+#                         fourth defect class would change F1b's published counts.
+#
+# LAUNCH between-snapshots WITH month=2026-08, THE SAME MONTH AS THE OTHER THREE. Its
+# stream id carries no month suffix -- deliberately, because its event window (June) and
+# its landing month are different facts, and a suffix would agree with only one of them.
+# The ingest reads the month DIRECTORY, so any other month lands the file where nothing
+# reads it and the June-event stream never reaches bronze.
 #
 # Auto Loader drains only files its checkpoint has not seen, so a second run in the
 # same month ingests only the new profile's file.
