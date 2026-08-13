@@ -35,7 +35,15 @@ import pytest
 import yaml
 
 from opl.bronze.registry import REGISTRY as BRONZE_REGISTRY
-from opl.config import DEFAULT, SENTINEL_MONTH, is_month
+from opl.config import (
+    DEFAULT,
+    SENTINEL_MONTH,
+    SESSION_TIMEZONE,
+    SESSION_TIMEZONE_CONFIG,
+    is_month,
+)
+from opl.gold.columns import GHOST_ROWS
+from opl.gold.dimensions import DimensionLoadResult
 from opl.gold.registry import REGISTRY as GOLD_REGISTRY
 from opl.vault import domains
 
@@ -85,6 +93,12 @@ _TASK_PARAMETERS = {
 # The two `{{...}}` references no task may spell for itself, and which position each one
 # occupies is read from `_TASK_PARAMETERS` rather than hardcoded.
 _REFERENCES = {"months": _MONTHS_PARAMETER, "load_date": _LOAD_DATE_REFERENCE}
+
+# The two `opl.config` names every session pin is written from. Spelled as the IDENTIFIER
+# and not as the value, because that is what the AST locks below look for: a task that
+# hardcoded `"UTC"` would satisfy a check on the value and would be the second spelling.
+SESSION_TIMEZONE_CONFIG_NAME = "SESSION_TIMEZONE_CONFIG"
+SESSION_TIMEZONE_NAME = "SESSION_TIMEZONE"
 
 # How many names each entry point qualifies through `opl.config.DEFAULT.table`. Both
 # qualify three, for different threes: the SCD2 task qualifies the dimension, its source
@@ -210,10 +224,12 @@ def test_no_gold_job_is_named_like_a_vault_job():
 
 def test_every_registered_gold_table_is_built_by_exactly_one_task():
     """THE TOTALITY LOCK. A registered gold table with no task is a table nothing builds
-    -- which is the state this repository was in for its whole history until this branch,
-    with `grep -ril "kimball|dim_|fact_"` returning nothing at all. A table built by TWO
-    tasks is worse than either: the loader is append-only and idempotent, so the second
-    task succeeds having appended nothing, and the run reports two builds."""
+    -- which is the state this repository was in for its whole history until this branch:
+    the only mention of a dimensional layer anywhere in it was ADR 0011 forbidding a
+    `dim_socio` (`src/opl/gold/__init__.py` records the measurement, and why the grep
+    that used to be quoted here asserted nothing). A table built by TWO tasks is worse
+    than either: the loader is append-only and idempotent, so the second task succeeds
+    having appended nothing, and the run reports two builds."""
     built: dict[str, list[str]] = {}
     for job_yml in _GOLD_JOBS:
         for key, (_script, table) in _build_tasks(job_yml).items():
@@ -419,6 +435,101 @@ def test_no_gold_entry_point_spells_a_catalog_or_a_schema(script):
     )
 
 
+def _timezone_pins(tree: ast.Module) -> list[tuple[str, ...]]:
+    """Every `<something>.conf.set(A, B)` in `tree`, as the pair of NAMES it was handed.
+
+    Names and not values, because the point of the lock is that neither half is spelled
+    here: a task that wrote `"UTC"` inline would pass a check on the value and would be
+    the second spelling this repository keeps paying for."""
+    return [
+        tuple(argument.id for argument in node.args if isinstance(argument, ast.Name))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "set"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "conf"
+    ]
+
+
+def test_the_pinned_session_timezone_is_utc_and_is_spelled_once():
+    """The two values every pin below is made of, asserted where they are DECLARED.
+
+    A `TIMESTAMP` is UTC micros and every conversion into or out of one resolves through
+    `spark.sql.session.timeZone`; local Spark inherits the OS zone and serverless
+    defaults to UTC, so an unpinned gold build writes `dim_company`'s version boundaries
+    three hours apart in the two places while the fact asks as of an `event_time` the
+    payment contract stamps in UTC. `opl.config` argues it at length."""
+    assert (SESSION_TIMEZONE_CONFIG, SESSION_TIMEZONE) == ("spark.sql.session.timeZone", "UTC")
+
+
+@pytest.mark.parametrize("script", _ENTRY_POINTS)
+def test_every_gold_entry_point_pins_the_session_timezone_after_it_gets_the_session(script):
+    """THE PIN, ON THE ONE OBJECT THAT CAN CARRY IT.
+
+    Serverless hands the task a session that already exists, so this cannot be a builder
+    option the way `opl.spark.local_session` spells it -- it has to be set on the session
+    the task was given, and it has to be set BEFORE anything reads a table, because the
+    setting decides what `CAST(applied_date AS TIMESTAMP)` means.
+
+    ASSERTED AS THE TWO IMPORTED NAMES rather than as a string: `opl.config` owns both
+    halves for the reason it owns the catalog and the schema, and a task spelling `"UTC"`
+    for itself is a coordinate that drifts."""
+    tree = _tree(script)
+    pins = _timezone_pins(tree)
+    assert (SESSION_TIMEZONE_CONFIG_NAME, SESSION_TIMEZONE_NAME) in pins, (
+        f"{script}.py does not call spark.conf.set({SESSION_TIMEZONE_CONFIG_NAME}, "
+        f"{SESSION_TIMEZONE_NAME}); it found {pins}. Without it the build inherits "
+        "whatever zone the cluster defaults to, and every interval bound it writes moves "
+        "with it"
+    )
+    def line_of(matches) -> int:
+        found = [node.lineno for node in ast.walk(tree) if matches(node)]
+        assert len(found) == 1, f"{script}.py has {len(found)} of the call, expected 1"
+        return found[0]
+
+    got_session = line_of(
+        lambda node: isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "getOrCreate"
+    )
+    pinned = line_of(
+        lambda node: isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "set"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "conf"
+    )
+    assert got_session < pinned, (
+        f"{script}.py pins the session timezone on line {pinned}, before it has a "
+        f"session on line {got_session}"
+    )
+
+
+def test_the_local_session_factory_pins_the_same_timezone_the_entry_points_do():
+    """The other half, and it must be the SAME two names.
+
+    `opl.spark.local_session` is what every Spark test in this repository runs against,
+    so a local session left on the operating system's zone means the suite asserts one
+    set of instants and the workspace writes another -- which is exactly the gap this
+    lock exists to close. It is a builder `.config(...)` there rather than a `conf.set`
+    because that factory CREATES the session; the values are the same."""
+    source = (_REPO / "src" / "opl" / "spark.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="spark.py")
+    configured = [
+        tuple(argument.id for argument in node.args if isinstance(argument, ast.Name))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "config"
+    ]
+    assert (SESSION_TIMEZONE_CONFIG_NAME, SESSION_TIMEZONE_NAME) in configured, (
+        "opl/spark.py does not pass "
+        f"({SESSION_TIMEZONE_CONFIG_NAME}, {SESSION_TIMEZONE_NAME}) to .config(...); it "
+        f"passes {configured}"
+    )
+
+
 @pytest.mark.parametrize("script", _ENTRY_POINTS)
 def test_no_gold_entry_point_raises_system_exit(script):
     """Serverless runs these under IPython, where an uncaught `SystemExit` reports a
@@ -499,6 +610,79 @@ def test_the_window_and_the_timestamp_are_validated_before_the_session():
         task.main(["dim_company", "2026-06+2026-07", ""])
     with pytest.raises(ValueError, match="no months were given"):
         task.main(["dim_company", SENTINEL_MONTH, "2026-08-12T12:00:00"])
+
+
+# --- the line the run log actually carries -------------------------------------------
+
+
+def _dimension_result(*, appended: int, already_present: int, versions: int = 4):
+    """A `DimensionLoadResult` with the two counts a caller controls.
+
+    Hand-built, in `tests/vault/test_satellite_diagnostics.py::_result`'s shape and for
+    its reason: the note is a pure function of a frozen dataclass, and driving it through
+    a real 69.2M-row load to see one sentence would test the loader instead."""
+    return DimensionLoadResult(
+        table="workspace.default.dim_company",
+        appended=appended,
+        already_present=already_present,
+        source_versions=versions,
+        distinct_keys=appended + already_present,
+    )
+
+
+def test_the_idempotent_re_run_line_cannot_be_printed_over_a_short_dimension():
+    """THE DEFECT IN ITS EXACT SHAPE. `_reconciliation_note`'s re-run branch fired on
+    `appended == 0 and already_present` and compared `already_present` to NOTHING -- so a
+    dimension permanently short of a dangling satellite version printed a clean "the
+    re-run is a no-op" on every later run, and the shortfall the function exists to make
+    visible was invisible on the one branch a retry lands in.
+
+    THE TWO INPUTS DIFFER BY ONE ROW AND MUST NOT READ ALIKE: four versions plus the
+    ghost is five, and a target holding four is the state the old branch called a no-op.
+
+    `main` IS ASSERTED TO PRINT THROUGH IT, which is what keeps this from being
+    self-referential -- a test of the note alone stays green while `main` prints the old
+    sentence beside it. Same closing assertion as the vault's."""
+    task = _load("gold_load_dimension")
+    expected = 4 + GHOST_ROWS
+
+    short_rerun = task._reconciliation_note(
+        _dimension_result(appended=0, already_present=4)
+    )
+    whole_rerun = task._reconciliation_note(
+        _dimension_result(appended=0, already_present=expected)
+    )
+    fresh = task._reconciliation_note(
+        _dimension_result(appended=expected, already_present=0)
+    )
+    short_fresh = task._reconciliation_note(
+        _dimension_result(appended=4, already_present=0)
+    )
+
+    assert "does NOT reconcile" in short_rerun and "no-op" not in short_rerun
+    assert "does NOT reconcile" in short_fresh
+    assert "no-op" in whole_rerun and "does NOT reconcile" not in whole_rerun
+    assert str(expected) in whole_rerun, (
+        "the re-run line names no total, so it reconciles against nothing -- which is "
+        "the defect this test exists for"
+    )
+    assert "which reconciles" in fresh and "no-op" not in fresh
+    assert "_reconciliation_note(result)" in Path(task.__file__).read_text(
+        encoding="utf-8"
+    ), "main no longer prints through _reconciliation_note, so this test measures nothing"
+
+
+def test_the_ghost_row_count_is_one_constant_across_the_loader_and_the_task():
+    """`GHOST_ROWS` is `opl.gold.columns`', and both gold entry points and both loaders
+    read it. It was spelled twice -- once in `opl.gold.conformed`, once in this task --
+    while `load_dimension` enforced nothing, so the two could disagree and the run log
+    would print the arithmetic that agreed with itself. The loader now REFUSES a target
+    that is not `source_versions + GHOST_ROWS`, which makes a second spelling a way to
+    print a reconciliation against a total the load rejected."""
+    task = _load("gold_load_dimension")
+    assert task.GHOST_ROWS is GHOST_ROWS == 1
+    source = (_SRC / "gold_load_dimension.py").read_text(encoding="utf-8")
+    assert "GHOST_ROWS = " not in source, "the task declares a GHOST_ROWS of its own"
 
 
 # --- mutation probes: the locks above, proved able to fail ---------------------------
