@@ -99,6 +99,44 @@ _GUARDED_JOBS = (
     "vault_estabelecimento_job.yml",
     "vault_partner_job.yml",
     "vault_reference_job.yml",
+    # THE FIRST GOLD JOB (F3 Task 1), and this list's question has a sharper answer for
+    # it than for any entry above. An ingestion job moves bytes somebody else produced
+    # and a vault load appends rows keyed on a digest; a gold build's ENTIRE OUTPUT is a
+    # function of the deployed code -- the surrogate key is a hash whose input order is
+    # one line of `opl.gold.dimensions`, and both interval bounds are sentinels declared
+    # in `opl.gold.columns`. A wheel from another revision writes a dimension that is
+    # individually well-formed, that a fact built from this revision joins to
+    # incorrectly, and that reports success; and because the loader is append-only and
+    # refuses a target it did not write in the same run, the repair is dropping a
+    # 69.2M-row table by hand rather than re-running.
+    "gold_dim_company_job.yml",
+    # THE SECOND GOLD JOB (F3 Task 3), and the answer is the same one with nothing
+    # softened by the tables being small. These three dimensions have no upstream at all
+    # in the sense the four ingestion jobs do: `dim_channel`'s members ARE
+    # `opl.contracts.payments.PAYMENT_METHODS`, its keys are `xxhash64` over them, and
+    # `dim_date`'s span is derived by one function in `opl.gold.conformed`. Every row is
+    # a function of the deployed wheel, so a wheel from another revision writes a
+    # conformed dimension that is individually well-formed and that a fact built from
+    # this revision joins to incorrectly -- with both runs reporting success.
+    "gold_conformed_dimensions_job.yml",
+    # THE THIRD GOLD JOB (F3 Task 2), and this list's question gains a COST dimension
+    # here that no entry above has. `pit_estabelecimento` is a ~144M-row append whose
+    # every column is a function of the deployed wheel: the as-of set is derived by one
+    # function in `opl.gold.pit`, the pointer semantics are one window frame, and the
+    # pointer COLUMN NAMES are derived from the satellite names in `opl.gold.specs`. A
+    # wheel from another revision writes a table that is individually well-formed and
+    # that every as-of read misses -- and because the loader is append-only, the repair
+    # is dropping ~144M rows by hand rather than re-running.
+    "gold_pit_estabelecimento_job.yml",
+    # THE FOURTH GOLD JOB (F3 Task 4), and this list's question has its sharpest answer
+    # here because this table's columns are a function of code deployed EARLIER as well as
+    # of the wheel that builds it. Its two role keys ARE `dim_company`'s surrogate keys --
+    # `xxhash64` over a business key and an `applied_date` -- and its three conformed keys
+    # are DERIVED by `opl.gold.conformed` rather than looked up, so a wheel whose key
+    # mechanism differs by one line writes a fact that is individually well-formed, joins
+    # to nothing at all, and reports success. Every other job in this list writes rows that
+    # are wrong; this one writes rows that are unreachable.
+    "gold_fact_payment_job.yml",
 )
 
 _UNGUARDED_JOBS = {

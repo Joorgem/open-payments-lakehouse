@@ -336,6 +336,12 @@ load, over the same table.
   cannot answer, and cannot be made to answer without inventing an identity the
   RFB withheld. The dimensional layer must not build a `dim_socio` on
   `cpf_cnpj_socio`; the honest artefact is a partnership bridge.
+
+  > **That layer exists now, and it complies.** F3 built the MLV star and built no
+  > `dim_socio`; the ruling is recorded, with this sentence quoted as its source, in
+  > [ADR 0014](0014-dim-company-at-empresa-grain.md). The partnership bridge is not
+  > built either — it needs `load_satellite` to accept a link, which is the real edit
+  > named in the bullet below.
 - **Two people can be one relationship, and only within one company.** The same
   masked CPF at two companies is two link rows (the company is part of the key);
   two rows carrying it inside one company are one. That is asserted in both

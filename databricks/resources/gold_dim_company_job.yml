@@ -1,0 +1,118 @@
+# databricks/resources/gold_dim_company_job.yml
+# THE FIRST JOB IN THIS REPOSITORY THAT BUILDS A GOLD TABLE: four ADRs about the vault,
+# fourteen vault tables loaded and RUN, and no star at all.
+#
+# THE GREP THAT USED TO BE QUOTED HERE SAID NOTHING. It was `grep -ril "kimball|dim_|
+# fact_"`, a BASIC regular expression in which `|` is a literal, so the pattern matched
+# nothing anywhere and the claim could not fail. Under `git grep -lEi` at the commit this
+# branch was cut from it matches five files, four of them the word "arteFACT_" and the
+# fifth ADR 0011 forbidding a `dim_socio` to a layer that did not exist.
+# `src/opl/gold/__init__.py` records the measurement in full.
+#
+# NAMED `gold_*` AND NOT `vault_*`, AND THAT IS A DECISION RATHER THAN A LABEL.
+# `tests/test_vault_job_wiring.py` globs `vault_*.yml`, asserts the result equals its own
+# four-entry list, and then demands that every table in `opl.vault.domains.REGISTRY` be
+# loaded by exactly one task of those files. A gold job under that prefix would be swept
+# into the glob and would turn both locks red -- the first because it is not in the list,
+# the second because its task names a table no vault domain registers. Repairing that
+# would mean editing a test file at exactly 800 lines, which the master protocol (section
+# 4.12) says must be split before it is touched. The prefix costs nothing and avoids all
+# of it; `tests/test_gold_job_wiring.py` asserts it rather than trusting it.
+#
+# ONE JOB PER PLAN TASK, for `vault_empresa_job.yml`'s reason and with the same payoff:
+# the Databricks UI reports duration per task and per run, so one job per plan task with
+# one task per gold table makes each build's wall-clock readable without instrumenting
+# anything. This build's cost is worth measuring on its own -- it is a 69.2M x 69.06M
+# join followed by a window over the result, which is a shape nothing else in this
+# lakehouse runs.
+#
+# EXPECTED: `dim_company` 69,202,818 rows = 69,202,817 satellite versions + 1 ghost.
+# The number that is COUNTED is satellite VERSIONS and not companies, which is the
+# distinction the phase's published prediction demands be stated: 68,922,881 companies
+# carry one version and 139,968 carry two.
+resources:
+  jobs:
+    opl_gold_dim_company:
+      name: opl-gold-dim-company
+      parameters:
+        - name: months
+          # A DECLARATION, NOT A FILTER, and this is the one job in the repository where
+          # that is true. A bronze ingest STAMPS its month onto the rows it reads and a
+          # vault load NARROWS to it; an SCD2 build can do neither, because a version's
+          # end date is the next version's start, so a build that read a subset of the
+          # snapshots would close intervals against versions it could not see and report
+          # success. `opl.gold.dimensions` therefore CHECKS this window against the
+          # snapshots the satellite actually holds and refuses a mismatch -- which is
+          # what makes a build launched after an unnoticed snapshot landed stop instead
+          # of quietly covering it.
+          #
+          # A LIST, and the plural is the vault's: `opl.vault.job_params.MONTH_SEPARATOR`
+          # is `+` and not a comma because `--params` is itself comma-separated.
+          #
+          # The default is a value the task refuses (`opl.config.SENTINEL_MONTH`, one
+          # sentinel and one spelling across every job here). Its reason is this job's
+          # own: a forgotten `--params` would otherwise declare a window nobody chose,
+          # and the check above would then either refuse for a confusing reason or --
+          # on the day the vault happens to hold exactly that window -- pass.
+          default: "REQUIRED-PASS-A-MONTH"
+        - name: revision
+          # The revision this run is launched for; the default is a value the guard
+          # below refuses, so a run launched without --params stops instead of checking
+          # nothing.
+          #
+          #     databricks bundle run opl_gold_dim_company -t free \
+          #       --params months=2026-06+2026-07,revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
+      tasks:
+        # FIRST, AND NOTHING BEFORE IT (ADR 0009). This job is in
+        # `tests/test_job_yaml_wiring.py::_GUARDED_JOBS`, and the question that list asks
+        # -- does a run against a wheel built from another revision matter? -- has a
+        # sharper answer here than for any job already in it. A gold build's OUTPUT is
+        # entirely a function of the deployed code: the surrogate key is a hash whose
+        # input order is a line in `opl.gold.dimensions`, and the interval bounds are two
+        # sentinels declared in `opl.gold.columns`. A wheel from another revision writes
+        # a dimension that is individually well-formed, joins to nothing a fact built by
+        # this revision expects, and reports success -- and because the loader is
+        # append-only and refuses a target it did not write, the repair is dropping a
+        # 69.2M-row table by hand.
+        #
+        # Side-effect-free, which is required rather than incidental: `max_retries: 0`
+        # does not prevent a retry on INTERNAL_ERROR, so a guard that touched a table
+        # could touch it twice.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        # THE ONE BUILD TASK, AND IT IS HANDED ONE TABLE NAME. There is no source
+        # parameter: `opl.gold.registry.Scd2Dimension` declares the satellite this
+        # dimension derives from, and the entry point resolves that satellite's parent
+        # hub from the vault registry -- which is the fix
+        # `opl.vault.satellites._refuse_a_mismatched_hub`'s own message names. A source
+        # here would be a second chance for a copied YAML to derive a plausible dimension
+        # from another table, which is the mistake the four vault jobs' two-key tasks
+        # can make and this one cannot.
+        - task_key: dim_company
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/gold_load_dimension.py
+            # [gold table, months, load_date].
+            parameters:
+              - "dim_company"
+              - "{{job.parameters.months}}"
+              # ONE BUILD TIMESTAMP FOR THE WHOLE RUN. `opl.gold.dimensions` gives
+              # `load_date` no default so that a loader cannot stamp its own clock; this
+              # is the value "the job's own parameters pin" that its docstring names,
+              # and it survives a task retry.
+              - "{{job.start_time.iso_datetime}}"
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

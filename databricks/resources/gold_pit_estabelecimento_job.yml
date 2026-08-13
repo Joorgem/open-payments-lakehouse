@@ -1,0 +1,165 @@
+# databricks/resources/gold_pit_estabelecimento_job.yml
+# THE POINT-IN-TIME TABLE, IN A JOB OF ITS OWN -- and the only job in this repository
+# whose output nothing downstream reads.
+#
+# WHAT IT IS FOR, MEASURED BEFORE IT WAS BUILT. `hub_estabelecimento` carries TWO
+# satellites whose change rates differ and whose changes are correlated, which is the one
+# place in this vault where TIMELINE COLLAPSE is possible at all. Task 0 measured it
+# (`docs/f3-run-evidence.md` §0.5, statements 01f196b3-55c2… and 01f196b3-b82f…): the
+# naive `(hash key, applied_date)` equi-join at 2026-07-11 answers 514,504 where the
+# as-of answer is 72,318,968 -- a gap of 71,804,464 rows. 1,141,850 establishments would
+# be handed a NULL address that is sitting in the June row and still in force; 499,630
+# the other way round.
+#
+# AND IT JOINS TO NOTHING IN THIS STAR, WHICH IS STATED HERE RATHER THAN LEFT TO BE
+# NOTICED. `dim_company` is at empresa grain, `dim_merchant` at estabelecimento grain is
+# deferred until the payment contract carries a 14-digit CNPJ, and `dim_geography` is
+# skipped -- so no fact and no dimension reaches this table. It is a MECHANISM
+# DEMONSTRATION OUTSIDE THE STAR, which is the same charge the phase plan levels at
+# `dim_merchant` and which is levelled at this table too rather than only at that one.
+# Two consequences worth an operator's attention:
+#   - NOTHING BREAKS IF THIS JOB IS NEVER RUN. No other gold job in this repository can
+#     say that, and the cost below is what makes the choice worth stating.
+#   - The one change that would pull it in is a `dim_merchant` at estabelecimento grain,
+#     which is a change to `opl.generator`'s payment contract (a SCHEMA_VERSION bump),
+#     not to this layer.
+#
+# EXPECTED, and these are predictions in the master protocol §4.5 sense -- published
+# BEFORE the run that tests them, derived from counts already in
+# `docs/f2-wave-1-workspace-run-evidence.md` and `docs/f3-run-evidence.md` §0.5:
+#
+#     as_of_date 2026-06-13    71,874,448 rows   (the keys observed in June; the 444,520
+#                                                 July-only establishments did not exist
+#                                                 yet and must be ABSENT, not NULL)
+#     as_of_date 2026-07-11    72,318,968 rows   (every hub key -- including the 4
+#                                                 observed in June and not in July, whose
+#                                                 June versions are still in force)
+#                            --------------
+#     pit_estabelecimento     144,193,416 rows
+#
+#     hub_estabelecimento      72,318,968 keys   -- the last layer must EQUAL this, and
+#                                                 the task prints a different sentence if
+#                                                 it does not
+#
+# COST -- AN EXTRAPOLATION AND NOT A MEASUREMENT, labelled as such because nothing of
+# this shape has been run on this platform. This build scans both satellites (~146M rows,
+# two narrow columns, twice), scans the hub once (72.3M rows, one column), shuffles a
+# ~291M-row union through one `groupBy` and a ~144M-row result through one window, and
+# writes ~144M rows of six columns.
+#
+#     wall clock   0.5-3 h, central ~1.5 h
+#     storage      ~5.0 GB (4-7)
+#
+# >>> FALSIFIED BY THE RUN. Measured 168 s and this block predicted 1,800-10,800 s, so it
+# >>> was wrong by 11-64x. The reason is in the block below, which cites a source whose own
+# >>> conclusion it then ignored: F2 measured that cost here lives in HASHING WIDTH x row
+# >>> count, and this extrapolation scaled on row count alone. The satellites it anchors on
+# >>> hash every source row into a new digest; this job hashes nothing and compares DATEs.
+# >>> Kept rather than rewritten -- a prediction wrong by 64x in the harmless direction is
+# >>> still wrong, and the next phase extrapolating gold cost from vault cost repeats it.
+# >>> See `docs/f3-workspace-run-evidence.md` §9.1.
+#
+# THE INTERVAL IS ANCHORED ON MEASUREMENTS AND THEN JUDGED, and the judgement is the part
+# that was wrong. `docs/f2-wave-1-workspace-run-evidence.md` §2.4 holds two loads at
+# 72.3M and 73.5M rows on Free Edition serverless that differ by 11x:
+# `link_empresa_estabelecimento` took 499 s and `sat_estabelecimento_dados` took 5,630 s --
+# 0.14-1.56 h, so NEITHER published endpoint is a measurement. This job's shape sits
+# between them -- it hashes nothing (the link's cost)
+# and makes no ledger grid or second full scan (the satellite's), but it shuffles 291M
+# rows, which NEITHER of them does and which nothing in this repository has measured. Any
+# central value narrower than that spread would be invented.
+#
+#     hub_estabelecimento              72,318,968 rows   1,842 s   2.753 GB
+#     sat_estabelecimento_dados        73,530,802 rows   5,630 s   5.585 GB
+#     sat_estabelecimento_endereco     72,888,582 rows   5,428 s   6.496 GB
+#     link_empresa_estabelecimento     72,318,968 rows     499 s   7.201 GB
+#
+# THE STORAGE FIGURE IS CALIBRATED ON THE LINK RATHER THAN ON A SATELLITE, because the
+# link is the one table here whose bytes are almost entirely 64-character hex digests:
+# 7.201 GB over 72,318,968 rows carrying THREE of them is 99.6 bytes/row, so a digest
+# costs ~33 bytes written. A PIT row is ONE digest plus three DATE columns over two or
+# three distinct values and two constants, all of which dictionary- and RLE-encode to
+# roughly nothing: ~35 bytes x 144,193,416 = ~5.0 GB.
+#
+# NO `months` PARAMETER, for `gold_conformed_dimensions_job.yml`'s reason with a
+# different argument. The SCD2 build DECLARES a window so it can refuse a snapshot the
+# launch did not name; a PIT pointer is `max(applied_date <= as_of_date)`, which a LATER
+# snapshot cannot move, so a snapshot this table did not know about is a layer to APPEND.
+# The one case that IS a revision -- a snapshot backfilled BETWEEN two the table already
+# holds -- is refused by `opl.gold.pit` from the dates on disk, which a parameter could
+# not improve on: a parameter states an intention, the refusal reads the table.
+#
+# A THIRD GOLD YAML RATHER THAN A TASK IN EITHER EXISTING ONE. `gold_dim_company_job.yml`
+# takes a `months` window this task must not be given, and `gold_conformed_dimensions_job
+# .yml` builds three tables that together cost seconds -- adding a multi-hour task to it
+# would mean that rebuilding `dim_date` after a payment batch lands either re-runs this
+# or requires an operator to deselect a task by hand in the UI, and `databricks bundle
+# run` has no task filter. The cost of the third file is the same two list edits the
+# second one paid: `_GUARDED_JOBS` in `tests/test_job_yaml_wiring.py` and `_GOLD_JOBS` in
+# `tests/test_gold_job_wiring.py`, both enumerated rather than globbed precisely so a job
+# added later cannot inherit a behaviour nobody chose.
+#
+# NAMED `gold_*` AND NOT `vault_*`, for both other gold jobs' reason:
+# `tests/test_vault_job_wiring.py` globs `vault_*.yml`, asserts the result equals its own
+# four-entry list, and demands every table in `opl.vault.domains.REGISTRY` be loaded by
+# exactly one task of those files. A gold job under that prefix turns both locks red.
+resources:
+  jobs:
+    opl_gold_pit_estabelecimento:
+      name: opl-gold-pit-estabelecimento
+      parameters:
+        - name: revision
+          # The revision this run is launched for; the default is a value the guard
+          # below refuses, so a run launched without --params stops instead of checking
+          # nothing.
+          #
+          #     databricks bundle run opl_gold_pit_estabelecimento -t free \
+          #       --params revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
+      tasks:
+        # FIRST, AND NOTHING BEFORE IT (ADR 0009). The answer to this guard's question is
+        # this job's own and it is about COST as much as about correctness: the build
+        # below is the second most expensive task in this repository, it is append-only,
+        # and a table written from the wrong wheel is repaired by dropping ~144M rows by
+        # hand. What a different revision changes here is not cosmetic -- the as-of set is
+        # derived by one function in `opl.gold.pit`, the pointer semantics are one window
+        # frame, and the pointer COLUMN NAMES are derived from the satellite names in
+        # `opl.gold.specs`. Any of the three moving writes a table that is individually
+        # well-formed and that every as-of read misses.
+        #
+        # Side-effect-free, which is required rather than incidental: `max_retries: 0`
+        # does not prevent a retry on INTERNAL_ERROR, so a guard that touched a table
+        # could touch it twice.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        # THE ONE BUILD TASK, HANDED ONE TABLE NAME. There is no hub parameter and no
+        # satellite parameter: `opl.gold.specs.PointInTimeTable` declares all three, and
+        # the entry point resolves them against the vault registry. The satellite tables
+        # reach the loader as a mapping KEYED BY SATELLITE NAME, so the one paste that
+        # would be silent -- two satellite tables transposed, each satellite's dates
+        # written into the other's pointer column -- is not expressible.
+        - task_key: pit_estabelecimento
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/gold_load_pit.py
+            # [gold table, load_date].
+            parameters:
+              - "pit_estabelecimento"
+              # ONE BUILD TIMESTAMP FOR THE WHOLE RUN. `opl.gold.pit` gives `load_date` no
+              # default precisely so that a loader cannot stamp its own clock; this is the
+              # value the job's own parameters pin, and it survives a task retry.
+              - "{{job.start_time.iso_datetime}}"
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

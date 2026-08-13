@@ -1,0 +1,127 @@
+# databricks/resources/gold_conformed_dimensions_job.yml
+# THE THREE CONFORMED DIMENSIONS OF THE STAR, IN ONE JOB OF THEIR OWN.
+#
+# A SECOND GOLD YAML RATHER THAN THREE MORE TASKS IN `gold_dim_company_job.yml`, and the
+# argument is operational rather than tidy. That job's one build task is a 69.2M x 69.06M
+# join followed by a window over the result -- the most expensive single task in this
+# repository. These three are a 50-row calendar, a 5-row enumeration and a 1-row
+# enumeration. Putting them in that file would mean that rebuilding `dim_date` -- after a
+# new payment batch lands, which is exactly when you would -- either re-runs the big join
+# or requires an operator to deselect a task by hand in the UI, and `databricks bundle
+# run` has no task filter. It would also make a file named `gold_dim_company_job.yml`
+# build four tables, which is the class of second-meaning-for-one-name this repository has
+# already paid for once (`opl.bronze.registry`: a quarantine name spelled twice "sent
+# estab triagers to a table full of unrelated F1.2 lookup rows").
+#
+# THE COST OF THE SECOND FILE IS TWO LIST EDITS AND BOTH ARE DELIBERATE: `_GUARDED_JOBS`
+# in `tests/test_job_yaml_wiring.py` (every YAML under `databricks/resources` must be
+# classified as guarded or deliberately not) and `_GOLD_JOBS` in
+# `tests/test_gold_job_wiring.py` (whose totality lock demands every registered gold table
+# be built by exactly one task). Those lists are enumerated rather than globbed precisely
+# so that a job added later cannot inherit a behaviour nobody chose.
+#
+# NAMED `gold_*` AND NOT `vault_*`, for `gold_dim_company_job.yml`'s reason:
+# `tests/test_vault_job_wiring.py` globs `vault_*.yml`, asserts the result equals its own
+# four-entry list, and then demands every table in `opl.vault.domains.REGISTRY` be loaded
+# by exactly one task of those files. A gold job under that prefix turns both locks red.
+#
+# NO `months` PARAMETER, WHICH MAKES THIS THE ONLY BUILD JOB IN THE REPOSITORY WITHOUT
+# ONE. A bronze ingest STAMPS its month, a vault load NARROWS to it, and the SCD2 build
+# beside this one DECLARES it so that it refuses when the vault has gained a snapshot the
+# launch did not name -- it must, because a version's end date is the next version's start
+# and an append cannot revise a closed interval. None of that applies here:
+# `dim_channel` and `dim_currency` have no snapshot input, and a snapshot `dim_date` did
+# not know about is days to APPEND with no key moving, because a day's surrogate key is
+# its own calendar position. A parameter this job ignored would be decoration.
+#
+# EXPECTED, and these are predictions in the master protocol §4.5 sense -- published
+# before the run that tests them:
+#   dim_date     50 members + 1 ghost   (2026-06-13 .. 2026-08-01, both RFB applied_dates
+#                                        to the latest payment day), fact-side
+#                                        cardinality 1 -- or 2 once the
+#                                        `between-snapshots` batch is in bronze
+#   dim_channel   5 members + 1 ghost   fact-side cardinality 5
+#   dim_currency  1 member  + 1 ghost   fact-side cardinality 1
+# Two of the three are constant columns on this data. The run log says so in a number.
+resources:
+  jobs:
+    opl_gold_conformed_dimensions:
+      name: opl-gold-conformed-dimensions
+      parameters:
+        - name: revision
+          # The revision this run is launched for; the default is a value the guard
+          # below refuses, so a run launched without --params stops instead of checking
+          # nothing.
+          #
+          #     databricks bundle run opl_gold_conformed_dimensions -t free \
+          #       --params revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
+      tasks:
+        # FIRST, AND NOTHING BEFORE IT (ADR 0009). The answer to this guard's question is
+        # the same one `gold_dim_company_job.yml` gives and it is if anything sharper
+        # here: these dimensions' entire contents are a function of the deployed code.
+        # `dim_channel`'s members are `opl.contracts.payments.PAYMENT_METHODS`, its keys
+        # are `xxhash64` over them, and `dim_date`'s span is derived by one function in
+        # `opl.gold.conformed`. A wheel from another revision writes a dimension that is
+        # individually well-formed, that a fact built from this revision joins to
+        # incorrectly, and that reports success.
+        #
+        # Side-effect-free, which is required rather than incidental: `max_retries: 0`
+        # does not prevent a retry on INTERNAL_ERROR, so a guard that touched a table
+        # could touch it twice.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        # THE THREE BUILDS, EACH HANDED ONE REGISTRY KEY. They do not depend on each
+        # other: nothing conformed reads anything conformed, so three parallel tasks is
+        # what the dependency graph actually says, and the Databricks UI then reports a
+        # duration per dimension rather than one number for all three.
+        #
+        # `dim_date` FIRST BY CONVENTION ONLY -- it is the one with a source to read, so
+        # an operator scanning a failed run finds the interesting task at the top.
+        - task_key: dim_date
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/gold_load_conformed_dimension.py
+            # [gold table, load_date].
+            parameters:
+              - "dim_date"
+              # ONE BUILD TIMESTAMP FOR THE WHOLE RUN, so all three dimensions carry the
+              # same LDTS and a reader can tell they were built together.
+              # `opl.gold.conformed` gives `load_date` no default precisely so that a
+              # loader cannot stamp its own clock; this is the value the job's own
+              # parameters pin, and it survives a task retry.
+              - "{{job.start_time.iso_datetime}}"
+
+        - task_key: dim_channel
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/gold_load_conformed_dimension.py
+            parameters:
+              - "dim_channel"
+              - "{{job.start_time.iso_datetime}}"
+
+        - task_key: dim_currency
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/gold_load_conformed_dimension.py
+            parameters:
+              - "dim_currency"
+              - "{{job.start_time.iso_datetime}}"
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

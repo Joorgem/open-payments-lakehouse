@@ -13,6 +13,8 @@ import sys
 from delta import configure_spark_with_delta_pip
 from pyspark.sql import SparkSession
 
+from opl.config import SESSION_TIMEZONE, SESSION_TIMEZONE_CONFIG
+
 
 def _pin_worker_interpreter() -> None:
     """Make Spark's Python workers run the interpreter the driver runs.
@@ -46,6 +48,22 @@ def local_session(app_name: str = "opl") -> SparkSession:
         .master("local[2]")
         .config("spark.driver.memory", "2g")
         .config("spark.sql.shuffle.partitions", "2")
+        # THE ZONE, DECLARED, because leaving it out is a DECISION to inherit the
+        # operating system's -- and the suite then asserts instants no Databricks run
+        # would ever write. Serverless defaults to UTC; this box is UTC-3, and
+        # `opl.gold.dimensions` turns a DATE into an instant, so an unpinned local
+        # session put every version boundary three hours off the payment stream's own
+        # UTC clock. `opl.config` argues the value; this is the half of the pin that
+        # covers the SESSION FACTORY, and each gold entry point sets the same pair on
+        # the session serverless hands it.
+        #
+        # WHAT IT COSTS, STATED SO IT IS NOT REDISCOVERED AS A BUG: pyspark converts a
+        # TIMESTAMP back to Python through `datetime.fromtimestamp`, which reads the
+        # OPERATING SYSTEM's zone, not this one -- so on a box that is not UTC,
+        # `collect()` hands back a datetime shifted by the offset. That is not a
+        # dimension that is wrong, it is two zones meeting in the driver; the gold
+        # fixtures compare against `instant_literal`'s own round trip for that reason.
+        .config(SESSION_TIMEZONE_CONFIG, SESSION_TIMEZONE)
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config(
             "spark.sql.catalog.spark_catalog",
