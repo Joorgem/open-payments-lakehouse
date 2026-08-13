@@ -429,7 +429,14 @@ def _refuse_an_as_of_layer_wider_than_the_hub(
     layer with one duplicated key AND one absent key passes it. What it does catch is the
     failure that actually scales -- a repeated union member, a satellite table handed
     twice, a re-run that appended a whole layer again -- each of which pushes a layer past
-    the key count by a wide margin."""
+    the key count by a wide margin.
+
+    AND ONE FAILURE THAT IS NOT ABOUT THIS BUILD AT ALL: a satellite carrying a hash key
+    the HUB does not hold. Such a key reaches the union through the observations and never
+    through the grid, so it appears at the instants it was observed and is missing from
+    every later one -- a partial history nothing else here would notice. It is the mirror
+    of the dangling satellite version `gold_load_dimension.py` reports, and it lands in
+    this bound because the layers it lands in are the ones already full."""
     over = [(day, rows) for day, rows in per_as_of if rows > hub_keys]
     if over:
         raise ValueError(
