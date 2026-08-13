@@ -44,7 +44,17 @@ from pyspark.sql import SparkSession
 from opl.bronze.registry import table_spec as bronze_table_spec
 from opl.config import DEFAULT, SESSION_TIMEZONE, SESSION_TIMEZONE_CONFIG
 from opl.contracts import payments
-from opl.gold.conformed import GHOST_ROWS, ConformedLoadResult, load_conformed_dimension
+
+# ONE SPELLING OF THE GHOST COUNT, AND IT IS `opl.gold.columns`' -- the same import the
+# sibling `gold_load_dimension.py` makes, for the reason stated there: the run log's
+# arithmetic must reconcile against the number the LOADER enforces rather than against a
+# second copy of it. This task read it from `opl.gold.conformed`, which re-exports it only
+# INCIDENTALLY: `GHOST_ROWS` is absent from that module's `__all__`, so the import rested
+# on an implementation detail the module does not advertise, and the day `conformed` stops
+# needing the constant this task breaks for a reason that has nothing to do with it. One
+# object either way today; one declared path to it now.
+from opl.gold.columns import GHOST_ROWS
+from opl.gold.conformed import ConformedLoadResult, load_conformed_dimension
 from opl.gold.registry import table_spec as gold_table_spec
 from opl.gold.specs import CalendarDimension, ConformedDimension
 from opl.vault import domains
@@ -76,7 +86,7 @@ def _reach_note(spec: ConformedDimension, result: ConformedLoadResult) -> str:
     f-string. A dimension every fact row resolves to ONE member of is a constant column
     wearing a dimension's name -- true today of `dim_currency` and of `dim_date` -- and a
     run log that printed the member count alone would let the phase's evidence describe
-    it as thin instead of measuring it. Master protocol §A6: a path that ran zero rows
+    it as thin instead of measuring it. Master protocol §4.6: a path that ran zero rows
     through it is not a path that works, and the same applies to a dimension whose
     fact-side cardinality is one."""
     reached = result.fact_side_cardinality

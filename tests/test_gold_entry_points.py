@@ -61,6 +61,14 @@ _ENTRY_POINTS = (
     "gold_load_fact",
 )
 
+# The two entry points whose RUN LOG prints the ghost in an arithmetic line, and so the two
+# that must read `GHOST_ROWS` from the module that declares it. Enumerated rather than
+# derived from `_ENTRY_POINTS`: the PIT task has no ghost of its own -- it writes pointers
+# into satellites, and the ghost belongs to the dimension the pointers are read beside --
+# and the fact task counts ghost REFERENCES per role, which is a measurement over the
+# written table rather than a row count it has to reconcile.
+_GHOST_PRINTING_ENTRY_POINTS = ("gold_load_dimension", "gold_load_conformed_dimension")
+
 # How many names each entry point qualifies through `opl.config.DEFAULT.table`. Three of
 # the four qualify three, for three different threes: the SCD2 task qualifies the
 # dimension, its source satellite and that satellite's parent hub; the conformed task
@@ -443,7 +451,7 @@ def _fact_result(**overrides):
 
 
 def test_the_resolution_note_reports_zero_as_unexercised_and_not_as_success():
-    """MASTER PROTOCOL SECTION A6, in the one place this phase can actually reach it.
+    """MASTER PROTOCOL SECTION 4.6, in the one place this phase can actually reach it.
     `COALESCE(<as-of lookup>, GHOST)` cannot fire on this data -- 1,024 of 1,024
     counterparties resolve to `hub_empresa` and `dim_company` covers every hub key -- so
     the number will be 0 and the run log must not let that read as a proven path.
@@ -603,16 +611,30 @@ def test_the_idempotent_re_run_line_cannot_be_printed_over_a_short_dimension():
     ), "main no longer prints through _reconciliation_note, so this test measures nothing"
 
 
-def test_the_ghost_row_count_is_one_constant_across_the_loader_and_the_task():
+@pytest.mark.parametrize("script", _GHOST_PRINTING_ENTRY_POINTS)
+def test_the_ghost_row_count_is_one_constant_across_the_loader_and_the_task(script):
     """`GHOST_ROWS` is `opl.gold.columns`', and both gold entry points and both loaders
     read it. It was spelled twice -- once in `opl.gold.conformed`, once in this task --
     while `load_dimension` enforced nothing, so the two could disagree and the run log
     would print the arithmetic that agreed with itself. The loader now REFUSES a target
     that is not `source_versions + GHOST_ROWS`, which makes a second spelling a way to
-    print a reconciliation against a total the load rejected."""
-    task = _load("gold_load_dimension")
+    print a reconciliation against a total the load rejected.
+
+    THE IMPORT PATH IS ASSERTED AND NOT ONLY THE VALUE, WHICH IS WHAT THIS TEST GAINED.
+    It checked `gold_load_dimension` alone, and `gold_load_conformed_dimension` -- the
+    other task whose run log prints a ghost -- took the constant from `opl.gold.conformed`
+    instead. That module re-exports it only incidentally: `GHOST_ROWS` is absent from its
+    `__all__`, so an `is` comparison passed while the task depended on an implementation
+    detail of a module whose subject is not this constant. Both are checked now, and both
+    are checked for WHERE they read it from, because one object reached by two paths stops
+    being one object the moment either path is re-exported by something else."""
+    task = _load(script)
     assert task.GHOST_ROWS is GHOST_ROWS == 1
-    source = (_SRC / "gold_load_dimension.py").read_text(encoding="utf-8")
+    source = (_SRC / f"{script}.py").read_text(encoding="utf-8")
     assert "GHOST_ROWS = " not in source, "the task declares a GHOST_ROWS of its own"
+    assert "from opl.gold.columns import GHOST_ROWS" in source, (
+        f"{script} reads GHOST_ROWS through another module's incidental re-export rather "
+        "than from opl.gold.columns, which is the one module that declares it"
+    )
 
 
