@@ -61,7 +61,7 @@ __all__ = ["AMOUNT_TYPE", "ISO_INSTANT_FORMAT", "event_instant"]
 # currency converts at exactly 1 with no lookup. SPELLED OUT for
 # `opl.gold.registry.DIM_CHANNEL.fact_column`'s reason: the payment contract names it only as
 # a member of `BUSINESS_ATTRIBUTE_COLUMNS` and not as a constant. It cannot drift behind a
-# rename, because `_refuse_a_fact_this_loader_cannot_derive` below requires the fact to
+# rename, because `_refuse_a_fact_whose_measures_this_loader_cannot_derive` below requires it to
 # DECLARE this exact name as an input of its rate measure, and the contract refuses a
 # business attribute it does not carry.
 _CURRENCY_COLUMN = "currency"

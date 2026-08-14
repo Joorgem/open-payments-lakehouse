@@ -97,7 +97,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pyspark.sql import Column, DataFrame
+from pyspark.sql import Column, DataFrame, Row
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
@@ -121,8 +121,9 @@ __all__ = [
 
 # THE THREE COLUMNS THIS MODULE PUTS IN THE FACT. They are DECLARED as literals in
 # `opl.gold.registry` -- `fx_rate` and `amount_brl` as `DerivedMeasure`s, `fx_rate_date` as
-# the `fact_column` of `dim_date`'s derived role -- and `opl.gold.facts
-# ._refuse_a_fact_this_loader_cannot_derive` refuses a spec that spells any of them
+# the `fact_column` of `dim_date`'s derived role -- and `opl.gold.fact_guards`'
+# `_refuse_a_fact_whose_measures_this_loader_cannot_derive` and
+# `_refuse_a_derived_role_this_loader_cannot_produce` refuse a spec that spells any of them
 # differently. So the two copies cannot drift, and the refusal is at the one place that can
 # see both, before the first write. The alternative -- `registry.py` importing this module --
 # would put pyspark behind the import of every gold spec, which is what
@@ -234,9 +235,26 @@ def _reduced(quotes: DataFrame) -> DataFrame:
     )
 
 
-def _refuse_a_quote_date_that_does_not_reduce_to_one_rate(reduced: DataFrame) -> int:
+def _measured(reduced: DataFrame) -> Row:
+    """ONE aggregate over the reduced series, carrying everything the refusal below reads AND
+    the three numbers `FxSeries` reports.
+
+    ONE COLLECT AND NOT TWO. The quote count and the publication span are reported rather than
+    refused, so it is tempting to measure them separately from the refusal -- and that would
+    be a second pass over the same frame for numbers the first pass already has in hand. The
+    refusal reads three of the five; the caller reads the other three (`quotes` is shared)."""
+    return reduced.agg(
+        F.count(F.lit(1)).alias("quotes"),
+        F.max(_DISTINCT_RATES).alias("rates"),
+        F.sum(_UNREADABLE).alias("unreadable"),
+        F.min(_FX_FROM).alias("first"),
+        F.max(_FX_FROM).alias("last"),
+    ).collect()[0]
+
+
+def _refuse_a_quote_date_that_does_not_reduce_to_one_rate(measured: Row) -> None:
     """Refuse two landed rows for one `(currency, quote_date)` that DISAGREE on the rate, or
-    a row whose rate or publication instant cannot be read.
+    a row whose rate, publication instant or quote date cannot be read.
 
     NEVER `max()`, NEVER `min()` OVER DISAGREEING VALUES, which is the phase plan's ruling
     and the module docstring's argument: either choice silently picks the rate every payment
@@ -245,13 +263,10 @@ def _refuse_a_quote_date_that_does_not_reduce_to_one_rate(reduced: DataFrame) ->
     could not read -- and because a NULL rate would otherwise reduce to a NULL and convert
     every payment on that date to NULL.
 
-    RETURNS THE QUOTE COUNT, so the one collect this function costs also produces the number
-    `FxSeries` reports rather than being paid for twice."""
-    measured = reduced.agg(
-        F.count(F.lit(1)).alias("quotes"),
-        F.max(_DISTINCT_RATES).alias("rates"),
-        F.sum(_UNREADABLE).alias("unreadable"),
-    ).collect()[0]
+    `measured["rates"]` IS NULL OVER AN EMPTY SERIES AND 0 OVER A GROUP WHOSE ONLY RATE IS
+    NULL, which is why the first branch tests truthiness before the comparison and the second
+    branch exists at all: `count_distinct` IGNORES NULLs, so a series of nothing but
+    unreadable rates would pass a `> 1` check and be caught only by the count beside it."""
     if measured["rates"] and measured["rates"] > 1:
         raise ValueError(
             f"refusing to resolve FX: one (currency, quote_date) in "
@@ -273,7 +288,6 @@ def _refuse_a_quote_date_that_does_not_reduce_to_one_rate(reduced: DataFrame) ->
             "The DQ gate refuses all three shapes, so this is a row that did not come "
             "through it"
         )
-    return measured["quotes"]
 
 
 def rate_intervals(quotes: DataFrame) -> FxSeries:
@@ -289,7 +303,8 @@ def rate_intervals(quotes: DataFrame) -> FxSeries:
     one lakehouse should not have two answers to "when does the open interval end", and
     `opl.gold.columns` argues why it is 2999-12-31 and not 9999-12-31 on this stack."""
     reduced = _reduced(quotes)
-    count = _refuse_a_quote_date_that_does_not_reduce_to_one_rate(reduced)
+    measured = _measured(reduced)
+    _refuse_a_quote_date_that_does_not_reduce_to_one_rate(measured)
     ordered = Window.partitionBy(_FX_CURRENCY).orderBy(_FX_FROM)
     bounds = reduced.select(
         _FX_CURRENCY,
@@ -300,12 +315,11 @@ def rate_intervals(quotes: DataFrame) -> FxSeries:
             F.lead(F.col(_FX_FROM)).over(ordered), instant_literal(VALID_TO_CEILING)
         ).alias(_FX_TO),
     )
-    ends = reduced.agg(F.min(_FX_FROM).alias("first"), F.max(_FX_FROM).alias("last")).collect()[0]
     return FxSeries(
         intervals=bounds,
-        quotes=count,
-        first_published=ends["first"],
-        last_published=ends["last"],
+        quotes=measured["quotes"],
+        first_published=measured["first"],
+        last_published=measured["last"],
     )
 
 

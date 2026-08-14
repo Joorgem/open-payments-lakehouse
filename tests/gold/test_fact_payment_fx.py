@@ -2,12 +2,14 @@
 amount in the reporting currency -- and the one property no calendar-day implementation can
 produce.
 
-WHY THIS IS A FILE OF ITS OWN. `test_fact_payment.py` is 750 lines and its whole fixture is
-five BRL payments over three instants, which is the right fixture for an as-of join into
-`dim_company` and the wrong one for FX: a BRL-only population converts at exactly 1 on every
-row, `amount_brl` equals `amount` everywhere, and no assertion over either column can fail.
-That is verbatim the state F-API's T1 exists to end, so a test of the FX layer has to reach a
-population with two currencies in it.
+WHY THIS IS A FILE OF ITS OWN. `test_fact_payment.py` is 747 lines of the project's 800-line
+cap, and its whole fixture is five BRL payments over three instants -- the right fixture for an
+as-of join into `dim_company` and the wrong one for FX. A BRL-only population converts at
+exactly 1 on every row and `amount_brl` equals `amount` everywhere, so an assertion over
+either column is a statement about the FIXTURE rather than about the conversion: it would hold
+under an implementation that wrote `fx_rate = 1` unconditionally. That is verbatim the state
+F-API's T1 exists to end, so a test of the FX layer has to reach a population with two
+currencies in it.
 
 --- THE TWO POPULATIONS THIS FILE MEASURES, AND WHY BOTH ARE NEEDED -------------------
 
