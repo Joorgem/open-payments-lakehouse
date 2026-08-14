@@ -405,6 +405,37 @@ def test_a_rate_that_is_not_a_number_is_refused(rate: object):
     assert COMPRA_FIELD in str(refusal.value)
 
 
+def test_a_quote_published_before_the_date_it_is_a_quote_for_is_refused():
+    """FREE, AND TRUE ON EVERY LIVE ROW IN THIS FILE -- asserted rather than claimed, first
+    block below. The series only ever publishes on or AFTER the quote date, and the 1984 row
+    is the extreme: five days late, which is the whole reason this module carries two fields.
+
+    WHAT IT CATCHES IS A RANGE REQUEST STAMPED WITH THE LATER OF ITS BOUNDS. Rows carry no
+    quote date, so a wide call must stamp one onto all of them; stamp `last` and every row
+    belonging to an earlier quote date arrives published before the date it claims. The
+    second block is exactly that shape, built from a real body by asking for a date one day
+    after its publication instant.
+
+    The other direction -- stamping `first` -- keeps the dates consistent and is caught by
+    the publication-spread bound instead, since the closest two distinct quotes in 42 years
+    publish six minutes apart. Neither guard covers both, which is why both exist."""
+    for body, day in (
+        (BODY_1984, date(1984, 11, 28)),
+        (BODY_2026_06_19, date(2026, 6, 19)),
+        (BODY_2026_06_22, date(2026, 6, 22)),
+        (BODY_2026_07_31, date(2026, 7, 31)),
+        (BODY_2025_04_23, date(2025, 4, 23)),
+    ):
+        for quote in quotes_in(body, day):
+            assert quote.published_at.date() >= quote.quote_date, (
+                f"{body} publishes before its own quote date, so this guard is not free"
+            )
+    with pytest.raises(PtaxResponseRefused) as refusal:
+        quotes_in(BODY_1984, date(1984, 12, 4))
+    message = str(refusal.value)
+    assert "1984-12-03 11:29:00.0" in message and "1984-12-04" in message
+
+
 def _one_row_body(**overrides: object) -> str:
     """A body carrying one row of the 2026-06-19 response with fields overridden."""
     row: dict[str, object] = {

@@ -291,6 +291,39 @@ def _publication_instant(raw: object, quote_date: date) -> datetime:
     )
 
 
+def _refuse_a_publication_before_its_quote_date(quote: PtaxQuote) -> None:
+    """Refuse a quote published before the date it is a quote FOR.
+
+    FREE, AND TRUE ON EVERY ROW THE SERIES HAS. Measured 1984-11-28 .. 2026-08-13: not one
+    of the 10,447 rows is published before the month its quote date falls in, and per-date
+    verification across the 1984 window and 2026-07 finds none published before its own
+    quote date at all -- including the five-day LAG this module exists to preserve, where
+    1984-11-28 is answered `1984-12-03 11:29:00.0`. The inequality is not symmetric and
+    only the impossible direction is refused.
+
+    IT IS HALF OF WHAT CATCHES `fetch_series` REWRITTEN AS ONE WIDE CALL, and the halves are
+    worth separating because the reviewer's version of this claim was slightly too strong. A
+    range request's rows carry no quote date, so whoever writes one must stamp a bound onto
+    all of them. Stamp the LATER bound and every row published for an earlier quote date
+    arrives with a publication instant before its claimed date: this refuses it. Stamp the
+    EARLIER bound and the dates stay consistent -- that variant is caught instead by
+    `_refuse_publications_too_far_apart`, since the closest two distinct quotes in 42 years
+    publish six minutes apart. Between them both directions are covered.
+
+    Were BCB ever to publish a quote before its own quote date, this would refuse a real
+    row -- and that is still the right verdict: a rate for a date that has not happened is
+    the one thing a project whose headline is as-of-known-time cannot land."""
+    if quote.published_at.date() < quote.quote_date:
+        raise PtaxResponseRefused(
+            f"{quote_url(quote.quote_date)} answered a row published "
+            f"{quote.published_raw}, BEFORE the quote date it was asked for "
+            f"({quote.quote_date}). A quote cannot be published before the day it is a "
+            "quote for, and no row in the series since 1984-11-28 is. This is what a range "
+            "request stamped with the LATER of its bounds looks like: rows for earlier "
+            "quote dates wearing a date nobody asked the endpoint for"
+        )
+
+
 def quotes_in(body: str, quote_date: date) -> tuple[PtaxQuote, ...]:
     """Every row the response carries, validated, with `quote_date` carried onto each.
 
@@ -316,16 +349,16 @@ def quotes_in(body: str, quote_date: date) -> tuple[PtaxQuote, ...]:
                 f"{sorted(row)}. Every one of {list(RESPONSE_FIELDS)} is load-bearing -- "
                 "the rates are the conversion and the stamp is what T3 compares against"
             )
-        quotes.append(
-            PtaxQuote(
-                quote_date=quote_date,
-                currency=QUOTED_CURRENCY,
-                published_at=_publication_instant(row[PUBLISHED_FIELD], quote_date),
-                published_raw=str(row[PUBLISHED_FIELD]),
-                compra=_rate(row, COMPRA_FIELD, quote_date),
-                venda=_rate(row, VENDA_FIELD, quote_date),
-            )
+        quote = PtaxQuote(
+            quote_date=quote_date,
+            currency=QUOTED_CURRENCY,
+            published_at=_publication_instant(row[PUBLISHED_FIELD], quote_date),
+            published_raw=str(row[PUBLISHED_FIELD]),
+            compra=_rate(row, COMPRA_FIELD, quote_date),
+            venda=_rate(row, VENDA_FIELD, quote_date),
         )
+        _refuse_a_publication_before_its_quote_date(quote)
+        quotes.append(quote)
     return tuple(quotes)
 
 
