@@ -175,20 +175,39 @@ def test_the_publication_instant_is_read_as_brasilia_time():
     )
 
 
-def test_two_publications_of_one_quote_reduce_to_the_later_stamp():
+def test_two_publications_of_one_quote_reduce_to_the_earlier_stamp():
     """The fan-out that HAS a witness: 2025-04-23, two rows, 27 ms apart, agreeing on
-    both rates. Reduced at the request, where one URL is one quote date and one endpoint
-    is one currency, so the reduce key is the request itself. The later stamp is kept --
-    T3's fail-safe direction, delaying availability rather than advancing it."""
+    both rates. Reduced per response, where one URL is one quote date and one endpoint is
+    one currency, so the reduce key is the request itself.
+
+    THE EARLIER STAMP IS KEPT, AND THAT IS THE ONE CHOICE HERE THAT CHANGES T3'S ANSWER.
+    The rates AGREE -- `sole_quote` has already refused the group otherwise -- so BCB had
+    published this rate at `.416` and the second row re-publishes a number that was
+    already knowable. Keeping `.443` would deny a payment that fell between the two stamps
+    a rate it could already have used and send it back to the previous business day at a
+    DIFFERENT rate, which is precisely the model plan T3 retracted.
+
+    The wrong answer is COMPUTED here rather than described: the last two assertions are
+    the same payment instant read against both reduces, and they disagree."""
     quotes = quotes_in(BODY_2025_04_23, date(2025, 4, 23))
     assert len(quotes) == 2
     assert quotes[1].published_at - quotes[0].published_at == timedelta(milliseconds=27)
-    assert quotes[0].venda == quotes[1].venda
+    assert quotes[0].venda == quotes[1].venda and quotes[0].compra == quotes[1].compra
     one = sole_quote(quotes)
     assert one is not None
-    assert one.published_raw == "2025-04-23 13:06:30.443"
+    assert one.published_raw == "2025-04-23 13:06:30.416"
     assert str(one.venda) == "5.68800"
     assert one.quote_date == date(2025, 4, 23)
+    paid_at = datetime(2025, 4, 23, 13, 6, 30, 430000, tzinfo=BRASILIA)
+    assert one.published_at <= paid_at, (
+        "the reduce kept a publication instant LATER than a payment the rate had already "
+        "been published for, so T3 denies that payment a rate BCB had already released "
+        "and falls back to the previous business day"
+    )
+    assert max(quote.published_at for quote in quotes) > paid_at, (
+        "the max() this replaces, evaluated rather than described: under it the same "
+        "payment sees no quote for its own date at all"
+    )
 
 
 def test_the_reduce_is_per_response_and_is_not_the_one_the_landed_table_needs():

@@ -296,6 +296,17 @@ def sole_quote(quotes: tuple[PtaxQuote, ...]) -> PtaxQuote | None:
     MEASURED: 2025-04-23 carries TWO rows, publication stamps 27 ms apart, AGREEING on
     both rates.
 
+    THE EARLIER STAMP IS KEPT, BECAUSE `max()` IS THE ONE REDUCE THAT CHANGES T3'S ANSWER
+    AND `min()` IS THE IDENTITY. The branch below has already refused any group whose rates
+    differ, so whatever this returns, both rows carry the SAME rate -- which means BCB had
+    published that rate at the earlier instant and the later row re-publishes a number
+    already knowable. T3 hands a payment the most recent quote whose publication instant
+    PRECEDES the payment's own, so keeping the LATER stamp denies a payment falling between
+    the two a rate it could already have used and sends it back to the previous business
+    day, at a different rate. That is the model this plan retracted at T3, rebuilt inside
+    the reduce. It is not the fail-safe direction either, because there is nothing here to
+    be safe from: the rate is identical either way and only its availability moves.
+
     THE DISAGREEMENT BRANCH HAS NO WITNESS. No quote date in the series holds rows that
     differ, so this branch ships unexercised by the source; the only body that has ever
     taken it is hand-built, in `tests/test_ptax_source.py`. That is a finding rather than
@@ -310,7 +321,7 @@ def sole_quote(quotes: tuple[PtaxQuote, ...]) -> PtaxQuote | None:
             f"on the rate: {sorted(map(str, rates))}. Taking either one silently picks "
             "the rate every payment on this date converts at, so the extraction stops here"
         )
-    return max(quotes, key=lambda quote: quote.published_at)
+    return min(quotes, key=lambda quote: quote.published_at)
 
 
 def fetch_quote(quote_date: date, fetch: Fetch) -> PtaxQuote | None:
