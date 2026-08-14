@@ -61,6 +61,15 @@ at both ends and matches two rows at a boundary. The intervals partition the tim
 currency, so a payment matches AT MOST ONE quote BY CONSTRUCTION rather than by a count
 taken afterwards.
 
+THE LOW END IS INCLUSIVE AND NO ROW CAN TELL, which is worth saying rather than leaving as an
+accident of the convention. T3's rule is that a quote's publication instant must PRECEDE the
+payment's own, which reads as strict; this predicate admits a payment landing exactly on it.
+Measured: the 2026-06-22 quote publishes 249.585 ms clear of event index 5,836 and events land
+on whole 5,000 ms steps, so nothing in this phase's data sits on a boundary and the
+`<=`-versus-`<` question decides no row (`docs/f-api-run-evidence.md` §1.1). It is spelled the
+way `dim_company`'s interval is spelled, because one lakehouse should not have two answers to
+"which side of a boundary does an event fall on".
+
 THE LOW END IS NOT FLOORED, AND THAT IS THE OPPOSITE OF `dim_company` ON PURPOSE. That
 dimension floors its first version at the epoch because a lookup convention about a company
 we know something about is better than "unknown"; a RATE THAT DID NOT EXIST YET CANNOT BE
@@ -300,6 +309,22 @@ def rate_intervals(quotes: DataFrame) -> FxSeries:
     )
 
 
+# `day` ARRIVES AS AN ARGUMENT AND IS NOT DERIVED FROM `instant` INSIDE THE FUNCTION BELOW,
+# AND AN EXISTING TEST CAUGHT THE DIFFERENCE. `to_date(<timestamp>)` RENDERS an instant, in the
+# SESSION zone -- so under America/Sao_Paulo a payment at 2026-06-20T00:00:00Z dated its own
+# identity conversion to 2026-06-19 and `fx_rate_date_key` became a function of a cluster
+# setting. That is verbatim the failure `opl.gold.conformed.day_of` exists to prevent, and
+# `tests/gold/test_fact_payment.py::test_the_fact_is_unchanged_when_it_is_built_under_a_non_utc
+# _session_zone` refused it. The caller passes `day_of(event_time)` -- ten characters of the
+# producer's own ISO text, zone-free -- so the column is as stable as `event_date_key` and is
+# derived by the same spelling.
+#
+# THE PARAGRAPH IS HERE RATHER THAN IN THE DOCSTRING because the function reached 58 of the
+# project's 50-line cap with it inside. It is the pattern `opl.bronze.generated_landing` and
+# `opl.generator.profiles` already use for the same reason, with the same cost stated: the
+# prose is still reviewed in the diff, and it is no longer reachable from `help()`.
+
+
 def with_resolved_rates(
     frame: DataFrame,
     intervals: DataFrame,
@@ -326,16 +351,6 @@ def with_resolved_rates(
     them, and the orphan count would report the whole BRL population as a data-quality
     finding. The day the payment happened, at a rate of 1, is a true statement about an
     identity conversion and it keeps the column total.
-
-    THAT DAY ARRIVES AS AN ARGUMENT AND IS NOT DERIVED FROM `instant` HERE, AND A TEST
-    CAUGHT THE DIFFERENCE. `to_date(<timestamp>)` RENDERS an instant, in the SESSION zone --
-    so under America/Sao_Paulo a payment at 2026-06-20T00:00:00Z became 2026-06-19 and
-    `fx_rate_date_key` moved with a cluster setting, which is verbatim the failure
-    `opl.gold.conformed.day_of` exists to prevent and which
-    `tests/gold/test_fact_payment.py::test_the_fact_is_unchanged_when_it_is_built_under_a
-    _non_utc_session_zone` refused. The caller passes `day_of(event_time)` -- ten characters
-    of the producer's own ISO text, zone-free -- so this column is as stable as
-    `event_date_key` and derived by the same spelling.
 
     A BROADCAST LEFT JOIN ON A HALF-OPEN INTERVAL, `from <= t < to` and never `BETWEEN` --
     `opl.gold.columns` argues the operator where the sentinels are declared. LEFT rather than

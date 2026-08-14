@@ -84,12 +84,19 @@
 #   references resolving to the ghost, per role         0   unchanged, and still UNEXERCISED
 #   rows orphaned per fact key, all four                0   see below
 #   DISTINCT event_date_key reached                     3   20260620, 20260622, 20260801
-#   DISTINCT fx_rate_date_key reached                   5   20260619, 20260622 and 20260731
-#                                                          from the USD rows, plus the BRL
-#                                                          rows' own days (20260620, 20260622,
-#                                                          20260801) -- so the two date roles
-#                                                          AGREE on the 35,095 BRL rows and
-#                                                          DIFFER on 2,864 of the 4,905 USD ones
+#   DISTINCT fx_rate_date_key reached                   4   20260619 and 20260622 from the USD
+#                                                          rows, plus the BRL rows' own days
+#                                                          (20260620, 20260622, 20260801) --
+#                                                          so the two date roles AGREE on the
+#                                                          35,095 BRL rows and DIFFER on 2,864
+#                                                          of the 4,905 USD ones.
+#                                                          NOT 20260731: that quote is only
+#                                                          reachable by a USD payment on
+#                                                          2026-08-01 and there are none. The
+#                                                          extraction reaches it because the
+#                                                          series must be gapless past what
+#                                                          the fact needs, which is a
+#                                                          different statement
 #   DISTINCT fx_rate values                             3   1.00000, 5.14420, 5.13950
 #   rows with fx_rate = 1.00000 exactly            35,095   every BRL row, by definition and
 #                                                          not by lookup

@@ -343,7 +343,7 @@ def _distinct_business_tuples(frame: DataFrame) -> int:
 def _deduplicated(source: DataFrame, fact: PaymentFact) -> DataFrame:
     """One row per `grain_key`: the payment, not the delivery.
 
-    BY THE GRAIN KEY AND BY NOTHING ELSE -- the module docstring argues the 1,600 payments
+    BY THE GRAIN KEY AND BY NOTHING ELSE -- the module docstring argues the 3,200 payments
     the alternative deletes.
 
     `row_number()` AND NOT `dropDuplicates`, AND THE DIFFERENCE IS DETERMINISM. A
@@ -702,14 +702,13 @@ def load_fact(
     payment event, both counterparties resolved as of that payment's own `event_time`.
 
     `load_date` is an argument with no default, for `opl.vault.hubs.load_hub`'s reason: a
-    loader that stamps its own clock cannot be asserted against. Idempotent by `grain_key`:
-    a re-run over an unchanged source appends nothing and reports 0, a source that GAINED a
-    payment batch appends that batch alone, and the grain check holds in every one of those
-    states.
+    loader that stamps its own clock cannot be asserted against. Idempotent by `grain_key`: a
+    re-run over an unchanged source appends nothing, a source that GAINED a payment batch
+    appends that batch alone, and the grain check holds in every one of those states.
 
-    `fx_source_table` IS `bronze_ptax` AND `rate_intervals` REDUCES AND REFUSES IT BEFORE
-    `fact_rows` BUILDS ANYTHING -- because the fan-out this join could otherwise cause is
-    visible only to a check whose message begins "THE TABLE ON DISK IS ALREADY WRITTEN"."""
+    `fx_source_table` IS `bronze_ptax`, AND `rate_intervals` REDUCES AND REFUSES IT BEFORE
+    `fact_rows` BUILDS ANYTHING -- the fan-out an unreduced FX join causes is visible only to
+    a check whose own message begins "THE TABLE ON DISK IS ALREADY WRITTEN"."""
     _refuse_a_mismatched_source(fact, dimension, hub, conformed)
     _refuse_a_fact_whose_measures_this_loader_cannot_derive(fact)
     _refuse_a_derived_role_this_loader_cannot_produce(fact, conformed)

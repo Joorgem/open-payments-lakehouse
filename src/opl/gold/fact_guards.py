@@ -22,9 +22,12 @@ Both are re-exported by `opl.gold.facts`, so no consumer's import line moved.
 WHERE EACH REFUSAL SITS RELATIVE TO THE WRITE, which is the property this module exists to
 make legible in one place:
 
-  * BEFORE ANY READ -- `_refuse_a_mismatched_source` and
-    `_refuse_a_fact_this_loader_cannot_derive`. Both are answerable from the specs alone, so
-    they run before a table is touched and can name a declaration rather than a column.
+  * BEFORE ANY READ -- `_refuse_a_mismatched_source`,
+    `_refuse_a_fact_whose_measures_this_loader_cannot_derive` and
+    `_refuse_a_derived_role_this_loader_cannot_produce`. All three are answerable from the
+    specs alone, so they run before a table is touched and name a DECLARATION rather than a
+    column -- which is the difference between a message an operator can act on and an
+    `AnalysisException` raised after a serverless session has started costing money.
   * BEFORE THE FIRST WRITE, OVER BRONZE -- `_refuse_payments_no_instant_can_be_read` and
     `_refuse_a_deduplication_that_lost_a_business_tuple`. Affordable because bronze is small;
     there is nothing to keep, so the message says so.
@@ -275,8 +278,8 @@ def _refuse_a_row_count_that_is_not_one_per_delivered_identity(
     produces everywhere. A fan-out does NOT lower the resolution rate -- both matches
     resolve -- so the count is the only measurement that can see it. TOO LOW is a
     deduplication taken over the wrong columns: on today's bronze, over the business
-    attributes, that is 18,400 rows against 20,000 identities and 1,600 real payments
-    deleted.
+    attributes, that is 36,800 rows against 40,000 identities and 3,200 real payments
+    deleted -- it read 18,400 / 20,000 / 1,600 until the fourth and fifth streams landed.
 
     CHECKED ON THE COUNT HELD AND NOT ON THE COUNT APPENDED, for `opl.gold.dimensions
     ._refuse_a_count_that_is_not_every_version_plus_the_ghost`'s reason: it is an invariant

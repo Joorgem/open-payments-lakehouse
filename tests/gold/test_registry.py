@@ -57,13 +57,12 @@ from .spec_probes import (
 )
 
 _GOLD = Path(__file__).resolve().parents[2] / "src" / "opl" / "gold"
-_MODULE = _GOLD / "registry.py"
 
 # Every gold module that DEFINES an `_assert_*` guard. Each is asked whether every guard it
 # declares is reached at all -- a guard defined, tested and never called is a guard whose
 # absence is invisible everywhere except in production.
 #
-# IT WAS TWO ENTRIES AND IS FIVE, WHICH IS WHAT F-API TASK 4'S SPLIT COST AND BOUGHT. It read
+# IT WAS TWO ENTRIES AND IS FOUR, WHICH IS WHAT F-API TASK 4'S SPLIT COST AND BOUGHT. It read
 # `{"registry.py": True, "specs.py": False}`, the flag deciding which one was also asked
 # whether the registry is built at import. `registry.py` now defines NO guard -- they moved to
 # `registry_guards.py` -- so it drops off this list entirely and the at-import question became
@@ -83,7 +82,6 @@ _GUARD_MODULES = (
     "spec_fields.py",
     "specs.py",
 )
-
 
 
 def test_the_registered_star_is_one_fact_four_dimensions_and_one_pit():

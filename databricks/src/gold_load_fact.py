@@ -39,14 +39,16 @@ invisible until the day there is a second one.
 `tests/test_job_yaml_launch_guards.py`'s anti-hardcode sweep exists because a literal
 `"bronze_ptax"` in an entry point is a name that outlives a rename.
 
-WHAT THE RUN LOG PUBLISHES, AND WHY IT IS FOUR SENTENCES RATHER THAN A ROW COUNT. The row
-count is enforced by the loader and printing it proves nothing; what an operator needs is
-the three numbers that separate a working star from a plausible one -- resolution at (row,
-role) grain, the legitimate repeats that survived deduplication, and the referential
-integrity of the three DERIVED conformed keys. Each has a state that must not read like
-success: zero unresolved is an UNEXERCISED path and not a triumph (master protocol section
-4.6), zero legitimate repeats means the fact ate 1,600 real payments, and a non-zero orphan
-count means a conformed dimension is older than the payments.
+WHAT THE RUN LOG PUBLISHES, AND WHY IT IS FIVE SENTENCES RATHER THAN A ROW COUNT. The row
+count is enforced by the loader and printing it proves nothing; what an operator needs is the
+four numbers that separate a working star from a plausible one -- resolution at (row, role)
+grain, the legitimate repeats that survived deduplication, the referential integrity of the
+FOUR derived conformed keys, and how many distinct rates the conversion actually used. Each
+has a state that must not read like success: zero unresolved is an UNEXERCISED path and not a
+triumph (master protocol section 4.6), zero legitimate repeats means the fact ate 3,200 real
+payments, a non-zero orphan count means a conformed dimension is older than the payments, and
+ONE distinct rate means every row converted at 1.00000 -- which is the state a mixed-currency
+stream exists to end, not a clean conversion.
 
     databricks bundle run opl_gold_fact_payment -t free \\
       --params revision=$(git rev-parse HEAD)
@@ -129,8 +131,8 @@ def _repeat_note(result: FactLoadResult) -> str:
     if result.legitimate_repeats == 0:
         return (
             f"and 0 legitimate repeats survived against {result.retained_tuples} distinct "
-            "business tuples, which is NOT a clean stream -- both promoted profiles emit "
-            "800 repeats each on purpose, so zero here means the deduplication was taken "
+            "business tuples, which is NOT a clean stream -- every promoted profile emits "
+            "800 repeats on purpose, so zero here means the deduplication was taken "
             "over the business attributes and deleted real payments"
         )
     return (

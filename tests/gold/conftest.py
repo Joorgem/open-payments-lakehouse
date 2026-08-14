@@ -34,6 +34,7 @@ asserted against a hub that actually holds it."""
 from __future__ import annotations
 
 from datetime import date, datetime
+from hashlib import sha256
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -443,8 +444,16 @@ def ptax_table(spark, db: str, rows=_PTAX_QUOTES) -> str:
     `mode("append")` in the real pipeline and a fixture that appended on every call would be
     reproducing exactly the duplicate `(currency, quote_date)` rows `opl.gold.fx` refuses --
     turning every test into an accidental probe of that refusal. A test that WANTS the
-    duplicate passes its own rows under its own name."""
-    table = f"{db}.bronze_ptax_{len(rows)}"
+    duplicate passes its own rows.
+
+    THE NAME IS A DIGEST OF THE ROWS AND NOT A COUNT OF THEM, and the count is what it was
+    first written as. Two two-row fixtures -- one whose rates DISAGREE and one whose rates
+    AGREE -- collided on `bronze_ptax_2`, so the second test read the first's table, met the
+    disagreement refusal, and failed with the message the other test asserts. The digest makes
+    the name a function of the CONTENT, which is what "created once per database" has to mean
+    for a fixture two tests parametrise differently."""
+    digest = sha256(repr(rows).encode()).hexdigest()[:8]
+    table = f"{db}.bronze_ptax_{digest}"
     if not spark.catalog.tableExists(table):
         schema = ", ".join(f"{column} string" for column in ptax.COLUMNS)
         (

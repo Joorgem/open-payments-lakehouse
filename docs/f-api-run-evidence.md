@@ -378,6 +378,131 @@ surviving one is the only artefact that would not have said so. The Saturday's
 `"value":[]` is the same envelope §0.5 records — one more instance of an absence and a
 failure being indistinguishable to a forgiving reader.
 
+### 1.3 Task 4 — the gold layer, and what the star will hold after the rebuild
+
+**Reported by the Task 4 implementer.** No workspace run has happened; every number below is
+derived from a declaration in this repository or reproduced locally, and each says which.
+
+#### The three columns the fact gained, and their types
+
+| column | type | additivity | derived from |
+|---|---|---|---|
+| `fx_rate` | `decimal(18, 5)` | **non-additive** | `currency`, `event_time` |
+| `amount_brl` | `decimal(18, 2)` | **additive** — the one measure a reader sums | `amount`, `fx_rate` |
+| `fx_rate_date_key` | `int` (`yyyyMMdd`) | *(a foreign key, not a measure)* | the resolved quote date |
+
+**`fx_rate` IS NOT `AMOUNT_TYPE`, and the arithmetic is the argument.** `decimal(18, 2)`
+would round 5.14420 to 5.14 and put `amount_brl` about **0.08% wrong on every USD row** —
+plausible in magnitude, in a column nobody re-derives. Five is the scale the series itself
+publishes at every magnitude it has ever carried: 5.14420 in 2026, 2828.00000 at the 1984
+floor, 0.82900 at the 1994 low, 71153.00000 at the 1993 high (§0.3 and `ptax_source`'s own
+measurements).
+
+**`SUM(amount_brl)` IS NOT `SUM(amount) × rate` TO THE CENT, and that is arithmetic rather
+than a defect.** `amount_brl` is `amount * fx_rate` rounded **HALF-UP to two decimals AT THE
+ROW**, so the two differ by up to half a centavo per converted row — about 4,905 rows' worth
+on this data. Rounding once over a total instead would hide which rows moved, and carrying the
+product's seven decimals into the fact would make `amount_brl` a column whose scale no
+currency explains. **Controller-checkable locally:** `1.23 × 1.50000 = 1.845` resolves to
+`1.85` (half-even would give 1.84), pinned in
+`tests/gold/test_fact_payment_fx.py::test_the_rate_keeps_five_decimals_and_the_converted
+_amount_rounds_half_up`.
+
+**`amount` is retained under its contract name and declared ADDITIVE ONLY WITHIN A CURRENCY.**
+Master spec §4.3 asks for `amount_original`; it is satisfied by a documented mapping onto
+`amount` rather than by a duplicate, because shipping both would put two byte-equal columns in
+one fact forever. **`fx_rate_date` is the second deviation from that column list**: the star
+carries `fx_rate_date_key` and no bare date column at all. Both renames belong in the T3 ADR.
+
+#### The FX split, REPRODUCED by the gold implementation
+
+**§1.1's two numbers are what this task was marked against, and they reproduce exactly** —
+counted off the frame `opl.gold.fx` writes, over the fifth profile's real 10,000 generated
+rows against the three measured quotes:
+
+| | rows | rate | quote date |
+|---|---|---|---|
+| USD, before the 2026-06-22 bulletin | **2,864** | 5.14420 | 2026-06-19 |
+| USD, after it | **2,041** | 5.13950 | 2026-06-22 |
+| BRL (no quote consulted) | **5,095** | 1.00000 exactly | the payment's own day |
+
+`tests/test_payment_profiles.py` already pinned 2,864 / 2,041 against a **Python-side**
+comparison of the same rule; what Task 4 adds is that the **Spark** implementation reproduces
+them, which is the only version of the claim that is about the code the workspace will run.
+Both populations are non-empty, which standing decision §4.6 requires and which each of this
+phase's three earlier windows would have failed.
+
+**Two payments on ONE calendar day carry two different rates.** Every row of the fifth stream
+falls on 2026-06-22 in both zones, and the resolved rate is not one number — which is the
+property no calendar-day implementation can produce, and the reason T3's rule is an instant
+comparison. Asserted directly:
+`test_two_payments_on_one_calendar_day_carry_two_different_rates`.
+
+#### What the star holds after the rebuild
+
+| | value | derivation |
+|---|---|---|
+| `fact_payment` rows | **40,000** | one per distinct delivered `transaction_id` |
+| distinct `fx_rate` values | **3** | 1.00000, 5.14420, 5.13950 |
+| rows at `fx_rate = 1.00000` exactly | **35,095** | every BRL row, by definition and not by lookup |
+| distinct `event_date_key` | **3** | 20260620, 20260622, 20260801 |
+| distinct `fx_rate_date_key` | **4** | 20260619 and 20260622 from the USD rows; 20260620, 20260622 and 20260801 from the BRL ones, whose conversion is dated to their own day |
+| rows where the two date keys AGREE | **35,095** | the BRL population — an identity conversion is dated to its own day |
+| orphaned rows, per fact key (four of them) | **0** | every resolvable quote date is inside `dim_date`'s 2026-06-13 .. 2026-08-01 span, the earliest being 2026-06-19 |
+| reduced PTAX quotes read | **42** | 2026-06-03 .. 2026-08-01, one row per `(currency, quote_date)` |
+
+> **`fx_rate_date_key` READ 5 IN THE FIRST DRAFT OF THIS TABLE, AND IT INCLUDED 20260731,
+> WHICH NO ROW CAN CARRY.** 2026-07-31's quote is only reachable by a USD payment on
+> 2026-08-01, and the only USD payments in this lakehouse are the fifth profile's, all of which
+> fall on 2026-06-22. The extraction window covers 2026-07-31 because the series has to be
+> gapless past what the fact needs, not because a row resolves to it — which is the distinction
+> the count got wrong. Caught by re-deriving it against the four streams' own days before this
+> document was committed, and corrected rather than deleted.
+
+#### The operational order, and why `fact_payment` must be DROPPED
+
+`opl.gold.facts._appended` writes `mode("append")` with **no `mergeSchema`**, so the three new
+columns make the append FAIL — which is the safe half. **With `mergeSchema` it is worse:**
+`_new_rows` anti-joins on `transaction_id`, so the 30,000 rows already written would keep NULL
+FX **forever** while every counter in the run log reported clean. ADR 0015 already accepts a
+drop-and-rebuild at 69.2M rows and 120 s; this table is 40,000 rows.
+
+1. land + ingest the fifth payment batch (`opl_bronze_payments`, `month=2026-06`)
+2. fetch + ingest the PTAX window (`opl_bronze_ptax`)
+3. re-run `opl_gold_conformed_dimensions` — **append-safe**: `dim_currency` gains USD,
+   `dim_date` appends **zero** rows because `covered_span` anchors on 2026-06-13 and
+   2026-06-22 is already inside the span
+4. **`DROP TABLE fact_payment`**
+5. re-run `opl_gold_fact_payment` → 40,000 rows
+
+Step 3 before step 5 and not after: the orphan counts are measured against the conformed
+tables as they stand, so a fact built first would REPORT 4,905 orphaned currency keys —
+correctly, and about a state whose repair is to re-run step 3 and read the numbers again.
+
+#### What Task 4 refused, and what an existing test caught
+
+**Gaplessness in business days is REPORTED, not refused, and that is a declined item.** Plan
+T3 clause 2 asks for the assertion. Any bound on the gap between two consecutive quotes is
+either a **Brazilian holiday calendar** — the second spelling of "is there a quote" that T3's
+own ruling refuses, with the witness in the series (§0.6: 2023-11-20 has a quote and today's
+list calls it a holiday) — or a number **drawn from this one extraction window**, which is the
+species `ptax_source` already refuses for magnitude ceilings ("a bound that cannot be chosen
+from the data is not a guard, it is a guess"). Friday-to-Monday is three days, a holiday
+weekend four, Carnival five. So `FactLoadResult` carries the quote count and the first and last
+publication instant instead, and the run log prints all three: a bounded or holey extraction is
+visible as three numbers rather than hidden behind a rate that resolved.
+
+**AND AN EXISTING TEST CAUGHT A REAL DEFECT IN THE FIRST DRAFT, which is worth recording
+because it is this repository's own recurring hazard.** A reporting-currency row's
+`fx_rate_date` was written `to_date(<event instant>)` — a **rendering** — so under
+`America/Sao_Paulo` every midnight-UTC payment dated its own identity conversion to the
+**previous day** and `fx_rate_date_key` became a function of a cluster setting.
+`tests/gold/test_fact_payment.py::test_the_fact_is_unchanged_when_it_is_built_under_a_non_utc
+_session_zone` refused it. It is `day_of(event_time)` now — the same ten characters
+`event_date_key` is read from. The zone hazard is not one this layer met once and closed; it is
+met by **every new column that answers "which day"**, and the only defence that has worked here
+is a test that SETS the wrong zone rather than inheriting it.
+
 ---
 
 ## 2. What the runs said
@@ -450,6 +575,34 @@ Added by Task 3, as the fifth profile and the currency domain landed:
   numbers were 2 and 1; the fifth profile made them 2 and 2. That is not an unexercised
   path — it is the opposite, a window in which the two numbers were provably different — and
   it is recorded here because the assertion that they can differ is otherwise only a comment.
+
+Added by Task 4, as the gold layer was built:
+
+- **The below-the-series refusal, on fact rows.** T3 clause 3 makes a payment for which no
+  quote had yet been published a REFUSAL rather than a NULL rate, and nothing in this phase's
+  payment range sits below 2026-06-03. The only population that reaches it is a fixture — a USD
+  payment on 2026-06-20 against a series whose first quote publishes on 2026-07-31. Suite-only.
+- **The disagreeing-duplicate refusal, now at the GOLD side too.** §0.7 records that the
+  extraction layer's version has no witness in 3.6 years; the reduce over the LANDED table has
+  the same absence for the same reason, and it is a second unexercised refusal rather than the
+  same one counted twice — bronze appends, so the two see different populations. The
+  *agreeing*-duplicate path IS exercised (a re-run is an ordinary event, and the reduce is what
+  makes it one).
+- **The unreadable-rate refusal in `rate_intervals`.** A `cotacao_venda` that will not cast to
+  `decimal(18, 5)`, a `data_hora_cotacao` from which no instant can be read, or a `quote_date`
+  that is no calendar day. All three are refused by the DQ gate one layer up, so this fires only
+  on a bronze row that did not come through it. Suite-only, and deliberately not removed: the
+  gate's own justification for its five `null_or_empty_*` rules is exactly this boundary.
+- **`_refuse_a_derived_role_this_loader_cannot_produce`.** A conformed dimension reached through
+  a derived role over any column but `fx_rate_date`. It cannot fire on the live registry, which
+  is the point — it fires on an EDIT, before a session starts, where the alternative is an
+  `AnalysisException` naming a column rather than the declaration that asked for it. Same class
+  as `stream._require_currencies`' four refusals (§ Task 3 above): the guard protects a diff,
+  not a data source.
+- **The one-rate branch of `gold_load_fact.py`'s FX note.** It reports a star where every row
+  converted at 1.00000 as the state the phase exists to end. After the rebuild the count is 3,
+  so the branch that fires is the mixed one; the single-rate sentence is exercised in
+  `tests/test_gold_entry_points.py` and by no run.
 
 ### 3.1 A gate rule weaker than its name — and the number this document first published was WRONG
 
