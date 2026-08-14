@@ -77,6 +77,11 @@ DATES_THE_FACT_NEEDS = (
 HOLIDAY_CASE = date(2026, 6, 4)
 MAX_FALLBACK_STEPS = 15
 
+# 6. The whole modern span in one request: does an absence the calendar cannot explain
+#    exist at all, and does any single date carry more than one row?
+SURVEY_FIRST = date(2023, 1, 1)
+SURVEY_LAST = date(2026, 8, 5)
+
 
 class Quote(NamedTuple):
     """One PTAX row. `asked_for` is the quote date the request filtered on; `published`
@@ -157,7 +162,13 @@ def easter_sunday(year: int) -> date:
 def bank_holidays(year: int) -> dict[date, str]:
     """DIAGNOSTIC ONLY -- used to say whether an absence in the series is explained.
     The phase resolves rates from the series itself and never from a calendar (T3):
-    a calendar is a second spelling of "is there a quote" and the two can disagree."""
+    a calendar is a second spelling of "is there a quote" and the two can disagree.
+
+    This list is TODAY's and does not back-date statutory changes, which is not a
+    shortcut but the demonstration: Black Consciousness became a national holiday only
+    from 2024 (Lei 14.759/2023), so §6 finds a quote on 2023-11-20, a day this table
+    calls a holiday. That is T3's hazard measured rather than argued -- a calendar that
+    drifts against its source hands the join a rate for a day the source never had."""
     easter = easter_sunday(year)
     movable = {
         easter - timedelta(days=48): "Carnival Monday",
@@ -314,6 +325,45 @@ def measure_5_extraction_range() -> None:
     print(f"  EXTRACTION RANGE: {min(resolved)} .. {max(needed)} inclusive, gapless")
 
 
+def measure_6_modern_survey() -> None:
+    """One request over the whole modern span. Two questions the 73-day walk is too
+    short to answer: does an absence exist that a national-holiday calendar cannot
+    explain, and does any one date carry MORE THAN ONE row -- the fan-out §4 says the
+    FX join must reduce before it joins, and refuse rather than `max()` if the rows
+    disagree. Keyed on publication date, which §1 shows is not the quote date in 1984;
+    §2's cross-check is what licenses the equation for the modern span."""
+    print(f"\n=== 6. MODERN-ERA SURVEY, {SURVEY_FIRST} .. {SURVEY_LAST} ===")
+    quotes, url = fetch_window(SURVEY_FIRST, SURVEY_LAST)
+    by_date: dict[str, list[Quote]] = {}
+    for quote in quotes:
+        by_date.setdefault(quote.published[:10], []).append(quote)
+    print(f"  {len(quotes)} row(s), {len(by_date)} distinct dates  url={url}")
+    holidays: dict[date, str] = {}
+    for year in range(SURVEY_FIRST.year, SURVEY_LAST.year + 1):
+        holidays.update(bank_holidays(year))
+    unexplained = [
+        day
+        for day in days_between(SURVEY_FIRST, SURVEY_LAST)
+        if day.isoformat() not in by_date and day.weekday() < 5 and day not in holidays
+    ]
+    print(f"  weekday absences the national-holiday calendar does NOT explain: {len(unexplained)}")
+    for day in unexplained:
+        print(f"    {day} {day.strftime('%a')}: UNEXPLAINED -- the calendar disagrees")
+    # The converse, which is T3's actual claim: a calendar can disagree the other way.
+    disagreeing = [
+        day
+        for day in days_between(SURVEY_FIRST, SURVEY_LAST)
+        if day in holidays and day.isoformat() in by_date
+    ]
+    print(f"  national holidays that DO carry a quote: {len(disagreeing)}")
+    for day in disagreeing:
+        print(f"    {day} {day.strftime('%a')}: {holidays[day]}, and quoted anyway")
+    for published_date, rows in sorted(by_date.items()):
+        if len(rows) > 1:
+            print(f"  FAN-OUT on {published_date}: {len(rows)} rows for one date")
+            print_quotes(rows, url, indent="    ")
+
+
 def main() -> None:
     print("PTAX probe -- public, unauthenticated BCB/Olinda OData. No credential involved.")
     print(f"endpoint: {PTAX_ENDPOINT}")
@@ -322,6 +372,7 @@ def main() -> None:
     measure_3_predictions()
     measure_4_window_gate()
     measure_5_extraction_range()
+    measure_6_modern_survey()
 
 
 if __name__ == "__main__":
