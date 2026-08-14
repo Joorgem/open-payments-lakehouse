@@ -450,6 +450,27 @@ comparison. Asserted directly:
 | rows where the two date keys AGREE | **35,095** | the BRL population — an identity conversion is dated to its own day |
 | orphaned rows, per fact key (four of them) | **0** | every resolvable quote date is inside `dim_date`'s 2026-06-13 .. 2026-08-01 span, the earliest being 2026-06-19 |
 | reduced PTAX quotes read | **42** | 2026-06-03 .. 2026-08-01, one row per `(currency, quote_date)` |
+| last publication instant printed | **2026-07-31 16:10:31.061071+00:00** | §0.2's `13:10:31.061071` read as BRT, rendered as an aware **UTC** instant on every driver (below). The first one is 2026-06-03's bulletin and is **not measured** — no prediction is made for it |
+| conversions past the last landed quote | **0** | every USD payment falls on 2026-06-22 and the series runs to 2026-07-31, so nothing converted at the open end |
+| widest fallback any conversion took | **3 days** | Monday 2026-06-22 back to Friday 2026-06-19 for 2,864 rows; 0 for the 2,041 same-day ones |
+
+> **THE LAST THREE ROWS ARE NEW, AND THE FIRST VERSION OF THIS TABLE COULD NOT HAVE BEEN
+> CHECKED WITHOUT THEM.** The quote count and the publication span describe the SERIES, and
+> nothing in `FactLoadResult` described the payment window they are supposed to be compared
+> against — `fx_last_published` was carried, printed and never compared. **An extraction
+> stopping one business day short of the payments produces every other number in this table
+> unchanged** (40,000 rows, grain enforced, four zero orphan counts, `fx_rates_used` 3) with up
+> to 10,000 rows converted at a stale rate, because the last quote's interval is closed at
+> `VALID_TO_CEILING` and a payment after it matches THAT quote rather than nothing.
+> `fx_beyond_series` and `fx_widest_fallback_days` are the other side of that comparison, and
+> both are **REPORTED, not refused**: a payment after the most recent bulletin is the normal
+> case — 20,000 fact rows fall on Saturday 2026-08-01, later than any quote a correct
+> extraction can hold — so telling a truncated window from a Saturday evening needs the
+> business-day calendar T3 refuses on the record. A refusal would refuse this phase's own
+> correct build. Closed by
+> `tests/gold/test_fact_payment_fx.py::test_a_series_that_stops_short_of_the_payments_is
+> _REPORTED_by_the_run_it_cannot_refuse`, which builds a real fact from a one-quote series
+> against payments 43 days later and asserts every other count clean.
 
 > **`fx_rate_date_key` READ 5 IN THE FIRST DRAFT OF THIS TABLE, AND IT INCLUDED 20260731,
 > WHICH NO ROW CAN CARRY.** 2026-07-31's quote is only reachable by a USD payment on
@@ -491,6 +512,68 @@ from the data is not a guard, it is a guess"). Friday-to-Monday is three days, a
 weekend four, Carnival five. So `FactLoadResult` carries the quote count and the first and last
 publication instant instead, and the run log prints all three: a bounded or holey extraction is
 visible as three numbers rather than hidden behind a rate that resolved.
+
+> **AND THE FIRST VERSION OF THAT SUBSTITUTE COVERED ONLY THE LOW END, WHICH THE FIX PASS
+> REPAIRED RATHER THAN RE-ARGUED.** Declining the *bound* was right; reporting the series' own
+> three numbers while nothing described the PAYMENT window is one side of a comparison. Two
+> numbers were added, both over the rows that actually consult a quote: **conversions that took
+> the series' last landed quote** (0 predicted here) and the **widest fallback any conversion
+> took** (3 days predicted here), which is what an INTERIOR hole moves when the high end reads
+> zero. The high end is reported and not refused for T3's own reason — a payment after the most
+> recent bulletin is normal, 20,000 fact rows fall on Saturday 2026-08-01, and separating that
+> from a truncated window needs the calendar the ruling refuses. §1.3 carries the predictions
+> and the test that closes it.
+>
+> **Two further refusals were added in the same pass, both with witnesses.** An EMPTY reduced
+> series was accepted — over zero rows `max`/`min` are NULL, so both existing branches are
+> skipped and a fact builds against an absent PTAX series at `fx_rate = 1`, i.e. the pre-phase
+> state printed as "converted at ONE rate over 0 quotes published None .. None". A `quotes == 0`
+> refusal needs no bound from the data. And the interval window's `orderBy` had no tie-break, so
+> two quote dates sharing one publication instant (2001-12-21 in the series; 1984-12-03/04/05
+> all published on 1984-12-05) left it undetermined which one carried the open range and which
+> got the empty interval `[t, t)` — no fan-out either way, so every count stayed right while the
+> surviving rate was arbitrary. Its test drives the same two landed rows in both orders and was
+> confirmed to FAIL against the old `orderBy`.
+
+#### THE ZONE INVARIANT `opl.gold.fx` ASSERTED ABOUT ITSELF IS FALSE — measured in the fix pass
+
+**`_published_instant` was SESSION-ZONE DEPENDENT and its own docstring said it was not.** The
+shipped spelling was `to_utc_timestamp(to_timestamp(text), 'UTC-03:00')`, described in the
+module docstring, the function docstring and two commit messages as one in which
+"`to_utc_timestamp` cancels the session zone on both sides so the instant does not move with
+`spark.sql.session.timeZone`".
+
+**It does not cancel.** Spark's `to_utc_timestamp` renders its input **in UTC** and not in the
+session zone (`convertTz(micros, from=tz, to=UTC)` reads `getLocalDateTime(micros, UTC)`),
+while `to_timestamp` over text carrying no offset parses **in the session zone** — so only one
+of the two varied. Measured through `opl.spark.local_session` (pyspark 3.5.9), `unix_micros` of
+one landed stamp under three session zones and at all three fractional widths the series
+carries:
+
+| session zone | `2026-06-19 13:03:25.555497` shipped | offset appended to the text |
+|---|---|---|
+| `UTC` (the pin) | 1781885005555497 = **16:03:25.555497Z** ✅ | 1781885005555497 ✅ |
+| `America/Sao_Paulo` | 1781895805555497 = **19:03:25.555497Z** ❌ | 1781885005555497 ✅ |
+| `Asia/Tokyo` | 1781852605555497 = **07:03:25.555497Z** ❌ | 1781885005555497 ✅ |
+
+**No landed number is wrong and nothing in §1.1 or §1.2 moves**, because
+`opl.config.SESSION_TIMEZONE` pins the session to UTC in both gold entry points and in the
+local session — which is exactly the problem: **the whole of T3's zone ruling rested on a
+cluster setting**, in the layer whose own prose says the defence that has ever worked is not
+depending on one. The fix appends the offset to the text
+(`to_timestamp(concat(data_hora_cotacao, '-03:00'))`, the offset rendered from
+`ptax_source.BRASILIA` so there is still one spelling of it), which is
+`fact_guards.event_instant`'s discipline applied to the side BCB leaves zoneless. Measured
+identical under all three zones above and identical to the old value under the pin.
+
+**Why nothing caught it, which is the transferable half.** T3 asked to "pin it in a test" and
+the zone FIX was pinned while the zone INVARIANCE was not: the only non-UTC session test
+(`test_fact_payment.py`) has a **BRL-only** fixture, so the FX interval bounds are computed
+there and discarded, and the one assertion on a publication instant read `.microsecond` —
+blind to the whole-hour shift that is the only thing a wrong zone does. Both are repaired:
+`test_two_landed_rows_that_agree_reduce_to_the_earlier_publication_instant` asserts the **full
+instant** and re-derives the series under `America/Sao_Paulo`. That test is what produced the
+measurement above, by failing.
 
 **AND AN EXISTING TEST CAUGHT A REAL DEFECT IN THE FIRST DRAFT, which is worth recording
 because it is this repository's own recurring hazard.** A reporting-currency row's
@@ -593,6 +676,24 @@ Added by Task 4, as the gold layer was built:
   that is no calendar day. All three are refused by the DQ gate one layer up, so this fires only
   on a bronze row that did not come through it. Suite-only, and deliberately not removed: the
   gate's own justification for its five `null_or_empty_*` rules is exactly this boundary.
+  **It had NO witness when this entry was first written** — every other "suite-only" line in
+  this ledger means a fixture reaches the branch, and `grep` found only the fact-side analogues.
+  Closed in the fix pass by one `venda="abc"` row
+  (`test_a_rate_that_cannot_be_read_is_refused_and_the_distinct_count_cannot_see_it`), which
+  also exercises the reason the NULL count sits beside `count_distinct`: the cast NULLs, the
+  distinct count ignores it, so `rates` is 0 and only the second branch can fire.
+- **The empty-series refusal** (`quotes == 0`), added in the fix pass. A `bronze_ptax` that
+  reduces to no quotes at all cannot happen behind a successful ingest of the 42-day window, so
+  the only population that reaches it is a fixture. Suite-only.
+- **`FactRole`'s reader-versus-source refusal.** `READS_DATE` on a contract-sourced role, or a
+  derived role read as ISO text or as a member. Like
+  `_refuse_a_derived_role_this_loader_cannot_produce` it cannot fire on the live registry — it
+  fires on an EDIT, at import, where the alternative is a `date_format` over raw ISO text that
+  casts in the session zone and keys every midnight-UTC payment to the previous day.
+- **The high-end coverage report is not a refusal and must not be read as one.** `fx_beyond_series`
+  is predicted **0** on this data, which means the series reached past every conversion — not
+  that a path was exercised. The state it exists to make visible (a truncated extraction) is
+  reachable only from a fixture here.
 - **`_refuse_a_derived_role_this_loader_cannot_produce`.** A conformed dimension reached through
   a derived role over any column but `fx_rate_date`. It cannot fire on the live registry, which
   is the point — it fires on an EDIT, before a session starts, where the alternative is an

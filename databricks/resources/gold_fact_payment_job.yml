@@ -100,6 +100,21 @@
 #   DISTINCT fx_rate values                             3   1.00000, 5.14420, 5.13950
 #   rows with fx_rate = 1.00000 exactly            35,095   every BRL row, by definition and
 #                                                          not by lookup
+#   conversions past the last landed quote              0   every USD payment falls on
+#                                                          2026-06-22 and the series runs to
+#                                                          2026-07-31, so nothing converted at
+#                                                          the open end of it. A NON-ZERO count
+#                                                          is not a failure -- it is the only
+#                                                          number in this log that can show a
+#                                                          TRUNCATED extraction, which every
+#                                                          other one reports as clean
+#   widest fallback any conversion took            3 days   Monday 2026-06-22 back to Friday
+#                                                          2026-06-19 for 2,864 rows, 0 for the
+#                                                          2,041 same-day ones. A weekend is 3,
+#                                                          a holiday weekend 4, Carnival 5 --
+#                                                          none of which this layer may assert
+#                                                          as a bound (opl.gold.fx), so a hole
+#                                                          in the series shows up here
 #
 # WHERE 36,800 COMES FROM AND WHY IT IS A DEDUCTION RATHER THAN AN ESTIMATE.
 # `opl.generator.stream` states `DISTINCT business-attribute tuple == event_count -
