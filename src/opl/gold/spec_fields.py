@@ -35,14 +35,21 @@ column and the guard demands it; `FROM_DERIVED` means this layer computes it and
 demands the contract does NOT carry it -- the mirror refusal, and the one that keeps the
 distinction from being a label anybody can put on anything.
 
-AND IT DECLARES HOW THE COLUMN IS READ, which is a separate question from where it came
-from and is not derivable from it. Bronze is all-string, so a contract-carried instant is
-ISO-8601 TEXT and its day is ten characters (`opl.gold.conformed.day_of`, which exists
-because a CAST would move the day with the session zone); a date this layer derived is
-already a `date`, and reading ten characters off one would be a cast in the other
-direction. Both roles then go on to the SAME key mechanism, so
-`opl.gold.conformed._member_key` still cannot drift between the dimension side and the
-fact side -- which is the property that whole function exists to hold.
+AND IT DECLARES HOW THE COLUMN IS READ, which is a separate QUESTION from where it came from
+even though the two answers are locked together. Bronze is all-string, so a contract-carried
+instant is ISO-8601 TEXT and its day is ten characters (`opl.gold.conformed.day_of`, which
+exists because a CAST would move the day with the session zone); a date this layer derived is
+already a `date`, and reading ten characters off one would be a cast in the other direction.
+Both roles then go on to the SAME key mechanism, so `opl.gold.conformed._member_key` still
+cannot drift between the dimension side and the fact side -- which is the property that whole
+function exists to hold.
+
+AND BECAUSE THEY ARE LOCKED TOGETHER, THE PAIRING IS REFUSED AND NOT DOCUMENTED. This
+paragraph said the reader "is not derivable from" the source, and that was the reason nothing
+checked it: `reads` was validated for MEMBERSHIP of `ROLE_READERS` and never against the
+column it reads. It IS derivable -- `READS_DATE` iff `FROM_DERIVED`, because nothing the
+contract carries is anything but text -- and what the gap admitted was this phase's own zone
+hazard wearing a declaration: see `FactRole._assert_the_reader_matches_the_declared_source`.
 
 --- WHY THE ADDITIVITY TOKENS ARE DECLARED HERE AND USED THERE ------------------------
 
@@ -203,6 +210,7 @@ class FactRole:
         _assert_one_of("fact role", self.key, "a reader", self.reads, ROLE_READERS)
         self._assert_the_key_is_the_facts_own()
         self._assert_the_column_matches_the_declared_source()
+        self._assert_the_reader_matches_the_declared_source()
 
     def _assert_the_key_is_the_facts_own(self) -> None:
         """Refuse a key spelled like the column it is derived from, or like one the gold
@@ -246,6 +254,38 @@ class FactRole:
                 "is built by the wrong projection: it arrives with the right type and "
                 f"another column's meaning. Declare it {FROM_CONTRACT}"
             )
+
+    def _assert_the_reader_matches_the_declared_source(self) -> None:
+        """Refuse a reader the column's own REPRESENTATION cannot support -- `READS_DATE` for
+        anything but a derived column, and a derived column read any other way.
+
+        `reads` WAS CHECKED FOR MEMBERSHIP AND NEVER AGAINST THE COLUMN, and the failure mode
+        is this phase's own zone hazard rather than a typo. Bronze is ALL-STRING, so no column
+        the contract carries is a `date`: a contract-sourced role over `event_time` declaring
+        `READS_DATE` passes every other guard, and `opl.gold.conformed._member_key` then applies
+        `date_format` to raw ISO TEXT -- which CASTS it first, in the SESSION zone, so under
+        America/Sao_Paulo every midnight-UTC payment keys to the previous day. That is the exact
+        defect `day_of` exists to prevent, arriving through a declaration instead of through a
+        cast, and until this guard the only thing that would have caught it was the non-UTC
+        rebuild test in `tests/gold/test_fact_payment.py`.
+
+        THE PAIRING IS DERIVABLE AND IS THEREFORE REFUSED RATHER THAN DOCUMENTED. A derived
+        date is a `date` because this layer built it that way, and everything the contract
+        carries is text -- so `READS_DATE` iff `FROM_DERIVED`, and `READS_ISO_TEXT` and
+        `READS_MEMBER` are both statements about a string. It is not folded into the source
+        check above because that one is about PROVENANCE and this one about TYPE: a role can get
+        its provenance right and still read the column with the wrong reader."""
+        if (self.reads == READS_DATE) == (self.source == FROM_DERIVED):
+            return
+        raise ValueError(
+            f"fact role {self.key!r} declares {self.fact_column!r} as {self.source} and reads "
+            f"it as {self.reads!r}. Bronze is ALL-STRING, so {READS_DATE!r} names a column "
+            f"this layer DERIVED and the other readers name text: {FROM_CONTRACT}-sourced "
+            f"roles read {READS_ISO_TEXT!r} or {READS_MEMBER!r}, {FROM_DERIVED} ones read "
+            f"{READS_DATE!r}. The mismatch does not crash -- `date_format` over raw ISO text "
+            "casts it in the SESSION zone, so every midnight-UTC payment keys to the previous "
+            "day and the star's answer becomes a function of a cluster setting"
+        )
 
 
 def _assert_the_roles_are_a_set_with_one_contract_source(

@@ -366,9 +366,11 @@ PIT_ESTABELECIMENTO = PointInTimeTable(
 # `dim_company` answers for both -- so the fact carries `payer_company_sk` AND
 # `payee_company_sk`, both resolved AS OF the payment's own `event_time`, and the plan's
 # closing test ("every row resolves to exactly one `dim_company` version") is ill-formed:
-# a correct row resolves to TWO. `opl.gold.specs._assert_every_counterparty_plays_exactly
+# a correct row resolves to TWO. `opl.gold.fact_spec._assert_every_counterparty_plays_exactly
 # _one_role` refuses the reading that is satisfiable, which is a fact that joins on the
-# payer alone.
+# payer alone. (It cited `opl.gold.specs`, where the fact kind lived until F-API T4a split it
+# out; that module re-exports `PaymentFact` and not its guards, so the old name resolved to
+# nothing.)
 #
 # THE KEY HALF OF EACH PAIR IS A NAME THIS LAYER INVENTS AND IS THEREFORE DECLARED; the
 # counterparty half is the CONTRACT's and is refused at import if it is not. Deriving

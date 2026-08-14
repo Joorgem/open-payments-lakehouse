@@ -237,19 +237,31 @@ def _assert_no_two_dimensions_draw_from_one_payment_column(
     this line into an `AttributeError` raised at IMPORT of `opl.gold.registry`, i.e. at
     import of every gold module and every gold job. An exclusion list is a guard that
     assumes the shape of the kinds it has not met; the inclusion below names the two
-    kinds this question is actually about, so the next kind is simply not asked."""
+    kinds this question is actually about, so the next kind is simply not asked.
+
+    AND IT ITERATES `fact_roles` BECAUSE READING `fact_column` NARROWED IT SILENTLY IN F-API
+    T4b. That attribute became a PROPERTY returning the CONTRACT-sourced role's column alone
+    (`opl.gold.specs.CalendarDimension.fact_column`), so from the moment a calendar could
+    declare a second role this guard stopped seeing every column the star draws from: two
+    calendars whose contract roles differ and whose DERIVED roles both name `fx_rate_date`
+    passed every import-time guard and produced exactly the defect the paragraph above
+    describes -- two keys over one column, agreeing until their member sets do not. Iterating
+    the roles also brings derived columns into the question, which is where the fact's own
+    `_assert_no_two_columns_of_one_fact_share_a_name` cannot help: that one compares KEY
+    names, and two keys over one column have two names."""
     drawn: dict[str, str] = {}
     for table in tables:
         if not isinstance(table, ConformedDimension):
             continue
-        if table.fact_column in drawn:
-            raise ValueError(
-                f"{drawn[table.fact_column]!r} and {table.name!r} both draw from the "
-                f"payment column {table.fact_column!r}. A conformed dimension answers "
-                "ONE question for every fact that asks it; two of them are two keys on "
-                "one column, agreeing until their member sets do not"
-            )
-        drawn[table.fact_column] = table.name
+        for role in table.fact_roles:
+            if role.fact_column in drawn:
+                raise ValueError(
+                    f"{drawn[role.fact_column]!r} and {table.name!r} both draw from the "
+                    f"fact column {role.fact_column!r}. A conformed dimension answers ONE "
+                    "question for every fact that asks it; two of them are two keys on one "
+                    "column, agreeing until their member sets do not"
+                )
+            drawn[role.fact_column] = table.name
 
 
 def _assert_no_surrogate_key_collides_with_its_source(

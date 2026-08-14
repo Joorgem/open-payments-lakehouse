@@ -34,6 +34,7 @@ from opl.gold.registry import (
     DIM_DATE,
     PIT_ESTABELECIMENTO,
     REGISTRY,
+    CalendarDimension,
     FactRole,
     UnknownGoldTable,
     build_registry,
@@ -44,6 +45,7 @@ from opl.gold.spec_fields import (
     FROM_DERIVED,
     READS_DATE,
     READS_ISO_TEXT,
+    READS_MEMBER,
 )
 from opl.vault import domains
 
@@ -307,13 +309,49 @@ def test_two_conformed_dimensions_drawing_from_one_fact_column_are_refused():
     and the fact would carry two keys resolving to the same five members. Nothing about
     it fails -- both build, both are well-formed, and a report joining one and a report
     joining the other agree until the day their member sets do not."""
-    with pytest.raises(ValueError, match="both draw from the payment column"):
+    with pytest.raises(ValueError, match="both draw from the fact column"):
         build_registry(
             (
                 _enumerated(name="dim_probe_a", surrogate_key="a_key"),
                 _enumerated(name="dim_probe_b", surrogate_key="b_key"),
             )
         )
+
+
+def test_two_calendars_whose_DERIVED_roles_name_one_column_are_refused_as_well():
+    """THE HALF THE GUARD LOST SILENTLY IN F-API T4b, and it is the defect its own docstring
+    names. It read `table.fact_column`, which for a calendar became a PROPERTY returning the
+    CONTRACT-sourced role's column alone -- so from the moment a calendar could declare a
+    second role, two calendars whose contract roles DIFFER and whose derived roles both name
+    `fx_rate_date` passed every import-time guard there was. The fact would then carry two date
+    keys over one column, agreeing on every row until their member sets diverged, which is
+    exactly what the paragraph above says cannot be allowed to build.
+
+    NEITHER PER-SPEC GUARD COVERS IT: `_assert_the_roles_are_a_set_with_one_contract_source`
+    sees one calendar at a time, and the fact's own
+    `_assert_no_two_columns_of_one_fact_share_a_name` compares KEY names -- and two keys over
+    one column have two names. Iterating `fact_roles` here is what closes it."""
+    def _pair(prefix: str, contract_column: str) -> CalendarDimension:
+        return _calendar(
+            name=f"dim_probe_{prefix}",
+            surrogate_key=f"{prefix}_key",
+            natural_key=f"{prefix}_full_date",
+            roles=(
+                _role(key=f"{prefix}_event_date_key", fact_column=contract_column),
+                _role(
+                    key=f"{prefix}_fx_date_key",
+                    fact_column="fx_rate_date",
+                    source=FROM_DERIVED,
+                    reads=READS_DATE,
+                ),
+            ),
+        )
+
+    with pytest.raises(ValueError, match="both draw from the fact column") as refused:
+        build_registry((_pair("a", payments.EVENT_TIME_COLUMN), _pair("b", "emitted_at")))
+    assert "fx_rate_date" in str(refused.value), (
+        "the guard reported the contract column the two calendars do NOT share"
+    )
 
 
 def test_a_calendar_dimension_whose_applied_date_source_is_not_a_satellite_is_refused():
@@ -419,6 +457,31 @@ def test_a_role_is_refused_in_both_directions_over_its_declared_source():
         _role(fact_column="fx_rate_date")
     with pytest.raises(ValueError, match="as derived"):
         _role(source=FROM_DERIVED, reads=READS_DATE)
+
+
+def test_a_role_whose_READER_does_not_match_its_source_is_refused():
+    """`reads` WAS VALIDATED FOR MEMBERSHIP AND NEVER AGAINST THE COLUMN IT READS, and what
+    that gap admitted is this phase's own zone hazard wearing a declaration rather than a typo.
+    Bronze is ALL-STRING, so a contract-sourced role over `event_time` declaring `READS_DATE`
+    passed every guard there was -- and `opl.gold.conformed._member_key` then applies
+    `date_format` to raw ISO TEXT, which CASTS it first, in the SESSION zone: under
+    America/Sao_Paulo every midnight-UTC payment keys to the previous day, which is the exact
+    defect `day_of` exists to prevent.
+
+    IT IS REFUSED RATHER THAN DOCUMENTED BECAUSE THE PAIRING IS DERIVABLE -- `READS_DATE` iff
+    `FROM_DERIVED`, since nothing the contract carries is anything but text. Both directions
+    are checked, because the mirror declaration (a derived `date` read as text or as a member)
+    would take ten characters off a `date` and key on the substring."""
+    with pytest.raises(ValueError, match="reads it as 'date'"):
+        _role(reads=READS_DATE)
+    derived = {"key": "probe_fx_date_key", "fact_column": "fx_rate_date", "source": FROM_DERIVED}
+    with pytest.raises(ValueError, match="reads it as 'iso-instant-text'"):
+        _role(**derived, reads=READS_ISO_TEXT)
+    with pytest.raises(ValueError, match="reads it as 'member'"):
+        _role(**derived, reads=READS_MEMBER)
+    assert _role(**derived, reads=READS_DATE).reads == READS_DATE, (
+        "the one pairing a derived role may declare is refused too, so nothing passes"
+    )
 
 
 # --- the point-in-time kind ----------------------------------------------------------
@@ -596,7 +659,8 @@ def test_every_guard_this_module_defines_is_run_at_import(module):
     What it closes: a guard that is defined, tested, and never called is a guard whose
     absence is invisible everywhere except in production.
 
-    OVER FIVE MODULES, WHICH IS WHERE THE GUARDS ACTUALLY LIVE AFTER TWO SPLITS. F3 Task 3
+    OVER FOUR MODULES, WHICH IS WHERE THE GUARDS ACTUALLY LIVE AFTER TWO SPLITS -- the number
+    `_GUARD_MODULES` holds and the number the comment above it already said. F3 Task 3
     moved the kinds out of the registry and F-API Task 4 moved the fact, the field guards and
     the whole-set guards out again -- and every one of those files can grow a guard nothing
     calls. The per-table guards run from a `__post_init__` and the whole-set ones from

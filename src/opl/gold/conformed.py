@@ -192,7 +192,7 @@ def fact_side_cardinality(fact: DataFrame, dimension: ConformedDimension) -> int
     What this number therefore answers for `dim_date` is "how many days do the PAYMENTS fall
     on", which is 3, and not "how many members does the star reach through either role". The
     second question is answered after the fact is built, per role, by
-    `opl.gold.facts._orphaned_per_conformed_dimension` measuring the complement."""
+    `opl.gold.facts._orphaned_per_fact_key` measuring the complement."""
     return fact.select(_fact_member(contract_role(dimension)).alias("_member")).distinct().count()
 
 

@@ -158,7 +158,7 @@ def _assert_the_declared_values_are_a_set(kind: str, name: str, role: str, value
     """Refuse an empty or repeating tuple of declared strings -- a dimension's MEMBERS.
 
     IT WAS SHARED WITH `CalendarDimension.roles` UNTIL F-API T4b made those `FactRole`s.
-    The role tuple is now checked by `opl.gold.fact_columns._assert_the_roles_are_a_set
+    The role tuple is now checked by `opl.gold.spec_fields._assert_the_roles_are_a_set
     _with_one_contract_source`, which asks two questions this one cannot -- that the keys
     and the columns are separately distinct, and that exactly one role is contract-sourced.
 
@@ -282,7 +282,7 @@ class CalendarDimension:
     exactly what the string form could not express: this class refused any length but one,
     and its own prescribed fix ("a second `fact_column` declared beside it") could not have
     held a derived column, because `_assert_the_fact_column_is_one_the_contract_carries`
-    refuses every name outside `payments.COLUMNS`. `opl.gold.fact_columns` carries the
+    refuses every name outside `payments.COLUMNS`. `opl.gold.spec_fields` carries the
     widening and both halves of the refusal that keeps it honest.
 
     `fact_column` IS NOW A PROPERTY AND NOT A FIELD, and that removes a second spelling
