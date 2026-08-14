@@ -11,13 +11,16 @@ the payment CONTRACT declares (never what the data happens to contain, which wou
 the two numbers equal by construction), and that `fact_side_cardinality` is COUNTED from a
 fact frame rather than declared anywhere.
 
-`dim_currency` IS LEAVING THAT DESCRIPTION, AND THE TWO HALVES MOVE IN DIFFERENT COMMITS.
-F-API's T1 splits the contract's `CURRENCIES` -- the value DOMAIN, which is the dimension's
+`dim_currency` HAS LEFT THAT DESCRIPTION, IN TWO COMMITS THAT MOVED DIFFERENT HALVES.
+F-API's T1 split the contract's `CURRENCIES` -- the value DOMAIN, which is the dimension's
 member set -- from the per-profile tuple the generator draws from, so the member count went
-to two while every declared stream still drew BRL alone. `reachable_currencies` below is
-the second number, and the moment a profile declares a mix the two agree again at 2. The
-member count and the fact-side cardinality being *two numbers* is the whole point; see
-`test_the_member_count_and_the_fact_side_cardinality_are_independent_numbers`.
+to two while every declared stream still drew BRL alone; then the `cross-currency` profile
+made a payment's currency vary within one stream, and the fact-side cardinality followed to
+two. `reachable_currencies` below is that second number, derived from what the profiles
+declare rather than from the domain. That the two are *two numbers* is the whole point --
+see `test_the_member_count_and_the_fact_side_cardinality_are_independent_numbers` -- and
+they disagreed for exactly one commit, which is the clearest demonstration this file holds
+of why they are not one.
 
 THE FACT FRAME IS BUILT FROM `opl.generator.profiles.PROFILES` AND NOT FROM A LITERAL.
 Every profile publishes `window_start` and `last_event_time` before any stream is
@@ -294,26 +297,34 @@ def test_the_fact_side_cardinality_is_counted_from_the_fact_it_is_handed(
     numbers -- which no declared constant can produce.
 
     WHY THIS IS THE MEASUREMENT THAT MATTERS. `dim_date` spans about fifty days and the
-    entire payment population reaches ONE of them (`docs/f3-run-evidence.md` §0.5: every
-    `event_time` on 2026-08-01), rising to two when the `between-snapshots` profile
-    lands. Task 5 has to publish those numbers rather than the word "thin", and a
-    cardinality that was declared anywhere would publish the declaration."""
+    entire payment population reached ONE of them (`docs/f3-run-evidence.md` §0.5: every
+    `event_time` on 2026-08-01), then two with `between-snapshots` and THREE with F-API's
+    `cross-currency`. Task 5 has to publish those numbers rather than the word "thin", and
+    a cardinality that was declared anywhere would publish the declaration.
+
+    THE MEMBER COUNT DOES NOT MOVE WITH IT, which is the property the two numbers exist to
+    separate. `covered_span` is a min/max over the fact's days AND the vault's
+    `applied_date`s, so it stays 2026-06-13 .. 2026-08-01 -- fifty days -- while the fact
+    reaches a third of them. A window outside that span would move both."""
     fact = spark.read.table(payments_bronze)
     f1b_only = {name: PROFILES[name] for name in ("clean", "promotable", "drifting")}
     before = fact.where(
         F.col(payments.EVENT_TIME_COLUMN).isin(list(reachable_instants(f1b_only)))
     )
     assert fact_side_cardinality(before, DIM_DATE) == len(reachable_days(f1b_only)) == 1
-    assert fact_side_cardinality(fact, DIM_DATE) == len(reachable_days()) == 2
+    # THREE, and the third is 2026-06-22 -- the `cross-currency` window. It is ONE day and
+    # not two because that window sits inside a single calendar day in both UTC and BRT,
+    # which is what its 08:00Z opening buys.
+    assert fact_side_cardinality(fact, DIM_DATE) == len(reachable_days()) == 3
     assert fact_side_cardinality(fact, DIM_CHANNEL) == len(payments.PAYMENT_METHODS)
     # THE CURRENCY ASSERTION USED TO READ `== len(payments.CURRENCIES) == 1` AND THAT
     # CONFLATED THE TWO NUMBERS F-API's T1 SEPARATES. The domain is the dimension's member
-    # set and is now two; what the fact can HOLD is what the profiles declare they draw
-    # from. While every declared profile draws BRL alone the two differ -- which is the
-    # constant-column problem NAMED rather than hidden, and it is the state the fifth
-    # profile changes.
-    assert fact_side_cardinality(fact, DIM_CURRENCY) == len(reachable_currencies()) == 1
-    assert len(payments.CURRENCIES) == 2, "the DOMAIN is wider than any stream draws from"
+    # set; what the fact can HOLD is what the profiles declare they draw from. The two
+    # agree at 2 now that a profile declares a mix, and they are still two numbers: they
+    # disagreed for exactly as long as the domain carried USD and no stream drew it, which
+    # is the state the mechanism commit left the tree in.
+    assert fact_side_cardinality(fact, DIM_CURRENCY) == len(reachable_currencies()) == 2
+    assert len(payments.CURRENCIES) == 2
 
 
 def test_the_member_count_and_the_fact_side_cardinality_are_independent_numbers(

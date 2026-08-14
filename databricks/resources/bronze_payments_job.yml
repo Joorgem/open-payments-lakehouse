@@ -37,8 +37,15 @@
 #
 # --- ONE RUN PER PROFILE, AND THE GATE IS WHY --------------------------------------
 #
-# `profile` selects a declared stream in opl.generator.profiles. The four are meant to
-# be run separately, into the same month, and each lands its own file:
+# `profile` selects a declared stream in opl.generator.profiles. The five are meant to
+# be run separately, into the same month, and each lands its own file.
+#
+# THIS LIST IS READ BY tests/test_job_yaml_wiring.py, WHICH IS NEW AND IS THE REASON THE
+# LIST CAN BE TRUSTED. It went stale once already (a fourth profile landed while this
+# comment named three, fixed in 6325fc3), because nothing compared the prose against
+# opl.generator.profiles.PROFILES. Something does now: every declared key must appear
+# here, and every key named here must be declared. Updating the code without updating
+# this block turns the suite red.
 #
 #     profile=clean       zero rejects; the rows reach bronze. The control -- if this
 #                         one goes red the failure is the pipeline, not a defect.
@@ -56,11 +63,22 @@
 #                         side to resolve. No defects: it places payments in TIME, and a
 #                         fourth defect class would change F1b's published counts.
 #
-# LAUNCH between-snapshots WITH month=2026-08, THE SAME MONTH AS THE OTHER THREE. Its
-# stream id carries no month suffix -- deliberately, because its event window (June) and
-# its landing month are different facts, and a suffix would agree with only one of them.
-# The ingest reads the month DIRECTORY, so any other month lands the file where nothing
-# reads it and the June-event stream never reaches bronze.
+#     profile=cross-currency
+#                         F-API's addition, and the only one whose payments are not all
+#                         BRL: it draws from ("BRL", "USD"), so 4,905 of its 10,000 rows
+#                         carry a currency that needs an FX rate. Its window opens at
+#                         2026-06-22T08:00Z and closes 21:53:15Z, which STRADDLES that
+#                         day's PTAX bulletin (published 13:06:19.750415 BRT) -- so 2,864
+#                         USD rows fall back to Friday 2026-06-19's rate and 2,041 resolve
+#                         same-day, two different rates on ONE calendar day. Also between
+#                         the two applied_dates, so it is a second "before" side. No
+#                         defects, for between-snapshots' reason.
+#
+# LAUNCH between-snapshots AND cross-currency WITH month=2026-08, THE SAME MONTH AS THE
+# OTHER THREE. Neither stream id carries a month suffix -- deliberately, because their
+# event window (June) and their landing month are different facts, and a suffix would agree
+# with only one of them. The ingest reads the month DIRECTORY, so any other month lands the
+# file where nothing reads it and the June-event stream never reaches bronze.
 #
 # Auto Loader drains only files its checkpoint has not seen, so a second run in the
 # same month ingests only the new profile's file.

@@ -301,6 +301,64 @@ reproduce **exactly**, which is the evidence that this probe is the same probe. 
 never published and is recorded here so the next edit to `profiles.py` has four rows to
 compare against rather than three.
 
+### 1.2 What Task 3 then measured locally — every §1.1 number reproduced
+
+**Reported by the Task 3 implementer.** This is not §2: no workspace run has happened, and the
+predictions above still stand as predictions about the run Task 5 makes. What is recorded here
+is that they survived the local derivation they describe.
+
+**The byte-identity probe, re-run from the implemented tree against a worktree at `f564f57`
+created outside the repository root** (a stray worktree under it turns
+`tests/test_revision_stamp.py`'s watched-paths test red locally and is invisible to CI):
+
+```
+clean              F1B-CLEAN-2026-08      rows= 10000 bytes=  2925069 sha256=fccd6c48…
+promotable         F1B-PROMOTABLE-2026-08 rows= 10150 bytes=  2969937 sha256=5603cdd4…
+drifting           F1B-DRIFTING-2026-08   rows= 10000 bytes=  2989447 sha256=54db876f…
+between-snapshots  F3-BETWEEN-SNAPSHOTS   rows= 10000 bytes=  2926409 sha256=3381ba26…
+cross-currency     F-API-CROSS-CURRENCY   rows= 10000 bytes=  2926588 sha256=a527b61c…
+```
+
+`cmp` is clean on all four pre-existing files, in both directions of the change: once after
+the mechanism commit (the domain widened, the draw moved, no profile declaring a mix) and
+again after the fifth profile landed. **The fifth file's 2,926,588 bytes is the number
+predicted in §1.1 before the `currencies` field existed**, reproduced by an emission in which
+4,905 of the 10,000 rows carry `USD` — which is the check that the currency draw moved the
+currency and nothing else.
+
+| §1.1 predicted | measured | where |
+|---|---|---|
+| 5,095 BRL / 4,905 USD | **same** | the closing test, and `grep -c` on the landed file |
+| 4,525 USD drawn / 380 USD inherited | **same** | the closing test, splitting base from repeat |
+| 5,836 rows before / 4,164 after publication | **same** | the closing test |
+| 2,864 USD fall back / 2,041 USD same-day | **same** | the closing test |
+| 10,000 rows, 2,926,588 bytes | **same** | the probe and the closing test |
+| distinct `event_date_key` 3, `dim_date` members 50 | **same** | `tests/gold/test_conformed.py`, 22 passed in 822 s local |
+
+**No base event needed a salt above 0**, which was §1.1's one stated assumption: the counts
+computed pool-free on the baseline tree and the counts read off a stream generated against a
+1,024-key pool agree exactly, and a collision retry would have moved them.
+
+#### The third rate now has a request behind it, and §0.2 had only two
+
+**Reported by the Task 3 implementer**, three live single-day requests through
+`opl.extraction.ptax_source.quote_url`:
+
+```
+2026-06-19  200  "value":[{"cotacaoCompra":5.14360,"cotacaoVenda":5.14420,"dataHoraCotacao":"2026-06-19 13:03:25.555497"}]
+2026-06-22  200  "value":[{"cotacaoCompra":5.13890,"cotacaoVenda":5.13950,"dataHoraCotacao":"2026-06-22 13:06:19.750415"}]
+2026-06-20  200  "value":[]
+```
+
+**§0.2 publishes 2026-07-31 and 2026-06-19 and not 2026-06-22**, and the whole of T2's window
+rests on the third one: `13:06:19.750415` read as BRT is what puts the boundary at index
+5,836, and `5.13950 != 5.14420` is what makes two payments on one calendar day carry two
+rates. Its only provenance in this repository was a test fixture. Checked rather than
+inherited, because **three windows in this phase were published and falsified** and the
+surviving one is the only artefact that would not have said so. The Saturday's
+`"value":[]` is the same envelope §0.5 records — one more instance of an absence and a
+failure being indistinguishable to a forgiving reader.
+
 ---
 
 ## 2. What the runs said
@@ -350,6 +408,29 @@ Added by Task 2, as the bronze layer was built:
   smaller claim wearing the same colour. *(The instant rule left this list in the fix pass:
   the landing directory is a re-ingestible surface with no `reclaim_landing`, so the value
   it now refuses is one the extraction cannot be asked about — see §3.1.)*
+
+Added by Task 3, as the fifth profile and the currency domain landed:
+
+- **The `before` placement.** `StreamProfile.placement` is one of `before` / `between` /
+  `after`, and **no declared profile is `before`** — the F1b three sit after both
+  `applied_date`s and the two June streams sit between them. Its branch in
+  `profiles.observed_placement` is exercised in `tests/test_payment_profiles.py` and by nothing
+  else. It is not speculative padding: without it the guard's dispatch would be a two-branch
+  check that silently accepts any window below the earlier date. Reported as a suite-only
+  path rather than as a working one.
+- **The straddling window.** `observed_placement` returns `None` for a window containing an
+  `applied_date`, which the guard turns into a refusal because `None` equals no declared
+  placement. No declaration takes it, and F3 measured why it never will at today's shape: a
+  straddle needs 48× the shared `event_interval_ms`. Suite-only.
+- **`stream._require_currencies`' four refusals.** Outside the domain, out of domain order,
+  a repeated member, and a bare `str` — every one of them is refused only in the suite,
+  because a live declaration reaching any of them would fail the build. This is the same
+  class as the gate's near-tautologies below: the guard protects an edit, not a data source.
+- **The disagreement between `dim_currency`'s member count and its fact-side cardinality
+  existed for exactly one commit.** The domain gained USD before any profile drew it, so the
+  numbers were 2 and 1; the fifth profile made them 2 and 2. That is not an unexercised
+  path — it is the opposite, a window in which the two numbers were provably different — and
+  it is recorded here because the assertion that they can differ is otherwise only a comment.
 
 ### 3.1 A gate rule weaker than its name — and the number this document first published was WRONG
 

@@ -56,6 +56,8 @@ from job_yaml import (
 
 from opl.bronze.masking import MASKED_COLUMNS
 from opl.bronze.registry import REGISTRY, table_spec
+from opl.contracts import payments
+from opl.generator.profiles import PROFILES
 
 # The `argv:` line every entry point's docstring ends with. Read rather than
 # restated, see `_first_argument_of`.
@@ -63,6 +65,13 @@ _ARGV_LINE = re.compile(r"^argv: \[([^\]]*)\]", re.M)
 
 # The task value the condition task branches on, and the task that publishes it.
 _GATE_VALUE = re.compile(r"^\{\{tasks\.([\w-]+)\.values\.bad_row_count\}\}$")
+
+# The `profile=<key>` entries `bronze_payments_job.yml`'s header documents its one
+# operator-facing parameter with. Anchored so the entry must OPEN a comment line -- three
+# of the five carry their description on the same line and two do not, so neither
+# `$`-anchoring nor a bare `in text` would read the list -- and the key is captured whole,
+# which is what lets the check below see a SURPLUS entry rather than only a missing one.
+_PROFILE_LINE = re.compile(r"^#\s+profile=([\w-]+)(?:\s|$)", re.M)
 
 
 def _first_argument_of(script: str) -> str:
@@ -342,6 +351,36 @@ def test_the_gate_verdict_routes_promotion_to_true_and_the_failure_to_false(tabl
     assert tasks["fail_on_dq"]["depends_on"] == [
         {"task_key": "check_bad_rows", "outcome": "false"}
     ]
+
+
+def test_the_payments_job_names_every_declared_profile_and_invents_none():
+    """THE PROSE THAT WENT STALE ONCE ALREADY, AND THE HALF NOTHING WAS CLOSING.
+
+    `bronze_payments_job.yml` documents the legal values of its `profile` parameter as an
+    indented `profile=<key>` list, because the parameter's whole contract is "one of the
+    keys declared in `opl.generator.profiles`" and an operator reads the YAML rather than
+    the module. Nothing compared the two: a fourth profile landed while the comment named
+    three (fixed in `6325fc3`), and F-API's fifth was the next drift queued to happen.
+
+    BOTH DIRECTIONS, AND THE SECOND IS THE ONE A "DID YOU UPDATE THE COMMENT" HABIT MISSES.
+    A declared key missing from the YAML is an operator who cannot discover a stream that
+    exists. A key in the YAML that no longer exists is worse: `profile_for` refuses it
+    naming the real ones, so the run fails -- after the revision guard, the session start
+    and the pool query have all succeeded -- and the operator's source of truth was the
+    thing that lied.
+
+    READ AS A SET FROM THE TEXT rather than by asking whether each key appears somewhere in
+    the file. `"clean" in text` is true of any YAML mentioning `profile=clean-something`,
+    and it can never catch a surplus entry at all."""
+    text = (RESOURCES / JOB_OF[payments.CONTRACT]).read_text(encoding="utf-8")
+    documented = set(_PROFILE_LINE.findall(text))
+    assert documented == set(PROFILES), (
+        f"{JOB_OF[payments.CONTRACT]} documents profiles {sorted(documented)} and "
+        f"opl.generator.profiles declares {sorted(PROFILES)}. The YAML comment is what an "
+        "operator reads to learn the legal values of --params profile=..., so a missing key "
+        "hides a stream and a surplus one sends a run to a refusal after the session starts."
+    )
+    assert len(documented) == 5, "a sanity floor: the regex must actually be matching"
 
 
 @pytest.mark.parametrize("table", sorted(JOB_OF))

@@ -131,7 +131,7 @@ def test_the_value_domains_are_declared_and_upper_case_ascii():
     What matters is that this tuple is now the value DOMAIN and no longer the tuple the
     generator draws from -- `opl.gold.registry.DIM_CURRENCY` reads it as its member set,
     while `opl.generator.stream.StreamSpec.currencies` decides what a stream picks. The
-    test that the widening moved no landed byte is in `tests/test_payment_emit.py`,
+    test that the widening moved no landed byte is in `tests/test_payment_profiles.py`,
     because that is a statement about a stream rather than about a declaration."""
     assert CURRENCIES == ("BRL", "USD")
     assert REPORTING_CURRENCY == "BRL" == CURRENCIES[0]
