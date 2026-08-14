@@ -28,6 +28,15 @@ RECORD_SOURCE = "rfb_cnpj_webdav"
 # the other is `opl.generator` run against a seed. A row that cannot say which is a row
 # whose provenance has to be inferred from its table name.
 GENERATED_RECORD_SOURCE = "opl_payment_generator"
+# WHERE AN API-FED SOURCE'S BYTES CAME FROM, which for PTAX is the Banco Central's
+# Olinda service. Named beside the other two for their reason, and it is the value that
+# made `LANDING_GENERATED` unusable for this source: stamping BCB's published rates with
+# `GENERATED_RECORD_SOURCE` would say this repository produced them, in the one column
+# that answers who did. It names the INSTITUTION AND THE SERVICE rather than a URL --
+# `RECORD_SOURCE` is `rfb_cnpj_webdav` on the same principle -- because an endpoint can
+# be re-hosted without the provenance changing, and a column full of URLs invites a
+# second spelling of one that `opl.extraction.ptax_source` already owns.
+API_RECORD_SOURCE = "bcb_olinda_ptax"
 # The one spelling of the column that records WHICH LANDED FILE a row came out of.
 # It lives here because this is where the column is created, and it is a constant
 # rather than a literal because `opl.bronze.retention` reads it back to decide which
@@ -161,21 +170,26 @@ def checkpoint_location(cfg: OplConfig, table_key: str, *, month: str) -> str:
 # reasoning, not the guard, and inside the docstring it put the function past the
 # project's 50-line limit.
 #
-# A file-fed table lands under `cnpj/<month>/<subdir>` and a generated one under
-# `generated/<month>/<subdir>` (`opl.config`, `opl.bronze.registry_landing`). Both are
-# rebuilt in the guard and the source dir must equal ONE of them.
+# A file-fed table lands under `cnpj/<month>/<subdir>`, a generated one under
+# `generated/<month>/<subdir>` and an api-fed one under `api/<month>/<subdir>`
+# (`opl.config`, `opl.bronze.registry_landing`). All three are rebuilt in the guard and
+# the source dir must equal ONE of them.
 #
-# STILL AN EQUALITY, NEVER A PREFIX TEST. "Starts with one of the two roots" would
+# STILL AN EQUALITY, NEVER A PREFIX TEST. "Starts with one of the roots" would
 # re-admit exactly the two shapes the equality exists to refuse: the month ROOT itself
 # -- the F1.4b blocker, since it holds every other table's files and cloudFiles walks a
 # source dir recursively -- and any `..` that climbs back out of the month.
 #
-# EITHER ROOT ACCEPTED RATHER THAN THE RIGHT ONE SELECTED, and that is a decision. The
+# ANY ROOT ACCEPTED RATHER THAN THE RIGHT ONE SELECTED, and that is a decision. The
 # function is handed a PATH, not a spec, so telling it which root to expect would mean
 # threading the landing mode through `bronze_stream` for a comparison that is already
 # exact: registered subdirs are unique across the whole registry
 # (`registry._assert_no_two_tables_share_a_landing_subdir`), so no legitimate path can
-# satisfy the wrong root's rebuild, and no illegitimate one can satisfy either.
+# satisfy another root's rebuild, and no illegitimate one can satisfy any of them.
+#
+# THE TUPLE GREW WITH THE FOURTH LANDING MODE AND HAD TO. A root missing from it is not
+# a laxity: it is a REFUSAL of every legitimate read of that root, at the top of the
+# ingest, which is the right direction to fail in and is how this edit announces itself.
 def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: str) -> None:
     """Refuse a `source_dir` that is not one table's landing subdir for `month`.
 
@@ -211,7 +225,11 @@ def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: st
     than trusting it, and until now that was not true of every spelling of it."""
     require_month(month, action="read")
     subdir = source_dir.rsplit("/", 1)[-1]
-    expected = (cfg.landing_table(subdir, month), cfg.landing_generated_table(subdir, month))
+    expected = (
+        cfg.landing_table(subdir, month),
+        cfg.landing_generated_table(subdir, month),
+        cfg.landing_api_table(subdir, month),
+    )
     if source_dir not in expected:
         raise ValueError(
             f"refusing to read: source_dir={source_dir!r} is not a landing subdir of "

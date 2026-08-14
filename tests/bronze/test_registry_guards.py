@@ -31,6 +31,8 @@ import pytest
 
 from opl.bronze import registry
 from opl.bronze.registry import (
+    FILE_FED_LANDING_MODES,
+    LANDING_API,
     LANDING_LOCAL,
     LANDING_ZIPS,
     REGISTRY,
@@ -39,6 +41,7 @@ from opl.bronze.registry import (
     _assert_contracts_exist,
     _assert_no_masked_contract_declares_a_check_constraint,
     _assert_no_table_claims_a_reserved_subdir,
+    _assert_no_table_nothing_downloads_claims_a_downloader,
     _assert_no_two_tables_share_a_contract,
     _assert_no_two_tables_share_a_landing_subdir,
     _assert_prefixes_match_their_file_groups,
@@ -434,6 +437,108 @@ def test_a_table_fed_by_several_groups_must_declare_no_prefix(monkeypatch):
     with pytest.raises(ValueError) as excinfo:
         _assert_prefixes_match_their_file_groups(REGISTRY)
     assert "prefix=None" in str(excinfo.value)
+
+
+# --- THE COMPLEMENT GUARD (F-API Task 2) ---------------------------------------------
+#
+# `_assert_no_table_nothing_downloads_claims_a_downloader` had NO refusal test until this
+# phase. It had a live-registry sweep in `test_registry.py`, which by this repository's
+# own doctrine "would stay green if the guard were deleted" -- the sweep asserts today's
+# entries are clean, and today's entries are clean whether or not anything refuses a
+# dirty one. Both tests below fail with the guard's body replaced by `return`, because
+# each one puts a spec into REGISTRY that the guard is the only thing refusing.
+#
+# THEY USE `landing="api"` DELIBERATELY, and that is the whole point rather than a
+# convenience. Under the guard's previous scope (`!= LANDING_GENERATED`) both of these
+# specs IMPORT CLEAN: `api` is not generated, so the mirror skipped it, and `api` is not
+# file-fed, so the cross-check skipped it too -- a mode unguarded in both directions. A
+# test written with `landing="generated"` would pass against the old guard and the new
+# one alike, and would say nothing about the hole this phase closed.
+
+
+def test_a_table_no_downloader_feeds_may_not_claim_a_file_group(monkeypatch):
+    """One landing directory, two producers, and a stream that cannot tell them apart.
+
+    The trap declares the fourth landing mode and the `estabelecimentos` contract, which
+    six-part `FILE_GROUPS` entries feed. What would follow is not an error: the extraction
+    host PUTs the RFB's archives into that contract's landing dir, this lakehouse writes
+    its own record into it too, and cloudFiles reads the directory RECURSIVELY with no
+    glob -- so one stream ingests both, against one schema, and reports SUCCESS."""
+    trap = replace(
+        REGISTRY["payments"],
+        name="ptax",
+        contract="estabelecimentos",
+        landing=LANDING_API,
+    )
+    monkeypatch.setitem(REGISTRY, "ptax", trap)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_no_table_nothing_downloads_claims_a_downloader(REGISTRY)
+    message = str(excinfo.value)
+    assert "'api'" in message, "the refusal must name the mode it FOUND"
+    assert "generated" not in message, (
+        "a PTAX operator reading a refusal about the payment generator goes looking in "
+        "the wrong module"
+    )
+    assert "Estabelecimentos" in message
+
+
+def test_a_table_no_downloader_feeds_may_not_claim_a_file_prefix(monkeypatch):
+    """The second refusal, which is a different sentence about a different mistake.
+
+    A prefix is the string a DOWNLOADER builds its file list from. Declared for a table
+    nothing downloads it is a false statement in the file this repository treats as the
+    answer to "what is table X?" -- and it enters that table into
+    `test_no_two_tables_share_a_file_prefix`, where it competes for a real producer's
+    string. Nothing reads it, so nothing fails; the registry simply says something untrue.
+
+    The contract stays `payments`, which no FILE_GROUPS entry feeds, so the first refusal
+    cannot fire and this reaches the second."""
+    trap = replace(REGISTRY["payments"], name="ptax", landing=LANDING_API, prefix="Ptax")
+    monkeypatch.setitem(REGISTRY, "ptax", trap)
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_no_table_nothing_downloads_claims_a_downloader(REGISTRY)
+    message = str(excinfo.value)
+    assert "'api'" in message and "'Ptax'" in message
+    assert "generated" not in message
+    assert "prefix=None" in message
+
+
+def test_the_two_skips_partition_the_registry(monkeypatch):
+    """WHAT THE RENAME BOUGHT, asserted as a property rather than as prose.
+
+    Each guard skips what the other checks, so every registered table -- under any
+    landing mode that ever exists -- is examined by exactly one of the pair. A fifth mode
+    added tomorrow needs no edit to either, which is precisely what was NOT true when
+    both were scoped positively and `api` fell between them.
+
+    A synthesised mode is used because the property has to hold for modes nobody has
+    declared yet; `_assert_landing_modes_known` is what refuses this value in the live
+    registry, and it runs before both of these."""
+    trap = replace(REGISTRY["payments"], name="future", landing="a-mode-nobody-declared")
+    monkeypatch.setitem(REGISTRY, "future", trap)
+
+    checked_by_the_cross_check = {
+        spec.name for spec in REGISTRY.values() if spec.landing in FILE_FED_LANDING_MODES
+    }
+    checked_by_the_mirror = {
+        spec.name for spec in REGISTRY.values() if spec.landing not in FILE_FED_LANDING_MODES
+    }
+    assert not checked_by_the_cross_check & checked_by_the_mirror
+    assert checked_by_the_cross_check | checked_by_the_mirror == {
+        spec.name for spec in REGISTRY.values()
+    }
+    assert "future" in checked_by_the_mirror, (
+        "an undeclared mode must fall to the mirror rather than through both"
+    )
+    # And the mirror actually refuses it, rather than merely being scoped over it: this
+    # spec has no file group and no prefix, so it passes -- which is the correct verdict
+    # and is what makes the scope real instead of vacuous.
+    _assert_no_table_nothing_downloads_claims_a_downloader(REGISTRY)
+    monkeypatch.setitem(REGISTRY, "future", replace(trap, prefix="Future"))
+    with pytest.raises(ValueError, match="'a-mode-nobody-declared'"):
+        _assert_no_table_nothing_downloads_claims_a_downloader(REGISTRY)
 
 
 def test_a_contract_claimed_by_two_tables_is_refused_at_import(monkeypatch):

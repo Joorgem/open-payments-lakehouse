@@ -44,12 +44,13 @@ from opl.bronze.registry_collisions import (
 # DEFINED is this package's business.
 from opl.bronze.registry_landing import (  # noqa: F401  (re-exported for consumers)
     FILE_FED_LANDING_MODES,
+    LANDING_API,
     LANDING_GENERATED,
     LANDING_LOCAL,
     LANDING_MODES,
     LANDING_ZIPS,
     _assert_landing_modes_known,
-    _assert_no_generated_table_claims_a_downloader,
+    _assert_no_table_nothing_downloads_claims_a_downloader,
     _assert_prefixes_match_their_file_groups,
     landing_dir,
 )
@@ -300,9 +301,9 @@ REGISTRY: dict[str, BronzeTable] = {
     #
     # `landing=LANDING_GENERATED` IS WHAT MAKES THE ENTRY LEGAL. Two import-time
     # guards refuse it under any other mode -- `_assert_prefixes_match_their_file_
-    # groups` because no FILE_GROUPS entry feeds `payments`, and its mirror
-    # `_assert_no_generated_table_claims_a_downloader` because declaring one would
-    # put two producers in one landing directory.
+    # groups` because no FILE_GROUPS entry feeds `payments`, and its complement
+    # `_assert_no_table_nothing_downloads_claims_a_downloader` because declaring one
+    # would put two producers in one landing directory.
     #
     # NO `reclaim_landing` TASK EXISTS FOR THIS TABLE, which is a consequence of the
     # mode rather than an omission: that task refuses anything that is not
@@ -321,7 +322,7 @@ REGISTRY: dict[str, BronzeTable] = {
         subdir=payments.LANDING_SUBDIR,
         landing=LANDING_GENERATED,
         # No downloader, so no prefix. Refused as a false statement by
-        # `_assert_no_generated_table_claims_a_downloader` if one is ever pasted in.
+        # `_assert_no_table_nothing_downloads_claims_a_downloader` if one is pasted in.
         prefix=None,
         # `transaction_id` IS THE COLUMN NO OTHER CONTRACT HAS, which is what makes
         # this tuple satisfy `test_the_new_tables_carry_a_constraint_no_other_
@@ -676,11 +677,14 @@ _assert_no_two_tables_share_a_contract()
 # ask what it means.
 _assert_landing_modes_known(REGISTRY)
 _assert_prefixes_match_their_file_groups(REGISTRY)
-# The mirror of the line above, and it must stay beside it: the prefix cross-check
-# SKIPS generated tables, so this is the only thing that says anything about them.
-# Split rather than folded in, for the reason the subdir trio is three functions --
-# each refusal is a different sentence about a different mistake.
-_assert_no_generated_table_claims_a_downloader(REGISTRY)
+# The COMPLEMENT of the line above, and it must stay beside it: the prefix cross-check
+# skips every table no downloader feeds, and this is the only thing that says anything
+# about those. The two skips are exact complements since F-API Task 2, so between them
+# they are total over the registry for any set of landing modes -- which is what stops a
+# fifth mode falling into neither, the way `api` fell into neither when both were scoped
+# positively. Split rather than folded in, for the reason the subdir trio is three
+# functions -- each refusal is a different sentence about a different mistake.
+_assert_no_table_nothing_downloads_claims_a_downloader(REGISTRY)
 # Also keyed on the contract, so it belongs in this group: `MASKED_COLUMNS` is
 # keyed by contract, not by table name, and asking whether THIS table is masked is
 # meaningless until its contract is known to exist and to name one table only.
