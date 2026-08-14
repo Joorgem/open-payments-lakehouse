@@ -296,33 +296,68 @@ def test_a_window_the_series_has_nothing_in_is_refused_rather_than_landed_empty(
     assert len(fetcher.urls) == 2, "both days were asked before the window was refused"
 
 
+def _reported_numbers(payload: bytes) -> tuple[str, ...]:
+    """The three `rows=`/`bytes=`/`sha256=` fragments `_report` must print for `payload`.
+
+    DERIVED FROM THE BYTES, never from a literal: these are the numbers `EmittedFile`
+    carries, so computing them here from the file on disk is what makes the run log a
+    measurement of the artefact rather than a restatement of what the emitter believed. One
+    record per line, `\\n`-terminated, so the line count IS the row count."""
+    return (
+        f"rows={payload.count(b'\n')}",
+        f"bytes={len(payload)}",
+        f"sha256={hashlib.sha256(payload).hexdigest()}",
+    )
+
+
+# --- THE ONE TEST BELOW THAT WRITES A REAL FILE, AND WHY ITS PROSE IS UP HERE ---------
+#
+# Module level for `opl.bronze.rules`' reason: with the reasoning inside it the function
+# stood at 54 lines against this project's 50-line limit, and the fix pass that closed its
+# tautology added assertions rather than removing any.
+#
+# THE REFACTOR'S ENTIRE CONTENT, EXERCISED -- and until this test nothing was.
+# `emit_records_file`'s `filename` parameter is the only thing that separates it from
+# `emit_stream_file`: F-API Task 2 generalised the payment stream's emitter by lifting the
+# name out of it. But the payment tests call the WRAPPER, which supplies its own name, and
+# every PTAX test above monkeypatches `emit_records_file` away -- so on a phase whose
+# subject is bytes on disk, no test wrote a PTAX record set to a file at all. A
+# `filename_for` that returned a constant, a path separator or the payment stream's own name
+# would have passed the whole suite.
+#
+# So this one writes. Real directories, the real emitter, the real serialiser, with only the
+# transport replaced -- and it asserts the four things that make a landed file a landed file:
+#
+#   * the file exists at the derived name, inside the landing dir and not the tmp one;
+#   * its BYTES are the serialised records, read back in binary, `\n`-terminated with no
+#     carriage return -- the property this module opens in binary for;
+#   * the staging directory is left empty, because the payload is `os.replace`d in;
+#   * the REPORTED row count, byte count and digest are the file's own.
+#
+# THE FOURTH ONE WAS A TAUTOLOGY UNTIL THIS PASS, and it is the species this phase keeps
+# finding. It read `sha256(payload) == sha256(landed.read_bytes())` with `payload` already
+# bound to `landed.read_bytes()` -- the same bytes hashed twice, true under every
+# implementation, including one whose `EmittedFile` reported zeros. Nothing anywhere
+# compared `EmittedFile.sha256` or `.byte_count` against a file, so the docstring's claim
+# that a run log's numbers and a local assertion compare directly was unexercised.
+#
+# IT IS NOW ASSERTED THROUGH THE RUN LOG ITSELF rather than against the dataclass, because
+# the log line is what Task 5 quotes: `_report` prints `EmittedFile`'s three numbers, and
+# `capsys` is where a workspace run's evidence and this file's `read_bytes()` meet. All
+# three expected values are DERIVED from the bytes on disk -- no literal digest lives here,
+# which is the same decision `test_a_bare_time_resolves_to_TODAYS_DATE...` made about a
+# literal date.
+#
+# A SECOND CALL IS THE IDEMPOTENCE HALF, and it is what a repair run of this job does: the
+# same window derives the same name and the same bytes, so the emitter reports the file as
+# already present, byte-identical, with the same three numbers and no rewrite.
+
+
 def test_the_records_reach_a_REAL_FILE_under_the_filename_this_task_derived(
-    monkeypatch, fetcher, tmp_path
+    monkeypatch, fetcher, tmp_path, capsys
 ):
-    """THE REFACTOR'S ENTIRE CONTENT, EXERCISED -- and until this test nothing was.
-
-    `emit_records_file`'s `filename` parameter is the only thing that separates it from
-    `emit_stream_file`: F-API Task 2 generalised the payment stream's emitter by lifting the
-    name out of it. But the payment tests call the WRAPPER, which supplies its own name, and
-    every PTAX test above monkeypatches `emit_records_file` away -- so on a phase whose
-    subject is bytes on disk, no test wrote a PTAX record set to a file at all. A
-    `filename_for` that returned a constant, a path separator or the payment stream's own
-    name would have passed the whole suite.
-
-    So this one writes. Real directories, the real emitter, the real serialiser, with only
-    the transport replaced -- and it asserts the four things that make a landed file a
-    landed file:
-
-      * the file exists at the derived name, inside the landing dir and not the tmp one;
-      * its BYTES are the serialised records, read back in binary, `\\n`-terminated with
-        no carriage return -- the property this module opens in binary for;
-      * the staging directory is left empty, because the payload is `os.replace`d in;
-      * the reported digest and byte count are the file's own, so the run log's numbers and
-        a local assertion compare directly.
-
-    A SECOND CALL IS THE IDEMPOTENCE HALF, and it is what a repair run of this job does:
-    the same window derives the same name and the same bytes, so the emitter reports the
-    file as already present, byte-identical, and touches nothing."""
+    """The real emitter, the real serialiser, real directories, and the run log's own
+    numbers checked against the bytes. See the comment block above."""
     module = _load("fetch_ptax")
     monkeypatch.setattr(module, "WINDOW_FIRST", date(2026, 6, 18))
     monkeypatch.setattr(module, "WINDOW_LAST", date(2026, 6, 20))
@@ -343,13 +378,18 @@ def test_the_records_reach_a_REAL_FILE_under_the_filename_this_task_derived(
     )
     assert b"\r" not in payload
     assert not list(staging.iterdir()), "the payload is replaced in, never left staged"
-    assert hashlib.sha256(payload).hexdigest() == hashlib.sha256(
-        landed.read_bytes()
-    ).hexdigest()
+    # The three numbers `_report` printed, against the file they describe.
+    reported = capsys.readouterr().out
+    for number in _reported_numbers(payload):
+        assert number in reported, f"the run log does not carry {number} for the file it wrote"
 
-    # The repair run: same window, same bytes, no rewrite.
+    # The repair run: same window, same bytes, same numbers, no rewrite.
     module.main(["ptax", "2026-08"])
     assert landed.read_bytes() == payload
+    repaired = capsys.readouterr().out
+    assert "already present, byte-identical" in repaired
+    for number in _reported_numbers(payload):
+        assert number in repaired, f"the repair run reports {number} differently"
 
 
 def test_a_non_200_is_a_refusal_and_never_an_empty_day(monkeypatch):
