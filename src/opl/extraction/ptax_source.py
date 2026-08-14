@@ -194,8 +194,27 @@ def _envelope_rows(body: str, quote_date: date) -> list[object]:
     return rows
 
 
-def _rate(row: dict[str, object], field: str, quote_date: date) -> Decimal:
-    """One rate, as the digits BCB published.
+# WHAT IS *NOT* ASSERTED ABOUT A RATE, AND THE ROWS THAT REFUSE TO LET IT BE. Both of the
+# following look free, and both are falsified by the series this endpoint actually serves
+# -- measured 1984-11-28 .. 2026-08-13, all 10,447 rows:
+#
+#   * `compra <= venda` IS NOT AN INVARIANT HERE. A bid above its ask is definitional
+#     nonsense, and SIXTEEN real rows carry it, every one between 1990-05-22 and
+#     1991-11-26; the widest is 1990-09-20, compra 79.52500 against venda 78.07500.
+#     Asserting it would refuse rows BCB serves today. Nothing downstream is harmed: gold
+#     reads `venda` alone (plan T4), so an inverted spread changes no conversion. It is a
+#     fact about the source's own history, recorded here rather than enforced.
+#   * THERE IS NO MAGNITUDE CEILING TO PICK. venda spans 0.82900 (published 1994-10-14) to
+#     71153.00000 (published 1993-07-30) -- five currency reforms and a hyperinflation
+#     inside one series. A ceiling drawn from the modern 5.x rates would refuse a decade of
+#     real rows; one drawn above 71153 would admit anything this phase could plausibly get
+#     wrong. A bound that cannot be chosen from the data is not a guard, it is a guess.
+#
+# What IS asserted below is what survives the whole series: finite, and strictly positive.
+
+
+def _parsed_rate(row: dict[str, object], field: str, quote_date: date) -> Decimal:
+    """The field's value as a `Decimal`, or a refusal naming what arrived instead.
 
     `bool` is refused by name: it is an `int` to Python, so `Decimal(True)` would land a
     rate of exactly 1 without a word, and 1.0 is the one value a broken FX rate can wear
@@ -214,6 +233,46 @@ def _rate(row: dict[str, object], field: str, quote_date: date) -> Decimal:
         f"{quote_url(quote_date)} answered {field}={value!r}, which is not a rate. A row "
         "whose rate cannot be read converts every payment that reaches it at nothing"
     )
+
+
+def _rate(row: dict[str, object], field: str, quote_date: date) -> Decimal:
+    """One rate, as the digits BCB published, refused unless it can be a price.
+
+    NaN AND Infinity ARE `Decimal(True)`'s ARGUMENT ONE STEP STRONGER, and they used to
+    pass. Both parse without complaint -- `Decimal("NaN")` and `Decimal("Infinity")` raise
+    nothing at all -- so `"NaN"` in a rate field reached bronze as the text `NaN`, cast to
+    NULL in Spark, and T3 clause 3 makes a NULL rate a refusal: the diagnosis started three
+    layers and one job run away from the response that carried it. NaN is also unequal to
+    itself, so two byte-identical NaN rows tripped the DISAGREEMENT branch instead -- the
+    extraction failed safe for entirely the wrong reason, naming a contradiction between
+    two rows that were the same bytes.
+
+    ZERO IS THE ONE THAT HIDES. `amount_brl` is `amount_original * venda`, so a zero venda
+    converts every USD payment on its date to exactly 0.00 while every row count, null
+    count and rejection count reports clean. Negative is refused beside it: a price below
+    zero is not a weaker rate, it is a different kind of thing.
+
+    Measured over the whole series: no row carries a compra or venda at or below zero, and
+    none is non-finite. The block above says which two neighbouring guards the same series
+    FALSIFIES."""
+    rate = _parsed_rate(row, field, quote_date)
+    if not rate.is_finite():
+        raise PtaxResponseRefused(
+            f"{quote_url(quote_date)} answered {field}={rate}, which is not a finite "
+            "number. It would land as that text, cast to NULL in Spark, and make every "
+            "payment on this date a refusal (T3 clause 3) far from the response that "
+            "carried it -- and NaN is unequal to itself, so two identical NaN rows would "
+            "otherwise be reported as contradicting each other on a rate they both spell "
+            "the same way"
+        )
+    if rate <= 0:
+        raise PtaxResponseRefused(
+            f"{quote_url(quote_date)} answered {field}={rate}, which is not a price. A "
+            "zero rate converts every payment on this date to exactly 0.00 with every row "
+            "count, null count and rejection count reporting clean; no row in the series "
+            "since 1984-11-28 carries a compra or a venda at or below zero"
+        )
+    return rate
 
 
 def _publication_instant(raw: object, quote_date: date) -> datetime:

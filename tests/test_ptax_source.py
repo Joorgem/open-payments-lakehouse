@@ -405,6 +405,60 @@ def test_a_rate_that_is_not_a_number_is_refused(rate: object):
     assert COMPRA_FIELD in str(refusal.value)
 
 
+def _one_row_body(**overrides: object) -> str:
+    """A body carrying one row of the 2026-06-19 response with fields overridden."""
+    row: dict[str, object] = {
+        COMPRA_FIELD: 5.14360,
+        VENDA_FIELD: 5.14420,
+        PUBLISHED_FIELD: "2026-06-19 13:03:25.555497",
+    }
+    row.update(overrides)
+    return json.dumps({ENVELOPE_ROWS: [row]})
+
+
+@pytest.mark.parametrize(
+    "rate", ["NaN", "-NaN", "sNaN", "Infinity", "-Infinity", "0", "0.00000", "-5.14420"]
+)
+def test_a_rate_that_is_not_a_finite_positive_price_is_refused(rate: str):
+    """`Decimal("NaN")` AND `Decimal("Infinity")` RAISE NOTHING, which is `Decimal(True)`'s
+    argument one step stronger -- and `True` was already refused by name here while these
+    were not. A non-finite rate landed as its own text, cast to NULL in Spark, and T3
+    clause 3 turns a NULL rate into a refusal three layers and one job run downstream.
+
+    ZERO IS THE ONE THAT HIDES: `amount_brl` is `amount_original * venda`, so a zero venda
+    converts every USD payment on its date to exactly 0.00 while the row count, the null
+    count and the rejection count all report clean. Measured: no row in the series since
+    1984-11-28 carries a compra or venda at or below zero, so none of these refuses a real
+    row. `compra > venda` and an absurd magnitude are NOT refused, and the module says
+    which sixteen rows and which two extremes forbid it."""
+    with pytest.raises(PtaxResponseRefused) as refusal:
+        quotes_in(_one_row_body(**{COMPRA_FIELD: rate}), date(2026, 6, 19))
+    assert COMPRA_FIELD in str(refusal.value)
+    assert "06-19-2026" in str(refusal.value)
+
+
+def test_two_identical_nan_rows_are_refused_as_a_rate_and_not_as_a_disagreement():
+    """FAILING SAFE FOR THE WRONG REASON, which is why this is its own test.
+
+    `Decimal("NaN") != Decimal("NaN")`, so before the finiteness check two BYTE-IDENTICAL
+    NaN rows built two distinct rate pairs and took the DISAGREEMENT branch -- the
+    extraction stopped, which is the right verdict, and told the reader that two rows
+    contradicted each other on a rate they both spell the same way. A refusal that names
+    the wrong cause costs the next reader the whole diagnosis."""
+    row = f'{{"{COMPRA_FIELD}":"NaN","{VENDA_FIELD}":"NaN",'
+    stamp = f'"{PUBLISHED_FIELD}":"2026-06-19 13:03:25.555497"}}'
+    body = "{" + _CONTEXT + f',"value":[{row}{stamp},{row}{stamp}]}}'
+    assert body.count("NaN") == 4, "two rows, byte-identical, both rates unreadable"
+    with pytest.raises(PtaxResponseRefused) as refusal:
+        sole_quote(quotes_in(body, date(2026, 6, 19)))
+    message = str(refusal.value)
+    assert COMPRA_FIELD in message and "finite" in message
+    assert "DISAGREE" not in message, (
+        "these rows do not disagree -- they are the same bytes twice, and the rate is "
+        "unreadable in both"
+    )
+
+
 def test_the_series_is_fetched_one_quote_date_at_a_time():
     """The loop is the price of attribution, and this is what it costs: one request per
     calendar day, weekends included, each naming a single quote date in both bounds.
