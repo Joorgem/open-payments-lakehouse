@@ -546,9 +546,13 @@ def test_the_ptax_table_carries_constraints_no_other_contract_could_have():
     `test_the_iso_shape_check_refuses_the_apis_own_spelling_on_a_real_delta_table` is the
     behavioural half of this pin, against Delta rather than against the string.
 
-    NO CHECK ON `currency`, asserted as an absence for the reason the payments entry
-    gives -- a second currency must be a VALUE change rather than a schema change, and a
-    CHECK would silently make it a migration on a live table."""
+    NO CHECK ON `currency`, asserted as an absence for the reason the payments entry gives,
+    and that reason is now a demonstration rather than a hypothetical: `payments.CURRENCIES`
+    is the value domain `dim_currency` reads, F-API appended `USD` to it, and a CHECK here
+    would have made that append a migration on a live table -- an ALTER before the next
+    promote could succeed. The registry's own comment used to argue this from "`CURRENCIES`
+    holds one member today", which Task 3 made false; it quotes no count now, and neither
+    does this."""
     for contract, columns in CONTRACT_COLUMNS.items():
         if contract == "ptax":
             continue
