@@ -557,11 +557,16 @@ def _refuse_a_span_with_no_quote_at_all(
 
 
 def fetch_series(first: date, last: date, fetch: Fetch) -> tuple[PtaxQuote, ...]:
-    """Every quote in `[first, last]`, in date order, ONE REQUEST PER QUOTE DATE.
+    """Every quote in `[first, last]`, in date order, ONE REQUEST PER CALENDAR DAY.
 
-    The loop is the price of attribution, and it is cheap: a response is ~220 bytes and
-    the phase's span is 42 quotes. A single wide request would be one round trip and
-    would return rows this layer could not attach a quote date to.
+    The loop is the price of attribution, and it is cheap: a response is ~220 bytes. **IT IS
+    ONE REQUEST PER CALENDAR DAY AND NOT PER QUOTE**, because a caller cannot know which days
+    carry one without asking -- so F-API's 2026-06-03 .. 2026-08-01 window is **60** calls
+    returning 42 quotes and 18 empty envelopes, measured on the run
+    (`docs/f-api-run-evidence.md` §2.5). This docstring said "the phase's span is 42 quotes"
+    while justifying a COST, which counted quotes and labelled them calls. A single wide
+    request would be one round trip and would return rows this layer could not attach a quote
+    date to.
 
     Days with no quote are ABSENT from the result rather than present as None: T3
     resolves them by falling back over the series, and asserting the series is gapless in

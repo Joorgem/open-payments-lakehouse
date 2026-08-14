@@ -483,10 +483,10 @@ def _projected(
     `item.fact_roles` and not over `conformed`.
 
     AND `fx_rate_date` IS READ HERE AND NEVER PROJECTED. The star carries `fx_rate_date_key`
-    and no bare date column, which is the second deviation from master spec §4.3's column
-    list -- the first being `amount_original`, satisfied by a documented mapping onto
-    `amount` rather than by a duplicate. Both are recorded in `docs/f-api-run-evidence.md`
-    §1.3 today and belong in the T3 ADR, which Task 5 writes: `docs/adr/` stops at 0015."""
+    and no bare date column -- one of THREE deviations from master spec §4.3's column list,
+    with `amount_original` satisfied by a mapping onto `amount` and `currency` carried only
+    as `currency_key`. All three are recorded in ADR 0016; the third was found by reading the
+    REBUILT TABLE's schema, not the code (`docs/f-api-run-evidence.md` §2.9)."""
     return converted.select(
         *(
             F.coalesce(F.col(key), F.lit(GHOST_SURROGATE_KEY)).alias(key)

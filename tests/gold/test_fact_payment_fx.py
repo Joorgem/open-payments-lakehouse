@@ -543,9 +543,9 @@ def test_the_built_fact_carries_the_declared_fx_types_and_a_joinable_quote_date_
     assert dict(frame.dtypes)[FX_RATE] == FX_RATE_TYPE.replace(" ", "")
     assert dict(frame.dtypes)[AMOUNT_BRL] == AMOUNT_TYPE.replace(" ", "")
     assert FX_RATE_DATE not in frame.columns, (
-        "the star carries fx_rate_date_key and no bare date column -- the second deviation "
-        "from master spec 4.3, recorded in docs/f-api-run-evidence.md 1.3 and belonging in "
-        "the T3 ADR, which Task 5 writes"
+        "the star carries fx_rate_date_key and no bare date column -- one of three "
+        "deviations from master spec 4.3, all recorded in docs/adr/0016-fx-resolved-by-"
+        "publication-instant-not-a-holiday-calendar.md"
     )
     rows = frame.select("event_date_key", "fx_rate_date_key", FX_RATE, AMOUNT_BRL, "amount")
     for row in rows.collect():

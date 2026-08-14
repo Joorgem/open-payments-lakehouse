@@ -590,7 +590,517 @@ is a test that SETS the wrong zone rather than inheriting it.
 
 ## 2. What the runs said
 
-*(Task 5.)*
+**Ran 2026-08-14, all four jobs SUCCESS, at revision `6cfe0f00c6f62720feb711a9478c005a33b3b7e7`.**
+Everything below is **controller-verified** unless a line says *Reported*: the run ids and task
+durations come from `databricks jobs get-run`, the quoted lines from
+`databricks jobs get-run-output <TASK run id>`, and every count from `.plans/sql.sh` with its
+36-character statement id and its `from_cache` flag both read before the number was written
+down. **F3 published 13-character statement-id prefixes that resolve to nothing and recorded
+it as a defect; these are full ids.**
+
+### 2.0 The deploy, verified BY ARTEFACT and not by its success line
+
+`databricks bundle validate -t free` → **Validation OK**; `databricks bundle deploy -t free` →
+**Deployment complete**. That sentence is not the verification. Three checks are:
+
+| check | value |
+|---|---|
+| local `dist/…whl` sha256 | `c0beb381459337d4b1dac6bcb3af7a0002ba46322e3f7832638597d089d4a8de` |
+| **deployed** wheel, downloaded back out of the workspace, sha256 | `c0beb381459337d4b1dac6bcb3af7a0002ba46322e3f7832638597d089d4a8de` — **identical** |
+| revision stamped **inside** the downloaded wheel (`opl/_revision.py:9`) | `REVISION = '6cfe0f00c6f62720feb711a9478c005a33b3b7e7'` = `git rev-parse HEAD`, with no `+dirty` suffix |
+
+**And the source was read out of the DOWNLOADED wheel, not out of the tree** — F3's second
+check, copied because a digest match proves the two files are the same file and not that
+either one carries the fix. `opl/gold/fx.py` was unzipped from the downloaded artefact and
+`cmp`-ed against `src/opl/gold/fx.py`: **identical**. It carries both of this phase's last two
+fixes by source:
+
+- `_as_micros`' `stamped = F.concat(F.col(ptax.PUBLISHED_AT_COLUMN), F.lit(_BRASILIA_OFFSET))`
+  — the offset appended to the text, i.e. the repair for the session-zone dependency §1.3
+  records. The retracted `to_utc_timestamp(...)` spelling is absent from the deployed bytes.
+- `FxSeries`' corrected span sentence (last publication **2026-07-31**, not the 2026-08-01 the
+  extraction *range* ends on), which is the diff `6cfe0f0` carried in this file.
+
+**No commit was made between the deploy and any of the runs** (§4.1). The tree was clean at
+`6cfe0f0` at deploy time and every job was launched with `--params …,revision=$(git rev-parse HEAD)`.
+
+### 2.1 The run sequence
+
+| # | job | run id | wall clock | result |
+|---|---|---|---|---|
+| 1 | `opl-bronze-payments` (`profile=cross-currency`, `month=2026-08`) | `1110464707906055` | **186.0 s** | **SUCCESS** |
+| 2 | `opl-bronze-ptax` (`month=2026-08`) | `607801051136099` | **181.3 s** | **SUCCESS** |
+| 3 | `opl-gold-conformed-dimensions` | `225673262734612` | **68.3 s** | **SUCCESS** |
+| 4 | `DROP TABLE workspace.default.fact_payment` | `01f19831-3044-1af3-ac60-24c7b8d0344f` | — | **SUCCEEDED** |
+| 5 | `opl-gold-fact-payment` | `202942563444320` | **72.0 s** | **SUCCESS** |
+
+Runs 1 and 2 were launched **overlapping** — they write different tables and share no batch —
+so the wall clocks above are not additive. First launch `2026-08-14T22:31:47.432Z`, last
+termination `2026-08-14T22:42:20.327Z`: **632.9 s** end to end, which includes the operator
+time between runs and the drop.
+
+**`month=2026-08` is the LANDING month and not the event window**, for both bronze jobs. The
+`cross-currency` stream's events are on 2026-06-22; launched under `month=2026-06` the June
+stream would never have reached `bronze_payments`. The handoff records this as an F3 fact and
+it cost nothing here because it was read first.
+
+### 2.2 Task-level durations, captured from the run output rather than reconstructed
+
+**F3 published no durations for its gold runs and recorded that as a gap; this is the repair.**
+
+| job | task | execution | setup |
+|---|---|---|---|
+| `opl-bronze-payments` | `assert_deployed_revision` | 30 s | 4 s |
+| | `generate` | 46 s | 1 s |
+| | `ingest` | 39 s | 1 s |
+| | `dq_gate_batch` | 26 s | 2 s |
+| | `promote` | 30 s | 1 s |
+| | `check_bad_rows` (condition) / `fail_on_dq` | 0 s / **SKIPPED** | — |
+| | **sum** | **171 s** | |
+| `opl-bronze-ptax` | `assert_deployed_revision` | 28 s | 4 s |
+| | `fetch` | 52 s | 1 s |
+| | `ingest` | 30 s | 1 s |
+| | `dq_gate_batch` | 24 s | 1 s |
+| | `promote` | 33 s | 1 s |
+| | `check_bad_rows` (condition) / `fail_on_dq` | 0 s / **SKIPPED** | — |
+| | **sum** | **167 s** | |
+| `opl-gold-conformed-dimensions` | `assert_deployed_revision` | 29 s | 3 s |
+| | `dim_channel` / `dim_currency` / `dim_date` (parallel) | 31 / 30 / 32 s | 1 / 2 / 2 s |
+| | **sum** | **122 s** (68.3 s wall — the three run concurrently) | |
+| `opl-gold-fact-payment` | `assert_deployed_revision` | 26 s | 3 s |
+| | `fact_payment` | **40 s** | 1 s |
+| | **sum** | **66 s** | |
+
+**526 s of measured task execution, of which 113 s — 21% — is the provenance guard.** Four
+runs, four `assert_deployed_revision` tasks at 26–30 s each, every one of them a cold
+serverless start doing one string comparison. That is the guard's real price at this scale and
+it is worth stating: F3's equivalent figure was 95 s over five runs.
+
+**NO DURATION PREDICTION WAS PUBLISHED BEFORE THESE RUNS, so no duration below is marked.**
+They are measurements, not confirmations. §1 predicted rows and rates and said nothing about
+time, and a cost number written after the run that produced it is not a prediction (§4.5) —
+which is exactly the standard this document applies to everything else. F3's lesson stands
+unexercised here rather than restated: **do not extrapolate gold cost from vault cost on row
+count.**
+
+### 2.3 Storage — the other figure F3 recorded as a gap
+
+**Controller-verified**, `DESCRIBE DETAIL` per table:
+
+| table | files | bytes |
+|---|---|---|
+| `bronze_payments` (40,150 rows, 4 batches) | 4 | **1,690,371** |
+| `bronze_ptax` (42 rows) | 1 | **4,765** |
+| `dim_currency` (2 members + ghost) | 3 | **4,960** |
+| `dim_date` (50 members + ghost) | 2 | **6,880** |
+| `dim_channel` (5 members + ghost) | 2 | **3,472** |
+| `fact_payment` **before** the drop (30,000 rows, 10 columns) | 1 | **1,336,929** |
+| `fact_payment` **after** the rebuild (40,000 rows, 13 columns) | 1 | **1,926,707** |
+
+`1,690,371` bytes of `bronze_payments` against **11,748,003** bytes of landed JSONL
+(2,925,069 + 2,969,937 + 2,926,409 + 2,926,588, the four promoted profiles' published byte
+counts) is the all-string bronze table's zstd Parquet compression at **7.0×**, not a loss.
+The fact grew 44% for a 33% row increase and three added columns, one of which is a
+`decimal(18,5)` taking three distinct values.
+
+### 2.4 Step 1 — `opl-bronze-payments`, `profile=cross-currency`
+
+**Reported**, `generate` task run `87731639120985`:
+
+```
+generate_payments: profile=cross-currency stream_id=F-API-CROSS-CURRENCY written at /Volumes/workspace/default/landing/generated/2026-08/payments/F-API-CROSS-CURRENCY.jsonl
+generate_payments: rows=10000 (declared 10000) drifted=0 bytes=2926588 sha256=8bf65d61fe08186c91bf88036ac82bc35d404501f9f71981501e39306f18d831
+generate_payments: event_time 2026-06-22T08:00:00.000Z .. 2026-06-22T21:53:15.000Z (10000 events, 5000 ms apart)
+generate_payments: currency BRL=5095 USD=4905 (declared BRL, USD)
+```
+
+**`bytes=2926588` is the number §1.1 published on the tree at `f564f57`, before the
+`currencies` field existed**, reproduced by a workspace emission against the **real
+`hub_empresa` pool** rather than the synthetic 1,024-key one. The sha256 differs from §1.2's
+`a527b61c…` for exactly the reason §1.1 stated in advance: the pool decides *which* company
+gets which payment and therefore the digest, but every `cnpj_basico` is eight characters, so
+it cannot move the byte count.
+
+**AND THE CURRENCY MIX IS IN THE RUN LOG, WHICH THE PLAN SAID IT WOULD NOT BE.** Task 3's
+handover recorded that `generate_payments._report` "prints no currency mix, so **Task 5 cannot
+read the 5,095 / 4,905 split out of the run log**". It was repaired before the deploy —
+`_currency_mix` prints the counts in the order the profile *declares* its currencies — so the
+split has a run-log witness as well as a table one. Recorded because the plan's own text still
+says otherwise.
+
+**Reported**, `dq_gate_batch` `347135863764864` and `promote` `62861209205868`:
+
+```
+dq_gate_batch: batch=1110464707906055 good=10000 bad=0
+promote_batch: appended 10000 rows (batch 1110464707906055) to workspace.default.bronze_payments
+```
+
+`fail_on_dq` was **SKIPPED**, which is the gate passing.
+
+**Controller-verified**, `01f19830-72e1-1e79-8544-b867ef0c1002`, `from_cache: None`:
+
+| | predicted | **actual** | |
+|---|---|---|---|
+| `bronze_payments` rows | 40,150 | **40,150** | ✅ |
+| …distinct `transaction_id` | 40,000 | **40,000** | ✅ |
+| …`_batch_id` values | 4 | **4** | ✅ |
+
+**Controller-verified**, `01f19830-7bba-17e5-82d6-a0fa0446cd89`, `from_cache: None` — the
+currency split at the table rather than at the emitter:
+
+| currency | rows |
+|---|---|
+| BRL | **35,245** = 30,150 pre-phase + **5,095** |
+| USD | **4,905** |
+
+**None of the 150 injected redeliveries is USD**, which is not a coincidence and is worth one
+line: they come from `promotable`, a BRL-only stream, so `40,150 − 40,000 = 150` and
+`USD = 4,905` are consistent by construction rather than by luck.
+
+### 2.5 Step 2 — `opl-bronze-ptax`
+
+**Reported**, `fetch` task run `690868124844405`:
+
+```
+fetch_ptax: window 2026-06-03 .. 2026-08-01 (60 calendar days) -> 42 quote(s), 18 day(s) with none
+fetch_ptax: written at /Volumes/workspace/default/landing/api/2026-08/ptax/usd-2026-06-03_2026-08-01.jsonl
+fetch_ptax: rows=42 bytes=6156 sha256=0dce4f1354f93d09f47e7c54b731bb0e7745003c2ccedfa89eb3cdad0ef466b8
+```
+
+**SIXTY requests from a serverless task in 52 s, and every published version of this number
+said forty-two.** Task 0's egress measurement (§0.8) is now a production path and not a
+probe: this is the first job in this repository that fetches its own input over HTTP.
+
+> **THE REQUEST COUNT IS 60, NOT 42, AND THE RUN LOG IS WHAT SAYS SO.** §0.4 of this
+> document, the phase plan in three places, and `ptax_source.fetch_series`' own docstring
+> ("ONE REQUEST PER QUOTE DATE … the phase's span is 42 quotes") all state the extraction as
+> **"42 requests of ~220 bytes"**. `quote_dates` yields **every calendar day** in the span —
+> it must, because a caller cannot know which days carry a quote without asking — so the
+> window 2026-06-03 .. 2026-08-01 is **60 requests**, of which 42 answer a quote and **18
+> answer HTTP 200 with `"value":[]`**. The run log prints both numbers correctly and nobody
+> had read them against the published claim.
+>
+> **The number that was wrong is the one describing the COST**, which is the number the
+> single-day request shape was justified against: the cost of attribution is **43% higher**
+> (60 / 42) than every document in this phase says. It is still trivial — at most ~13 KB of
+> response bodies, 52 s wall — so the ruling does not move — but "42 requests" was a count of *quotes* wearing the label
+> of a count of *calls*, which is the same species as §1.3's falsified row below: a number
+> right about one population, published as an answer about another. **Twice in one phase.**
+>
+> **And it has one good consequence:** the `"value":[]` envelope §0.5 records as
+> indistinguishable from a failure was **received 18 times in the workspace** and read as an
+> absence each time, so the no-quote-for-this-day branch is no longer fixture-only. **That is
+> not the same as exercising the refusal** — a *wholly* empty span is what
+> `_refuse_a_span_with_no_quote_at_all` fires on, and 42 of the 60 answered, so it did not
+> fire. §3 keeps it on the unexercised list.
+
+```
+dq_gate_batch: batch=607801051136099 good=42 bad=0
+promote_batch: appended 42 rows (batch 607801051136099) to workspace.default.bronze_ptax
+```
+
+**Controller-verified**, `01f19830-e50d-15e7-b00e-584e0fb95074`, `from_cache: None`:
+
+| | predicted | **actual** | |
+|---|---|---|---|
+| `bronze_ptax` rows | 42 | **42** | ✅ |
+| …distinct `quote_date` | 42 | **42** | ✅ one row per date, no reduce needed on a first landing |
+| …first / last `quote_date` | 2026-06-03 / — | **2026-06-03 / 2026-07-31** | ✅ |
+| …distinct `currency` | 1 | **1** | ✅ USD only |
+
+**The last landed quote date is 2026-07-31 and the extraction RANGE ends 2026-08-01**, which
+is not a shortfall: 2026-08-01 is a Saturday and has no bulletin. That is the distinction
+`6cfe0f0` corrected in `fx.py`'s own docstring hours before this run, and the run reproduces
+it exactly.
+
+**Gaplessness in business days, measured rather than assumed** — every weekday in
+2026-06-03 .. 2026-08-01 anti-joined against the landed dates.
+**Controller-verified**, `01f19830-f021-10c9-be20-27c9c092c12a`, `from_cache: None`:
+
+| missing business day | weekday |
+|---|---|
+| **2026-06-04** | Thu |
+
+**One row, and it is the one Task 0 named** — Corpus Christi 2026, absent from BCB's series,
+falling back to 2026-06-03 (venda 5.04150). Zero unpredicted gaps in the landed window. This
+is the assertion T3 clause 2 *declined to build into the loader* (a bound on the gap is either
+a holiday calendar or a number drawn from this window — see ADR 0016), taken here as an
+operator measurement instead, which is what the decline said would happen.
+
+### 2.6 Step 3 — `opl-gold-conformed-dimensions`, append-safe
+
+**Reported**, the three task logs verbatim:
+
+```
+gold_load_conformed_dimension: workspace.default.dim_currency +1 rows (2 members + 1 ghost, 3 distinct currency_key values, which is every row); drawn from 'currency', and the fact reaches 2 of them
+gold_load_conformed_dimension: workspace.default.dim_date +0 rows (50 members + 1 ghost, 51 distinct date_key values, which is every row); drawn from 'event_time', and the fact reaches 3 of them
+gold_load_conformed_dimension: workspace.default.dim_channel +0 rows (5 members + 1 ghost, 6 distinct channel_key values, which is every row); drawn from 'payment_method', and the fact reaches 5 of them
+```
+
+| | predicted | **actual** | |
+|---|---|---|---|
+| `dim_currency` gains USD | **+1** row, 2 members | **+1**, **2 members** | ✅ |
+| `dim_currency` fact-side cardinality | 2 | **2** | ✅ **the "cannot be wrong" column is retired** |
+| `dim_date` appends | **zero** rows | **+0**, still **50 members** | ✅ |
+| `dim_date` fact-side cardinality | 3 | **3** | ✅ |
+| `dim_channel` | unchanged, 5 members | **+0**, **5**, fact reaches **5** | ✅ |
+
+**`dim_date` appending zero is a prediction and not a tautology.** `covered_span` anchors its
+low end on 2026-06-13, and 2026-06-22 sits inside the existing span, so a calendar built for
+three streams already covered the fourth and the fifth. Had the fifth profile's window been
+one day outside it, this run would have appended and every count downstream would still have
+been right — which is why the number was published in advance.
+
+### 2.7 Step 4 — the drop, measured before it happened
+
+**Pre-decided in the plan and in ADR 0015, not discovered here.** `opl.gold.facts._appended`
+writes `mode("append")` with no `mergeSchema`, so three new columns make the append fail —
+and *with* `mergeSchema` it is worse: `_new_rows` anti-joins on the grain, so the 30,000
+existing rows would keep NULL FX **forever** while every counter in the run log reported
+clean.
+
+**The transition is measured rather than asserted. Immediately before the drop**
+(`01f19831-1f1e-1ab4-ac90-855f2988dd66` for the counts,
+`01f19831-2a32-1140-a024-e1a01e99596c` for the storage, both `from_cache: None`; the schema is
+`01f1982f-9173-1fc1-99cd-d8e003dad8a9`):
+
+| | before the drop | after the rebuild |
+|---|---|---|
+| rows / distinct `transaction_id` | 30,000 / 30,000 | **40,000 / 40,000** |
+| columns | **10** | **13** |
+| distinct `event_date_key` | 2 | **3** |
+| distinct `currency_key` | **1** | **2** |
+| files / bytes | 1 / 1,336,929 | 1 / **1,926,707** |
+| Delta table id | `dba54eea-be46-422e-a3ad-9958b8c665a4` | **`6342e221-0c68-4790-85f9-06dfb8cb62d7`** |
+
+`DROP TABLE workspace.default.fact_payment` → statement
+`01f19831-3044-1af3-ac60-24c7b8d0344f`, **SUCCEEDED**; `SHOW TABLES … LIKE 'fact_payment'`
+returned zero rows (`01f19831-36f7-1775-b947-71f98a492630`, `from_cache: None`). **The two
+different Delta table ids are the evidence that this was a rebuild and not an append.**
+
+The three columns the rebuild added, with their declared types confirmed at the table
+(`01f19831-8df6-18d9-b4ff-f113b0fb05c9`, `from_cache: None`):
+
+| column | predicted type | **actual** |
+|---|---|---|
+| `fx_rate` | `decimal(18, 5)` | **`decimal(18,5)`** ✅ |
+| `amount_brl` | `decimal(18, 2)` | **`decimal(18,2)`** ✅ |
+| `fx_rate_date_key` | `int` (`yyyyMMdd`) | **`int`** ✅ |
+
+### 2.8 Step 5 — `opl-gold-fact-payment`, and the phase's headline
+
+**Reported**, `fact_payment` task run `314037919408885`, in full because every clause of it is
+a marked prediction:
+
+```
+gold_load_fact: workspace.default.fact_payment +40000 rows from 40150 bronze payments over
+40000 distinct transaction_id keyed on dim_company and ['dim_date', 'dim_channel',
+'dim_currency']; 80000 (row, role) references over 40000 rows, all resolved and NONE on the
+ghost (payer_company_sk: 0, payee_company_sk: 0) -- so the unknown-member path is UNEXERCISED
+rather than proven: every counterparty is drawn from hub_empresa's own key space, so nothing
+in this data can fail to resolve; and 3200 legitimate repeats survived it (36800 distinct
+business tuples), which is the count a deduplication over the business attributes would have
+deleted; every derived conformed key names a member that exists; and 3 distinct amount_brl
+conversion rates were used over 42 reduced (currency, quote_date) quotes published
+2026-06-03 16:06:26.540000+00:00 .. 2026-07-31 16:10:31.061071+00:00, no conversion past the
+last quote and widest fallback taken 3 day(s); SUM(amount_brl) is the only additive total
+(amount is additive only within a currency) and it does NOT equal SUM(amount) x rate to the
+cent, because the conversion rounds half-up at the row
+```
+
+#### THE FX SPLIT — the two populations counted separately
+
+**Controller-verified**, `01f19831-a0bf-17d9-a6ce-815a9b45ce74`, `from_cache: None`. The fact
+carries `currency_key`, not a currency string, so this is joined through `dim_currency`:
+
+| currency | `fx_rate` | `fx_rate_date_key` | **rows** | predicted |
+|---|---|---|---|---|
+| BRL | **1.00000** | 20260620 | 10,000 | — |
+| BRL | **1.00000** | 20260622 | **5,095** | **5,095** ✅ |
+| BRL | **1.00000** | 20260801 | 20,000 | — |
+| **USD** | **5.14420** | **20260619** | **2,864** | **2,864** ✅ |
+| **USD** | **5.13950** | **20260622** | **2,041** | **2,041** ✅ |
+
+**2,864 fell back across a whole weekend to Friday 2026-06-19; 2,041 resolved same-day on
+Monday 2026-06-22. Both populations are non-empty, and they carry different rates.** That is
+T2's closing test, on real fact rows, and it is the property three earlier windows in this
+phase were published for and falsified before this one survived.
+
+**Two payments on ONE calendar day carry two different rates** —
+`01f19831-ab40-1e2a-bfca-677cce8a0046`, `from_cache: None`:
+
+| `event_date_key` | rows | distinct `fx_rate` | distinct `fx_rate` among USD rows |
+|---|---|---|---|
+| 20260620 | 10,000 | 1 | 0 |
+| **20260622** | **10,000** | **3** | **2** |
+| 20260801 | 20,000 | 1 | 0 |
+
+**One calendar day, one stream, one currency, two rates.** No calendar-day implementation can
+produce that row, and it is the reason the fifth profile exists.
+
+**And the boundary itself is at the predicted index** —
+`01f19831-fb02-158e-ac6e-1fc670ad4182`, `from_cache: None`, splitting 2026-06-22's rows at the
+2026-06-22 bulletin read as BRT (`2026-06-22T16:06:19.750415Z`):
+
+| | predicted | **actual** |
+|---|---|---|
+| rows before the bulletin | 5,836 | **5,836** ✅ |
+| rows after the bulletin | 4,164 | **4,164** ✅ |
+
+#### THE COUNTS
+
+**Controller-verified**, `01f19831-80ec-1859-ae3d-86a3d31f523e` (the top-level counts),
+`01f19831-b024-13c1-9f75-f789b1dd0695` (the tuple control and the identity rows),
+`01f19831-c979-10b7-8baf-9562377117dc` (the two totals),
+`01f19831-bc82-1694-b89b-b83e3f1db092` (the agreeing-key decomposition), all `from_cache: None`:
+
+| | predicted | **actual** | |
+|---|---|---|---|
+| `fact_payment` rows | **40,000** | **40,000** | ✅ **grain enforced** |
+| …distinct `transaction_id` | 40,000 | **40,000** | ✅ |
+| …distinct business tuples | 36,800 | **36,800** | ✅ `= 4 × 9,200` |
+| **bronze**'s distinct business tuples (the control) | 36,800 | **36,800** | ✅ dedup changed none |
+| …legitimate repeats | 3,200 | **3,200** | ✅ `= 4 × 800` |
+| …distinct `event_date_key` | **3** | **3** | ✅ 20260620, 20260622, 20260801 |
+| …distinct `fx_rate_date_key` | **4** | **4** | ✅ 20260619, 20260620, 20260622, 20260801 |
+| …distinct `fx_rate` values | 3 | **3** | ✅ 1.00000, 5.14420, 5.13950 |
+| …rows at `fx_rate` exactly 1.00000 | 35,095 | **35,095** | ✅ every BRL row, by definition and not by lookup |
+| …channels / currencies reached | 5 / 2 | **5 / 2** | ✅ |
+| …rows resolving to the ghost, both roles | 0 | **0** | ⚠️ **UNEXERCISED, not success** |
+| …orphaned rows per fact key (four of them) | 0 | **0** | ⚠️ reported, and see §3 |
+| reduced PTAX quotes read | 42 | **42** | ✅ |
+| last publication instant printed | 2026-07-31 16:10:31.061071+00:00 | **2026-07-31 16:10:31.061071+00:00** | ✅ to the microsecond |
+| `fx_beyond_series` | 0 | **0** | ✅ *(a report, not a path — see §3)* |
+| `fx_widest_fallback_days` | 3 | **3** | ✅ Monday 06-22 back to Friday 06-19 |
+| rows where the two date keys AGREE | 35,095 | **37,136** | ❌ **FALSIFIED — see below** |
+
+**`SUM(amount_brl)` is not `SUM(amount) × rate` to the cent, and here is the arithmetic**
+rather than the sentence: `SUM(amount_brl) = 1,501,572,707.34` against a
+multiply-the-per-rate-subtotals answer of `1,501,572,707.5810390` — a gap of **0.241039** over
+4,905 converted rows, against a bound of half a centavo per row (24.525). `SUM(amount)` is
+`997,161,462.62` and **is not a currency total at all** now that 4,905 rows are USD, which is
+precisely why `amount_brl` is the declared measure.
+
+#### THE ONE FALSIFIED §1 PREDICTION, AND IT IS THE MOST USEFUL ROW IN THIS SECTION
+
+*(One of **two** falsifications this run produced. The other is not a §1 prediction and so is
+not marked here: **§0.4's "42 requests"**, which the run measured at **60** — §2.5.)*
+
+> **§1.3 predicted 35,095 rows "where the two date keys AGREE", derived as "the BRL
+> population — an identity conversion is dated to its own day". The measurement is 37,136.**
+
+**Controller-verified**, `01f19831-bc82-1694-b89b-b83e3f1db092`, `from_cache: None`:
+
+| currency | `fx_rate` | rows where `event_date_key = fx_rate_date_key` |
+|---|---|---|
+| BRL | 1.00000 | 35,095 |
+| **USD** | **5.13950** | **2,041** |
+| | | **37,136** |
+
+**The prediction's derivation was a sufficient condition offered as a necessary one.** An
+identity conversion is indeed dated to its own day — but so is **any USD payment that
+resolved to the SAME day's quote**, and this document predicted 2,041 of those, four
+paragraphs above the row that forgot them. The two date keys agree for every same-day
+resolution, whatever the currency, and "same-day resolution exists" is the entire point of
+T2's window.
+
+**Nothing is adjusted to match.** The number 35,095 is right about the population it names
+(BRL rows) and wrong as an answer to the question asked (rows where the keys agree). The
+error is not in the loader, the join or the star: **it is in a prediction that reasoned about
+one population while counting another** — which is the same species Task 3's reviewer caught
+in §1.1's 36,800 derivation, in this same document, and which was corrected there rather than
+learned from. Twice now, the defect has been the derivation and not the number.
+
+**Restated correctly for whoever inherits it:** rows where `event_date_key = fx_rate_date_key`
+= every reporting-currency row (35,095) **plus** every converted row that resolved same-day
+(2,041) = **37,136**, and the complement — 2,864 — is exactly the fallback population.
+
+#### The as-of join's headline case, re-measured
+
+§5 required `f3-workspace-run-evidence.md` §6's payment-leg counts for company `47070968` to
+be re-measured after the fifth stream. **Controller-verified**,
+`01f19831-dedc-1ae5-ad58-9526630be145`, `from_cache: None`:
+
+| side of 2026-07-11 | `company_sk` | `capital_social` | `is_current` | payment legs (F3) | **payment legs (now)** |
+|---|---|---|---|---|---|
+| **before** | `-8897288640841010596` | 50000,00 | false | 18 | **39** |
+| **on/after** | `7138330321006406353` | 370000,00 | true | 38 | **38** |
+
+**The "before" side gained 21 legs and the "after" side gained none**, which is the shape the
+fifth profile forces rather than a surprise: its 10,000 payments are on 2026-06-22, before
+2026-07-11, so every leg it contributes resolves to the June version. The "after" side is fed
+only by the 2026-08-01 streams, which did not change.
+
+### 2.9 A THIRD DEVIATION FROM MASTER SPEC §4.3'S COLUMN LIST, and the repository says two
+
+**Controller-verified** by the post-rebuild schema (`01f19831-8df6-18d9-b4ff-f113b0fb05c9`,
+`from_cache: None`). §4.3 asks the fact to hold
+`amount_original + currency + fx_rate + fx_rate_date + amount_brl`. The star holds:
+
+| §4.3 asks for | the star carries |
+|---|---|
+| `amount_original` | `amount` — **recorded** as a deviation |
+| **`currency`** | **`currency_key` (`bigint`), and no currency column at all** — **recorded nowhere** |
+| `fx_rate` | `fx_rate` ✅ |
+| `fx_rate_date` | `fx_rate_date_key` — **recorded** as a deviation |
+| `amount_brl` | `amount_brl` ✅ |
+
+`src/opl/gold/facts.py` **called** `fx_rate_date_key` "the **second** deviation … the first
+being `amount_original`", and §1.3 of this document still does. **On this repository's own
+criterion it is the third of three.** `currency` is exactly the same species as
+`fx_rate_date`: a bare business column replaced by a conformed foreign key, satisfied through
+a dimension rather than in the fact. It predates this phase — F3 built the fact with
+`currency_key` and no currency column, at a time when the column would have held one constant
+value — but it becomes visible only now that the fact reaches two currencies, and it is not in
+any ADR, evidence document or docstring. **ADR 0016 records all three, and `facts.py`'s
+docstring and `test_fact_payment_fx.py`'s assertion message were corrected to say three in
+the same pass** — the two sites that had been citing "the T3 ADR, which Task 5 writes"
+against a `docs/adr/` that stopped at 0015. **§1.3 is deliberately NOT corrected**: it is a
+predictions section, and a prediction edited after the run that tests it stops being one.
+*(`dim_currency` spells its member `currency_code`, so the string `currency` names a bronze
+column and nothing in gold.)*
+
+### 2.10 The provenance guard: four more accepts, and still no refusal
+
+**Reported**, `assert_deployed_revision` task run `736340098682648`, one of four identical:
+
+```
+assert_deployed_revision: OK -- the installed wheel was built from 6cfe0f00c6f62720feb711a9478c005a33b3b7e7,
+which is the revision this run was launched for. That is a claim about the WHEEL; the
+entry-point files under databricks/src were synced by the same deploy, and a deploy made from
+a modified tree would have stamped +dirty.
+```
+
+**Eleven accepts across F2 and F3 became FIFTEEN. Zero refusals, still.** Four more accepts
+are not evidence about the refusal half, and §3 says so rather than letting the count grow
+into a claim.
+
+### 2.11 What this phase made FALSE, re-published in one place
+
+Protocol §9 condition 5 asks a phase to delete what it falsified rather than leave two
+answers in the repository. Every row below was a published number in
+`docs/f3-workspace-run-evidence.md` or `.plans/HANDOFF.md`; every replacement is
+controller-verified above.
+
+| published at F3's close | **now** | where marked |
+|---|---|---|
+| `bronze_payments` 30,150 rows / 30,000 ids / 3 batches | **40,150 / 40,000 / 4** | §2.4 |
+| `fact_payment` 30,000 rows | **40,000** | §2.8 |
+| distinct business tuples 27,600 = 3 × 9,200 | **36,800 = 4 × 9,200** | §2.8 |
+| legitimate repeats 2,400 = 3 × 800 | **3,200 = 4 × 800** | §2.8 |
+| channels / currencies reached 5 / 1 | **5 / 2** | §2.8 |
+| distinct `event_date_key` 2 | **3** — 20260620, **20260622**, 20260801 | §2.8 |
+| `dim_currency` 1 member, fact-side cardinality 1 | **2 members, fact-side cardinality 2** | §2.6 |
+| §9.4's "`dim_currency` at fact-side cardinality 1 … **cannot be wrong**" | **retired.** T1 existed to do exactly this | §2.6 |
+| §6's payment legs for `47070968`: **18** / 38 | **39 / 38** | §2.8 |
+| `dim_date` **50** members | **50** — unchanged, and predicted so | §2.6 |
+| the guard's **eleven** accepts, zero refusals | **fifteen** accepts, zero refusals | §2.10 |
+| `.plans/HANDOFF.md`: "100% of the 30,000 fact rows fall on days with no quote, and the path that goes unexercised is the DIRECT lookup" | **false twice over.** 2,041 rows resolve a quote same-day; and under an instant rule 6,480 of the original 30,000 already sat in an earlier BRT day | §2.8, ADR 0016 |
+| `fact_payment`'s 10 columns | **13** — `fx_rate`, `amount_brl`, `fx_rate_date_key` | §2.7 |
+
+**And one number this document itself made false:** §1.3's **35,095** rows where the two date
+keys agree is **37,136**. It is above rather than in this table because it is *this* phase's
+prediction and not an inherited one — a phase must mark its own.
 
 ---
 
@@ -606,7 +1116,8 @@ Accumulated as the phase runs rather than reconstructed at its end.
 - **The below-the-series refusal.** Nothing in this phase's range sits below 2026-06-03.
 - **The provenance guard's REFUSAL half**, still, in the workspace. Eleven accepts across F2
   and F3, zero refusals. This phase's runs will add accepts, and accepts are not evidence
-  about the refusal.
+  about the refusal. **They did: the count is now FIFTEEN accepts and zero refusals** (§2.10).
+  Four more instances of a guard saying yes tell a reader nothing about whether it can say no.
 
 Added by Task 2, as the bronze layer was built:
 
@@ -704,6 +1215,63 @@ Added by Task 4, as the gold layer was built:
   converted at 1.00000 as the state the phase exists to end. After the rebuild the count is 3,
   so the branch that fires is the mixed one; the single-rate sentence is exercised in
   `tests/test_gold_entry_points.py` and by no run.
+
+**Added by Task 5, from what the four runs did and did not touch.** Everything above was
+written before a run existed; these entries are the ones only a run could produce, and they
+are the *residue* of four SUCCESS results rather than a list of things that went wrong.
+
+- **CONFIRMED UNEXERCISED BY THE RUNS, not merely predicted so.** Four entries above stopped
+  being forecasts and became measurements: the **ghost on both role keys** is `0 / 0` over
+  80,000 (row, role) references (§2.8), the **four orphan counters** are all 0, **`fx_beyond_series`
+  is 0**, and the **one-rate branch** did not fire because `fx_rates_used` came back 3. Each is
+  a zero, and **a zero is not coverage** — the state each exists to make visible was not
+  reachable from this data, which is what §4.6 means.
+- **THE DQ GATE'S FAILING ROUTE, IN THIS PHASE.** `fail_on_dq` was **SKIPPED** on both bronze
+  runs (`good=10000 bad=0`, `good=42 bad=0`), so the ten PTAX rules and the payments rules were
+  all exercised in the *accept* direction only. **No PTAX row has ever been rejected by the gate
+  in the workspace.** `drifting` — the one profile that makes the gate fire — was deliberately
+  not run in this phase, so the quarantine path carries no F-API witness. `bronze_ptax_quarantine`
+  exists and holds **zero** rows (controller-verified, `01f19832-8f32-1a3e-b056-222f99f62c67`,
+  `from_cache: None`).
+- **NO LONGER UNEXERCISED: the no-quote-for-this-day branch.** 18 of the fetch's **60**
+  requests answered HTTP 200 with `"value":[]` and were read as absences (§2.5). Moved off
+  this list because a run put real bodies through it. **The refusal of a wholly-empty span
+  stays on it** — 42 of the 60 answered, so `_refuse_a_span_with_no_quote_at_all` did not
+  fire, and the two are different branches.
+- **`reclaim_landing`, for PTAX.** This table deliberately has none (its way back is the
+  request), which means the landing directory is a permanently re-ingestible surface. §3.1's
+  residual — a file written by another wheel, hand-repaired, or copied in, judged by the gate
+  alone — is not merely open but now has a real file sitting in it:
+  `/Volumes/workspace/default/landing/api/2026-08/ptax/usd-2026-06-03_2026-08-01.jsonl`.
+- **The refuse-a-different-file-under-one-name branch, for PTAX** — still. It fires when BCB
+  *revises* a rate for a window already landed, or when a second fetch derives different bytes
+  for the same filename. This run was a **first** landing, so the branch was reached with
+  nothing to compare against. A second `opl-bronze-ptax` run over the same window is the
+  cheapest way to exercise it and was not made, because it would also append 42 duplicate rows
+  to `bronze_ptax` and put the gold-side reduce to work — which is a different experiment.
+- **THE GOLD-SIDE REDUCE RAN OVER A POPULATION THAT NEEDED NO REDUCING.** `rate_intervals` read
+  42 rows and reduced them to 42 `(currency, quote_date)` pairs — one to one. Its
+  *agreeing*-duplicate path, which §3 above calls "exercised" on the grounds that a re-run is an
+  ordinary event, **has not been exercised in the workspace**: no re-run has happened. The
+  disagreement refusal remains without a witness at either layer. Corrected here rather than
+  left as the stronger claim it was written as.
+- **The empty-series refusal and the below-the-series refusal**, both still fixture-only after
+  the runs, for the reasons already stated — the 42-day window landed successfully and nothing
+  in the payment range sits below 2026-06-03.
+- **The holiday crossing, on fact rows** — closed as unexercised by measurement rather than by
+  argument. §2.5's anti-join found exactly one missing business day, **2026-06-04**, and the
+  earliest date any fact row resolves to is **2026-06-19** (§2.8). So the one holiday in the
+  landed series is 15 days below the closest fact row could reach it. The witness for ADR 0016's
+  central argument is a **series** row, and no fact row crosses a holiday in this lakehouse.
+- **THE TWO-RATE PROPERTY RESTS ON ONE STREAM AND ONE DAY.** 4,905 of 40,000 fact rows are
+  converted at all; every one of them falls on 2026-06-22; every one resolves to one of two
+  quotes. The mechanism is proven — and it is proven **once**. The other 41 landed quotes are
+  reachable by no payment in this lakehouse, and `fx_rate_date_key` takes 4 of the 51 values
+  `dim_date` holds. A reader must not read "42 quotes landed" as "42 quotes exercised".
+- **The `assert_deployed_revision` guard cost 21% of this phase's task time and refused
+  nothing**, which is the same sentence as the entry above it in a different currency. Fifteen
+  accepts, zero refusals, ~113 s of serverless start-up spent proving a string equality that
+  has never once been unequal in the workspace.
 
 ### 3.1 A gate rule weaker than its name — and the number this document first published was WRONG
 
