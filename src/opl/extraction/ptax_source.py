@@ -457,19 +457,16 @@ def sole_quote(quotes: tuple[PtaxQuote, ...]) -> PtaxQuote | None:
     """The one quote for a `(currency, quote_date)` IN ONE RESPONSE, or None if that
     response carries none.
 
-    THE SCOPE IS ONE RESPONSE, AND THIS IS NOT THE REDUCE THE LANDED TABLE NEEDS. Here
-    the key IS the request -- one endpoint is one currency and one URL is one quote date
-    -- so two rows in one response can only be two publications of one quote, and that is
-    the only fan-out this function is able to see. It is invoked once per response and
-    never over the table.
+    THE SCOPE IS ONE RESPONSE, AND THIS IS NOT THE REDUCE THE LANDED TABLE NEEDS. Here the
+    key IS the request -- one endpoint is one currency and one URL is one quote date -- so
+    two rows in one response can only be two publications of one quote, and that is the only
+    fan-out this function can see. It is invoked once per response and never over the table.
 
-    SO IT DOES NOT SURVIVE THE LANDING, and the correction is worth stating plainly
-    because the first version of this docstring got it backwards. Bronze is written
-    `mode("append")` (`opl.bronze.promote`), so a second extraction over the same span
-    lands a second row for every `(currency, quote_date)` reduced here, and no amount of
-    care at the request can see across responses or across runs. THE CONSUMER OF THE
-    LANDED TABLE MUST STILL REDUCE OVER THAT TABLE. This is an addition to that reduce,
-    not a replacement for it, and a re-run is an ordinary event rather than an incident.
+    SO IT DOES NOT SURVIVE THE LANDING, and the first version of this docstring had that
+    backwards. Bronze is written `mode("append")` (`opl.bronze.promote`), so a second
+    extraction over the same span lands a second row for every `(currency, quote_date)`
+    reduced here. THE CONSUMER OF THE LANDED TABLE MUST STILL REDUCE OVER THAT TABLE: this
+    is an addition to that reduce, and a re-run is an ordinary event rather than an incident.
 
     THE EARLIER STAMP IS KEPT, BECAUSE `max()` IS THE ONE REDUCE THAT CHANGES T3'S ANSWER
     AND `min()` IS THE IDENTITY. Measured: 2025-04-23 carries two rows 27 ms apart, AGREEING
@@ -482,10 +479,14 @@ def sole_quote(quotes: tuple[PtaxQuote, ...]) -> PtaxQuote | None:
     this plan retracted at T3, rebuilt inside the reduce. Not the fail-safe direction either:
     the rate is identical either way and only its availability moves.
 
-    THE DISAGREEMENT BRANCH HAS NO WITNESS. No quote date in the series holds rows that
-    differ, so this branch ships unexercised by the source; the only body that has ever
-    taken it is hand-built, in `tests/test_ptax_source.py`. That is a finding rather than
-    a defect -- the alternative is picking one of two contradicting rates in silence."""
+    THE DISAGREEMENT BRANCH HAS NO WITNESS, and the claim is scoped to the probing actually
+    done: Task 0's per-date walk of 903 rows over 3.6 years found one duplicate pair, which
+    agrees, and this pass walked the neighbourhood of every publication-date collision in the
+    42-year series and found one more (2001-12-21, identical stamps, also agreeing). A quote
+    date whose two rows published on different DAYS would not show up as such a collision and
+    was not searched for. The only body that has ever taken this branch is hand-built, in
+    `tests/test_ptax_source.py` -- a finding rather than a defect, since the alternative is
+    picking one of two contradicting rates in silence."""
     if not quotes:
         return None
     _refuse_a_second_quote_date(quotes)
