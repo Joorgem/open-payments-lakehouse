@@ -10,7 +10,13 @@ ships headerless semicolon CSV because that is what it ships; the payment stream
 JSON Lines because the drift class this lakehouse must exhibit is a NEW OPTIONAL
 COLUMN APPEARING MID-STREAM, which in CSV is a column-count change that a positional
 reader either refuses outright or silently misaligns (`opl.contracts.payments` carries
-the full argument).
+the full argument). The PTAX record is JSON Lines for a third reason again: it is one
+object per quote, built from a validated response rather than from a file BCB sent, and
+a semicolon-delimited rendering of it would invent a dialect nobody publishes.
+
+THE DISPATCH IS TOTAL OVER THE CATALOGUE SINCE F-API TASK 2, and was a default before
+that. See the comment block above `_SOURCE_FORMATS` for what a defaulted format costs
+and why the failure is invisible in both directions.
 
 CONTRACT-KEYED, LIKE `rules_for` AND `struct_for`, and that is the seam rather than a
 parameter on the stream. A format passed in by the caller would be a coordinate that
@@ -22,8 +28,10 @@ from __future__ import annotations
 from pyspark.sql import DataFrame, SparkSession
 
 from opl.bronze.schema import struct_for
-from opl.contracts.cnpj_schemas import CSV_DIALECT
+from opl.contracts.catalogue import CONTRACT_COLUMNS
+from opl.contracts.cnpj_schemas import CSV_DIALECT, TABLES
 from opl.contracts.payments import CONTRACT as PAYMENTS_CONTRACT
+from opl.contracts.ptax import CONTRACT as PTAX_CONTRACT
 
 # The `cloudFiles.format` / `spark.read.format` names. Constants because both the
 # format string and the option set are chosen from them below, and a literal in one
@@ -125,9 +133,72 @@ def jsonl_read_options() -> dict[str, str]:
     }
 
 
+# WHICH FORMAT EACH CONTRACT'S BYTES ARE WRITTEN IN. A TOTAL MAPPING, not a test with a
+# fallback, and that is F-API Task 2's change rather than a tidy-up.
+#
+# It was `JSON_FORMAT if contract == PAYMENTS_CONTRACT else CSV_FORMAT`, which is a
+# DEFAULT wearing a conditional: every contract that is not payments got semicolon CSV,
+# including every contract added afterwards. The failure that produces is silent in both
+# halves. Spark IGNORES CSV options on a JSON read, so nothing reports the mismatch; and
+# CSV over JSON Lines parses each line as one field -- the whole JSON object lands in the
+# first declared column and the remaining columns are PERMISSIVE-padded NULL. The DQ gate
+# then reports `null_or_empty_<second column>` and a triager starts from a blank column
+# when the fault is the format dispatch, one layer up, for the whole table.
+#
+# So an unclassified contract RAISES. A KeyError, bare, matching `catalogue.columns_for`
+# and `rules.rules_for`: this key is neither operator-supplied nor a table, and the guard
+# below is what turns the possibility into an import-time refusal anyway.
+#
+# THE RFB HALF IS DERIVED FROM `TABLES`, not listed. "Semicolon CSV" is not a fact about
+# four particular contracts, it is what the Receita ships -- so a fifth RFB layout gets
+# the right answer by construction, and a contract that is NOT an RFB layout cannot get
+# one by accident.
+_SOURCE_FORMATS: dict[str, str] = {
+    **{contract: CSV_FORMAT for contract in TABLES},
+    PAYMENTS_CONTRACT: JSON_FORMAT,
+    PTAX_CONTRACT: JSON_FORMAT,
+}
+
+
+def _assert_every_contract_declares_a_format() -> None:
+    """Fail at import if the mapping above is not exactly the catalogue's contracts.
+
+    AT IMPORT rather than at the call, because the call is where it stops being visible:
+    a contract missing from the mapping raises inside the ingest task, after the stream
+    has been configured, and a contract in the mapping that no source declares is a dead
+    entry that reads as coverage. The registry already refuses a table whose contract the
+    catalogue does not know; this is the same totality one layer along, over the question
+    "and how are its bytes parsed?".
+
+    A plain ValueError: nothing here is an unknown table, and no operator supplied it."""
+    missing = sorted(set(CONTRACT_COLUMNS) - set(_SOURCE_FORMATS))
+    if missing:
+        raise ValueError(
+            f"{missing} are declared contracts with no source format, so an ingest of one "
+            "raises after the stream is built. Every contract is parsed as SOMETHING, and "
+            "the answer is not allowed to be a default: CSV options on a JSON read are "
+            "ignored by Spark, and CSV over JSON Lines lands the whole object in the first "
+            "column with the rest PERMISSIVE-padded NULL -- a blank column in the gate's "
+            "report, one layer below the actual fault."
+        )
+    stray = sorted(set(_SOURCE_FORMATS) - set(CONTRACT_COLUMNS))
+    if stray:
+        raise ValueError(
+            f"{stray} declare a source format and no source declares them as contracts "
+            f"({', '.join(sorted(CONTRACT_COLUMNS))}). An entry for a contract that does "
+            "not exist reads as coverage and parses nothing."
+        )
+
+
+_assert_every_contract_declares_a_format()
+
+
 def source_format(contract: str) -> str:
-    """The `cloudFiles.format` / reader format `contract`'s files are written in."""
-    return JSON_FORMAT if contract == PAYMENTS_CONTRACT else CSV_FORMAT
+    """The `cloudFiles.format` / reader format `contract`'s files are written in.
+
+    KeyError if the contract declares none -- see the comment block above for why an
+    unclassified contract must raise rather than fall through to CSV."""
+    return _SOURCE_FORMATS[contract]
 
 
 def read_options(contract: str) -> dict[str, str]:
@@ -137,7 +208,12 @@ def read_options(contract: str) -> dict[str, str]:
     `source_format` instead of re-testing the contract, so a format and its options
     cannot come apart. They would fail in the quiet direction if they did -- CSV
     options on a JSON read are simply ignored by Spark, so the stream would parse with
-    Spark's own defaults and nothing would say so."""
+    Spark's own defaults and nothing would say so.
+
+    IT IS ALSO WHY WIDENING ONE WIDENS BOTH. `PTAX_CONTRACT` was added to
+    `_SOURCE_FORMATS` and nothing here changed; had this function carried its own
+    `contract in (A, B)` test, the two would have had to be edited together forever, and
+    the edit that was forgotten would be the silent one."""
     return jsonl_read_options() if source_format(contract) == JSON_FORMAT else csv_read_options()
 
 
