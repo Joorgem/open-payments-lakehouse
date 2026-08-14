@@ -173,6 +173,40 @@ def test_no_currency_domain_is_declared():
     assert ptax_source.QUOTED_CURRENCY == "USD"
 
 
+def test_the_docstring_puts_the_grain_reduce_on_THE_CONSUMER_and_not_behind_it():
+    """THE ONE SENTENCE ABOUT THIS TABLE A READER IS MOST LIKELY TO GET WRONG, pinned so it
+    cannot be softened back.
+
+    The first version of this module said the grain "IS one row per (currency, quote_date)"
+    and that "everything below assumes that reduction already happened". Task 1's fix pass
+    established the opposite and could not edit this file: `sole_quote` reduces ONE
+    RESPONSE, bronze is written `mode("append")`, so a second extraction over the same span
+    lands a second row for every quote date -- and the consumer of the landed table must
+    still reduce over it. A gold-side join written against the retracted sentence fans out
+    its fact on the first re-run, with every row count reporting clean.
+
+    A TEXT PIN AND NOT AN ARGUMENT ABOUT TASTE. This claim cannot be asserted
+    behaviourally: the contract is DATA, and what is wrong with the retracted sentence is
+    that it is a false statement about a table's grain, which goes stale silently rather
+    than turning red. This repository treats silent staleness as the worse outcome (see
+    §5's note on a docstring that "is corrected by hand or not at all"), so the sentence is
+    given a test. It fails if the imperative is deleted, and it fails if the retracted
+    phrasing comes back."""
+    docstring = ptax.__doc__ or ""
+    assert "MUST REDUCE IT TO ONE ROW PER (currency, quote_date)" in docstring, (
+        "the requirement has to be on the consumer, in the imperative: a table whose grain "
+        "is described rather than required is one a gold join will assume"
+    )
+    assert "Everything below assumes that reduction already happened" not in docstring, (
+        "the retracted sentence is back -- `mode('append')` means a re-run lands duplicates "
+        "and nothing between here and the fact removes them"
+    )
+    # And the reduce it DOES describe is the one ptax_source actually performs: the earlier
+    # stamp, not the later one. Task 1's fix pass moved that too, and a docstring naming
+    # `max()` behaviour beside a `min()` implementation is the same species of stale.
+    assert "EARLIER publication stamp" in docstring
+
+
 def test_the_contract_module_imports_nothing_and_is_therefore_data():
     """`cnpj_schemas` imports nothing, `payments` imports nothing, and so does this.
 

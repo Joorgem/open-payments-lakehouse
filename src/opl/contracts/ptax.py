@@ -8,13 +8,27 @@ IT IMPORTS NOTHING, and that is a requirement rather than a tidiness note.
 and the registry is imported by the extraction scripts, which run on a host where pyspark
 is an optional extra that is usually absent. An import here is an import there.
 
-THE GRAIN IS ONE ROW PER (currency, quote_date). Not per publication, not per request,
-not per calendar day: one row is the ONE quote that a given currency had for a given
-quote date. `opl.extraction.ptax_source.sole_quote` is where that reduction happens, at
-the request, because there the key IS the request -- one endpoint is one currency and one
-URL is one quote date, so two rows in one response can only be two publications of one
-quote. Two rows that AGREE reduce to the later publication stamp; two that DISAGREE are
-refused rather than resolved. Everything below assumes that reduction already happened.
+THE INTENDED GRAIN IS ONE ROW PER (currency, quote_date) AND THE LANDED TABLE DOES NOT
+ENFORCE IT. Read that as a requirement on the CONSUMER, because it is the one sentence
+about this table that a reader is most likely to get wrong -- an earlier version of this
+docstring said the reduction had already happened and that "everything below assumes" it,
+and that was retracted.
+
+**ANY CONSUMER OF THIS TABLE MUST REDUCE IT TO ONE ROW PER (currency, quote_date)
+ITSELF.** Not "should" and not "may assume": bronze is written `mode("append")`
+(`opl.bronze.promote`), so a second extraction over the same span lands a SECOND row for
+every quote date it covers, and a re-run is an ordinary event rather than an incident. A
+consumer that joins this table unreduced fans out its fact.
+
+What `opl.extraction.ptax_source.sole_quote` does is a DIFFERENT, SMALLER reduce, and it
+is an addition to the one above rather than a replacement for it. Its scope is ONE
+RESPONSE, where the key IS the request -- one endpoint is one currency and one URL is one
+quote date -- so the only fan-out it can see is two publications of one quote inside a
+single body. Two rows that DISAGREE on a rate are refused rather than resolved; two that
+agree reduce to the EARLIER publication stamp, because the rate is the same either way and
+only its availability moves, and keeping the later one would deny a payment between the two
+a rate that had already been published (plan T3). It cannot see across runs, and it cannot
+see across rows of a landed table, because it is never invoked over one.
 
 --- THE COLUMN-PROVENANCE SPLIT, WHICH IS THIS MODULE'S WHOLE DESIGN ------------------
 
