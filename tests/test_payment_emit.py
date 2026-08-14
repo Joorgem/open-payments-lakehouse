@@ -295,6 +295,52 @@ def test_the_payments_ingest_refuses_a_missing_batch_id_and_a_missing_month():
         module.main(["payments", "12345"])
 
 
+def test_the_run_log_carries_the_currency_mix_a_declaration_cannot_supply(capsys):
+    """THE ONE NUMBER IN THE PUBLISHED PREDICTIONS THAT NO RUN LOG CARRIED.
+
+    The mix is an outcome of the draw, not a declared count: `profiles.py` declares WHICH
+    currencies a stream may carry and nothing about how many rows get each. So the split
+    published for the cross-currency profile could be checked only by re-running the
+    generator locally and counting -- which is re-deriving the thing the workspace run
+    existed to show. `_report` prints it now, beside the digest and the byte count, which
+    are the two numbers the same evidence document quotes from the same three lines.
+
+    A HAND-BUILT MIX AND A LITERAL EXPECTATION, deliberately. Counting the records here and
+    comparing that against the line would be the same count twice -- true under any
+    implementation, including one that read the wrong key -- and this file has already paid
+    for one assertion of that shape. Six records with a known split are the pin.
+
+    `EUR` IS UNDECLARED BY THE PROFILE and is printed anyway, LAST: `_require_currencies`
+    makes it unreachable through a real stream, and a mix line that dropped a value would
+    add up to less than `rows=` with nothing saying which value was missing.
+
+    The column spelling is cross-checked against the contract in the same breath. It is a
+    second copy of a contract column name -- the shape this repository ties down rather than
+    trusts -- and a `_CURRENCY_COLUMN` that drifted would count a KeyError, not a mix."""
+    from opl.bronze.generated_landing import EmittedFile
+    from opl.contracts.payments import COLUMNS
+
+    module = _load("generate_payments")
+    assert module._CURRENCY_COLUMN in COLUMNS, "the mix is counted over a contract column"
+    profile = profiles_module.PROFILES["cross-currency"]
+    records = tuple(
+        {module._CURRENCY_COLUMN: currency}
+        for currency in ("BRL", "USD", "BRL", "EUR", "USD", "BRL")
+    )
+    landed = EmittedFile(
+        path="/Volumes/probe.jsonl",
+        row_count=len(records),
+        byte_count=0,
+        sha256="",
+        was_already_there=False,
+    )
+
+    module._report(profile, landed, records)
+    printed = capsys.readouterr().out
+    assert "currency BRL=3 USD=2 EUR=1 (declared BRL, USD)" in printed
+    assert f"rows={len(records)}" in printed, "the mix must be readable beside the rows"
+
+
 def test_the_registered_payments_table_is_the_one_these_tasks_are_built_for():
     """Guard the guard: every refusal above is about a table that is NOT generated, so
     all of them would still pass if `payments` itself had stopped being one -- with
