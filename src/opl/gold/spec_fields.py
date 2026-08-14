@@ -333,3 +333,31 @@ def _assert_the_roles_are_a_set_with_one_contract_source(
             "leaves the span unmeasurable, and two leave it a function of which role a "
             "reader picked"
         )
+
+
+def _assert_a_calendars_roles_read_a_day(kind: str, name: str, roles: tuple[FactRole, ...]) -> None:
+    """Refuse a calendar role that reads a MEMBER -- the one pairing `FactRole` itself cannot
+    judge, because it needs the KIND.
+
+    `FactRole._assert_the_reader_matches_the_declared_source` locks the reader to the column's
+    representation, which leaves `READS_MEMBER` over a contract column legal -- and it IS legal,
+    for an ENUMERATED dimension, whose member is exactly the string the column holds. For a
+    CALENDAR it is the zone hazard from the other direction: `opl.gold.conformed._member_key`
+    branches on the kind, so a calendar role reading a member hands `date_format` the RAW ISO
+    INSTANT TEXT, which casts it in the SESSION zone and keys every midnight-UTC payment to the
+    previous day. A calendar's contract role reads ISO TEXT and its derived roles read a DATE,
+    so between the two guards each source has exactly one legal reader.
+
+    IT IS A SEPARATE FUNCTION AND NOT A CLAUSE OF THE GUARD ABOVE because it is the only check
+    here that is about ONE KIND: the guard above is called by whatever declares a role tuple,
+    and this one only by the calendar."""
+    reading_members = sorted(role.key for role in roles if role.reads == READS_MEMBER)
+    if reading_members:
+        raise ValueError(
+            f"gold {kind} {name!r} declares {reading_members} reading {READS_MEMBER!r}, and a "
+            f"calendar's member is a DAY. Its key is `date_format(...)`, so a role reading a "
+            f"member hands that the column's RAW TEXT -- an ISO instant, cast in the SESSION "
+            f"zone, which keys every midnight-UTC payment to the previous day. A contract role "
+            f"reads {READS_ISO_TEXT!r} (ten characters, zone-free) and a derived one "
+            f"{READS_DATE!r}"
+        )

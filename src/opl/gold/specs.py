@@ -55,6 +55,7 @@ from opl.gold.spec_fields import (
     FROM_CONTRACT,
     READS_MEMBER,
     FactRole,
+    _assert_a_calendars_roles_read_a_day,
     _assert_every_field_is_named,
     _assert_the_fact_column_is_one_the_contract_carries,
     _assert_the_roles_are_a_set_with_one_contract_source,
@@ -316,6 +317,7 @@ class CalendarDimension:
         _assert_the_roles_are_a_set_with_one_contract_source(
             "calendar dimension", self.name, self.roles
         )
+        _assert_a_calendars_roles_read_a_day("calendar dimension", self.name, self.roles)
         # THE CONTRACT-COLUMN AND DRIFT REFUSALS ARE `FactRole`'s NOW, not repeated here. A
         # calendar's `fact_column` IS the contract-sourced role's column, and that role
         # already refused a name v1 does not carry and a DRIFT column -- at the `FactRole(...)`

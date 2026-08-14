@@ -210,9 +210,11 @@ class FxSeries:
     """The reduced series and the three numbers that make a BOUNDED extraction visible.
 
     REPORTED AND NEVER REFUSED -- see the module docstring for why gaplessness is not
-    asserted here. A run log carrying "42 quotes, 2026-06-03 .. 2026-08-01" is what lets a
-    reader see that the window the fact needed was actually landed; a rate that resolved
-    proves only that SOME quote preceded the payment.
+    asserted here. A run log carrying "42 quotes, published ... .. 2026-07-31 16:10:31.061071+
+    00:00" is what lets a reader see that the window the fact needed was actually landed; a rate
+    that resolved proves only that SOME quote preceded the payment. The LAST PUBLICATION is
+    2026-07-31 and not 2026-08-01, which this sentence used to say: the extraction RANGE ends on
+    a Saturday, and a Saturday has no bulletin.
 
     AND THESE THREE ARE ONE SIDE OF A COMPARISON: `FxCoverage` below is the other, because
     nothing in this dataclass describes the PAYMENT window it is supposed to be checked

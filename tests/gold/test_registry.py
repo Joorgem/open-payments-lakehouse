@@ -484,6 +484,23 @@ def test_a_role_whose_READER_does_not_match_its_source_is_refused():
     )
 
 
+def test_a_calendar_role_that_reads_a_MEMBER_is_refused_because_its_member_is_a_day():
+    """THE ONE PAIRING `FactRole` CANNOT JUDGE, and leaving it open would have been a hole in
+    the guard above. `READS_MEMBER` over a contract column passes the role's own reader check --
+    correctly, because it is exactly right for an ENUMERATED dimension, whose member IS the
+    string the column holds. For a CALENDAR it is the same zone defect from the other side:
+    `_member_key` branches on the KIND, so a calendar role reading a member hands `date_format`
+    the raw ISO instant text, which casts in the SESSION zone and keys every midnight-UTC
+    payment to the previous day. It needs the kind to see, so it is asserted where the kind is."""
+    with pytest.raises(ValueError, match="a calendar's member is a DAY"):
+        _calendar(roles=(_role(reads=READS_MEMBER),))
+    assert DIM_DATE.fact_roles[0].reads == READS_ISO_TEXT, "the live calendar reads the text"
+    assert DIM_CHANNEL.fact_roles[0].reads == READS_MEMBER, (
+        "and an enumerated dimension's derived role reads a member, which is why the refusal "
+        "cannot live in FactRole"
+    )
+
+
 # --- the point-in-time kind ----------------------------------------------------------
 
 
