@@ -86,6 +86,14 @@ _TABLE_TASKS = [
     # and reports SUCCESS.
     "bronze_payments_ingest",
     "generate_payments",
+    # F-API Task 2, and both are deliberate additions in this list's own sense. The
+    # ingest is the fourth spelling of "read a landing dir into staging" and the one that
+    # reads the THIRD landing root; the fetch is the first entry point that makes an
+    # outbound HTTP call, so a literal subdir in it would write a landed file into a
+    # directory no registered table's stream reads -- an ingest that drains nothing and
+    # reports SUCCESS, after 42 requests have already been made.
+    "bronze_ptax_ingest",
+    "fetch_ptax",
 ]
 
 
@@ -338,6 +346,26 @@ _MONTH_CONSUMERS: dict[str, list[tuple[str, int | None, str | None]]] = {
     "generate_payments": [
         ("landing_generated_table", 1, None),
         ("landing_generated_tmp", 1, None),
+    ],
+    # F-API Task 2. Four consumers again, and the same four FACTS -- reached through the
+    # THIRD landing root and through `registry_landing.landing_dir`, which resolves the
+    # root from the spec's landing mode rather than from this entry point knowing the
+    # layout. The month is the third positional argument there, not the second, because
+    # that function takes the whole spec.
+    "bronze_ptax_ingest": [
+        ("landing_dir", 2, None),
+        ("bronze_stream", None, "month"),
+        ("checkpoint_location", None, "month"),
+        ("add_common_audit_columns", None, "snapshot_month"),
+    ],
+    # THE FETCHER, and it belongs in this lock for `generate_payments`' reason: its month
+    # decides which directory the record is written into, and the ingest task that
+    # follows resolves ITS source dir from the same job parameter. A month that diverged
+    # here would write one month's landing dir and read another's -- a job whose every
+    # task reports SUCCESS having ingested nothing, after 42 HTTP round trips.
+    "fetch_ptax": [
+        ("landing_api_table", 1, None),
+        ("landing_api_tmp", 1, None),
     ],
 }
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 
 
 @dataclass(frozen=True)
@@ -235,6 +236,21 @@ def is_month(value: str) -> bool:
 # to be a real month would put every un-parameterised run back on that path.
 SENTINEL_MONTH = "REQUIRED-PASS-A-MONTH"
 
+# The `first`/`last` job-parameter default in the PTAX job YAML, and a value
+# `require_quote_date` refuses BELOW. Same shape and same reason as `SENTINEL_MONTH`
+# above, `provenance.SENTINEL_REVISION` and `promote.SENTINEL_BATCH_ID`: a job parameter
+# must have SOME default, no date is a valid one, and so the default's whole job is to
+# fail.
+#
+# IT LIVES HERE, BESIDE `SENTINEL_MONTH`, AND NOT IN THE ENTRY POINT THAT PARSES IT.
+# `require_month`'s own docstring argues placement from the number of callers, and this
+# has one -- so the argument for this location is the other one that file makes: a job
+# YAML's default is compared against the CONSTANT THE CODE NAMES
+# (`tests/test_job_yaml_launch_guards.py`), because two spellings of one sentinel is a
+# default that drifts into a value nobody checked. A constant inside `databricks/src` is
+# not in the wheel the job installs and is not where that lock looks.
+SENTINEL_QUOTE_DATE = "REQUIRED-PASS-A-DATE"
+
 
 # THE SESSION TIMEZONE, PINNED, AND IT IS A CORRECTNESS SETTING RATHER THAN A
 # PREFERENCE. A Spark `TIMESTAMP` is an INSTANT stored as UTC micros, and every
@@ -358,3 +374,50 @@ def require_month(month: str | None, *, action: str) -> str:
             "given."
         )
     return candidate
+
+
+def require_quote_date(value: str | None, *, action: str, bound: str) -> date:
+    """The quote date `action` will work from, or refuse: absent and malformed both.
+
+    ISO `YYYY-MM-DD`, which is NOT the format the PTAX endpoint is asked in
+    (`MM-DD-YYYY`, in single quotes). That asymmetry is the whole reason this refuses
+    rather than accepting whatever parses: `opl.extraction.ptax_source.quote_url` does
+    the conversion, so an operator who types the API's own spelling here would otherwise
+    have `06-03-2026` read as a date -- `date.fromisoformat` refuses it, which is what
+    makes the refusal exact rather than lucky.
+
+    A `date`, not a string, and that is the point of parsing at the boundary: every
+    consumer downstream takes a real date, so nothing further in can hold a value that
+    only LOOKS like one. The landing filename is derived from it, so a malformed bound
+    would otherwise become part of a path.
+
+    ABSENCE IS REFUSED, NOT DEFAULTED, for `require_month`'s reason with a sharper edge.
+    There is no defensible default: today's date invents a fact, and a pinned window
+    would silently land whichever range was last written down rather than the one asked
+    for -- under a filename derived from it, which the landing writer then refuses to
+    overwrite, so the correct fetch would be blocked by the wrong one.
+
+    `bound` names WHICH end of the window is wrong, because a message that says only
+    "not a date" leaves an operator with two parameters and one complaint.
+
+    Refuses BEFORE any request is made, like `table_spec` and `require_month`: nothing
+    about a malformed date needs 42 HTTP round trips to diagnose."""
+    candidate = (value or "").strip()
+    if not candidate or candidate == SENTINEL_QUOTE_DATE:
+        raise ValueError(
+            f"refusing to {action}: no {bound} quote date was given, and there is no "
+            "default to fall back on. It bounds which days are fetched and it is half of "
+            "the landing filename, so a guessed window lands a file under a name derived "
+            "from it -- after which the landing writer refuses to overwrite it, and the "
+            "window that was actually wanted can never be landed under that name."
+        )
+    try:
+        return date.fromisoformat(candidate)
+    except ValueError:
+        raise ValueError(
+            f"refusing to {action}: {bound}={value!r} is not an ISO date. It has to be "
+            "YYYY-MM-DD (e.g. 2026-06-03). Note that this is NOT the format the PTAX "
+            "endpoint itself is asked in -- that is MM-DD-YYYY in single quotes, and "
+            "opl.extraction.ptax_source does the conversion. An API-shaped date here is "
+            "refused rather than reinterpreted."
+        ) from None

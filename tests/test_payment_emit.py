@@ -230,10 +230,18 @@ def test_a_different_stream_under_the_same_name_is_refused_not_overwritten(tmp_p
     Same stream id, different defects, therefore different bytes. Overwriting would
     replace a file whose rows may already be in bronze, leaving that table describing
     a stream that no longer exists anywhere -- and Auto Loader, which keys on the
-    path, would never read the replacement."""
-    _emit(tmp_path)
-    with pytest.raises(ValueError, match="already holds a different stream"):
+    path, would never read the replacement.
+
+    The refusal's wording widened when F-API Task 2 generalised the emitter: it serves
+    two producers now and cannot say "stream" about both. What is asserted here is the
+    part that is about THIS producer -- both digests, so the reader can see which file
+    is on disk and which one the run derived."""
+    _, landed = _emit(tmp_path)
+    with pytest.raises(ValueError) as excinfo:
         _emit(tmp_path, DefectSpec(duplicate_count=3))
+    message = str(excinfo.value)
+    assert "already holds different bytes" in message
+    assert landed.sha256 in message, "the operator must see the digest that is on disk"
 
 
 # --- THE DECLARED PROFILES ---------------------------------------------------------

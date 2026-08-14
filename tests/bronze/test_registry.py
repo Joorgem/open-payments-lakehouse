@@ -322,7 +322,7 @@ def test_no_table_nothing_downloads_claims_a_downloader():
             f"{spec.name} lands as {spec.landing!r} and declares prefix {spec.prefix!r} "
             "-- a prefix is what a DOWNLOADER builds its file list from"
         )
-    assert modes == {LANDING_GENERATED}
+    assert modes == {LANDING_GENERATED, LANDING_API}
 
 
 # --- WHERE A SPEC LANDS: `registry_landing.landing_dir` --------------------------------
@@ -518,3 +518,41 @@ def test_the_new_tables_carry_a_constraint_no_other_contract_could_have():
         "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
         "ALTER TABLE {table} ALTER COLUMN identificador_socio SET NOT NULL",
     )
+
+
+def test_the_ptax_table_carries_constraints_no_other_contract_could_have():
+    """The same anti-paste property for the third source, and it needs its own test
+    because the one above is written over `cnpj_schemas.TABLES` -- PTAX is not an RFB
+    file layout, so that loop cannot see it at all.
+
+    TWO COLUMNS, and each is unique to this contract across the WHOLE catalogue rather
+    than across the RFB half: a constraint tuple pasted from any other registered table
+    would be missing both, and one pasted FROM here onto another table names columns that
+    table does not have, so `test_every_constraint_references_a_column_of_its_own_contract`
+    refuses it.
+
+    They are also the right columns. `quote_date` is the key the FX join resolves against
+    and the value this phase invites a writer to get wrong -- the endpoint is asked in
+    `MM-DD-YYYY`, so the request's own spelling produces a ten-character string that
+    joins to nothing while every count stays green. The length CHECK refuses a value of
+    any other width at the promote, and the gate's `bad_quote_date_shape` is what tells
+    the two ten-character spellings apart, before anything reaches bronze.
+    `cotacao_venda` is the rate gold converts with: a NULL there is an `amount_brl` that
+    lowers a total by an amount nobody can name.
+
+    NO CHECK ON `currency`, asserted as an absence for the reason the payments entry
+    gives -- a second currency must be a VALUE change rather than a schema change, and a
+    CHECK would silently make it a migration on a live table."""
+    for contract, columns in CONTRACT_COLUMNS.items():
+        if contract == "ptax":
+            continue
+        assert "quote_date" not in columns and "cotacao_venda" not in columns, contract
+
+    assert table_spec("ptax").constraints == (
+        "ALTER TABLE {table} ALTER COLUMN quote_date SET NOT NULL",
+        "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS quote_date_iso_shape",
+        "ALTER TABLE {table} ADD CONSTRAINT quote_date_iso_shape "
+        "CHECK (length(trim(quote_date)) = 10)",
+        "ALTER TABLE {table} ALTER COLUMN cotacao_venda SET NOT NULL",
+    )
+    assert not [s for s in table_spec("ptax").constraints if "currency" in s]

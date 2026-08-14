@@ -726,9 +726,9 @@ def test_an_unmasked_contract_keeps_its_check_constraint():
         for spec in REGISTRY.values()
         if any("CHECK" in statement for statement in spec.constraints)
     ]
-    assert sorted(checked) == ["empresas", "estabelecimentos", "lookup", "payments"], (
-        f"expected the four unmasked tables to keep their CHECK, got {checked}"
-    )
+    assert sorted(checked) == [
+        "empresas", "estabelecimentos", "lookup", "payments", "ptax",
+    ], f"expected every unmasked table to keep its CHECK, got {checked}"
 
 
 def test_the_registry_still_imports_where_pyspark_is_not_installed():

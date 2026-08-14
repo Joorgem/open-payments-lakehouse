@@ -19,6 +19,9 @@ from opl.bronze.snapshot import SNAPSHOT_REF_DATE_COLUMN
 from opl.contracts.catalogue import CONTRACT_COLUMNS
 from opl.contracts.payments import CONTRACT as PAYMENTS_CONTRACT
 from opl.contracts.payments import COUNTERPARTY_COLUMNS, REQUIRED_COLUMNS
+from opl.contracts.ptax import CONTRACT as PTAX_CONTRACT
+from opl.contracts.ptax import PUBLISHED_AT_COLUMN, QUOTE_DATE_COLUMN, RATE_COLUMNS
+from opl.contracts.ptax import REQUIRED_COLUMNS as PTAX_REQUIRED_COLUMNS
 
 _REPLACEMENT_CHAR = "�"
 
@@ -101,6 +104,14 @@ REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "socios": ("cnpj_basico", "identificador_socio", "nome_socio_razao_social",
                "qualificacao_socio"),
     PAYMENTS_CONTRACT: tuple(REQUIRED_COLUMNS),
+    # PTAX IS DERIVED FOR PAYMENTS' REASON, WITH A DIFFERENT AUTHOR ON THE OTHER SIDE.
+    # The contract declares every column required, and `opl.extraction.ptax_source`
+    # already refuses a response row missing any of the API's three fields and carries
+    # the request's own two onto every quote -- so "no column is ever blank" is a
+    # property of the layer above rather than a hope about BCB. Anything blank here means
+    # something between that validation and bronze emptied a column, which is exactly the
+    # set of columns a bug in the landing writer could empty without anyone noticing.
+    PTAX_CONTRACT: tuple(PTAX_REQUIRED_COLUMNS),
 }
 
 
@@ -217,6 +228,87 @@ def _cnpj_basico_length() -> Column:
     the module's one plain-function example of the three shapes it deliberately
     carries (a lambda, a closure, a module function)."""
     return _basico_length("cnpj_basico")()
+
+
+# The ISO date this lakehouse stamps into `quote_date`, as a SHAPE and then as a real
+# date. Two checks in one predicate because each misses what the other catches: the
+# regex refuses `06-19-2026` -- the API's own `MM-DD-YYYY`, which is what a writer that
+# reused the request's spelling would land -- and `to_date` refuses `2026-13-45`, which
+# has the shape and names no day.
+_ISO_DATE_SHAPE = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+_ISO_DATE_FORMAT = "yyyy-MM-dd"
+
+
+def _bad_iso_date(column: str) -> Callable[[], Column]:
+    """`column` is not an ISO `YYYY-MM-DD` naming a real day.
+
+    THE MISTAKE THIS PHASE INVITES, refused at the gate. The PTAX endpoint is asked in
+    `MM-DD-YYYY` in single quotes -- not ISO, and got wrong by everyone who assumes --
+    so the natural bug in a landing writer is to stamp the request's own spelling into
+    the record. Nothing about that fails: the column is present, non-blank, ten
+    characters, and it JOINS TO NOTHING in gold while every row count stays green, which
+    is the shape this repository refuses to ship.
+
+    A LENGTH CHECK ALSO EXISTS, in the registry's constraint tuple, and this is not a
+    duplicate of it. That one runs at the promote, AFTER the append has committed, and
+    length alone accepts `06-19-2026`. This runs in the gate, before anything reaches
+    bronze, and it is the one that can tell the two spellings apart."""
+    return lambda: ~F.col(column).rlike(_ISO_DATE_SHAPE) | F.to_date(
+        F.col(column), _ISO_DATE_FORMAT
+    ).isNull()
+
+
+def _unparseable_rate(column: str) -> Callable[[], Column]:
+    """`column` does not read as a decimal number.
+
+    NEAR-TAUTOLOGICAL TODAY, AND SAID SO RATHER THAN DROPPED. The landing writer stamps
+    `str(Decimal(...))` from a value `opl.extraction.ptax_source` already parsed with
+    `Decimal` from the raw response text, so a rate that reaches bronze unparseable means
+    the emitter changed shape -- a `repr(float)`, a locale-formatted comma, a truncation.
+    The reason it earns a place on an all-or-nothing gate is what a NULL rate does
+    downstream: `amount_brl` is `amount_original * venda`, so an unreadable venda is not
+    a missing column, it is every payment on that date converted at nothing, lowering
+    a total by an amount nobody can name.
+
+    `decimal(18,5)` is the series' own scale -- five digits, which `5.14420` needs and
+    which `decimal(18,2)` would round to `5.14`, putting `amount_brl` ~0.08% wrong on
+    every row while looking deliberate."""
+    return lambda: F.col(column).cast(_RATE_TYPE).isNull()
+
+
+_RATE_TYPE = "decimal(18,5)"
+
+
+def _unparseable_publication_instant() -> Column:
+    """`data_hora_cotacao` does not read as a timestamp.
+
+    IT IS T3's COMPARATOR, which is why this is not the same rule as the two above wearing
+    a different column name. The rate for a payment is the most recent quote whose
+    PUBLICATION INSTANT precedes the payment's own; a value `to_timestamp` cannot read
+    becomes NULL in that comparison, the row drops out of the as-of resolution, and the
+    payment silently resolves to an OLDER quote instead. Nothing is missing and nothing
+    fails -- the answer is just the wrong rate.
+
+    FORMAT-AGNOSTIC ON PURPOSE, and this is a decision rather than laziness. The API's
+    fractional-second width is not stable across the series -- 1 digit in 1984, 3 in 2025,
+    6 in 2026 -- so a pinned pattern is a rule that works on this phase's range and
+    rejects the series. Spark's own parser accepts all of them; what is asserted here is
+    that SOMETHING can read it, which is exactly what the join needs.
+
+    WHAT THAT COSTS, MEASURED RATHER THAN GLOSSED: Spark's single-argument `to_timestamp`
+    parses a BARE TIME. `13:03:25.555497` becomes 1970-01-01T13:03:25, so this rule
+    accepts it and T3's comparison gets a real instant fifty-six years early -- a quote
+    every payment sorts after. The hole is closed UPSTREAM rather than here:
+    `ptax_source._publication_instant` accepts exactly two spellings, both date-and-time,
+    and refuses everything else before a record is ever built. Pinned as an accepted
+    limit in `tests/bronze/test_ptax_rules.py` so it is a recorded property rather than
+    something met in the workspace.
+
+    The NULL case is a near-tautology with `null_or_empty_data_hora_cotacao`, which runs
+    FIRST and therefore wins the reason -- first-match-wins is the gate's contract. That
+    is the right ordering: a row with no stamp at all is described by the missing stamp,
+    not by the stamp being unreadable."""
+    return F.to_timestamp(F.col(PUBLISHED_AT_COLUMN)).isNull()
 
 
 def _unprovable_ref_date() -> Column:
@@ -337,6 +429,47 @@ def _unprovable_ref_date() -> Column:
 # THE ORDER IS THE SAME ARGUMENT THE CNPJ SETS MAKE: what is MISSING before what is
 # the wrong SHAPE before what is damaged in its BYTES. A row missing its payer is
 # described by the missing payer rather than by that column's length.
+#
+# --- AND THE PTAX SET, WHOSE ENTRIES ARE MOSTLY NEAR-TAUTOLOGIES, SAID SO ---------
+#
+# Every rule below is a statement about a record this repository BUILDS, from a response
+# `opl.extraction.ptax_source` has already validated. So most of them cannot fire against
+# any body BCB has ever returned, and that is reported here rather than dressed up:
+#
+#   - Five `null_or_empty_*`, one per contract column, derived from the contract. The
+#     extraction layer refuses a row missing any API field and carries the request's two
+#     values onto every quote, so a blank means the landing writer emptied a column.
+#   - `bad_quote_date_shape`. NOT a near-tautology, and the one rule here that is aimed at
+#     a mistake somebody will actually make: the API is asked in `MM-DD-YYYY`, so the
+#     request's own spelling is the wrong value most likely to be stamped, and it joins to
+#     nothing in gold with every count green.
+#   - `unparseable_cotacao_compra` / `unparseable_cotacao_venda`. Near-tautological -- the
+#     writer stamps `str(Decimal(...))` -- and kept because an unreadable venda converts
+#     every payment on that date at nothing.
+#   - `unparseable_data_hora_cotacao`. Near-tautological for the same reason and the most
+#     load-bearing of the three, because it is T3's COMPARATOR: a stamp the join cannot
+#     read does not fail, it resolves the payment to an older quote.
+#   - `encoding_replacement_char`, folded over all five columns. Live for the reason it is
+#     live on payments: the serialiser returns TEXT and a writer that did not encode UTF-8
+#     explicitly hands Java bytes it substitutes U+FFFD for, silently.
+#
+# WHAT IT DELIBERATELY DOES NOT CARRY, and the second one is a ruling rather than a
+# deferral:
+#
+#   - No value-domain rule (`currency IN (...)`, a rate range, a quote_date window). The
+#     currency is decided by which endpoint was called, not by the body, and a plausible
+#     rate range is a number nobody in this repository is entitled to assert about BCB.
+#   - NO GAPLESSNESS RULE, and it cannot be one. T3 requires the landed series to be
+#     contiguous in business days over the whole span the fact reaches, because "most
+#     recent landed quote" otherwise returns a STALE rate successfully. That is a
+#     statement about a day that is ABSENT -- and this gate TAGS ROWS. There is no row for
+#     a missing day, so no rule here can ever see one. It belongs to whatever asserts the
+#     series after it is landed, and putting a decorative version of it here would be a
+#     control that reports green over exactly the case it names.
+#   - No `unprovable_snapshot_ref_date`, for payments' reason: the column does not exist
+#     on these rows. `_snapshot_ref_date` is the date a source declares in its own
+#     FILENAME, which is a fact about the RFB's mainframe naming convention; BCB declares
+#     no such thing, so `add_common_audit_columns` does not stamp it.
 
 
 def rules_for(table: str) -> list[tuple[str, Callable[[], Column]]]:
@@ -375,6 +508,16 @@ def rules_for(table: str) -> list[tuple[str, Callable[[], Column]]]:
                 for column in COUNTERPARTY_COLUMNS
             ),
             ("encoding_replacement_char", _encoding_check(PAYMENTS_CONTRACT)),
+        ],
+        PTAX_CONTRACT: [
+            *_required_rules(PTAX_CONTRACT),
+            (f"bad_{QUOTE_DATE_COLUMN}_shape", _bad_iso_date(QUOTE_DATE_COLUMN)),
+            *(
+                (f"unparseable_{column}", _unparseable_rate(column))
+                for column in RATE_COLUMNS
+            ),
+            (f"unparseable_{PUBLISHED_AT_COLUMN}", _unparseable_publication_instant),
+            ("encoding_replacement_char", _encoding_check(PTAX_CONTRACT)),
         ],
     }
     return list(tables[table])

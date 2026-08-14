@@ -1,0 +1,166 @@
+# databricks/resources/bronze_ptax_job.yml
+# One job YAML PER TABLE, deliberately -- not one for_each_task over the registry.
+# Same reason as every other job here: for_each shares a single {{job.run_id}} and
+# therefore one _batch_id across tables, which contradicts the
+# one-batch-is-one-table's-ingest assumption the gate, promote_batch and the
+# repromote operator job all rest on.
+#
+# WRITTEN AS A COPY of the Payments job, which is the risk every file in this directory
+# carries: `ptax` appears in four task parameter lists below and every wrong value it
+# could carry is the name of a table that EXISTS, so a leftover string does not fail the
+# run -- it fetches, ingests, gates or promotes another table and reports SUCCESS.
+# tests/test_job_yaml_wiring.py refuses any registered table name in this file other than
+# this job's own, and the prose below capitalises table names for that lock's sake:
+# registry keys are lower-case, so a case-sensitive grep of this file counts PARAMETERS
+# only.
+#
+# --- WHAT THIS JOB HAS THAT NO OTHER ONE DOES, AND WHAT IT LACKS ---------------------
+#
+# IT FETCHES ITS OWN INPUT, OVER HTTP. PTAX lands as `api` (opl.bronze.registry_landing),
+# which means nothing downloads a file and nothing generates one: fetch_ptax.py sits
+# exactly where unzip_table.py sits in the CNPJ jobs and where generate_payments.py sits
+# in the Payments job, calling the Banco Central's public OData service and writing a
+# record built from the validated response into the Volume. That is the whole difference
+# in the task list, and it is why this job takes two extra parameters.
+#
+# NO CREDENTIAL IS INVOLVED AND NONE MAY BE ADDED. The endpoint is public and
+# unauthenticated. There is no secret scope reference in this file and there must never
+# be one.
+#
+# IT HAS NO reclaim_landing. That task deletes landed files once bronze proves it holds
+# their rows, and it refuses any table that does not land as zips -- because the zips in
+# the sibling directory are the only way back to the source when a parse defect is found
+# after ingestion. The way back here is the REQUEST: the window and the currency, which
+# the landing filename carries, so re-fetching reproduces the same path. Nothing is
+# deleted.
+#
+# IT HAS NO ensure_masked_table. The PTAX contract declares no masked column -- it holds
+# two dates, a currency code and two published exchange rates, and there is no personal
+# datum anywhere in it. tests/test_job_yaml_wiring.py asserts the ABSENCE as well as the
+# presence, because that task is a documented no-op for an unmasked contract and a copied
+# one would tell the next reader these rows are masked when they are not.
+#
+# --- THE WINDOW IS A PARAMETER, AND THE DEFAULTS REFUSE -----------------------------
+#
+# `first` and `last` bound the QUOTE DATES fetched, and they are a different fact from
+# `month`, which is the landing month. The extraction range F-API Task 0 measured is
+# 2026-06-03 .. 2026-08-01 -- 42 quotes, gapless in business days. 2026-06-03 is a hard
+# floor: starting at 06-04 leaves Corpus Christi with nothing to fall back to.
+#
+#     databricks bundle run bronze_ptax -t free \
+#       --params month=2026-08,revision=$(git rev-parse HEAD),\
+#                first=2026-06-03,last=2026-08-01
+#
+# The landing filename is derived from the window and the currency and carries no run id,
+# month or timestamp, so a re-run of the same window is a no-op and a different window is
+# a different file. Auto Loader drains only files its checkpoint has not seen.
+resources:
+  jobs:
+    bronze_ptax:
+      name: opl-bronze-ptax
+      parameters:
+        - name: month
+          # The month this run fetches into and ingests from; the default is a value the
+          # tasks refuse (opl.config.SENTINEL_MONTH), because a real month here
+          # re-ingests that month against an EMPTY month-scoped checkpoint and silently
+          # doubles the row counts -- the promote's idempotence is keyed on _batch_id and
+          # cannot see it. Estabelecimentos' job carries the full argument.
+          default: "REQUIRED-PASS-A-MONTH"
+        - name: revision
+          # The revision this run is launched for; the default is a value the guard below
+          # refuses, so a run launched without --params stops instead of checking
+          # nothing. Estabelecimentos' job carries the full argument.
+          default: "REQUIRED-PASS-A-REVISION"
+        - name: first
+          # The first quote date fetched, ISO YYYY-MM-DD. The default is a value
+          # opl.config.require_quote_date refuses, for the reason the two above are: a
+          # real date here would make a forgotten --params fetch a window nobody asked
+          # for -- and then REFUSE the window that was asked for, because emit_records_file
+          # will not overwrite a file whose bytes differ from the ones it derived.
+          default: "REQUIRED-PASS-A-DATE"
+        - name: last
+          # The last quote date fetched, inclusive. Same sentinel and same argument.
+          default: "REQUIRED-PASS-A-DATE"
+      tasks:
+        # FIRST, AND NOTHING BEFORE IT (ADR 0009). Compares the revision above -- the
+        # operator's HEAD when the run was submitted -- against the revision the deployed
+        # wheel was built from, and refuses a mismatch before this job makes a single
+        # request. It matters here for a reason no other job has: this is the first task
+        # in this repository that reaches OUT of the workspace, and a wheel from another
+        # commit could ask a different endpoint, or read the response against a different
+        # contract, and land it under a filename this repository would then refuse to
+        # correct.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        - task_key: fetch
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/fetch_ptax.py
+            parameters:
+              [
+                "ptax",
+                "{{job.parameters.month}}",
+                "{{job.parameters.first}}",
+                "{{job.parameters.last}}",
+              ]
+
+        - task_key: ingest
+          depends_on: [{ task_key: fetch }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/bronze_ptax_ingest.py
+            parameters: ["ptax", "{{job.run_id}}", "{{job.parameters.month}}"]
+
+        - task_key: dq_gate_batch
+          depends_on: [{ task_key: ingest }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/dq_gate_batch.py
+            parameters: ["ptax", "{{job.run_id}}"]
+
+        - task_key: check_bad_rows
+          depends_on: [{ task_key: dq_gate_batch }]
+          condition_task:
+            op: EQUAL_TO
+            left: "{{tasks.dq_gate_batch.values.bad_row_count}}"
+            right: "0"
+
+        - task_key: promote
+          depends_on: [{ task_key: check_bad_rows, outcome: "true" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/promote_batch.py
+            # --in-flow declares "this batch_id is the run executing this task", which is
+            # the ONLY caller that can say so truthfully. It is what lets a run whose
+            # batch is empty (the window was already landed and already ingested) succeed
+            # as a no-op instead of being refused.
+            parameters: ["ptax", "{{job.run_id}}", "--in-flow"]
+
+        - task_key: fail_on_dq
+          depends_on: [{ task_key: check_bad_rows, outcome: "false" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/fail_on_dq.py
+            # The TABLE, not a quarantine name -- and no quarantine string is spelled in
+            # this file at all, which is the point rather than a style. fail_on_dq derives
+            # it from the registry, so the one value that could be stale here does not
+            # exist.
+            parameters: ["ptax"]
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

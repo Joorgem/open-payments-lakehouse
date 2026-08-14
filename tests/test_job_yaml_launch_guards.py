@@ -67,6 +67,15 @@ _GUARDED_JOBS = (
     # pinned digest describes code nobody reviewed, and `emit_stream_file` refuses the
     # correct stream ever afterwards because a different file already sits there.
     "bronze_payments_job.yml",
+    # The PTAX job, and this list's question has an answer here that no other entry has:
+    # it is the first job in this repository whose tasks reach OUTSIDE the workspace. A
+    # wheel from another revision could ask a different endpoint, or read the response
+    # against a different contract -- and then land it under a filename derived from the
+    # window, which `emit_records_file` refuses to overwrite ever afterwards. So a wrong
+    # wheel does not merely write wrong rows here; it takes the name the correct rows
+    # would have to be written under, and the repair is deleting a file from the Volume
+    # by hand.
+    "bronze_ptax_job.yml",
     # The operator job, and its inclusion is a decision rather than completeness: a
     # repromote APPENDS TO BRONZE, the system of record, re-applying whatever DQ rules
     # the deployed wheel happens to carry. Run against a stale wheel it appends rows

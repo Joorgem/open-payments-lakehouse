@@ -57,6 +57,11 @@ JOB_OF = {
     # gate-verdict routing, the month default and the revision guard -- because what
     # changed is which task fills the landing dir, not the flow.
     "payments": "bronze_payments_job.yml",
+    # F-API Task 2, and the first entry whose job FETCHES its own input over HTTP: PTAX
+    # lands as `api`, so `fetch_ptax.py` sits where `unzip_table.py` sits in the CNPJ
+    # jobs and where `generate_payments.py` sits in the payments one. Same flow again,
+    # and every lock is still total over it -- only the producer task changes.
+    "ptax": "bronze_ptax_job.yml",
 }
 
 

@@ -332,6 +332,23 @@ def test_the_three_roles_are_three_different_tables():
     assert len(set(roles)) == 3
 
 
+def test_the_registry_carries_exactly_the_names_this_contract_declares():
+    """The lift, asserted as a lift. Every string in the registry entry comes from this
+    module and `name` is the only literal there, so a value that drifted would be a value
+    spelled twice -- which is the whole defect the registry exists to remove."""
+    spec = REGISTRY["ptax"]
+    assert (spec.contract, spec.table_key, spec.subdir) == (
+        CONTRACT,
+        BRONZE_TABLE_KEY,
+        LANDING_SUBDIR,
+    )
+    assert (spec.staging, spec.bronze, spec.quarantine) == (
+        BRONZE_STAGING_TABLE,
+        BRONZE_TABLE,
+        BRONZE_QUARANTINE_TABLE,
+    )
+
+
 def test_the_bronze_names_collide_with_nothing_another_table_owns():
     """The names are declared HERE and lifted into `opl.bronze.registry` by the entry
     that registers this table -- so they have to be collision-free against every table

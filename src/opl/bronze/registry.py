@@ -55,7 +55,7 @@ from opl.bronze.registry_landing import (  # noqa: F401  (re-exported for consum
     landing_dir,
 )
 from opl.config import OplConfig
-from opl.contracts import payments
+from opl.contracts import payments, ptax
 from opl.contracts.catalogue import CONTRACT_COLUMNS, is_known
 
 # Values that make the derivation below independent of any real table or month --
@@ -351,6 +351,55 @@ REGISTRY: dict[str, BronzeTable] = {
             "CHECK (length(trim(transaction_id)) > 0)",
             "ALTER TABLE {table} ALTER COLUMN payer_cnpj_basico SET NOT NULL",
             "ALTER TABLE {table} ALTER COLUMN payee_cnpj_basico SET NOT NULL",
+        ),
+    ),
+    # THE THIRD SOURCE, and the first whose bytes somebody else produced and nobody
+    # downloaded: a job task calls BCB's public PTAX endpoint and writes a record built
+    # from the validated response. `landing=LANDING_API` is what makes the entry legal,
+    # under the SAME two guards the payments entry names above -- they are complements
+    # since F-API Task 2, so this table is checked by the mirror rather than falling
+    # between them, and it must have no file group AND no prefix.
+    #
+    # `LANDING_GENERATED` WAS CONSIDERED AND REJECTED, though it fits mechanically and
+    # would have reused `bronze_payments_ingest.py` unchanged. That mode stamps
+    # `_record_source = opl_payment_generator`, which would say this repository produced
+    # the Banco Central's published rates -- a false claim in the one column that answers
+    # who produced a row. `opl.config` carries the same argument for the third root.
+    #
+    # Every string is lifted from `opl.contracts.ptax`; `name` is the only literal, for
+    # the reason the payments entry gives.
+    "ptax": BronzeTable(
+        name="ptax",
+        contract=ptax.CONTRACT,
+        table_key=ptax.BRONZE_TABLE_KEY,
+        staging=ptax.BRONZE_STAGING_TABLE,
+        bronze=ptax.BRONZE_TABLE,
+        quarantine=ptax.BRONZE_QUARANTINE_TABLE,
+        subdir=ptax.LANDING_SUBDIR,
+        landing=LANDING_API,
+        prefix=None,
+        # `quote_date` AND `cotacao_venda` ARE THE COLUMNS NO OTHER CONTRACT HAS, which
+        # is what satisfies `test_the_new_tables_carry_a_constraint_no_other_contract_
+        # could_have`: a tuple pasted from any other entry here would be missing both,
+        # and one pasted FROM here names columns no other table carries.
+        #
+        # They are also the right columns on their own merits. `quote_date` is the key
+        # the FX join resolves against and the one this phase invites a writer to get
+        # wrong -- the API is asked in `MM-DD-YYYY`, so writing the request's own
+        # spelling produces a value that joins to nothing while every count stays green;
+        # the length CHECK refuses that shape at the promote. `cotacao_venda` is the rate
+        # gold converts with, so a NULL there is an `amount_brl` that lowers every total
+        # by an amount nobody can name.
+        #
+        # WHAT IS DELIBERATELY ABSENT: no CHECK on `currency`, for exactly the reason the
+        # payments entry gives -- a second currency must be a VALUE change rather than a
+        # schema change, and a CHECK would silently make it a migration on a live table.
+        constraints=(
+            "ALTER TABLE {table} ALTER COLUMN quote_date SET NOT NULL",
+            "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS quote_date_iso_shape",
+            "ALTER TABLE {table} ADD CONSTRAINT quote_date_iso_shape "
+            "CHECK (length(trim(quote_date)) = 10)",
+            "ALTER TABLE {table} ALTER COLUMN cotacao_venda SET NOT NULL",
         ),
     ),
 }
