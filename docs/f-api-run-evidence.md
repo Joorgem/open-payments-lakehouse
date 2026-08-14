@@ -1194,9 +1194,43 @@ entry-point files under databricks/src were synced by the same deploy, and a dep
 a modified tree would have stamped +dirty.
 ```
 
-**Eleven accepts across F2 and F3 became FIFTEEN. Zero refusals, still.** Four more accepts
-are not evidence about the refusal half, and §3 says so rather than letting the count grow
-into a claim.
+**Eleven accepts across F2 and F3 became FIFTEEN.** Four more accepts are not evidence about
+the refusal half — so it was made to refuse.
+
+### 2.10.1 THE REFUSAL HALF FIRED, FOR THE FIRST TIME IN THIS WORKSPACE
+
+**Controller-verified.** Fifteen accepts across F2, F3 and this phase, and **zero refusals**,
+had stood in the unexercised ledger since F2 wave 1 — carried forward untouched through F3,
+which added five accepts and said plainly that five more yeses tell a reader nothing about
+whether the guard can say no.
+
+Task 5 left the workspace in exactly the state that answers it: the deployed wheel was built
+from `6cfe0f0`, and the evidence commits moved HEAD to `ac379c9`. Launching
+`opl-gold-fact-payment` at HEAD against that wheel is the guard's own scenario, costs one
+task, and **writes nothing** — the refusal is the point.
+
+Job run **`972804892628743`**, guard task run **`522276384734989`**, job state `TERMINATED` /
+`RUN_EXECUTION_ERROR`, and the `fact_payment` task **`SKIPPED`**:
+
+```
+WrongRevision: refusing to run: the deployed wheel was built from
+6cfe0f00c6f62720feb711a9478c005a33b3b7e7, and this run was launched for
+ac379c9797c5c3713b9433389e3a998ecc3bf6f9. Different commits -- so every task after this one
+would execute code that is not the code you are reading.
+The likeliest cause is the simplest: nobody ran `databricks bundle deploy -t free` since
+ac379c9797c5c3713b9433389e3a998ecc3bf6f9. CI validates the repository and never what is
+deployed, so nothing else would have gone red. It can also be a stale wheel inside a fresh
+deploy -- the jobs receive the wheel through the glob `dependencies: ["../../dist/*.whl"]`
+over a dist/ that nothing cleans.
+Deploy, then launch again with the same revision.
+```
+
+**Three things this establishes that fifteen accepts could not.** The guard **raises** rather
+than warning; the downstream task is **skipped**, so a mismatched wheel cannot write a row;
+and the message names **both commits** and the two causes, including the `dist/*.whl` glob
+over a directory nothing cleans — the failure mode a reader could not have diagnosed from a
+bare refusal. **ADR 0009's central claim is now a measurement rather than a design intent**,
+and the entry moves out of §3 after three phases.
 
 ### 2.11 What this phase made FALSE, re-published in one place
 
@@ -1255,10 +1289,13 @@ Accumulated as the phase runs rather than reconstructed at its end.
 - **The holiday crossing, on fact rows.** No Brazilian national holiday falls in this phase's
   payment range (§0.6), so it is exercised over the series in the unit suite only.
 - **The below-the-series refusal.** Nothing in this phase's range sits below 2026-06-03.
-- **The provenance guard's REFUSAL half**, still, in the workspace. Eleven accepts across F2
-  and F3, zero refusals. This phase's runs will add accepts, and accepts are not evidence
-  about the refusal. **They did: the count is now FIFTEEN accepts and zero refusals** (§2.10).
-  Four more instances of a guard saying yes tell a reader nothing about whether it can say no.
+- ~~**The provenance guard's REFUSAL half**, still, in the workspace. Eleven accepts across F2
+  and F3, zero refusals.~~ **CLOSED — it refused.** The count reached FIFTEEN accepts, and
+  four more instances of a guard saying yes tell a reader nothing about whether it can say
+  no — so it was made to say no. `WrongRevision` raised, the downstream task **skipped**,
+  nothing written: **§2.10.1**, job run `972804892628743`. **This entry had stood since F2
+  wave 1 and survived F3 untouched.** It is the one item this phase removed from the ledger
+  rather than added to it.
 
 Added by Task 2, as the bronze layer was built:
 
