@@ -534,11 +534,17 @@ def test_the_ptax_table_carries_constraints_no_other_contract_could_have():
     They are also the right columns. `quote_date` is the key the FX join resolves against
     and the value this phase invites a writer to get wrong -- the endpoint is asked in
     `MM-DD-YYYY`, so the request's own spelling produces a ten-character string that
-    joins to nothing while every count stays green. The length CHECK refuses a value of
-    any other width at the promote, and the gate's `bad_quote_date_shape` is what tells
-    the two ten-character spellings apart, before anything reaches bronze.
-    `cotacao_venda` is the rate gold converts with: a NULL there is an `amount_brl` that
-    lowers a total by an amount nobody can name.
+    joins to nothing while every count stays green. `cotacao_venda` is the rate gold
+    converts with: a NULL there is an `amount_brl` that lowers a total by an amount nobody
+    can name.
+
+    `quote_date_iso_shape` NOW ENFORCES ITS OWN NAME, which it did not. It was
+    `length(trim(quote_date)) = 10`, and ten characters is exactly what `06-19-2026` is --
+    so the constraint named for the ISO shape admitted the one non-ISO spelling this phase
+    invites, while its own comment named that value as the thing to worry about. Every
+    other CHECK here is named for what it checks (`cnpj_basico_len8` -> `length = 8`).
+    `test_the_iso_shape_check_refuses_the_apis_own_spelling_on_a_real_delta_table` is the
+    behavioural half of this pin, against Delta rather than against the string.
 
     NO CHECK ON `currency`, asserted as an absence for the reason the payments entry
     gives -- a second currency must be a VALUE change rather than a schema change, and a
@@ -551,8 +557,31 @@ def test_the_ptax_table_carries_constraints_no_other_contract_could_have():
     assert table_spec("ptax").constraints == (
         "ALTER TABLE {table} ALTER COLUMN quote_date SET NOT NULL",
         "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS quote_date_iso_shape",
-        "ALTER TABLE {table} ADD CONSTRAINT quote_date_iso_shape "
-        "CHECK (length(trim(quote_date)) = 10)",
+        "ALTER TABLE {table} ADD CONSTRAINT quote_date_iso_shape CHECK "
+        "(regexp_like(quote_date, '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$'))",
         "ALTER TABLE {table} ALTER COLUMN cotacao_venda SET NOT NULL",
     )
     assert not [s for s in table_spec("ptax").constraints if "currency" in s]
+
+
+def test_every_constraint_survives_being_formatted_with_its_table():
+    """THE TRAP THE ISO-SHAPE FIX WALKED UP TO, closed for every table rather than one.
+
+    `promote_batch._assert_constraints` issues `statement.format(table=tbl)`, so any
+    literal brace in a constraint is a format field: the natural spelling of the new
+    regex, `[0-9]{4}-[0-9]{2}-[0-9]{2}`, raises `IndexError: Replacement index 4 out of
+    range` -- and it raises inside the promote, AFTER the append has committed, on the run
+    that was meant to assert the constraint. The repair run then correctly skips the
+    committed append and fails on the same statement.
+
+    So this asserts what the promote actually does, with `{table}` the only field any
+    statement may carry. A brace-free regex is what the PTAX entry declares; this is what
+    stops the next author's `{2}` from being discovered in a workspace."""
+    for spec in REGISTRY.values():
+        for statement in spec.constraints:
+            formatted = statement.format(table="catalog.schema.tbl")
+            assert "catalog.schema.tbl" in formatted
+            assert "{" not in formatted and "}" not in formatted, (
+                f"{spec.name} constraint {statement!r} still holds a brace after "
+                "formatting, so it carries a format field that is not {table}"
+            )

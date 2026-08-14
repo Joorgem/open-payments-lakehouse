@@ -389,10 +389,32 @@ REGISTRY: dict[str, BronzeTable] = {
         # They are also the right columns on their own merits. `quote_date` is the key
         # the FX join resolves against and the one this phase invites a writer to get
         # wrong -- the API is asked in `MM-DD-YYYY`, so writing the request's own
-        # spelling produces a value that joins to nothing while every count stays green;
-        # the length CHECK refuses that shape at the promote. `cotacao_venda` is the rate
-        # gold converts with, so a NULL there is an `amount_brl` that lowers every total
-        # by an amount nobody can name.
+        # spelling produces a value that joins to nothing while every count stays green.
+        # `cotacao_venda` is the rate gold converts with, so a NULL there is an
+        # `amount_brl` that lowers every total by an amount nobody can name.
+        #
+        # `quote_date_iso_shape` WAS NAMED FOR A PROPERTY IT DID NOT ENFORCE, and that is
+        # F-API's fix pass. It was `length(trim(quote_date)) = 10`, which ADMITS
+        # `06-19-2026` -- the API's own spelling, and the exact value the constraint's own
+        # comment says this phase invites. Measured on local Delta: the length CHECK
+        # accepted that string, the regex refuses it along with `2026-6-19`, `19/06/2026`
+        # and `2026-06-1x`, and accepts `2026-06-19`. Every other CHECK in this registry
+        # is named for what it checks (`cnpj_basico_len8` -> `length = 8`), so the choice
+        # was enforce the name or rename to the truth; the name is the useful half,
+        # because a ten-character non-ISO date is precisely what a triager would not think
+        # to look for behind a passing constraint called `iso_shape`.
+        #
+        # NO `{n}` QUANTIFIER, AND THAT IS NOT A STYLE CHOICE. `promote_batch.
+        # _assert_constraints` issues `statement.format(table=tbl)`, so `[0-9]{4}` raises
+        # IndexError from str.format -- AFTER the append has committed, on the run that was
+        # meant to assert the constraint. Spelled out digit by digit instead, and
+        # `test_every_constraint_survives_being_formatted_with_its_table` is what keeps the
+        # next author from reintroducing it.
+        #
+        # NOT `trim(...)`, unlike the length CHECK it replaces: the gate's own
+        # `bad_quote_date_shape` anchors on the raw column, and a CHECK that trimmed would
+        # accept a padded value the gate refuses -- a constraint looser than the rule
+        # upstream of it, which is the one direction this repository does not allow.
         #
         # WHAT IS DELIBERATELY ABSENT: no CHECK on `currency`, for exactly the reason the
         # payments entry gives -- a second currency must be a VALUE change rather than a
@@ -400,8 +422,9 @@ REGISTRY: dict[str, BronzeTable] = {
         constraints=(
             "ALTER TABLE {table} ALTER COLUMN quote_date SET NOT NULL",
             "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS quote_date_iso_shape",
-            "ALTER TABLE {table} ADD CONSTRAINT quote_date_iso_shape "
-            "CHECK (length(trim(quote_date)) = 10)",
+            "ALTER TABLE {table} ADD CONSTRAINT quote_date_iso_shape CHECK "
+            "(regexp_like(quote_date, "
+            "'^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$'))",
             "ALTER TABLE {table} ALTER COLUMN cotacao_venda SET NOT NULL",
         ),
     ),

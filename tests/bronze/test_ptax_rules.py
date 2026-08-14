@@ -1,5 +1,12 @@
 # tests/bronze/test_ptax_rules.py
-"""The DQ gate's verdict on the PTAX series.
+"""The DQ gate's verdict on the PTAX series -- and, at the foot of this file, the ONE
+promote-time CHECK the gate's own docstrings compare themselves against.
+
+That second part is here rather than in `test_registry.py` because it is the other half of
+a sentence `bad_quote_date_shape` already carries: the gate tells two ten-character
+spellings apart before anything reaches bronze, and the CHECK runs at the promote after
+the append has committed. Both halves of a comparison in one file; `test_registry.py`
+keeps the DDL string pin, which is a different claim from what the engine refuses.
 
 ITS OWN FILE, for `test_payment_rules.py`'s reason: `test_rules.py`'s fixtures are built
 on `cnpj_schemas.TABLES` -- `_row(contract, ...)` indexes it directly -- so every PTAX
@@ -27,6 +34,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import StringType, StructField, StructType
 
 from opl.bronze.dq import REJECT_COLUMN, RESCUED_DATA_COLUMN, evaluate, split
+from opl.bronze.registry import table_spec
 from opl.bronze.rules import rules_for
 from opl.bronze.schema import struct_for
 from opl.contracts.ptax import COLUMNS, CONTRACT, REQUIRED_COLUMNS
@@ -368,6 +376,66 @@ def test_a_row_with_two_faults_reports_the_first_rule_that_matches(spark):
     assert _reasons(spark, [_row(cotacao_venda="", quote_date="06-19-2026")]) == [
         "null_or_empty_cotacao_venda"
     ]
+
+
+# --- AND THE OTHER HALF OF THE COMPARISON: THE PROMOTE'S OWN CHECK -------------------
+#
+# `bad_quote_date_shape`'s docstring compares itself against the registry's CHECK
+# constraint -- "that one runs at the promote, AFTER the append has committed, and length
+# alone accepts `06-19-2026`" -- and until F-API's fix pass nothing anywhere exercised the
+# second half of that sentence. It was true: the CHECK was named `quote_date_iso_shape`
+# and spelled `length(trim(quote_date)) = 10`, so the constraint named for the ISO shape
+# admitted the one non-ISO spelling this phase invites. `tests/bronze/test_registry.py`
+# pins the DDL string; this is the behavioural half, against a real Delta transaction log,
+# because a CHECK is a claim about what the engine will refuse and not about what the
+# string says.
+
+
+def test_the_iso_shape_check_refuses_the_apis_own_spelling_on_a_real_delta_table(
+    spark, tmp_path
+):
+    """The registry's `quote_date` DDL, applied, and asked about four real spellings.
+
+    Through `statement.format(table=...)` exactly as `promote_batch._assert_constraints`
+    issues it, so this also exercises the reason the regex carries no `{n}` quantifier: a
+    brace here is a format field, and `[0-9]{4}` would raise IndexError inside the promote
+    after the append had committed.
+
+    `06-19-2026` is the case that matters and the one the old CHECK accepted -- ten
+    characters, non-blank, and it joins to nothing in gold with every count green. The
+    other three are the shapes a length check cannot see either way, kept so a future
+    weakening of the pattern (say `[0-9-]+`) has something to fail against.
+
+    THE COLUMN IS DECLARED NOT NULL AT CREATE TIME, AND THAT IS A MEASURED LOCAL LIMIT
+    rather than a shortcut. Applying the tuple's own
+    `ALTER COLUMN quote_date SET NOT NULL` to a table created from a DataFrame fails on
+    open-source Delta 3.x -- "Cannot change nullable column to non-nullable" -- while
+    Databricks accepts it, which is why the promote issues it there and why F1.4b's live
+    tables carry it. So the column starts non-nullable here and all three statements are
+    issued in the promote's own order, leaving the CHECK as the only thing that can refuse
+    a row."""
+    database = f"ptax_check_{tmp_path.name}"
+    spark.sql(f"CREATE DATABASE {database} LOCATION '{tmp_path.as_uri()}'")
+    table = f"{database}.bronze_ptax"
+    try:
+        spark.sql(f"CREATE TABLE {table} (quote_date STRING NOT NULL) USING DELTA")
+        spark.sql(f"INSERT INTO {table} VALUES ('2026-06-19')")
+        applied = [
+            statement.format(table=table)
+            for statement in table_spec("ptax").constraints
+            if "quote_date" in statement
+        ]
+        assert len(applied) == 3, "the quote_date DDL is NOT NULL, DROP and ADD"
+        for statement in applied:
+            spark.sql(statement)
+        for refused in ("06-19-2026", "2026-6-19", "19/06/2026", "2026-06-1x"):
+            with pytest.raises(Exception, match="quote_date_iso_shape"):
+                spark.sql(f"INSERT INTO {table} VALUES ('{refused}')")
+        assert [row["quote_date"] for row in spark.table(table).collect()] == [
+            "2026-06-19"
+        ], "the ISO value is the only one that landed"
+    finally:
+        spark.sql(f"DROP DATABASE {database} CASCADE")
 
 
 def test_an_undeclared_bcb_field_is_rejected_as_rescued_data_above_every_rule(spark):
