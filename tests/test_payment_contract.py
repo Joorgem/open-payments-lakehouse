@@ -107,9 +107,17 @@ def test_v1_declares_every_column_required_and_no_optional_one():
 
     So the equality still holds, and the two names are still separate -- see
     `test_the_drift_column_is_declared_but_not_by_v1` for what the contract knows about the
-    column without declaring it."""
+    column without declaring it.
+
+    AND IT IS ASSERTED AS AN IDENTITY, because the equality CANNOT FAIL: the contract
+    declares `REQUIRED_COLUMNS = COLUMNS`, so both names are one tuple object and `==`
+    compares it with itself. Found on the PTAX side of the same declaration and fixed in
+    both, since a second unfailable assertion is exactly the thing a reader counts as
+    coverage. `is` states the property that is load-bearing -- v1 requires every column by
+    CONSTRUCTION and not by a list kept in step -- and it fails on the edit that would make
+    the equality meaningful, which is the optional column this docstring predicted."""
     assert SCHEMA_VERSION == 1
-    assert REQUIRED_COLUMNS == COLUMNS
+    assert REQUIRED_COLUMNS is COLUMNS
     assert DRIFT_COLUMN not in COLUMNS
 
 

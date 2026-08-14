@@ -138,8 +138,17 @@ def test_v1_declares_every_column_required():
     `ptax_source.quotes_in` refuses a response row missing any of the API's three fields,
     and it carries the request's two values onto every quote, so a record that reaches
     the landing writer cannot be missing a column. A gate looser than that would tolerate
-    exactly the columns a bug between the two could empty."""
-    assert REQUIRED_COLUMNS == COLUMNS
+    exactly the columns a bug between the two could empty.
+
+    ASSERTED AS AN IDENTITY, NOT AN EQUALITY, and that is a correction rather than a
+    flourish. `REQUIRED_COLUMNS == COLUMNS` was here and CANNOT FAIL: the contract declares
+    `REQUIRED_COLUMNS = COLUMNS`, so the two names are one tuple object and the comparison
+    is a tuple against itself. `is` states the property that is actually load-bearing --
+    "every column is required" holds by CONSTRUCTION rather than by a second list somebody
+    keeps in step -- and it fails on the edit that would make the equality meaningful,
+    which is a v2 declaring an optional column by copying the tuple. That edit needs the
+    docstring above rewritten, so it should turn something red."""
+    assert REQUIRED_COLUMNS is COLUMNS
     assert {_snake_case(f) for f in ptax_source.RESPONSE_FIELDS} <= set(REQUIRED_COLUMNS)
 
 

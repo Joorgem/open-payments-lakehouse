@@ -11,6 +11,7 @@ The one function that would make a request -- `fetch_ptax.fetch` -- is exercised
 a double that records what it was handed."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from datetime import date
 from pathlib import Path
@@ -293,6 +294,62 @@ def test_a_window_the_series_has_nothing_in_is_refused_rather_than_landed_empty(
     with pytest.raises(PtaxResponseRefused, match="no quote at all"):
         module.main(["ptax", "2026-08"])
     assert len(fetcher.urls) == 2, "both days were asked before the window was refused"
+
+
+def test_the_records_reach_a_REAL_FILE_under_the_filename_this_task_derived(
+    monkeypatch, fetcher, tmp_path
+):
+    """THE REFACTOR'S ENTIRE CONTENT, EXERCISED -- and until this test nothing was.
+
+    `emit_records_file`'s `filename` parameter is the only thing that separates it from
+    `emit_stream_file`: F-API Task 2 generalised the payment stream's emitter by lifting the
+    name out of it. But the payment tests call the WRAPPER, which supplies its own name, and
+    every PTAX test above monkeypatches `emit_records_file` away -- so on a phase whose
+    subject is bytes on disk, no test wrote a PTAX record set to a file at all. A
+    `filename_for` that returned a constant, a path separator or the payment stream's own
+    name would have passed the whole suite.
+
+    So this one writes. Real directories, the real emitter, the real serialiser, with only
+    the transport replaced -- and it asserts the four things that make a landed file a
+    landed file:
+
+      * the file exists at the derived name, inside the landing dir and not the tmp one;
+      * its BYTES are the serialised records, read back in binary, `\\n`-terminated with
+        no carriage return -- the property this module opens in binary for;
+      * the staging directory is left empty, because the payload is `os.replace`d in;
+      * the reported digest and byte count are the file's own, so the run log's numbers and
+        a local assertion compare directly.
+
+    A SECOND CALL IS THE IDEMPOTENCE HALF, and it is what a repair run of this job does:
+    the same window derives the same name and the same bytes, so the emitter reports the
+    file as already present, byte-identical, and touches nothing."""
+    module = _load("fetch_ptax")
+    monkeypatch.setattr(module, "WINDOW_FIRST", date(2026, 6, 18))
+    monkeypatch.setattr(module, "WINDOW_LAST", date(2026, 6, 20))
+    monkeypatch.setattr(module, "fetch", fetcher)
+    landing, staging = tmp_path / "api" / "ptax", tmp_path / "_tmp" / "api" / "ptax"
+    monkeypatch.setattr(module, "landing_dir", lambda *a: str(landing))
+    monkeypatch.setattr(module, "landing_tmp_dir", lambda *a: str(staging))
+
+    module.main(["ptax", "2026-08"])
+
+    landed = landing / "usd-2026-06-18_2026-06-20.jsonl"
+    assert [path.name for path in landing.iterdir()] == [landed.name]
+    payload = landed.read_bytes()
+    assert payload == (
+        b'{"quote_date":"2026-06-19","currency":"USD",'
+        b'"data_hora_cotacao":"2026-06-19 13:03:25.555497",'
+        b'"cotacao_compra":"5.14360","cotacao_venda":"5.14420"}\n'
+    )
+    assert b"\r" not in payload
+    assert not list(staging.iterdir()), "the payload is replaced in, never left staged"
+    assert hashlib.sha256(payload).hexdigest() == hashlib.sha256(
+        landed.read_bytes()
+    ).hexdigest()
+
+    # The repair run: same window, same bytes, no rewrite.
+    module.main(["ptax", "2026-08"])
+    assert landed.read_bytes() == payload
 
 
 def test_a_non_200_is_a_refusal_and_never_an_empty_day(monkeypatch):

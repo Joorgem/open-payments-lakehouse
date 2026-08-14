@@ -25,6 +25,8 @@ repository refuses -- and an ingest entry point handed the wrong one reads JSON 
 and produces one string column of NULLs per row without erroring."""
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pyspark.sql import DataFrame, SparkSession
 
 from opl.bronze.schema import struct_for
@@ -193,6 +195,45 @@ def _assert_every_contract_declares_a_format() -> None:
 _assert_every_contract_declares_a_format()
 
 
+# AND WHICH OPTIONS EACH FORMAT TAKES. A TOTAL MAPPING FOR THE SAME REASON one level
+# along, and it closes the residual the totality guard above did not reach: `read_options`
+# was `jsonl if source_format(...) == JSON else csv`, so a THIRD format -- parquet, avro,
+# text -- got the semicolon-CSV dialect from an `else`. That is the same default wearing a
+# conditional the dispatch above was fixed for, one question later, and it fails just as
+# quietly: Spark ignores CSV options on a read that is not CSV.
+#
+# The factories are values here rather than being called, because `csv_read_options` builds
+# a fresh dict per call and a module-level dict would be one object every caller could
+# mutate.
+_FORMAT_OPTIONS: dict[str, Callable[[], dict[str, str]]] = {
+    CSV_FORMAT: csv_read_options,
+    JSON_FORMAT: jsonl_read_options,
+}
+
+
+def _assert_every_declared_format_has_options() -> None:
+    """Fail at import if a format some contract declares has no option set, or vice versa.
+
+    The mirror of `_assert_every_contract_declares_a_format`, over the second question: a
+    contract is parsed as SOMETHING, and that something is read with options that MATCH it.
+    A format with no options would raise inside the ingest task after the stream was built;
+    an option set no contract's format names is a dead entry that reads as coverage.
+
+    A plain ValueError: nothing here is an unknown table, and no operator supplied it."""
+    declared = set(_SOURCE_FORMATS.values())
+    if declared != set(_FORMAT_OPTIONS):
+        raise ValueError(
+            f"the formats contracts declare ({sorted(declared)}) are not the formats with "
+            f"option sets ({sorted(_FORMAT_OPTIONS)}). Every format is read with options "
+            "that match it, and the answer is not allowed to be a default: Spark IGNORES "
+            "CSV options on a read that is not CSV, so a format falling through to the CSV "
+            "dialect parses with Spark's own defaults and nothing says so."
+        )
+
+
+_assert_every_declared_format_has_options()
+
+
 def source_format(contract: str) -> str:
     """The `cloudFiles.format` / reader format `contract`'s files are written in.
 
@@ -213,8 +254,13 @@ def read_options(contract: str) -> dict[str, str]:
     IT IS ALSO WHY WIDENING ONE WIDENS BOTH. `PTAX_CONTRACT` was added to
     `_SOURCE_FORMATS` and nothing here changed; had this function carried its own
     `contract in (A, B)` test, the two would have had to be edited together forever, and
-    the edit that was forgotten would be the silent one."""
-    return jsonl_read_options() if source_format(contract) == JSON_FORMAT else csv_read_options()
+    the edit that was forgotten would be the silent one.
+
+    KEYED RATHER THAN CONDITIONAL since F-API's fix pass, and that is the same correction
+    the format dispatch itself got: `jsonl if ... == JSON else csv` handed a third format
+    the semicolon-CSV dialect from an `else`. Now a format with no option set raises, and
+    the guard above makes it an import-time refusal instead."""
+    return _FORMAT_OPTIONS[source_format(contract)]()
 
 
 def read_csv_batch(spark: SparkSession, path: str, table: str) -> DataFrame:

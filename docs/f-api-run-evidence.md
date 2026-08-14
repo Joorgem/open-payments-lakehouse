@@ -202,6 +202,17 @@ Added by Task 2, as the bronze layer was built:
   produces one.
 - **The refuse-a-different-file-under-one-name branch, for PTAX.** It fires when BCB
   *revises* a rate for a window already landed. No witness in 3.6 years of series.
+- **`encoding_replacement_char` is SHADOWED on four of the five columns it is folded
+  over**, which is a stronger and different statement from the near-tautology below and was
+  not recorded when the rule set was written. First-match-wins is the gate's contract, and an
+  earlier CONTENT rule sits on every column but `currency`: a U+FFFD in `quote_date` breaks
+  the ISO regex, in either rate it makes the decimal cast NULL, and in `data_hora_cotacao`
+  it breaks the publication-instant shape. **No row escapes** — every one of the five is
+  rejected — but the reason a triager filters on names the content rule, so
+  `encoding_replacement_char` can only ever be the recorded reason for `currency`. Measured
+  per column in `tests/bronze/test_ptax_rules.py`. The fold stays total over the contract
+  for the reason it is derived rather than listed: a v2 column arrives covered, and the four
+  shadowed columns are shadowed by rules that describe the same row correctly.
 - **Every PTAX DQ rule except `bad_quote_date_shape` and `unparseable_data_hora_cotacao`
   is a near-tautology against the live source.** The landed record is built by this
   repository from an already-validated response, so the gate re-asserts at the table what

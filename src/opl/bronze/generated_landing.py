@@ -208,6 +208,33 @@ def _refuse_a_different_file(existing: bytes, payload: bytes, path: Path) -> Non
     )
 
 
+# --- WHAT A CALLER OWES `emit_records_file`, AND WHY THAT PROSE IS UP HERE ------------
+#
+# Module level for the reason `opl.bronze.rules` and `opl.bronze.registry_landing` state
+# above their own long guards: this reasoning grew past the point where the function
+# carrying it stayed under the project's 50-line limit. F-API Task 2 generalised a 47-line
+# `emit_stream_file` into a 60-line `emit_records_file` and every added line was prose.
+#
+# FILENAME-AGNOSTIC IS THE ONLY THING THAT SEPARATES IT FROM `emit_stream_file` BELOW.
+# Every other property -- the binary write, the explicit UTF-8, the read-back
+# verification, the run-unique staged name and the refuse-a-different-file rule -- is the
+# same statement whatever produced the records, so it is made once rather than twice in
+# two modules.
+#
+# WHAT A CALLER OWES IT IS A FILENAME THAT IS A FUNCTION OF THE CONTENT'S DECLARED
+# IDENTITY, and nothing else. Auto Loader tracks files by PATH: a name carrying a run id,
+# a timestamp or a month would make every re-run a NEW file, so the same rows would be
+# ingested again under a fresh `_batch_id` -- which the promote's idempotence is keyed on
+# and therefore cannot see. `filename_for` below is the payment stream's answer;
+# `fetch_ptax.filename_for` derives PTAX's from the window and currency it fetched.
+#
+# `directory` IS A LANDING DIR (`registry_landing.landing_dir`, which resolves it from the
+# spec's landing mode) and `tmp_directory` ITS STAGING TWIN. Both are required and neither
+# is defaulted, for `unzip_volume.unzip_dir`'s reason -- this module cannot know which
+# directories an Auto Loader reads, and getting that wrong puts a half-written file where a
+# stream will ingest it.
+
+
 def emit_records_file(
     records: Sequence[Mapping[str, str]],
     filename: str,
@@ -217,24 +244,8 @@ def emit_records_file(
 ) -> EmittedFile:
     """Put `records` in `directory` under `filename`, idempotently. THE emitter.
 
-    FILENAME-AGNOSTIC, WHICH IS THE ONLY THING THAT SEPARATES IT FROM THE WRAPPER BELOW.
-    Every other property -- the binary write, the explicit UTF-8, the read-back
-    verification, the run-unique staged name and the refuse-a-different-file rule -- is
-    the same statement whatever produced the records, so it is made once here rather than
-    twice in two modules.
-
-    WHAT A CALLER OWES THIS FUNCTION IS A FILENAME THAT IS A FUNCTION OF THE CONTENT'S
-    DECLARED IDENTITY, and nothing else. Auto Loader tracks files by PATH: a name
-    carrying a run id, a timestamp or a month would make every re-run a NEW file, so the
-    same rows would be ingested again under a fresh `_batch_id` -- which the promote's
-    idempotence is keyed on and therefore cannot see. `filename_for` below is the payment
-    stream's answer; PTAX derives its own from the window and currency it fetched.
-
-    `directory` is a landing dir (`OplConfig.landing_generated_table` /
-    `landing_api_table`) and `tmp_directory` its staging twin; both are required and
-    neither is defaulted, for `unzip_volume.unzip_dir`'s reason -- this module cannot know
-    which directories an Auto Loader reads, and getting that wrong puts a half-written
-    file where a stream will ingest it."""
+    See the comment block above for what a caller owes it, what makes it the one emitter
+    both sources reach, and why that prose is not in here."""
     payload = serialised_bytes(records)
     destination = Path(directory) / filename
     digest = hashlib.sha256(payload).hexdigest()

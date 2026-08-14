@@ -115,10 +115,18 @@ def test_there_is_one_required_rule_per_contract_column():
     """Derived, not listed, so a v2 column arrives with its rule.
 
     Every column is required here, which is not a judgement call about the source but a
-    restatement of what the extraction layer already refuses -- see the contract."""
+    restatement of what the extraction layer already refuses -- see the contract.
+
+    Note what is NOT asserted here and why. `len(REQUIRED_COLUMNS) == len(COLUMNS)` was,
+    and it cannot fail: the contract declares `REQUIRED_COLUMNS = COLUMNS`, so those are
+    two names for ONE tuple object and the comparison is a tuple against itself. What can
+    fail, and is what this test is for, is that the rule set carries one rule per required
+    column and that no `null_or_empty_*` rule exists for anything else."""
     produced = {name for name, _ in rules_for(CONTRACT)}
-    assert {f"null_or_empty_{column}" for column in REQUIRED_COLUMNS} <= produced
-    assert len(REQUIRED_COLUMNS) == len(COLUMNS) == 5
+    required = {f"null_or_empty_{column}" for column in REQUIRED_COLUMNS}
+    assert required <= produced
+    assert {name for name in produced if name.startswith("null_or_empty_")} == required
+    assert len(COLUMNS) == 5
 
 
 def test_the_clean_row_is_accepted(spark):
@@ -350,21 +358,40 @@ def test_every_fractional_second_width_the_series_uses_is_accepted(spark, publis
     assert _reasons(spark, [_row(data_hora_cotacao=published)]) == [None]
 
 
-def test_a_replacement_character_in_any_column_is_rejected(spark):
-    """The encoding check, folded over all five columns.
+@pytest.mark.parametrize("column", COLUMNS)
+def test_a_replacement_character_is_caught_but_only_currency_REPORTS_it(spark, column):
+    """THE ENCODING CHECK IS SHADOWED ON FOUR OF THE FIVE COLUMNS IT IS FOLDED OVER, and
+    that is measured here rather than left as a surprise in a quarantine table.
 
-    LIVE RATHER THAN INHERITED, for the reason it is live on payments: the serialiser
-    returns TEXT, and a writer that did not encode UTF-8 explicitly hands Java bytes it
-    cannot map -- and Java's decoder substitutes U+FFFD SILENTLY where Python raises.
-    That character is then the only in-band evidence that the bytes on disk are not the
-    bytes that were serialised.
+    "Shadowed" is a stronger and different statement from the "near-tautology" every other
+    docstring in this file makes, so it earns its own test. First-match-wins is the gate's
+    contract, and an earlier CONTENT rule sits on every column except `currency`: any
+    U+FFFD in `quote_date` breaks `bad_quote_date_shape`'s regex, any U+FFFD in either rate
+    makes the decimal cast NULL, and any U+FFFD in `data_hora_cotacao` breaks the
+    publication-instant shape. So the row is always REJECTED -- nothing gets through -- but
+    the reason a triager filters on names the content rule, and `encoding_replacement_char`
+    can only ever be the recorded reason for one of the five columns.
 
-    `currency` is the column carrying it here precisely because no earlier rule looks at
-    its content: a value that is non-blank reaches the encoding check, and this is what
-    says the fold covers a column no other rule inspects."""
-    assert _reasons(spark, [_row(currency=f"US{_REPLACEMENT_CHAR}")]) == [
-        "encoding_replacement_char"
-    ]
+    WHY IT IS STILL RIGHT TO FOLD IT OVER ALL FIVE. The fold is derived from the contract
+    (`rules._encoding_check`), so a v2 column arrives covered; `currency` proves the fold
+    reaches a column no other rule inspects; and the four shadowed columns are shadowed by
+    rules that describe the same row correctly, which is a reporting fact rather than a
+    coverage gap. What would be wrong is believing the string
+    `encoding_replacement_char` in a live quarantine tells you WHICH column held the
+    character -- on this table it tells you it was `currency`.
+
+    THE ORDER IS ALSO WHAT SAYS THE FOLD IS LAST DELIBERATELY: a row whose bytes are
+    damaged is reported as such only once nothing simpler explains it, which is the
+    argument every rule set in this repository makes."""
+    shadowing = {
+        "quote_date": "bad_quote_date_shape",
+        "cotacao_compra": "unparseable_cotacao_compra",
+        "cotacao_venda": "unparseable_cotacao_venda",
+        "data_hora_cotacao": "unparseable_data_hora_cotacao",
+        "currency": "encoding_replacement_char",
+    }
+    dirty = _CLEAN[column] + _REPLACEMENT_CHAR
+    assert _reasons(spark, [_row(**{column: dirty})]) == [shadowing[column]]
 
 
 def test_a_row_with_two_faults_reports_the_first_rule_that_matches(spark):

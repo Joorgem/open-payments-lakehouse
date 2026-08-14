@@ -28,6 +28,15 @@ file's docstring points at the other. Nothing was shared across the seam and so
 nothing was copied: the AST helpers below read scripts and stayed, every YAML
 helper went whole.
 
+AND THE SERVERLESS-CAPABILITY SWEEP LEFT IN F-API'S FIX PASS, at 831 lines, when the two
+PTAX entry points got the coordinate locks the other five already had. It is now
+`tests/test_serverless_capabilities.py`, and again the seam was already drawn -- it sat
+under a section header of its own because it is a different subject: it asks whether a
+module uses a capability the deploy target refuses, over a file set (`src/opl/**` plus
+`databricks/src/*`) that no other lock here looks at, and it says nothing about which
+table anything touches. This file changes when an entry point changes; that one changes
+when the platform refuses something new.
+
 TO WHOEVER HITS THE RED HERE DURING THE REGISTRY REFACTOR: these describe a
 structure the refactor deliberately deletes, so some of them fail BY
 CONSTRUCTION once a script takes its table from a job parameter instead of a
@@ -53,9 +62,12 @@ constants they read; `_deref` below is `_bound_table`'s surviving half."""
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
+
+from opl.bronze.registry import REGISTRY
 
 _REPO = Path(__file__).resolve().parents[1]
 _SRC = _REPO / "databricks" / "src"
@@ -103,13 +115,36 @@ def test_no_task_names_a_bronze_table_directly_any_more(script):
     whose staging/quarantine pair can drift from the one the registry declares --
     which is how a triager was sent to a table full of unrelated rows.
 
+    DERIVED FROM THE REGISTRY SINCE F-API'S FIX PASS, and the literal it replaced was
+    `bronze_cnpj_`. That prefix is every RFB table's and NO other source's, so a task
+    spelling `bronze_payments_staging` or `bronze_ptax_staging` passed this sweep -- on two
+    entry points added by a phase whose own tables are the ones outside the prefix. Every
+    registered name is asked for now, in every role, so a third source is covered on the day
+    it is registered rather than on the day somebody widens a string here.
+
+    ON WORD BOUNDARIES, WHICH IS NOT FASTIDIOUSNESS -- a plain substring match turned this
+    red on both PTAX tasks the moment it was widened, and correctly by its own rule and
+    wrongly in fact: `bronze_payments` is the payments BRONZE TABLE and also the stem of
+    `bronze_payments_ingest.py`, which both new tasks name in a refusal message that tells
+    an operator which entry point to run instead. `_` is a word character, so
+    `\\bbronze_payments\\b` does not match inside `bronze_payments_ingest` while
+    `bronze_ptax_staging` still matches itself exactly.
+
     Comment lines are stripped before the check: a comment that cites the table a
     real incident happened in is this repo's house style, and is not wiring."""
     source = (_SRC / f"{script}.py").read_text(encoding="utf-8")
     code = "\n".join(
         line for line in source.splitlines() if not line.strip().startswith("#")
     )
-    assert "bronze_cnpj_" not in code, f"{script}.py names a bronze table directly"
+    named = sorted(
+        {
+            value
+            for spec in REGISTRY.values()
+            for value in (spec.staging, spec.bronze, spec.quarantine, spec.table_key)
+            if re.search(rf"\b{re.escape(value)}\b", code)
+        }
+    )
+    assert not named, f"{script}.py names bronze table(s) {named} directly"
     assert "table_spec(" in code
 
 
@@ -646,6 +681,90 @@ def test_each_task_takes_its_rule_set_from_the_spec_it_resolved(script):
     assert _spec_field(call.args[0], f"{script} rules_for") == "contract"
 
 
+def _whole_spec_arg(expr: ast.expr, where: str) -> str:
+    """The argument is the resolved `spec` itself, not one of its fields.
+
+    `registry_landing.landing_dir` and `landing_tmp_dir` take the WHOLE spec on purpose --
+    their docstring says why: the landing root is resolved from `spec.landing`, so handing
+    them `spec.subdir` would put the mapping back in the caller. So the two PTAX tasks
+    cannot be locked with `_spec_field`, and this is the assertion that replaces it."""
+    assert isinstance(expr, ast.Name) and expr.id == "spec", (
+        f"{where}: expected the resolved spec itself, got {ast.dump(expr)[:120]}"
+    )
+    return expr.id
+
+
+def test_the_ptax_ingest_binds_every_coordinate_to_the_one_resolved_spec():
+    """THE FOURTH INGEST, LOCKED LIKE THE FIRST -- and it had no such lock at all.
+
+    F-API Task 2 added two entry points and neither got the coordinate lock the other five
+    have, so a redirect inside either passed the whole suite: `spec.quarantine` in place of
+    `spec.staging`, or a second `table_spec("payments")`, and both leave `table_spec(` in
+    the source so the anti-hardcode sweep above stays green too.
+
+    What is pinned is that ONE spec, resolved from argv, feeds every coordinate: the schema
+    read with, the directory read from, the checkpoint deciding which of its files are new,
+    and the table written to. The source directory is asked of `landing_dir` and takes the
+    WHOLE spec, which is the difference from `bronze_ingest`'s lock and is deliberate --
+    the landing root comes from `spec.landing` there rather than from this file knowing the
+    layout."""
+    main = _main_of("bronze_ptax_ingest")
+    scope = _locals_of(main, "bronze_ptax_ingest")
+    _resolved_spec(main, scope, "bronze_ptax_ingest")
+    stream = _sole_call(main, "bronze_stream", "bronze_ptax_ingest")
+    assert len(stream.args) >= 5, "bronze_stream() no longer takes contract/table_key here"
+    bound = {
+        "contract": _spec_field(stream.args[2], "ptax bronze_stream contract"),
+        "source_dir": _whole_spec_arg(
+            _sole_call(main, "landing_dir", "bronze_ptax_ingest").args[1], "ptax landing_dir"
+        ),
+        "checkpoint": _spec_field(
+            _sole_call(main, "checkpoint_location", "bronze_ptax_ingest").args[1],
+            "ptax checkpoint",
+        ),
+        "written": _spec_field(
+            _table_arg(_sole_call(main, "toTable", "bronze_ptax_ingest").args[0], "toTable"),
+            "ptax toTable",
+        ),
+    }
+    assert bound == {
+        "contract": "contract",
+        "source_dir": "spec",
+        "checkpoint": "table_key",
+        "written": "staging",
+    }
+    # STAGING AND NOTHING ELSE. This task must not qualify bronze or quarantine at all:
+    # the promote reads staging as trusted input and the gate writes the quarantine, and an
+    # ingest that could name either could append raw rows into a table that has passed DQ.
+    assert _qualified_spec_fields(main, "bronze_ptax_ingest") == ["staging"]
+
+
+def test_the_fetch_writes_only_into_the_directories_its_own_spec_resolves():
+    """THE WRITER'S HALF, and the reason it needs a lock of its own: this is the first
+    entry point in the repository that makes an outbound HTTP call, and the file it lands
+    is the input the ingest task then reads.
+
+    Both directories come from the SAME resolved spec through
+    `registry_landing.landing_dir`/`landing_tmp_dir`, so the file cannot be staged under
+    one root and landed under another -- which is an `os.replace` across FUSE mounts, or
+    worse a successful move into a directory no stream reads. And it must qualify NO Delta
+    table at all: a fetch that named one is a fetch that could write to it.
+
+    `generate_payments` is the same shape one root along and is locked by
+    `_MONTH_CONSUMERS` only, which is the gap this closes for the newer pair."""
+    main = _main_of("fetch_ptax")
+    scope = _locals_of(main, "fetch_ptax")
+    _resolved_spec(main, scope, "fetch_ptax")
+    for callee in ("landing_dir", "landing_tmp_dir"):
+        call = _sole_call(main, callee, "fetch_ptax")
+        assert len(call.args) == 3, f"fetch_ptax: {callee}() no longer takes (cfg, spec, month)"
+        _whole_spec_arg(call.args[1], f"fetch_ptax {callee}")
+    assert _qualified_spec_fields(main, "fetch_ptax") == [], (
+        "fetch_ptax.py qualifies a Delta table; it writes a file into a Volume and reads "
+        "nothing, so a table name here is a coordinate it has no use for"
+    )
+
+
 def test_the_promote_takes_its_constraint_ddl_from_the_spec():
     """What the two `..._constraints_are_the_ones_bronze_carries_today` tests
     locked, restated -- the DDL itself is now Task 4's
@@ -662,60 +781,3 @@ def test_the_promote_takes_its_constraint_ddl_from_the_spec():
     )
     assert "ALTER TABLE" not in code, "promote_batch.py spells DDL of its own again"
     assert "spec.constraints" in code
-
-
-# --- serverless refuses explicit caching -----------------------------------------------
-
-_CACHING_CALLS = frozenset({"persist", "cache", "unpersist"})
-
-
-def _python_sources_that_run_on_databricks() -> list[Path]:
-    """Every module that can execute inside a job: the wheel's `opl` package and the
-    entry points beside it. Test code is excluded because it runs on local Spark, where
-    caching is supported and is a legitimate thing for a fixture to do."""
-    repo = Path(__file__).resolve().parents[1]
-    return sorted((repo / "src" / "opl").rglob("*.py")) + sorted(
-        (repo / "databricks" / "src").glob("*.py")
-    )
-
-
-@pytest.mark.parametrize(
-    "path", _python_sources_that_run_on_databricks(), ids=lambda p: p.name
-)
-def test_no_module_that_runs_on_databricks_asks_the_engine_to_cache(path: Path):
-    """`persist()`/`cache()` are a HARD REFUSAL on serverless, not a slow path.
-
-    THIS IS A REGRESSION GUARD FOR A FAILURE THAT ONLY THE DEPLOY TARGET PRODUCES, which
-    is why it is a source check rather than a behavioural one. Local Spark supports
-    caching happily, so every test in this repository passes with a `persist()` in place
-    and the refusal appears for the first time in the workspace:
-
-        [NOT_SUPPORTED_WITH_SERVERLESS] PERSIST TABLE is not supported on serverless
-        compute. SQLSTATE: 0A000
-
-    Measured 2026-08-09 on run `604594149706864`, where `effectivity._append_and_count
-    _closes` called `rows.persist()` and failed the task twice. Nothing was written --
-    the call precedes both the count and the append -- but the phase lost the run, and a
-    reviewer had independently recommended adding a SECOND `persist()` a few lines above
-    it, which would have failed the same way.
-
-    The remedy for a frame consumed twice on this platform is to materialise it or to
-    restructure so it is read once. Asking the engine to hold it is not available.
-
-    THE CHECK IS OVER THE AST AND NOT OVER THE TEXT, which is not fastidiousness: the
-    first spelling of this guard matched substrings and went red on `effectivity.py`,
-    whose docstring now EXPLAINS the refusal and therefore contains `rows.persist()` as
-    prose. A guard that cannot tell a call from a mention of a call punishes documenting
-    the very thing it is guarding."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    offenders = sorted({
-        f"{node.func.attr}() at line {node.lineno}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in _CACHING_CALLS
-    })
-    assert not offenders, (
-        f"{path.name} calls {offenders} -- serverless refuses explicit caching outright "
-        "(NOT_SUPPORTED_WITH_SERVERLESS), so this runs locally and fails in the workspace"
-    )

@@ -114,6 +114,45 @@ def test_the_json_options_are_the_three_that_make_the_drift_verdict_possible():
     }
 
 
+def test_a_format_with_no_option_set_is_refused_at_import_rather_than_given_csvs(
+    monkeypatch,
+):
+    """THE RESIDUAL `else` THE FIRST FIX LEFT BEHIND, closed one question later.
+
+    `_SOURCE_FORMATS` became total over the CATALOGUE in F-API Task 2, so every contract
+    declares a format. `read_options` was still `jsonl if source_format(...) == JSON else
+    csv`, which is total over nothing: a THIRD format -- parquet for a future source, avro,
+    text -- fell into the `else` and got the RFB's semicolon-CSV dialect. Same default
+    wearing a conditional as the dispatch that was fixed, and just as silent, because Spark
+    discards options that do not apply to the format it was given.
+
+    Both halves of the totality are exercised: a declared format with no option set, and an
+    option set no declared format names. The first is the edit somebody will make (a new
+    source, a new format, the options forgotten); the second is what keeps the guard from
+    being satisfiable by adding entries nobody reads."""
+    from opl.bronze import reader
+
+    monkeypatch.setitem(reader._SOURCE_FORMATS, "future", "parquet")
+    with pytest.raises(ValueError, match="parquet"):
+        reader._assert_every_declared_format_has_options()
+
+    monkeypatch.undo()
+    monkeypatch.setitem(reader._FORMAT_OPTIONS, "avro", dict)
+    with pytest.raises(ValueError, match="avro"):
+        reader._assert_every_declared_format_has_options()
+
+
+def test_every_option_set_is_a_fresh_dict_no_caller_can_mutate_for_the_next():
+    """`_FORMAT_OPTIONS` holds the FACTORIES rather than their results, and this is what
+    says so. A module-level dict of option dicts would be one object per format shared by
+    every stream in a job, so an ingest that popped or overwrote a key would change how the
+    next table is parsed -- silently, in the direction Spark does not report."""
+    first, second = read_options("ptax"), read_options("ptax")
+    assert first == second and first is not second
+    first["multiLine"] = "true"
+    assert read_options("ptax")["multiLine"] == "false"
+
+
 def test_no_json_contract_is_handed_the_csv_dialect():
     """The failure stated as the thing that would be seen, not as the setting.
 
