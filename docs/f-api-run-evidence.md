@@ -202,12 +202,14 @@ Added by Task 2, as the bronze layer was built:
   produces one.
 - **The refuse-a-different-file-under-one-name branch, for PTAX.** It fires when BCB
   *revises* a rate for a window already landed. No witness in 3.6 years of series.
-- **Every PTAX DQ rule except `bad_quote_date_shape` is a near-tautology against the live
-  source.** The landed record is built by this repository from an already-validated
-  response, so the gate re-asserts at the table what the extraction refused at the row.
-  Each rule's docstring says so. **A green gate here is not evidence about BCB** — it is
-  evidence that our own fetch did not drift, which is a smaller claim wearing the same
-  colour.
+- **Every PTAX DQ rule except `bad_quote_date_shape` and `unparseable_data_hora_cotacao`
+  is a near-tautology against the live source.** The landed record is built by this
+  repository from an already-validated response, so the gate re-asserts at the table what
+  the extraction refused at the row. Each rule's docstring says so. **A green gate here is
+  not evidence about BCB** — it is evidence that our own fetch did not drift, which is a
+  smaller claim wearing the same colour. *(The instant rule left this list in the fix pass:
+  the landing directory is a re-ingestible surface with no `reclaim_landing`, so the value
+  it now refuses is one the extraction cannot be asked about — see §3.1.)*
 
 ### 3.1 A gate rule weaker than its name — and the number this document first published was WRONG
 
@@ -247,8 +249,35 @@ stated consequence was backwards.**
 
 **This is therefore not an accepted limit.** A judgement about a known, stable behaviour can
 be accepted and recorded; a publication instant that renders differently on two days cannot be
-carried by this lakehouse at all. The rule is tightened, and the test asserts the **value**
-rather than only the verdict.
+carried by this lakehouse at all.
+
+**FIXED, and here is what the rule is now.** `unparseable_data_hora_cotacao` is two checks
+where it was one, on `bad_quote_date_shape`'s own pattern — a **shape** the landed text must
+have, and the format-agnostic **parse** it must still satisfy:
+
+```
+^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?$
+```
+
+Each half catches what the other misses. The shape refuses every value whose instant its own
+text does not determine — a bare time (today's date), a bare date (midnight, an instant BCB
+never published), a `T` separator, seven fractional digits, surrounding whitespace: **all six
+return a non-NULL timestamp from `to_timestamp` and all six were accepted before.** The parse
+refuses `2026-13-45 11:00:00`, which has the shape exactly and names no instant, so the parse
+half stays load-bearing rather than becoming decorative behind the regex.
+
+**It is not a pinned `to_timestamp` pattern, and that part of the original reasoning survives**
+(below). The fractional group is `{1,6}`-or-absent, which is the set the series uses, and it
+matches `ptax_source.PUBLICATION_FORMATS` exactly — because whether a spelling is a publication
+instant is one decision spanning the extraction layer and the gate, and a gate looser than the
+extraction tolerates exactly the values a bug between the two could produce.
+
+**And the test asserts the VALUE.** `test_a_bare_time_resolves_to_TODAYS_DATE_and_is_therefore_
+refused` compares the resolved instant's date against `current_date()` in the same session —
+not against a literal, which would be a second number going stale the way the retracted one
+did — and then asserts the rule refuses the row. The first assertion fails if the resolved
+instant ever changes; the second fails the moment anyone reverts to the format-agnostic parse.
+A literal `!= 1970-01-01` sits between them, refusing the retracted claim by name.
 
 **And "closed upstream" was false at the one boundary the gate exists to police.** The
 extraction does refuse a bare time — but `bronze_ptax_ingest` reads a **directory** against

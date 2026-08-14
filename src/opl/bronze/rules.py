@@ -279,36 +279,70 @@ def _unparseable_rate(column: str) -> Callable[[], Column]:
 _RATE_TYPE = "decimal(18,5)"
 
 
+# A publication INSTANT: a date, a space, a time to the second, and 1-6 fractional
+# digits or none. Two checks in one predicate below, for `_bad_iso_date`'s reason -- each
+# misses what the other catches. The shape refuses a value whose instant is not fully
+# determined by its own text (see the comment block below `_ISO_DATE_SHAPE`'s siblings);
+# `to_timestamp` refuses `2026-13-45 11:00:00`, which HAS the shape and names no instant.
+#
+# THE WIDTH IS 1 TO 6 BECAUSE THE SERIES USES 1, 3 AND 6, and this is the whole reason a
+# single `to_timestamp` PATTERN is still the wrong fix: `yyyy-MM-dd HH:mm:ss.SSSSSS`
+# rejects `1984-12-03 11:29:00.0` and `2025-04-23 13:02:31.416`, both real rows this
+# endpoint returns. The parse stays format-agnostic; only the SHAPE is pinned, and it is
+# pinned to a set rather than to one width. It matches `ptax_source.PUBLICATION_FORMATS`
+# exactly -- `%Y-%m-%d %H:%M:%S.%f` and the same without the fraction, `%f` taking 1 to 6
+# -- because whether a spelling is a publication instant is ONE decision spanning the
+# extraction layer and the gate, and a gate looser than the extraction tolerates exactly
+# the values a bug between the two could produce.
+_INSTANT_SHAPE = r"^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?$"
+
+
 def _unparseable_publication_instant() -> Column:
-    """`data_hora_cotacao` does not read as a timestamp.
+    """`data_hora_cotacao` does not read as a determinate publication instant.
 
     IT IS T3's COMPARATOR, which is why this is not the same rule as the two above wearing
     a different column name. The rate for a payment is the most recent quote whose
-    PUBLICATION INSTANT precedes the payment's own; a value `to_timestamp` cannot read
-    becomes NULL in that comparison, the row drops out of the as-of resolution, and the
-    payment silently resolves to an OLDER quote instead. Nothing is missing and nothing
-    fails -- the answer is just the wrong rate.
+    PUBLICATION INSTANT precedes the payment's own; a value the comparison cannot read
+    becomes NULL, the row drops out of the as-of resolution, and the payment silently
+    resolves to an OLDER quote instead. Nothing is missing and nothing fails -- the answer
+    is just the wrong rate.
 
-    FORMAT-AGNOSTIC ON PURPOSE, and this is a decision rather than laziness. The API's
-    fractional-second width is not stable across the series -- 1 digit in 1984, 3 in 2025,
-    6 in 2026 -- so a pinned pattern is a rule that works on this phase's range and
-    rejects the series. Spark's own parser accepts all of them; what is asserted here is
-    that SOMETHING can read it, which is exactly what the join needs.
+    WHAT "DETERMINATE" ADDS, AND IT IS THIS RULE'S WHOLE HISTORY. It was
+    `to_timestamp(...).isNull()` alone -- format-agnostic, so every fractional width the
+    series uses is accepted, which is still right. But Spark's single-argument
+    `to_timestamp` PARSES A BARE TIME, and it does not date it 1970: `13:03:25.555497`
+    becomes TODAY'S DATE. Measured through `opl.spark.local_session` (pyspark 3.5.9): on
+    2026-08-14 that text resolves to `2026-08-14 13:03:25.555497`, and tomorrow it
+    resolves to something else. Two consequences, each fatal on its own:
 
-    WHAT THAT COSTS, MEASURED RATHER THAN GLOSSED: Spark's single-argument `to_timestamp`
-    parses a BARE TIME. `13:03:25.555497` becomes 1970-01-01T13:03:25, so this rule
-    accepts it and T3's comparison gets a real instant fifty-six years early -- a quote
-    every payment sorts after. The hole is closed UPSTREAM rather than here:
-    `ptax_source._publication_instant` accepts exactly two spellings, both date-and-time,
-    and refuses everything else before a record is ever built. Pinned as an accepted
-    limit in `tests/bronze/test_ptax_rules.py` so it is a recorded property rather than
-    something met in the workspace.
+      * IT IS NON-DETERMINISTIC. The same landed bytes yield a different instant on a
+        different day, and being a function of its input is bronze's entire contract.
+      * THE CONSEQUENCE IS INVERTED. Today is LATER than every payment in this phase's
+        June/July window, so the row is excluded from every as-of set and the payment
+        resolves to an older quote -- verbatim the failure this docstring says the rule
+        exists to prevent. The retracted claim ("a real instant fifty-six years early
+        that every payment sorts after") had it backwards.
+
+    A bare DATE is refused by the same clause and for a weaker but real reason: it is
+    determinate, and it is midnight -- an instant BCB never published, which turns T3's
+    instant comparison into the calendar-day comparison the contract's own provenance
+    guard exists to refuse.
+
+    "CLOSED UPSTREAM" WAS FALSE AT THE BOUNDARY THIS GATE POLICES, which is why the fix is
+    here and not only there. `ptax_source._publication_instant` does refuse both shapes --
+    but `bronze_ptax_ingest` reads a DIRECTORY against `struct_for("ptax")` and never
+    imports the extraction module, and this table deliberately has no `reclaim_landing`, so
+    a landed file persists indefinitely. A file written by a wheel built from another
+    revision, hand-repaired, or copied in meets no extraction guard whatsoever. That is
+    exactly the boundary the five `null_or_empty_*` rules are justified by.
 
     The NULL case is a near-tautology with `null_or_empty_data_hora_cotacao`, which runs
     FIRST and therefore wins the reason -- first-match-wins is the gate's contract. That
     is the right ordering: a row with no stamp at all is described by the missing stamp,
     not by the stamp being unreadable."""
-    return F.to_timestamp(F.col(PUBLISHED_AT_COLUMN)).isNull()
+    return ~F.col(PUBLISHED_AT_COLUMN).rlike(_INSTANT_SHAPE) | F.to_timestamp(
+        F.col(PUBLISHED_AT_COLUMN)
+    ).isNull()
 
 
 def _unprovable_ref_date() -> Column:
@@ -446,9 +480,14 @@ def _unprovable_ref_date() -> Column:
 #   - `unparseable_cotacao_compra` / `unparseable_cotacao_venda`. Near-tautological -- the
 #     writer stamps `str(Decimal(...))` -- and kept because an unreadable venda converts
 #     every payment on that date at nothing.
-#   - `unparseable_data_hora_cotacao`. Near-tautological for the same reason and the most
-#     load-bearing of the three, because it is T3's COMPARATOR: a stamp the join cannot
-#     read does not fail, it resolves the payment to an older quote.
+#   - `unparseable_data_hora_cotacao`. The most load-bearing of the three, because it is
+#     T3's COMPARATOR: a stamp the join cannot read does not fail, it resolves the payment
+#     to an older quote. AND IT IS NOT A NEAR-TAUTOLOGY ANY MORE, which is F-API's fix
+#     pass rather than a re-description. It was `to_timestamp(...).isNull()`, and Spark's
+#     single-argument parser reads a BARE TIME as today's date -- so the rule accepted a
+#     landed value that renders differently on two days and sorts AFTER every payment in
+#     this phase's window instead of before it. The rule now refuses any stamp whose
+#     instant its own text does not determine. See the function.
 #   - `encoding_replacement_char`, folded over all five columns. Live for the reason it is
 #     live on payments: the serialiser returns TEXT and a writer that did not encode UTF-8
 #     explicitly hands Java bytes it substitutes U+FFFD for, silently.

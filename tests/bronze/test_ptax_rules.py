@@ -20,7 +20,10 @@ exercise the rule, and none of them is a body the API has ever returned. `bad_qu
 shape` is the one exception, and it is the one this phase actually invites."""
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
+from pyspark.sql import functions as F
 from pyspark.sql.types import StringType, StructField, StructType
 
 from opl.bronze.dq import REJECT_COLUMN, RESCUED_DATA_COLUMN, evaluate, split
@@ -213,29 +216,102 @@ def test_a_publication_instant_that_cannot_be_read_is_rejected(spark, published)
     assert _reasons(spark, [_row(data_hora_cotacao=published)]) == [expected]
 
 
-def test_a_bare_time_is_ACCEPTED_here_and_that_is_the_price_of_being_format_agnostic(
-    spark,
-):
-    """A LIMIT OF THIS RULE, MEASURED AND RECORDED RATHER THAN LEFT TO BE DISCOVERED.
+def test_a_bare_time_resolves_to_TODAYS_DATE_and_is_therefore_refused(spark):
+    """THE TENSION THIS RULE WAS TIGHTENED TO CLOSE, and it asserts the VALUE rather than
+    only the verdict -- because a test that pinned the verdict is exactly how three
+    readers in a row inherited a wrong number.
 
-    Spark's single-argument `to_timestamp` parses `13:03:25.555497` -- a bare time, with
-    no date -- into 1970-01-01T13:03:25. So this rule does NOT catch it, and a stamp of
-    that shape would give T3's comparison a real instant fifty-six years early: every
-    payment would sort after it and the quote would look eternally available.
+    The rule was `to_timestamp(...).isNull()` alone, and the test here asserted
+    `== [None]`: the bare time is accepted. That assertion is true under EITHER value, so
+    it verified that the rule did not fire and said nothing about what the rule let
+    through. The docstring, two commit messages and a published evidence section all said
+    `13:03:25.555497` becomes `1970-01-01T13:03:25`, "a real instant fifty-six years early
+    that every payment sorts after". Nobody measured it.
 
-    IT IS STILL THE RIGHT RULE, and the alternative is worse. A pinned pattern would
-    reject `1984-12-03 11:29:00.0` and `2025-04-23 13:02:31.416` -- both real rows this
-    endpoint returns, whose fractional-second widths differ from 2026's -- so it would
-    pass every test written from this phase's own window and refuse the series.
+    IT BECOMES TODAY'S DATE. So the landed value was NON-DETERMINISTIC -- the same bytes
+    yield a different instant tomorrow, and bronze's whole contract is being a function of
+    its input -- and the consequence was INVERTED: today is later than every payment in
+    this phase's June/July window, so the row drops out of every as-of set and the payment
+    resolves to an OLDER quote, verbatim the failure the rule exists to prevent.
 
-    WHAT ACTUALLY CLOSES THE HOLE IS UPSTREAM, and it is closed. `ptax_source.
-    _publication_instant` accepts exactly two spellings, both date-and-time, and refuses
-    everything else BEFORE a record is ever built -- so no value of this shape can reach
-    a landed file through the fetch task. This gate rule is the second line, and the
-    thing it is second at is a landing writer that reformatted a stamp that had already
-    parsed. Asserted here so that the accept is a recorded property rather than a silent
-    gap somebody meets in the workspace."""
-    assert _reasons(spark, [_row(data_hora_cotacao="13:03:25.555497")]) == [None]
+    THE FIRST ASSERTION IS THE MEASUREMENT, RE-TAKEN ON EVERY RUN, and it is compared
+    against `current_date()` rather than against a literal on purpose: a literal
+    `2026-08-14` in this file would be a second number going stale in exactly the way the
+    retracted one did. It fails if the resolved instant ever changes -- to 1970-01-01, to
+    NULL, to anything else -- which is what a value pin means.
+
+    THE SECOND IS THE FIX: the rule now REFUSES the shape, so it fails the moment anyone
+    reverts to the format-agnostic parse. The two together are the whole closing argument.
+
+    A pinned `to_timestamp` PATTERN is still the wrong fix and is not what changed here --
+    see `test_every_fractional_second_width_the_series_uses_is_accepted`."""
+    bare = "13:03:25.555497"
+    resolved = (
+        _frame(spark, [_row(data_hora_cotacao=bare)])
+        .select(
+            F.to_timestamp(F.col("data_hora_cotacao")).cast("date").alias("day"),
+            F.current_date().alias("today"),
+        )
+        .collect()[0]
+    )
+    assert resolved["day"] == resolved["today"], (
+        "Spark dates a bare time with the date the QUERY RAN, which is what makes the "
+        "landed value non-deterministic; if this is ever false the retracted 1970-01-01 "
+        "claim, or something new, is what the rule would be letting through"
+    )
+    assert resolved["day"] != date(1970, 1, 1), "the retracted claim, refused explicitly"
+    assert _reasons(spark, [_row(data_hora_cotacao=bare)]) == [
+        "unparseable_data_hora_cotacao"
+    ]
+
+
+@pytest.mark.parametrize(
+    "published",
+    [
+        # NO DATE AT ALL: today's date, non-deterministically. The headline case.
+        "13:03:25.555497",
+        "13:03:25",
+        # NO TIME AT ALL: determinate, and midnight -- an instant BCB never published, so
+        # T3's comparison silently becomes the calendar-day one the contract's provenance
+        # guard exists to refuse. `to_timestamp` accepts it; the shape does not.
+        "2026-06-19",
+        # A SPELLING THE SERIES DOES NOT USE, accepted by Spark's parser and refused here
+        # because whether a spelling is a publication instant is ONE decision shared with
+        # `ptax_source.PUBLICATION_FORMATS`, which takes a space and not a `T`. Bronze
+        # lands the string BCB sent; a reformatted one means something rewrote it.
+        "2026-06-19T13:03:25.555497",
+        # Seven fractional digits: past what `%f` takes, so the extraction refuses it too.
+        "2026-06-19 13:03:25.5554970",
+        # Padded. `to_timestamp` trims; the column is landed as-is, and every other shape
+        # rule in this module (`bad_quote_date_shape`) anchors without trimming.
+        "  2026-06-19 13:03:25  ",
+    ],
+)
+def test_a_stamp_whose_instant_its_own_text_does_not_determine_is_refused(spark, published):
+    """THE PROPERTY, over every way of failing it that Spark's parser would accept.
+
+    Each of these returns a non-NULL timestamp from `to_timestamp`, so the rule as first
+    shipped accepted all six. What they have in common is that the instant is not fully
+    determined by the landed text -- either because the text names no date (the first two,
+    which are dated by the clock) or because something between the response and the file
+    rewrote a stamp that had already parsed, which is the one thing this rule is second
+    at."""
+    assert _reasons(spark, [_row(data_hora_cotacao=published)]) == [
+        "unparseable_data_hora_cotacao"
+    ]
+
+
+def test_a_shaped_stamp_that_names_no_instant_is_still_refused_by_the_parse(spark):
+    """WHY THE RULE IS TWO CHECKS AND NOT ONE, in the direction the shape cannot see.
+
+    `2026-13-45 11:00:00` has the shape exactly and names neither a month nor a day, so
+    the shape half accepts it and `to_timestamp` returns NULL. It is the same pairing
+    `bad_quote_date_shape` makes -- a regex for the spelling, a parse for the day -- and
+    it is what keeps the parse half load-bearing rather than decorative after the
+    tightening."""
+    assert _reasons(spark, [_row(data_hora_cotacao="2026-13-45 11:00:00")]) == [
+        "unparseable_data_hora_cotacao"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -255,7 +331,14 @@ def test_every_fractional_second_width_the_series_uses_is_accepted(spark, publis
 
     A rule pinned to `yyyy-MM-dd HH:mm:ss.SSSSSS` accepts every 2026 row and rejects
     1984-12-03 and 2025-04-23 -- both of which are real rows this endpoint returns. It
-    would pass every test written from this phase's own window and reject the series."""
+    would pass every test written from this phase's own window and reject the series.
+
+    THIS IS THE HALF THE TIGHTENING HAD TO KEEP, and it is why the fix is a shape whose
+    fractional group is `{1,6}`-or-absent rather than a `to_timestamp` format string. The
+    four values here are the three widths the series is known to use plus no fraction at
+    all, which no observed row has -- present so an absence is not a refusal, exactly as
+    `ptax_source.PUBLICATION_FORMATS` carries the same second spelling for the same
+    reason."""
     assert _reasons(spark, [_row(data_hora_cotacao=published)]) == [None]
 
 
