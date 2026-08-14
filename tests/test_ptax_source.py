@@ -191,6 +191,48 @@ def test_two_publications_of_one_quote_reduce_to_the_later_stamp():
     assert one.quote_date == date(2025, 4, 23)
 
 
+def test_the_reduce_is_per_response_and_is_not_the_one_the_landed_table_needs():
+    """THE BUILD-BLOCKER THIS COMMIT CLOSES. `sole_quote` reduces ONE response, and the
+    first version of its docstring presented that as REPLACING the reduce gold does before
+    the FX join. It does not: bronze is written `mode("append")` (`opl.bronze.promote`), so
+    a second extraction over the same span lands a second row for every
+    `(currency, quote_date)` already reduced here -- rows this function structurally cannot
+    see, being invoked once per response. A re-run is an ordinary event, so the request-
+    layer reduce is an ADDITION and the whole-table reduce stays downstream.
+
+    THREE ASSERTIONS, BECAUSE THE CLAIM CAN REVERT THREE WAYS. The module could grow a
+    whole-table reduce; `sole_quote` could quietly accept rows from several quote dates and
+    thereby become one; and the docstrings could stop telling the next implementer that the
+    landed table still needs reducing. The last is pinned to the words on purpose -- the
+    defect being closed here WAS a docstring, so a test that only checked behaviour would
+    have passed against the version that shipped the wrong claim."""
+    for name in (
+        "reduce_quotes",
+        "dedupe_quotes",
+        "latest_per_quote_date",
+        "sole_quote_per_date",
+        "reduce_series",
+        "unique_quotes",
+    ):
+        assert not hasattr(ptax_source, name), (
+            f"{name} implies a whole-table reduce lives in this module. It cannot: this "
+            "layer never holds two responses at once, and bronze appends across runs"
+        )
+    friday = quotes_in(BODY_2026_06_19, date(2026, 6, 19))
+    monday = quotes_in(BODY_2026_06_22, date(2026, 6, 22))
+    with pytest.raises(PtaxResponseRefused, match="quote dates"):
+        sole_quote(friday + monday)
+    said = f"{ptax_source.__doc__}\n{sole_quote.__doc__}"
+    assert 'mode("append")' in said and "MUST STILL REDUCE" in said, (
+        "the per-response limit and the downstream obligation are the whole of the "
+        "correction; a reader who cannot find them here will re-derive the wrong claim"
+    )
+    assert "rather than in gold before the FX join" not in said, (
+        "that is the retracted claim, restored. The request-layer reduce is an addition "
+        "to the gold-side one, never a replacement for it"
+    )
+
+
 def test_two_rows_that_disagree_on_the_rate_are_refused_rather_than_reduced():
     """THE BRANCH WITH NO WITNESS IN THE SERIES, which is why the body is the real
     2025-04-23 response with one digit changed -- 903 rows over 3.6 years contain no

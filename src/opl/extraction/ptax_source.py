@@ -33,6 +33,17 @@ precedes the payment's own -- is implementable only if both survive to bronze. A
 returning the API's own three fields makes T3 degrade silently into the calendar-day
 comparison it forbids, and it would look correct on every day this phase extracts.
 
+THE REDUCE IN `sole_quote` IS PER RESPONSE AND DOES NOT SURVIVE THE LANDING. It sees one
+response -- one currency, one quote date -- and reduces the rows in it. That is an
+ADDITION to the reduce a consumer of the landed table must do, and never a replacement
+for it: bronze is written `mode("append")` (`opl.bronze.promote`), so a second extraction
+over the same span lands a SECOND row for every `(currency, quote_date)` this function
+already reduced to one, and it cannot see those rows because it is invoked once per
+response and never over the table. A RE-RUN IS AN ORDINARY EVENT -- a repair, a widened
+window, a retried task -- so any consumer joining against this data MUST reduce over the
+landed table itself first. Nothing in this module does that, and nothing in this module
+can.
+
 DECIMAL, FROM THE RAW TEXT. `json.loads` turns the API's `5.07730` into the float
 `5.0773`, and `str()` on that drops the trailing zero -- so a rate carried through a
 float is a different string from the one BCB published. Everything here parses with
@@ -242,32 +253,61 @@ def quotes_in(body: str, quote_date: date) -> tuple[PtaxQuote, ...]:
     return tuple(quotes)
 
 
-def sole_quote(quotes: tuple[PtaxQuote, ...]) -> PtaxQuote | None:
-    """The one quote for a `(currency, quote_date)`, or None if that day carries none.
+def _refuse_a_second_quote_date(quotes: tuple[PtaxQuote, ...]) -> None:
+    """Refuse a group spanning more than one quote date.
 
-    THE REDUCE LIVES HERE, at the request, rather than in gold before the FX join,
-    because here the key IS the request: one endpoint is one currency and one URL is one
-    quote date, so two rows in one response can only be two publications of one quote.
-    Downstream the key would have to be re-derived from landed columns, and the
-    disagreement below would have to be caught in Spark after the fan-out had already
-    multiplied the fact -- `_refuse_a_row_count_that_is_not_one_per_delivered_identity`
-    fires only after the append, and says so.
+    THIS IS WHAT MAKES THE PER-RESPONSE SCOPE STRUCTURAL rather than a sentence in a
+    docstring. Every group this module builds comes from one response and therefore
+    carries one quote date, so nothing inside can reach this. It exists for the caller
+    that mistakes `sole_quote` for the reduce the LANDED TABLE needs and hands it rows
+    from several dates: under that reading a disagreement between two perfectly good
+    quotes on different days would be refused as a contradiction, and an agreement across
+    a flat week would collapse five quotes into one. Bronze appends, so that caller is not
+    hypothetical -- something downstream has to reduce, and it must not be this."""
+    dates = sorted({quote.quote_date for quote in quotes})
+    if len(dates) > 1:
+        raise PtaxResponseRefused(
+            f"sole_quote was handed rows for {len(dates)} quote dates ({dates[0]} .. "
+            f"{dates[-1]}), and it reduces ONE response, whose rows all carry the single "
+            "quote date its URL asked for. The reduce the landed table needs is a "
+            "different one and lives downstream: bronze appends, so a re-run lands a "
+            "second row per (currency, quote_date) that this function never sees."
+        )
+
+
+def sole_quote(quotes: tuple[PtaxQuote, ...]) -> PtaxQuote | None:
+    """The one quote for a `(currency, quote_date)` IN ONE RESPONSE, or None if that
+    response carries none.
+
+    THE SCOPE IS ONE RESPONSE, AND THIS IS NOT THE REDUCE THE LANDED TABLE NEEDS. Here
+    the key IS the request -- one endpoint is one currency and one URL is one quote date
+    -- so two rows in one response can only be two publications of one quote, and that is
+    the only fan-out this function is able to see. It is invoked once per response and
+    never over the table.
+
+    SO IT DOES NOT SURVIVE THE LANDING, and the correction is worth stating plainly
+    because the first version of this docstring got it backwards. Bronze is written
+    `mode("append")` (`opl.bronze.promote`), so a second extraction over the same span
+    lands a second row for every `(currency, quote_date)` reduced here, and no amount of
+    care at the request can see across responses or across runs. THE CONSUMER OF THE
+    LANDED TABLE MUST STILL REDUCE OVER THAT TABLE. This is an addition to that reduce,
+    not a replacement for it, and a re-run is an ordinary event rather than an incident.
 
     MEASURED: 2025-04-23 carries TWO rows, publication stamps 27 ms apart, AGREEING on
-    both rates. The LATER stamp is kept, which is T3's own fail-safe direction: it delays
-    when the quote becomes usable rather than advancing it.
+    both rates.
 
-    THE DISAGREEMENT BRANCH HAS NO WITNESS. 903 rows over 3.6 years hold no date whose
-    rows differ, so this branch ships unexercised by the source; the only body that has
-    ever taken it is hand-built, in `tests/test_ptax_source.py`. That is a finding rather
-    than a defect -- the alternative is a `max()` over a disagreement nobody would see."""
+    THE DISAGREEMENT BRANCH HAS NO WITNESS. No quote date in the series holds rows that
+    differ, so this branch ships unexercised by the source; the only body that has ever
+    taken it is hand-built, in `tests/test_ptax_source.py`. That is a finding rather than
+    a defect -- the alternative is picking one of two contradicting rates in silence."""
     if not quotes:
         return None
-    published = {(quote.compra, quote.venda) for quote in quotes}
-    if len(published) > 1:
+    _refuse_a_second_quote_date(quotes)
+    rates = {(quote.compra, quote.venda) for quote in quotes}
+    if len(rates) > 1:
         raise PtaxResponseRefused(
             f"{quote_url(quotes[0].quote_date)} answered {len(quotes)} rows that DISAGREE "
-            f"on the rate: {sorted(map(str, published))}. Taking either one silently picks "
+            f"on the rate: {sorted(map(str, rates))}. Taking either one silently picks "
             "the rate every payment on this date converts at, so the extraction stops here"
         )
     return max(quotes, key=lambda quote: quote.published_at)
