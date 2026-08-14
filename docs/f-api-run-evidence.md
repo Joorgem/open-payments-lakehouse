@@ -947,6 +947,35 @@ produce that row, and it is the reason the fifth profile exists.
 | rows before the bulletin | 5,836 | **5,836** ✅ |
 | rows after the bulletin | 4,164 | **4,164** ✅ |
 
+#### 2,864 RE-DERIVED BY TWO ROUTES THAT SHARE NO DECOMPOSITION
+
+F3's precedent: a number too neat to trust once is re-measured by a query sharing nothing with
+the first. **Controller-verified**, `01f19835-01f6-1f07-bafe-49b045df14de`, `from_cache: None`,
+over the 4,905 rows with `fx_rate <> 1.00000`:
+
+| route | reads | **answer** |
+|---|---|---|
+| group by `fx_rate` / `fx_rate_date_key` (above) | the resolved rate and its date key | **2,864** |
+| compare `event_time` against the publication instant | the payment's own instant, and nothing the FX join produced | **2,864** ✅ |
+| recover the rate as `ROUND(amount_brl / amount, 4)` | the two money columns only | **2,862** ⚠️ |
+
+**The third route is 3 rows short, and the three rows are the argument rather than a defect.**
+`01f19835-1a4c-1c19-ba3c-457ecc44d3ac`, `from_cache: None`, lists them in full:
+
+| `amount` | `fx_rate` | `amount_brl` | recovered ratio |
+|---|---|---|---|
+| 6.35 | 5.13950 | 32.64 | 5.14015748… |
+| 31.40 | 5.14420 | 161.53 | 5.14426751… |
+| 73.06 | 5.14420 | 375.84 | 5.14426498… |
+
+They are **the three smallest converted amounts in the table**, and they are short for exactly
+the reason §1.3 published in advance: `amount_brl` is rounded HALF-UP at the row, so half a
+centavo is a larger fraction of a small amount and moves the recovered ratio in the fourth
+decimal. `6.35 × 5.13950 = 32.635825 → 32.64`. **The rate is NOT recoverable from the two
+money columns**, which is why `fx_rate` is a column and not a derivation — and this is the
+sharpest available demonstration that the rounding claim describes real rows rather than a
+bound nobody reached.
+
 #### THE COUNTS
 
 **Controller-verified**, `01f19831-80ec-1859-ae3d-86a3d31f523e` (the top-level counts),
