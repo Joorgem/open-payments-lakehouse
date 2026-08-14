@@ -158,7 +158,10 @@ def test_a_blank_or_absent_column_is_rejected_by_name(spark, column, blank):
         # quotes, so this is what a writer that reused the request's own spelling lands.
         # Ten characters, non-blank, and it joins to NOTHING in gold.
         "06-19-2026",
-        # Shape-valid, names no day. The registry's length CHECK accepts it.
+        # Shape-valid, names no day -- so the registry's CHECK, which is that shape and
+        # nothing more, ACCEPTS it. This is the value that makes the gate strictly stronger
+        # than the constraint rather than a duplicate of it, and the Delta test at the foot
+        # of this file lands it to prove the acceptance is real.
         "2026-13-45",
         # The other direction: a real date in a spelling nothing downstream parses.
         "19/06/2026",
@@ -168,10 +171,17 @@ def test_a_blank_or_absent_column_is_rejected_by_name(spark, column, blank):
 def test_a_quote_date_that_is_not_an_iso_day_is_rejected(spark, quote_date):
     """THE ONE RULE HERE THAT IS NOT NEAR-TAUTOLOGICAL.
 
-    `06-19-2026` is the value the phase's own API format produces, and it is the reason
-    the registry's `length(trim(quote_date)) = 10` CHECK is not enough on its own: that
-    constraint accepts this string, and it runs at the promote, AFTER the append has
-    committed. This runs in the gate, before anything reaches bronze."""
+    `06-19-2026` is the value the phase's own API format produces, and it is what a writer
+    that reused the request's own spelling lands.
+
+    WHAT THIS ADDS OVER THE REGISTRY'S CHECK IS NO LONGER THAT THE CHECK IS BLIND TO IT.
+    That CHECK was `length(trim(quote_date)) = 10`, which accepted this string; F-API's fix
+    pass made it `regexp_like` on the same digit shape, so it refuses it too -- and a
+    docstring here went on saying otherwise, which is the species this phase keeps finding.
+    Two differences survive and both point the same way: this predicate ALSO requires
+    `to_date` to name a real day, which is why `2026-13-45` is in the list above and is
+    ACCEPTED by the CHECK; and this runs in the gate, before anything reaches bronze, while
+    the CHECK runs at the promote, AFTER the append has committed."""
     assert _reasons(spark, [_row(quote_date=quote_date)]) == ["bad_quote_date_shape"]
 
 
@@ -358,6 +368,91 @@ def test_every_fractional_second_width_the_series_uses_is_accepted(spark, publis
     assert _reasons(spark, [_row(data_hora_cotacao=published)]) == [None]
 
 
+# --- THE SEAM: `_INSTANT_SHAPE` AGAINST `ptax_source`'s OWN PARSE ---------------------
+#
+# `rules._INSTANT_SHAPE`'s comment block used to say it matched `PUBLICATION_FORMATS`
+# "exactly", and that was measured FALSE: `strptime`'s `%m`, `%d`, `%H`, `%M` and `%S` each
+# accept an unpadded field where the regex demands two digits. The claim is now an
+# ASYMMETRY, so it is pinned as one -- a table of spellings with BOTH verdicts recorded,
+# each verified against the real implementation on both sides. `_the_extraction_reads`
+# calls `ptax_source._publication_instant` rather than re-looping over the formats, so
+# there is no second spelling of the parse in here to drift from the first.
+#
+# The property that matters is the DIRECTION, asserted over the whole table below: no
+# spelling is accepted by the gate and refused by the extraction. That is what makes the
+# gap safe -- a value cannot reach bronze past the extraction and then be called valid at
+# the gate -- and the reverse gap (extraction accepts, gate refuses) is exactly the five
+# unpadded rows, which is the cost `rules.py` now states rather than claims away.
+_GATE_REFUSES, _GATE_ACCEPTS = True, False
+_SEAM_CASES = [
+    # (spelling, the gate refuses it, the extraction reads it)
+    ("2026-06-19 13:03:25.555497", _GATE_ACCEPTS, True),  # what the phase actually lands
+    ("2026-06-19 13:03:25", _GATE_ACCEPTS, True),  # the fraction-less second spelling
+    ("2026-6-19 13:03:25", _GATE_REFUSES, True),  # unpadded month: `%m` takes it
+    ("2026-06-9 13:03:25", _GATE_REFUSES, True),  # unpadded day
+    ("2026-06-19 1:03:25", _GATE_REFUSES, True),  # unpadded hour
+    ("2026-06-19 13:3:25", _GATE_REFUSES, True),  # unpadded minute
+    ("2026-06-19 13:03:5", _GATE_REFUSES, True),  # unpadded second
+    ("26-06-19 13:03:25", _GATE_REFUSES, False),  # `%Y` is the one field that wants four
+    ("2026-13-45 11:00:00", _GATE_REFUSES, False),  # shaped, names no instant: both refuse
+]
+
+
+def _the_extraction_reads(stamp: str) -> bool:
+    """Whether `ptax_source` would land a quote carrying `stamp`. The extraction's own
+    decision, taken by its own function -- a copy of the `PUBLICATION_FORMATS` loop here
+    would be a second spelling of the thing this file exists to compare against."""
+    from opl.extraction.ptax_source import PtaxResponseRefused, _publication_instant
+
+    try:
+        _publication_instant(stamp, date(2026, 6, 19))
+    except PtaxResponseRefused:
+        return False
+    return True
+
+
+@pytest.mark.parametrize(("stamp", "gate_refuses", "extraction_reads"), _SEAM_CASES)
+def test_the_gate_accepts_no_spelling_the_extraction_would_refuse(
+    spark, stamp, gate_refuses, extraction_reads
+):
+    """Both verdicts on one spelling, so neither side can move in silence.
+
+    The five unpadded rows are the divergence itself: the extraction lands them and the
+    gate fails the whole run on them, under a reason ("does not read as a determinate
+    publication instant") that is untrue of a stamp `strptime` read perfectly well. If
+    `PUBLICATION_FORMATS` is ever padded, or the shape's quantifiers widened to `{1,2}`,
+    those rows fail here and the paragraph in `rules.py` is what needs rewriting."""
+    reasons = _reasons(spark, [_row(data_hora_cotacao=stamp)])
+    expected = ["unparseable_data_hora_cotacao"] if gate_refuses else [None]
+    assert reasons == expected, f"the GATE's verdict on {stamp!r} moved"
+    assert _the_extraction_reads(stamp) is extraction_reads, (
+        f"the EXTRACTION's verdict on {stamp!r} moved, so the asymmetry `rules.py` "
+        "states about these two layers is no longer the one measured here"
+    )
+
+
+def test_no_case_in_the_seam_table_is_gate_accepted_and_extraction_refused():
+    """THE DIRECTION, over the verified table rather than over an adjective.
+
+    Each row above is checked against both implementations, so this reads the measurement
+    rather than a declaration. It is the whole safety argument for the gap: the gate being
+    STRICTER means a landed file cannot hold a stamp the extraction blessed and the gate
+    then rejects for a reason untrue of it -- and the opposite pairing, if it ever appeared,
+    would be a value the extraction refuses reaching bronze unremarked."""
+    wrong_way = [
+        stamp for stamp, refuses, reads in _SEAM_CASES if not refuses and not reads
+    ]
+    assert not wrong_way, (
+        f"{wrong_way} would be accepted by the gate and refused by the extraction, which "
+        "inverts the direction of the divergence -- see `rules._INSTANT_SHAPE`"
+    )
+    assert [stamp for stamp, refuses, reads in _SEAM_CASES if refuses and reads], (
+        "the table no longer holds a single spelling the extraction reads and the gate "
+        "refuses, so the asymmetry rules.py describes has been closed -- delete the "
+        "paragraph rather than leaving it as this phase's next stale claim"
+    )
+
+
 @pytest.mark.parametrize("column", COLUMNS)
 def test_a_replacement_character_is_caught_but_only_currency_REPORTS_it(spark, column):
     """THE ENCODING CHECK IS SHADOWED ON FOUR OF THE FIVE COLUMNS IT IS FOLDED OVER, and
@@ -408,14 +503,17 @@ def test_a_row_with_two_faults_reports_the_first_rule_that_matches(spark):
 # --- AND THE OTHER HALF OF THE COMPARISON: THE PROMOTE'S OWN CHECK -------------------
 #
 # `bad_quote_date_shape`'s docstring compares itself against the registry's CHECK
-# constraint -- "that one runs at the promote, AFTER the append has committed, and length
-# alone accepts `06-19-2026`" -- and until F-API's fix pass nothing anywhere exercised the
-# second half of that sentence. It was true: the CHECK was named `quote_date_iso_shape`
-# and spelled `length(trim(quote_date)) = 10`, so the constraint named for the ISO shape
-# admitted the one non-ISO spelling this phase invites. `tests/bronze/test_registry.py`
-# pins the DDL string; this is the behavioural half, against a real Delta transaction log,
-# because a CHECK is a claim about what the engine will refuse and not about what the
-# string says.
+# constraint, and until F-API's fix pass nothing anywhere exercised the comparison. The
+# docstring said "length alone accepts `06-19-2026`", which was true of the CHECK as
+# shipped -- named `quote_date_iso_shape` and spelled `length(trim(quote_date)) = 10`, so
+# the constraint named for the ISO shape admitted the one non-ISO spelling this phase
+# invites. The fix pass replaced it with `regexp_like`, and the sentence went stale in three
+# places rather than being retired with it; what the docstring claims NOW is that the gate
+# is strictly stronger, which is two values and not an adjective: `06-19-2026` is refused by
+# both, and `2026-13-45` is refused by the gate and LANDS past the CHECK. Both are asserted
+# below. `tests/bronze/test_registry.py` pins the DDL string; this is the behavioural half,
+# against a real Delta transaction log, because a CHECK is a claim about what the engine
+# will refuse and not about what the string says.
 
 
 def test_the_iso_shape_check_refuses_the_apis_own_spelling_on_a_real_delta_table(
@@ -431,7 +529,9 @@ def test_the_iso_shape_check_refuses_the_apis_own_spelling_on_a_real_delta_table
     `06-19-2026` is the case that matters and the one the old CHECK accepted -- ten
     characters, non-blank, and it joins to nothing in gold with every count green. The
     other three are the shapes a length check cannot see either way, kept so a future
-    weakening of the pattern (say `[0-9-]+`) has something to fail against.
+    weakening of the pattern (say `[0-9-]+`) has something to fail against. `2026-13-45` is
+    INSERTED rather than refused -- the acceptance half of "the gate is strictly stronger",
+    which the comment block above explains.
 
     THE COLUMN IS DECLARED NOT NULL AT CREATE TIME, AND THAT IS A MEASURED LOCAL LIMIT
     rather than a shortcut. Applying the tuple's own
@@ -458,9 +558,11 @@ def test_the_iso_shape_check_refuses_the_apis_own_spelling_on_a_real_delta_table
         for refused in ("06-19-2026", "2026-6-19", "19/06/2026", "2026-06-1x"):
             with pytest.raises(Exception, match="quote_date_iso_shape"):
                 spark.sql(f"INSERT INTO {table} VALUES ('{refused}')")
-        assert [row["quote_date"] for row in spark.table(table).collect()] == [
-            "2026-06-19"
-        ], "the ISO value is the only one that landed"
+        spark.sql(f"INSERT INTO {table} VALUES ('2026-13-45')")
+        assert sorted(row["quote_date"] for row in spark.table(table).collect()) == [
+            "2026-06-19",
+            "2026-13-45",
+        ], "the CHECK is the shape only; naming a real day is the GATE's added clause"
     finally:
         spark.sql(f"DROP DATABASE {database} CASCADE")
 

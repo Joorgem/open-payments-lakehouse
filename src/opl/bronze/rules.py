@@ -249,10 +249,17 @@ def _bad_iso_date(column: str) -> Callable[[], Column]:
     characters, and it JOINS TO NOTHING in gold while every row count stays green, which
     is the shape this repository refuses to ship.
 
-    A LENGTH CHECK ALSO EXISTS, in the registry's constraint tuple, and this is not a
-    duplicate of it. That one runs at the promote, AFTER the append has committed, and
-    length alone accepts `06-19-2026`. This runs in the gate, before anything reaches
-    bronze, and it is the one that can tell the two spellings apart."""
+    THE REGISTRY'S CHECK IS THE SAME SHAPE NOW, AND THIS PREDICATE IS STRICTLY STRONGER.
+    `quote_date_iso_shape` was `length(trim(quote_date)) = 10`, which accepted
+    `06-19-2026`; F-API's fix pass made it `regexp_like` on the same digit shape as
+    `_ISO_DATE_SHAPE`, so it refuses that value too and "length alone accepts it" is no
+    longer the distinction. What survives is: this predicate ALSO requires `to_date` to
+    name a real day, so `2026-13-45` passes the CHECK and is refused HERE; and this runs
+    in the gate, before anything reaches bronze, while the CHECK runs at the promote,
+    AFTER the append has committed. Both differences point the same way -- the gate is
+    never weaker than the constraint downstream of it, which is the one direction this
+    repository does not allow. Both halves are pinned in tests/bronze/test_ptax_rules.py,
+    the second against a real Delta transaction log."""
     return lambda: ~F.col(column).rlike(_ISO_DATE_SHAPE) | F.to_date(
         F.col(column), _ISO_DATE_FORMAT
     ).isNull()
@@ -289,11 +296,29 @@ _RATE_TYPE = "decimal(18,5)"
 # single `to_timestamp` PATTERN is still the wrong fix: `yyyy-MM-dd HH:mm:ss.SSSSSS`
 # rejects `1984-12-03 11:29:00.0` and `2025-04-23 13:02:31.416`, both real rows this
 # endpoint returns. The parse stays format-agnostic; only the SHAPE is pinned, and it is
-# pinned to a set rather than to one width. It matches `ptax_source.PUBLICATION_FORMATS`
-# exactly -- `%Y-%m-%d %H:%M:%S.%f` and the same without the fraction, `%f` taking 1 to 6
-# -- because whether a spelling is a publication instant is ONE decision spanning the
-# extraction layer and the gate, and a gate looser than the extraction tolerates exactly
-# the values a bug between the two could produce.
+# pinned to a set rather than to one width -- because whether a spelling is a publication
+# instant is ONE decision spanning the extraction layer and the gate, and a gate looser
+# than the extraction tolerates exactly the values a bug between the two could produce.
+#
+# IT DOES NOT MATCH `ptax_source.PUBLICATION_FORMATS` EXACTLY, AND THE ASYMMETRY IS SAID
+# HERE RATHER THAN CLAIMED AWAY -- an earlier version of this block said "exactly" and it
+# was measured false. `strptime`'s `%m`, `%d`, `%H`, `%M` and `%S` each accept an UNPADDED
+# field, so the extraction validates `2026-6-19 13:03:25`, `2026-06-9 13:03:25`,
+# `2026-06-19 1:03:25` and the unpadded-minute and unpadded-second spellings, all five of
+# which this shape refuses (`%Y` is the one field that does demand four digits, so
+# `26-06-19 13:03:25` is refused by both). The fractional clause is the half that DOES
+# agree: `{1,6}` is `%f`'s own range, and the fraction-less second spelling is why the
+# group is optional.
+#
+# THE DIVERGENCE IS ONE-DIRECTIONAL AND THAT IS THE SAFE DIRECTION: everything this shape
+# accepts, the extraction accepts, so no value can reach bronze past the extraction and
+# then be called valid here. The cost of the gap, stated because it is not zero: if BCB
+# ever published an unpadded stamp, the extraction would land it and this gate would fail
+# the WHOLE run on a row the extraction had called valid, under a reason ("does not read as
+# a determinate publication instant") that is untrue of it. The fix at that point is to
+# widen these quantifiers to `{1,2}`, never to loosen the parse. Pinned across the seam by
+# `test_the_gate_accepts_no_spelling_the_extraction_would_refuse` -- which fails if either
+# side moves, so the paragraph above cannot go stale the way "exactly" did.
 _INSTANT_SHAPE = r"^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?$"
 
 
@@ -488,9 +513,19 @@ def _unprovable_ref_date() -> Column:
 #     landed value that renders differently on two days and sorts AFTER every payment in
 #     this phase's window instead of before it. The rule now refuses any stamp whose
 #     instant its own text does not determine. See the function.
-#   - `encoding_replacement_char`, folded over all five columns. Live for the reason it is
-#     live on payments: the serialiser returns TEXT and a writer that did not encode UTF-8
-#     explicitly hands Java bytes it substitutes U+FFFD for, silently.
+#   - `encoding_replacement_char`, folded over all five columns and SHADOWED ON FOUR OF
+#     THEM. It is live for the reason it is live on payments -- the serialiser returns TEXT
+#     and a writer that did not encode UTF-8 explicitly hands Java bytes it substitutes
+#     U+FFFD for, silently -- but first-match-wins puts an earlier CONTENT rule on every
+#     column except `currency`: a U+FFFD in `quote_date` breaks `bad_quote_date_shape`'s
+#     regex, one in either rate makes the decimal cast NULL, and one in
+#     `data_hora_cotacao` breaks `_INSTANT_SHAPE`. So the row is always REJECTED and
+#     nothing gets through, and this name can only ever be the REPORTED reason for
+#     `currency` -- which matters because these strings are data an operator filters a
+#     quarantine on. It stays folded over all five anyway: the fold is derived from the
+#     contract, so a v2 column arrives covered, and `currency` is the one column no other
+#     rule inspects. Measured in
+#     `test_a_replacement_character_is_caught_but_only_currency_REPORTS_it`.
 #
 # WHAT IT DELIBERATELY DOES NOT CARRY, and the second one is a ruling rather than a
 # deferral:
