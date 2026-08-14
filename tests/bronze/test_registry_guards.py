@@ -13,8 +13,14 @@ the cap, because "a guard changes" turned out to be two reasons rather than one.
 cross-check and its complement -- which is the half that changes when a landing MODE is
 added, and which the source side had already split along: `opl.bronze.registry_landing`
 is its own module for exactly that reason. What is left here exercises the guards
-`registry.py` and `registry_collisions.py` define, none of which knows what a landing
-mode is.
+`registry.py`, `registry_collisions.py` and `registry_subdirs.py` define, none of which
+knows what a landing mode is.
+
+THE SUBDIR TRIO MOVED MODULE IN THE SAME PASS AND ITS TESTS DID NOT, which is deliberate:
+`registry_subdirs.py` exists because `registry.py` reached 802 lines, and the guards it
+holds are still about "what may this table's `subdir` be" -- the same reason-to-edit as
+everything else here. They take `REGISTRY` as an argument now, like the collision trio
+below and for the identical reason, so the call sites in this file pass it.
 
 Every test here works the same way: put a spec that must not exist into `REGISTRY`
 with `monkeypatch`, call the guard, and assert it refuses AND says why. They are
@@ -312,7 +318,7 @@ def test_a_pasted_subdir_is_refused_at_import(monkeypatch):
     monkeypatch.setitem(REGISTRY, "empresas", pasted)
 
     with pytest.raises(ValueError, match="both claim landing subdir"):
-        _assert_no_two_tables_share_a_landing_subdir()
+        _assert_no_two_tables_share_a_landing_subdir(REGISTRY)
 
 
 def test_a_table_claiming_a_reserved_subdir_is_refused_by_name(monkeypatch):
@@ -338,7 +344,7 @@ def test_a_table_claiming_a_reserved_subdir_is_refused_by_name(monkeypatch):
     monkeypatch.setitem(REGISTRY, "socios", trap)
 
     with pytest.raises(ValueError) as excinfo:
-        _assert_no_table_claims_a_reserved_subdir()
+        _assert_no_table_claims_a_reserved_subdir(REGISTRY)
     message = str(excinfo.value)
     assert "socios" in message and "'zips'" in message
     # The operator has to be told WHY, not just refused: the reason is recursion.
@@ -383,7 +389,7 @@ def test_a_subdir_that_is_a_path_rather_than_a_name_is_refused(monkeypatch, subd
     monkeypatch.setitem(REGISTRY, "socios", trap)
 
     with pytest.raises(ValueError) as excinfo:
-        _assert_subdirs_are_single_path_components()
+        _assert_subdirs_are_single_path_components(REGISTRY)
     message = str(excinfo.value)
     assert "socios" in message and repr(subdir) in message
     # Refused as MALFORMED, not as one more reserved name -- the distinction is the
