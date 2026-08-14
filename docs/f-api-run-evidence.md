@@ -92,6 +92,19 @@ interstitial or an OData error object would produce. Because an absence is resol
 falling back, a failure read as an absence makes the fallback cross a hole nobody can see.
 The response envelope is therefore validated and **refused**, rather than returned as no rows.
 
+**The sharpest instance is not an outage — it is the date format.** An **ISO** date in `@di`
+returns **HTTP 200 with `"value":[]`**, on every day of a span. So the one format mistake this
+repository polices hardest fails by wearing a Saturday's exact shape, silently, all the way
+through: `2026-06-03` looks precisely like a day with no quote. That is the argument for
+refusing a wholly-empty span rather than returning nothing, and it is what the refusal message
+now says.
+
+**And Olinda's real error body is a JSON object inside a comment wrapper** —
+`/*{ "codigo": …, "mensagem": … }*/`, served without a content-type, reproduced from three
+different bad requests. The fixture originally written for this case used the OASIS
+`{"error": …}` shape, which takes the *missing-member* branch, so **the branch that fires on a
+real API error had never been exercised** until it was replaced with the live body.
+
 ### 0.6 T3's premise, measured rather than argued
 
 **Reported.** The phase rules that the fallback reads the PTAX series itself and never a
@@ -196,16 +209,58 @@ Added by Task 2, as the bronze layer was built:
   evidence that our own fetch did not drift, which is a smaller claim wearing the same
   colour.
 
-### 3.1 An accepted limit, pinned rather than hidden
+### 3.1 A gate rule weaker than its name — and the number this document first published was WRONG
 
-Spark's format-agnostic `to_timestamp` **parses a bare time**: `"13:03:25.555497"` becomes
-`1970-01-01T13:03:25`, a real instant fifty-six years early that every payment sorts after.
-So `unparseable_data_hora_cotacao` accepts it.
+Spark's format-agnostic `to_timestamp` **parses a bare time**, so
+`unparseable_data_hora_cotacao` accepts `"13:03:25.555497"`. That much is true and was
+measured. **What this section first published about the resulting value was false, and its
+stated consequence was backwards.**
 
-**A pinned pattern would be worse, and that is why the limit is accepted rather than fixed
-here.** The fractional-second width is 1, 3 or 6 digits across the series (§0.4), so any
+> **RETRACTED.** This said the value becomes `1970-01-01T13:03:25`, "a real instant fifty-six
+> years early that every payment sorts after", and called the whole thing an accepted limit.
+> The number came from Task 2's implementer, was repeated in two commit messages and in
+> `rules.py`'s own docstring, and was accepted by **the first of two independent reviewers and
+> by the controller**. Nobody measured it until the second review.
+>
+> **Controller-verified** through `opl.spark.local_session` (pyspark 3.5.9, session timezone
+> UTC; the driver renders local, which is the −3 h in the display):
+>
+> | landed text | `to_timestamp` |
+> |---|---|
+> | `13:03:25.555497` | **2026-08-14** 10:03:25.555497 — *the date the query ran* |
+> | `2026-06-19 13:03:25.555497` | 2026-06-19 10:03:25.555497 |
+> | `1984-12-03 11:29:00.0` | 1984-12-03 08:29:00 |
+> | `2025-04-23 13:02:31.416` | 2025-04-23 10:02:31.416000 |
+>
+> **Both consequences are worse than the retracted claim.** The value is
+> **non-deterministic** — the same landed bytes yield a different instant tomorrow, and being
+> a function of its input is bronze's entire contract. And the ordering is **inverted**:
+> today's date is *later* than every payment in this phase's June/July window, so the row is
+> **excluded from every as-of set** and the payment silently resolves to an **older** quote,
+> which is verbatim the failure the rule's own docstring says it exists to prevent.
+>
+> **Why three readers inherited it.** The first reviewer reported the claim "verified by
+> execution" — and what its execution verified was that the **rule does not fire**: the test
+> asserts `== [None]`, which is true under either value. **A test that pins the verdict does
+> not pin the value.** A docstring carrying a number no assertion checks is how it survived
+> an implementer, a reviewer and the controller in sequence.
+
+**This is therefore not an accepted limit.** A judgement about a known, stable behaviour can
+be accepted and recorded; a publication instant that renders differently on two days cannot be
+carried by this lakehouse at all. The rule is tightened, and the test asserts the **value**
+rather than only the verdict.
+
+**And "closed upstream" was false at the one boundary the gate exists to police.** The
+extraction does refuse a bare time — but `bronze_ptax_ingest` reads a **directory** against
+`struct_for("ptax")` and never imports the extraction module, and this table deliberately has
+no `reclaim_landing`, so a landed file persists indefinitely. A file written by a wheel built
+from another revision, hand-repaired, or copied in meets no extraction guard whatsoever. That
+is precisely the boundary the five `null_or_empty_*` rules are justified by — "something
+between that validation and bronze emptied a column" — and the same argument refuses leaving
+this rule weak. The accurate scope is *closed for records this repository's fetch task
+builds*; the residual is the landing directory as a re-ingestible surface.
+
+**A pinned format pattern is still the wrong fix**, and that part of the original reasoning
+survives: the fractional-second width is 1, 3 or 6 digits across the series (§0.4), so any
 single pattern rejects real rows — `1984-12-03 11:29:00.0` and `2025-04-23 13:02:31.416`
-among them. The hole is closed **upstream**, where the extraction refuses a
-`dataHoraCotacao` it cannot read against two explicit date-and-time spellings, and it is
-recorded here and in the rule's own docstring rather than left for a reader to discover
-that a gate rule is weaker than its name.
+among them.
