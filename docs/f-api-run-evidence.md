@@ -180,3 +180,32 @@ Accumulated as the phase runs rather than reconstructed at its end.
 - **The provenance guard's REFUSAL half**, still, in the workspace. Eleven accepts across F2
   and F3, zero refusals. This phase's runs will add accepts, and accepts are not evidence
   about the refusal.
+
+Added by Task 2, as the bronze layer was built:
+
+- **The fetch's non-200 branch.** Exercised against a test double only; the live endpoint
+  answered 200 every time it was asked.
+- **The refusal of a fetch window that yields no quotes.** No window in this phase's range
+  produces one.
+- **The refuse-a-different-file-under-one-name branch, for PTAX.** It fires when BCB
+  *revises* a rate for a window already landed. No witness in 3.6 years of series.
+- **Every PTAX DQ rule except `bad_quote_date_shape` is a near-tautology against the live
+  source.** The landed record is built by this repository from an already-validated
+  response, so the gate re-asserts at the table what the extraction refused at the row.
+  Each rule's docstring says so. **A green gate here is not evidence about BCB** — it is
+  evidence that our own fetch did not drift, which is a smaller claim wearing the same
+  colour.
+
+### 3.1 An accepted limit, pinned rather than hidden
+
+Spark's format-agnostic `to_timestamp` **parses a bare time**: `"13:03:25.555497"` becomes
+`1970-01-01T13:03:25`, a real instant fifty-six years early that every payment sorts after.
+So `unparseable_data_hora_cotacao` accepts it.
+
+**A pinned pattern would be worse, and that is why the limit is accepted rather than fixed
+here.** The fractional-second width is 1, 3 or 6 digits across the series (§0.4), so any
+single pattern rejects real rows — `1984-12-03 11:29:00.0` and `2025-04-23 13:02:31.416`
+among them. The hole is closed **upstream**, where the extraction refuses a
+`dataHoraCotacao` it cannot read against two explicit date-and-time spellings, and it is
+recorded here and in the rule's own docstring rather than left for a reader to discover
+that a gate rule is weaker than its name.
