@@ -32,7 +32,9 @@ make legible in one place:
     `_refuse_a_deduplication_that_lost_a_business_tuple`. Affordable because bronze is small;
     there is nothing to keep, so the message says so.
   * BEFORE THE FIRST WRITE, OVER THE DERIVED FRAME -- `_refuse_unresolved_rates`. It cannot
-    be one of the two above: the column it counts does not exist until the FX join has run.
+    be one of the two above: the column it reads does not exist until the FX join has run, and
+    the count reaches it from `opl.gold.fx.coverage`, which takes it in the same aggregate as
+    the two numbers that make a TRUNCATED extraction visible.
   * AFTER THE WRITE -- `_refuse_a_row_count_that_is_not_one_per_delivered_identity` alone,
     and its message begins by saying the table is already on disk. It is the only one that
     cannot be moved earlier, because the number it checks is a property of the target.
@@ -41,7 +43,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pyspark.sql import Column, DataFrame
+from pyspark.sql import Column
 from pyspark.sql import functions as F
 
 from opl.contracts import payments
@@ -306,24 +308,24 @@ def _refuse_a_row_count_that_is_not_one_per_delivered_identity(
     )
 
 
-def _refuse_unresolved_rates(fact: PaymentFact, rows: DataFrame) -> None:
-    """Count the derived rows that carry no rate, and refuse before the append.
+def _refuse_unresolved_rates(fact: PaymentFact, *, unresolved: int) -> None:
+    """Refuse the derived rows that carry no rate, before the append.
 
-    ONE AGGREGATE OVER THE DERIVED FRAME, which is the SECOND time it is derived and is said
-    plainly in the module docstring rather than hidden. It is affordable for
-    `_measured_source`'s reason -- 40,150 rows through one window and three broadcast joins,
-    where the dimension is the expensive thing and is not touched again.
+    THE COUNT ARRIVES AS A NUMBER AND IS NOT TAKEN HERE, WHICH MOVED IN THE T4 FIX PASS.
+    `opl.gold.fx.coverage` measures it in the SAME aggregate as the two window numbers the run
+    log reports -- they are three counts over one frame, and taking this one separately was a
+    second pass over 40,150 rows for a number the other pass already had in hand.
 
-    AND IT MUST BE HERE RATHER THAN IN `_bronze`. That function refuses over BRONZE, before
-    anything is derived, so it cannot see a column the FX join produces; this is the same
-    refusal at the only point where the column exists and nothing has been written.
+    AND IT MUST STILL BE MEASURED OVER THE DERIVED FRAME RATHER THAN IN `_bronze`. That
+    function refuses over BRONZE, before anything is derived, so it cannot see a column the FX
+    join produces; this is the same refusal at the only point where the column exists and
+    nothing has been written.
 
     ONE COUNT AND NOT TWO. `amount_brl` is NULL exactly when `fx_rate` is, because the
     delivered amount has already been refused unreadable by `_bronze` -- so a second count
     over `amount_brl` would be true under every implementation and would read as two checks.
     The quote DATE's own absence is refused one layer up, over the series, where the message
     can name the landed row."""
-    measured = rows.agg(F.count(F.when(F.col(FX_RATE).isNull(), 1)).alias("rates")).collect()[0]
-    refuse_payments_no_rate_can_be_resolved(fact.name, unresolved_rates=measured["rates"])
+    refuse_payments_no_rate_can_be_resolved(fact.name, unresolved_rates=unresolved)
 
 

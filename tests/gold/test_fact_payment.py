@@ -625,14 +625,14 @@ def test_the_projected_columns_are_the_declared_ones_in_the_declared_order(
         FX_RATE, AMOUNT_BRL, payments.EVENT_TIME_COLUMN, "load_date", RECORD_SOURCE,
     ]
     assert spark.read.table(table).columns == expected
-    frame = fact_rows(
+    frame, _coverage = fact_rows(
         FACT_PAYMENT,
         dimension=DIM_COMPANY,
         hub=HUB,
         conformed=(DIM_DATE, DIM_CHANNEL, DIM_CURRENCY),
         source=spark.read.table(fact_source),
         versions=spark.read.table(dim_loaded.table),
-        rates=rate_intervals(spark.read.table(fx_source)).intervals,
+        series=rate_intervals(spark.read.table(fx_source)),
         load_date=BUILT_AT,
     )
     assert frame.columns == expected

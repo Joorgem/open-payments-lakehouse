@@ -21,10 +21,11 @@ THE ZONE IS BRT AND THE ARGUMENT IS MEASURED, NOT ASSUMED. Every 2026 row publis
 before the bulletin exists. It is also the fail-safe direction -- it places publication
 three hours LATER, so a wrong zone makes a payment fall back to an older rate rather than
 use one not yet published. The offset comes from `opl.extraction.ptax_source.BRASILIA` and
-is rendered rather than restated, so this layer and the extraction cannot disagree about it;
-`str(timezone(timedelta(hours=-3)))` is `'UTC-03:00'`, which Spark accepts as a zone id, and
-`to_utc_timestamp` cancels the session zone on both sides so the instant does not move with
-`spark.sql.session.timeZone`.
+is rendered rather than restated, so this layer and the extraction cannot disagree about it,
+and it is APPENDED TO THE TEXT so the instant is a function of the value and not of
+`spark.sql.session.timeZone`. This paragraph claimed `to_utc_timestamp` "cancels the session
+zone on both sides"; it does not, the publication instant moved three hours under
+America/Sao_Paulo, and `_published_instant` carries the measurement.
 
 --- WHY THE FX SIDE IS REDUCED *BEFORE* THE JOIN (T4c) --------------------------------
 
@@ -88,14 +89,24 @@ itself carries the witness (2023-11-20 has a quote and today's holiday list call
 holiday) -- or a number drawn from this one extraction window, which is the species
 `ptax_source` already refuses for magnitude ceilings ("a bound that cannot be chosen from
 the data is not a guard, it is a guess"). A three-day Friday-to-Monday gap and a four-day
-holiday weekend are both normal, and Carnival makes five. What is done instead is
-REPORTING: `FxSeries` carries the quote count and the first and last publication instant, so
-a bounded or holey extraction is visible in the run log as three numbers rather than
-invisible behind a rate that resolved.
+holiday weekend are both normal, and Carnival makes five.
+
+WHAT IS DONE INSTEAD IS REPORTING, AND IT COVERS THE HIGH END AND THE INTERIOR AND NOT ONLY
+THE LOW END -- which is what the first version of this substitute got wrong. `FxSeries`
+carries the quote count and the first and last publication instant, and those three numbers
+are one side of a comparison whose other side nothing published: a TRUNCATED extraction that
+stops one business day short of the payments yields every count clean -- 40,000 rows, the
+grain enforced, no orphans, `fx_rates_used` unchanged -- with up to 10,000 rows converted at
+a stale rate, because `_FX_TO` coalesces the last quote's bound to `VALID_TO_CEILING` and a
+payment after it matches that quote rather than nothing. So `coverage` below measures the
+OTHER side, over the payments themselves: how many CONVERTED payments took the series' last
+landed quote, and the widest fallback any conversion actually took. Neither needs a calendar
+and neither needs a magnitude ceiling.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from pyspark.sql import Column, DataFrame, Row
 from pyspark.sql import functions as F
@@ -112,8 +123,10 @@ __all__ = [
     "FX_RATE_DATE",
     "FX_RATE_SCALE",
     "FX_RATE_TYPE",
+    "FxCoverage",
     "FxSeries",
     "converted_amount",
+    "coverage",
     "rate_intervals",
     "refuse_payments_no_rate_can_be_resolved",
     "with_resolved_rates",
@@ -146,7 +159,11 @@ FX_RATE_TYPE = f"decimal(18, {FX_RATE_SCALE})"
 # THE PUBLICATION ZONE, RENDERED FROM THE EXTRACTION'S OWN DECISION rather than restated. A
 # second spelling of an offset is a second spelling of T3's ruling, and this one would be
 # silent: three hours is not a shape any test notices, it is a rate one business day old.
-_BRASILIA_ZONE = str(BRASILIA)
+# `str(timezone(timedelta(hours=-3)))` is `'UTC-03:00'`, so the OFFSET is what is left when the
+# `UTC` prefix goes -- the spelling a timestamp string carries. If `BRASILIA` ever stopped being
+# a fixed offset this would leave the text unparseable and `_UNREADABLE` would refuse the whole
+# series by name, which is the loud direction.
+_BRASILIA_OFFSET = str(BRASILIA).removeprefix("UTC")
 
 # The FX side's own columns, prefixed so nothing they carry can collide with a payment
 # column while both frames are joined -- `opl.gold.facts._resolved`'s decision, and for its
@@ -160,6 +177,33 @@ _FX_TO = "_fx_to"
 _DISTINCT_RATES = "_distinct_rates"
 _UNREADABLE = "_unreadable"
 
+# THE TWO REPORTED INSTANTS ARE AWARE UTC `datetime`s AND NOT COLLECTED TIMESTAMPS, and the
+# reason is the one hazard `opl.gold.dimensions.instant_literal` says it cannot fix:
+# `collect()` converts a Spark TIMESTAMP back through `datetime.fromtimestamp`, which reads
+# the DRIVER's operating-system zone whatever the session is pinned to. A naive collected
+# bound therefore PRINTS three hours early on this dev box and correctly on a UTC driver --
+# and the publication span is the one number a reader uses to check that the extraction
+# covered the payments, so it may not be a function of which machine printed it. What is
+# collected is `unix_micros`, i.e. the instant itself as a LONG, and the two conversions
+# below are exact integer arithmetic rather than a float division through `fromtimestamp`.
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+_MICROSECOND = timedelta(microseconds=1)
+
+
+def _as_instant(micros: int) -> datetime:
+    """Epoch microseconds as an AWARE UTC instant -- what this module reports."""
+    return _EPOCH + micros * _MICROSECOND
+
+
+def _as_micros(instant: datetime) -> int:
+    """An aware instant as epoch microseconds -- what a Spark comparison against it takes.
+
+    NO `F.lit(datetime)` AND NO ZONE-PARSED STRING LITERAL ON EITHER SIDE. The first goes
+    through the driver's own zone (`opl.gold.facts` states it where it imports
+    `instant_literal`) and the second is read in the SESSION zone, so both would put a
+    cluster or a machine setting inside a comparison whose whole subject is an instant."""
+    return (instant - _EPOCH) // _MICROSECOND
+
 
 @dataclass(frozen=True)
 class FxSeries:
@@ -168,12 +212,31 @@ class FxSeries:
     REPORTED AND NEVER REFUSED -- see the module docstring for why gaplessness is not
     asserted here. A run log carrying "42 quotes, 2026-06-03 .. 2026-08-01" is what lets a
     reader see that the window the fact needed was actually landed; a rate that resolved
-    proves only that SOME quote preceded the payment."""
+    proves only that SOME quote preceded the payment.
+
+    AND THESE THREE ARE ONE SIDE OF A COMPARISON: `FxCoverage` below is the other, because
+    nothing in this dataclass describes the PAYMENT window it is supposed to be checked
+    against."""
 
     intervals: DataFrame
     quotes: int
-    first_published: object
-    last_published: object
+    first_published: datetime
+    last_published: datetime
+
+
+@dataclass(frozen=True)
+class FxCoverage:
+    """What the payments say about the series -- the half `FxSeries`' three numbers cannot.
+
+    `unresolved` IS A REFUSAL'S INPUT AND THE OTHER TWO ARE REPORTS, and they are measured in
+    ONE aggregate because they are one pass over one frame: a payment below the series' first
+    quote resolves nothing (T3 clause 3), a payment past its last quote resolves the LAST one,
+    and a payment inside a hole resolves the one before it. Only the first of the three is
+    distinguishable from a correct build, so only the first is refused."""
+
+    unresolved: int
+    beyond_series: int
+    widest_fallback_days: int
 
 
 def _quote_date() -> Column:
@@ -199,11 +262,28 @@ def _published_instant() -> Column:
     this layer is the NULL count, which `refuse_payments_no_rate_can_be_resolved` turns into
     a refusal.
 
-    `to_utc_timestamp` AND NOT AN INTERVAL ADDITION. Adding three hours to a parsed wall
-    clock is only correct while the session zone is UTC, and `tests/gold/test_fact_payment.py`
-    deliberately builds the whole fact under America/Sao_Paulo to prove nothing in it moves
-    with the zone. This spelling uses the session zone on both sides, so the two cancel."""
-    return F.to_utc_timestamp(F.to_timestamp(F.col(ptax.PUBLISHED_AT_COLUMN)), _BRASILIA_ZONE)
+    THE OFFSET IS APPENDED TO THE TEXT, AND THE SPELLING IT REPLACED WAS SESSION-ZONE
+    DEPENDENT -- MEASURED, against its own docstring's claim. This read
+    `to_utc_timestamp(to_timestamp(text), 'UTC-03:00')` and said "`to_utc_timestamp` cancels
+    the session zone on both sides so the instant does not move". IT DOES NOT CANCEL: Spark's
+    `to_utc_timestamp` renders its input in UTC and not in the session zone (`convertTz(micros,
+    from=tz, to=UTC)` reads `getLocalDateTime(micros, UTC)`), while `to_timestamp` over text
+    with no offset parses in the SESSION zone -- so only the parse varied. Measured on
+    2026-06-19 13:03:25.555497 through `opl.spark.local_session`: 16:03:25.555497Z under UTC,
+    19:03:25.555497Z under America/Sao_Paulo, 07:03:25.555497Z under Asia/Tokyo. The value was
+    right in the workspace only because `opl.config.SESSION_TIMEZONE` pins the session, i.e.
+    the whole of T3's zone ruling rested on a cluster setting.
+
+    APPENDING `-03:00` MAKES THE ZONE PART OF THE VALUE, which is `opl.gold.fact_guards
+    .event_instant`'s discipline applied to the other side of the same join: that one requires a
+    zone designator in the payment's text, this one supplies the one BCB omits. Measured
+    identical under all three session zones above and at all three fractional widths the series
+    carries (1, 3 and 6 digits), and identical to the old value under the pin -- so no landed
+    number moves. NOT an interval addition either, for the reason that spelling was always
+    refused: adding three hours to a parsed wall clock is correct only while the session is
+    UTC, which is where this one started."""
+    stamped = F.concat(F.col(ptax.PUBLISHED_AT_COLUMN), F.lit(_BRASILIA_OFFSET))
+    return F.to_timestamp(stamped)
 
 
 def _reduced(quotes: DataFrame) -> DataFrame:
@@ -242,14 +322,41 @@ def _measured(reduced: DataFrame) -> Row:
     ONE COLLECT AND NOT TWO. The quote count and the publication span are reported rather than
     refused, so it is tempting to measure them separately from the refusal -- and that would
     be a second pass over the same frame for numbers the first pass already has in hand. The
-    refusal reads three of the five; the caller reads the other three (`quotes` is shared)."""
+    refusal reads three of the five; the caller reads the other three (`quotes` is shared).
+
+    THE TWO INSTANTS COME BACK AS `unix_micros` AND NOT AS TIMESTAMPS -- see `_as_instant`
+    above for the driver-zone rendering that decides it."""
     return reduced.agg(
         F.count(F.lit(1)).alias("quotes"),
         F.max(_DISTINCT_RATES).alias("rates"),
         F.sum(_UNREADABLE).alias("unreadable"),
-        F.min(_FX_FROM).alias("first"),
-        F.max(_FX_FROM).alias("last"),
+        F.unix_micros(F.min(_FX_FROM)).alias("first"),
+        F.unix_micros(F.max(_FX_FROM)).alias("last"),
     ).collect()[0]
+
+
+def _refuse_a_series_with_no_quotes(measured: Row) -> None:
+    """Refuse an EMPTY reduced series, and its own aggregate is why this branch has to come
+    first.
+
+    OVER ZERO ROWS `max` AND `min` RETURN NULL, so both branches of the refusal below are
+    skipped and a fact builds against an ABSENT PTAX series: every payment is in the reporting
+    currency's `fx_rate = 1` branch or is refused for carrying no rate at all, and the run log
+    prints "converted at ONE rate over 0 quotes published None .. None" -- which is the
+    pre-phase state, reported as a clean conversion. A `quotes == 0` refusal needs no bound
+    from the data and no calendar: it is the one statement about the extraction window that
+    can be made without either."""
+    if measured["quotes"]:
+        return
+    raise ValueError(
+        f"refusing to resolve FX: {ptax.BRONZE_TABLE} reduced to NO quotes at all. Every "
+        f"payment in the reporting currency would convert at 1 by definition and every other "
+        f"one would be refused for carrying no {FX_RATE}, so a BRL-only star would build, "
+        "report success and carry the single rate this phase exists to leave behind -- and "
+        "the counts that would show it (the quote count and the publication span) are NULL "
+        "over an empty series rather than wrong. Land the PTAX window and re-run. Nothing "
+        "has been written by this run"
+    )
 
 
 def _refuse_a_quote_date_that_does_not_reduce_to_one_rate(measured: Row) -> None:
@@ -301,11 +408,21 @@ def rate_intervals(quotes: DataFrame) -> FxSeries:
 
     THE CEILING IS `VALID_TO_CEILING`, shared with `dim_company` rather than spelled again:
     one lakehouse should not have two answers to "when does the open interval end", and
-    `opl.gold.columns` argues why it is 2999-12-31 and not 9999-12-31 on this stack."""
+    `opl.gold.columns` argues why it is 2999-12-31 and not 9999-12-31 on this stack.
+
+    THE ORDER IS BY PUBLICATION AND THEN BY QUOTE DATE, AND THE TIE-BREAK IS NOT DECORATION.
+    Two quote dates CAN share one publication instant -- the fix pass found 2001-12-21's
+    duplicate pair carrying identical stamps, and 1984-12-03/04/05 all published on
+    1984-12-05 -- and with `orderBy(_FX_FROM)` alone, WHICH of those rows gets the empty
+    interval `[t, t)` and which gets the range to the next bound is undetermined. No fan-out
+    is possible either way (the intervals still partition the timeline), so the row count and
+    every count taken off it stay right while the surviving rate is arbitrary.
+    """
     reduced = _reduced(quotes)
     measured = _measured(reduced)
+    _refuse_a_series_with_no_quotes(measured)
     _refuse_a_quote_date_that_does_not_reduce_to_one_rate(measured)
-    ordered = Window.partitionBy(_FX_CURRENCY).orderBy(_FX_FROM)
+    ordered = Window.partitionBy(_FX_CURRENCY).orderBy(_FX_FROM, _FX_QUOTE_DATE)
     bounds = reduced.select(
         _FX_CURRENCY,
         _FX_QUOTE_DATE,
@@ -318,8 +435,8 @@ def rate_intervals(quotes: DataFrame) -> FxSeries:
     return FxSeries(
         intervals=bounds,
         quotes=measured["quotes"],
-        first_published=measured["first"],
-        last_published=measured["last"],
+        first_published=_as_instant(measured["first"]),
+        last_published=_as_instant(measured["last"]),
     )
 
 
@@ -387,6 +504,65 @@ def with_resolved_rates(
             FX_RATE_DATE: F.when(in_reporting, day).otherwise(F.col(_FX_QUOTE_DATE)),
         }
     ).drop(*matched)
+
+
+# THE HIGH END IS COUNTED AND NOT REFUSED, AND THE MECHANISM IS T3's OWN. A payment past the
+# last landed publication matches that quote through `VALID_TO_CEILING`, so it converts at a
+# rate that may be one business day stale and may be exactly right -- and the two are
+# INDISTINGUISHABLE without the thing T3 refuses. Being after the most recent bulletin is the
+# NORMAL state of a payment in this lakehouse: 20,000 fact rows fall on Saturday 2026-08-01,
+# later than any quote a correct extraction could hold, and the master spec's own "fallback
+# para ultimo dia util" is exactly that case. Telling a truncated extraction from a Saturday
+# evening needs either a business-day calendar (the second spelling, with the 2023-11-20
+# witness in the series) or a staleness bound drawn from one window -- so a REFUSAL here would
+# refuse this phase's own correct build. It is counted instead, and the count is the side of
+# the comparison the run log was missing.
+#
+# ONLY OVER THE ROWS THAT CONSULT A QUOTE, which is what keeps the number readable. A
+# reporting-currency row converts at exactly 1 by definition and reads no series at all, so
+# counting it would report 20,000 against a fully covered star and drown the signal. On this
+# phase's data every USD payment falls on 2026-06-22 and the series runs to 2026-07-31, so the
+# prediction is ZERO -- and the truncated extraction the module docstring describes turns it
+# into thousands, in a run whose every other count is clean.
+#
+# AND THE WIDEST FALLBACK IS WHAT MAKES AN INTERIOR HOLE VISIBLE, which the count above cannot:
+# a hole is not at the high end, so a payment inside one resolves the quote BEFORE it and looks
+# exactly like a weekend. Friday-to-Monday is 3 days, a holiday weekend 4, Carnival 5 -- none
+# of which this layer may assert as a bound, all of which a reader can compare a printed number
+# against. Zero means every conversion used its own day's quote, or that nothing converted.
+#
+# THE PROSE IS HERE RATHER THAN IN THE DOCSTRING for `with_resolved_rates`' reason below: the
+# function reached 50 of the project's 50-line cap with it inside, and the cost is stated the
+# same way -- it is still reviewed in the diff and it is no longer reachable from `help()`.
+
+
+def coverage(
+    converted: DataFrame,
+    *,
+    instant: Column,
+    day: Column,
+    currency_column: str,
+    reporting_currency: str,
+    last_published: datetime,
+) -> FxCoverage:
+    """The three numbers the resolved frame knows and `FxSeries` cannot: rows carrying no
+    rate, rows that took the series' LAST landed quote, and the widest fallback any conversion
+    actually took. ONE AGGREGATE, because they are one pass over one frame.
+
+    Measured BEFORE the projection drops `fx_rate_date` and the currency, which is why it is
+    called from `opl.gold.facts.fact_rows` rather than over the written table."""
+    consulted = F.col(currency_column) != F.lit(reporting_currency)
+    beyond = F.unix_micros(instant) > F.lit(_as_micros(last_published)).cast("long")
+    measured = converted.agg(
+        F.count(F.when(F.col(FX_RATE).isNull(), 1)).alias("unresolved"),
+        F.count(F.when(consulted & beyond, 1)).alias("beyond"),
+        F.max(F.when(consulted, F.datediff(day, F.col(FX_RATE_DATE)))).alias("widest"),
+    ).collect()[0]
+    return FxCoverage(
+        unresolved=measured["unresolved"],
+        beyond_series=measured["beyond"],
+        widest_fallback_days=measured["widest"] or 0,
+    )
 
 
 def converted_amount(*, amount_column: str, amount_type: str) -> Column:

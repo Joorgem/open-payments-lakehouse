@@ -40,15 +40,17 @@ invisible until the day there is a second one.
 `"bronze_ptax"` in an entry point is a name that outlives a rename.
 
 WHAT THE RUN LOG PUBLISHES, AND WHY IT IS FIVE SENTENCES RATHER THAN A ROW COUNT. The row
-count is enforced by the loader and printing it proves nothing; what an operator needs is the
-four numbers that separate a working star from a plausible one -- resolution at (row, role)
-grain, the legitimate repeats that survived deduplication, the referential integrity of the
-FOUR derived conformed keys, and how many distinct rates the conversion actually used. Each
-has a state that must not read like success: zero unresolved is an UNEXERCISED path and not a
-triumph (master protocol section 4.6), zero legitimate repeats means the fact ate 3,200 real
-payments, a non-zero orphan count means a conformed dimension is older than the payments, and
-ONE distinct rate means every row converted at 1.00000 -- which is the state a mixed-currency
-stream exists to end, not a clean conversion.
+count is enforced by the loader and printing it proves nothing; what an operator needs are the
+numbers that separate a working star from a plausible one -- resolution at (row, role) grain,
+the legitimate repeats that survived deduplication, the referential integrity of the FOUR
+derived conformed keys, how many distinct rates the conversion actually used, and how far the
+PTAX series reached past the payments. Each has a state that must not read like success: zero
+unresolved is an UNEXERCISED path and not a triumph (master protocol section 4.6), zero
+legitimate repeats means the fact ate 3,200 real payments, a non-zero orphan count means a
+conformed dimension is older than the payments, ONE distinct rate means every row converted at
+1.00000 -- the state a mixed-currency stream exists to end -- and a non-zero count of
+conversions past the last landed quote means those rows converted at whatever the extraction
+happened to stop at, which every other number in this log reports as clean.
 
     databricks bundle run opl_gold_fact_payment -t free \\
       --params revision=$(git rev-parse HEAD)
@@ -170,6 +172,30 @@ def _integrity_note(result: FactLoadResult) -> str:
     )
 
 
+def _window_note(result: FactLoadResult) -> str:
+    """Whether the landed series reached PAST the payments, and how far back any conversion
+    had to go -- the two states must not read alike, which is why this is a function.
+
+    ZERO BEYOND THE SERIES IS THE ONLY STATE THAT PROVES COVERAGE, and it is the prediction for
+    this data: every USD payment falls on 2026-06-22 and the extraction runs to 2026-07-31. A
+    non-zero count is not a failure -- a payment after the most recent bulletin is normal, and
+    the master spec's own "fallback para ultimo dia util" is that case -- so it is said as what
+    it is: those rows converted at the LAST quote landed, and nothing in this run can tell a
+    stale rate from a current one for them.
+
+    THE WIDEST FALLBACK IS PRINTED EVEN WHEN IT IS ZERO, because it is the number an INTERIOR
+    hole moves: 3 days is Friday-to-Monday, 4 a holiday weekend, 5 Carnival, and anything
+    larger is a missing business day the quote count alone would not show."""
+    reach = f"widest fallback taken {result.fx_widest_fallback_days} day(s)"
+    if not result.fx_beyond_series:
+        return f"no conversion past the last quote and {reach}"
+    return (
+        f"{result.fx_beyond_series} conversions PAST the last landed quote -- they took it, so "
+        f"a later quote (if BCB published one) was never landed and this run cannot tell a "
+        f"stale rate from a current one for them -- and {reach}"
+    )
+
+
 def _fx_note(result: FactLoadResult, spec: PaymentFact) -> str:
     """What the FX resolution did, said so that ONE rate does not read as success.
 
@@ -179,13 +205,30 @@ def _fx_note(result: FactLoadResult, spec: PaymentFact) -> str:
     count of ONE is reported as the state the phase exists to leave behind, not as a clean
     conversion.
 
-    AND THE SERIES' OWN THREE NUMBERS ARE PRINTED BESIDE IT, because gaplessness is REPORTED
-    rather than refused (`opl.gold.fx` argues why a gap bound would be either a holiday
-    calendar or a guess). A bounded extraction shows up here as a quote count and a last
-    publication instant that do not reach the days the fact needed."""
+    AND THE SERIES' OWN NUMBERS ARE PRINTED BESIDE IT, because gaplessness is REPORTED rather
+    than refused (`opl.gold.fx` argues why a gap bound would be either a holiday calendar or a
+    guess). A bounded extraction shows up here as a quote count and a last publication instant
+    that do not reach the days the fact needed.
+
+    AND WITH THE TWO NUMBERS THAT MAKE THAT COMPARISON POSSIBLE, which is what the first
+    version of this note was missing: the span above describes the SERIES, and nothing printed
+    the PAYMENT window it was supposed to be checked against. A truncated extraction stopping
+    one business day short yields every count in this log clean -- the rows, the grain, the
+    resolution, the orphans, the rate count -- over up to 10,000 rows converted at a stale
+    rate, because a payment past the last quote matches THAT quote rather than nothing. So
+    `fx_beyond_series` counts the conversions that took it, and `fx_widest_fallback_days` is
+    the longest reach any conversion made, which is what an INTERIOR hole moves when the count
+    at the high end is zero. Both are reported and neither is refusable: telling a truncated
+    window from a Saturday evening needs the holiday calendar T3 refuses.
+
+    THE INSTANTS RENDER IN UTC ON EVERY DRIVER. They are aware `datetime`s built from
+    `unix_micros` (`opl.gold.fx._as_instant`), not timestamps handed back by `collect()` --
+    which converts through the DRIVER's operating-system zone, so this line published a
+    prediction that was right on a UTC cluster and three hours out on the dev box."""
     series = (
         f"{result.fx_quotes} reduced (currency, quote_date) quotes published "
-        f"{result.fx_first_published} .. {result.fx_last_published}"
+        f"{result.fx_first_published} .. {result.fx_last_published}, "
+        f"{_window_note(result)}"
     )
     if result.fx_rates_used <= 1:
         return (

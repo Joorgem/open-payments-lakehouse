@@ -38,12 +38,13 @@ the one population where the two answers differ, and they differ WITHIN one cale
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 from pyspark.sql import functions as F
 
+from opl.config import SESSION_TIMEZONE, SESSION_TIMEZONE_CONFIG
 from opl.contracts import payments
 from opl.generator.cnpj_pool import validated_pool
 from opl.generator.defects import delivered_records
@@ -51,6 +52,9 @@ from opl.generator.profiles import CROSS_CURRENCY, POOL_SIZE, PROFILES
 from opl.gold.conformed import day_of
 from opl.gold.fact_guards import AMOUNT_TYPE, event_instant
 from opl.gold.fx import (
+    _FX_FROM,
+    _FX_QUOTE_DATE,
+    _FX_TO,
     AMOUNT_BRL,
     FX_RATE,
     FX_RATE_DATE,
@@ -79,6 +83,13 @@ FRIDAY = date(2026, 6, 19)
 MONDAY = date(2026, 6, 22)
 FRIDAY_VENDA = Decimal("5.14420")
 MONDAY_VENDA = Decimal("5.13950")
+UNIT_RATE = Decimal("1.00000")
+
+# 13:03:25.555497 READ AS BRT (T3) IS 16:03:25.555497Z, and this is the whole instant rather
+# than its microseconds. `opl.gold.fx` reports aware UTC instants built from `unix_micros`, so
+# this literal is comparable on any driver and under any session zone -- which is what makes
+# the invariance assertion below writable at all.
+FRIDAY_PUBLISHED = datetime(2026, 6, 19, 16, 3, 25, 555_497, tzinfo=UTC)
 
 # The published FX-resolving populations -- `docs/f-api-run-evidence.md` §1.1. These are the
 # USD rows either side of the bulletin, and NOT the 5,836 / 4,164 ROW split: a BRL row
@@ -148,17 +159,29 @@ def test_the_resolution_reproduces_the_published_fx_split(resolved_cross_currenc
     IT IS COUNTED OFF THE RESOLVED FRAME AND NOT OFF THE RECORDS. `tests/test_payment
     _profiles.py` already compares each record's instant against the publication instant in
     Python; this counts what `opl.gold.fx` actually wrote, which is the claim about the code
-    that will run."""
+    that will run.
+
+    THE COMPARISON IS TOTAL, WHICH IS WHAT REPLACED THREE ASSERTIONS THAT COULD NOT FAIL. It
+    read `min(FELL_BACK, SAME_DAY) > 0` and `FELL_BACK + SAME_DAY == USD_ROWS` -- arithmetic on
+    three module literals, true without a session. A whole-dict equality carries both claims
+    against MEASURED counts: a path with no rows is a MISSING KEY, a third population is an
+    EXTRA one, and a day-grain implementation collapses the first two into a single entry."""
     by_rate = {
         (row[FX_RATE], row[FX_RATE_DATE]): row["n"]
         for row in resolved_cross_currency.groupBy(FX_RATE, FX_RATE_DATE)
         .agg(F.count(F.lit(1)).alias("n"))
         .collect()
     }
-    assert by_rate[(FRIDAY_VENDA, FRIDAY)] == FELL_BACK
-    assert by_rate[(MONDAY_VENDA, MONDAY)] == SAME_DAY
-    assert min(FELL_BACK, SAME_DAY) > 0, "an empty path is an unexercised path"
-    assert FELL_BACK + SAME_DAY == USD_ROWS
+    assert by_rate == {
+        (FRIDAY_VENDA, FRIDAY): FELL_BACK,
+        (MONDAY_VENDA, MONDAY): SAME_DAY,
+        (UNIT_RATE, MONDAY): BRL_ROWS,
+    }, "an empty path is an unexercised path and a fourth group is a population nobody named"
+    converted = resolved_cross_currency.where(
+        F.col("currency") != payments.REPORTING_CURRENCY
+    ).count()
+    assert by_rate[(FRIDAY_VENDA, FRIDAY)] + by_rate[(MONDAY_VENDA, MONDAY)] == converted
+    assert converted == USD_ROWS
     assert sum(by_rate.values()) == 10_000
 
 
@@ -174,7 +197,12 @@ def test_two_payments_on_one_calendar_day_carry_two_different_rates(resolved_cro
 
     IT ALSO PROVES THE FALLBACK CROSSES A WHOLE WEEKEND on real rows: the pre-bulletin
     population reaches back past Sunday 2026-06-21 and Saturday 2026-06-20 to Friday
-    2026-06-19, and past the unquoted part of Monday morning as well."""
+    2026-06-19, and past the unquoted part of Monday morning as well.
+
+    AND THAT LAST CLAIM IS MEASURED OFF THE FRAME NOW. It was `FRIDAY <= MONDAY - 3 days`, two
+    module literals and a subtraction -- true in any Python. The distance the rows ACTUALLY
+    took is `datediff(day, fx_rate_date)`, which is `{0, 3}` here and is the same quantity
+    `FactLoadResult.fx_widest_fallback_days` reports for a whole build."""
     usd = resolved_cross_currency.where(F.col("currency") == "USD")
     days = {row[0] for row in usd.select(day_of(payments.EVENT_TIME_COLUMN)).distinct().collect()}
     assert days == {MONDAY}, "the whole window sits inside one calendar day"
@@ -185,8 +213,15 @@ def test_two_payments_on_one_calendar_day_carry_two_different_rates(resolved_cro
     )
     quote_dates = {row[0] for row in usd.select(FX_RATE_DATE).distinct().collect()}
     assert quote_dates == {FRIDAY, MONDAY}
-    assert FRIDAY <= MONDAY - timedelta(days=3), (
-        "the fallback reaches back across Saturday and Sunday"
+    reached = {
+        row[0]
+        for row in usd.select(
+            F.datediff(day_of(payments.EVENT_TIME_COLUMN), F.col(FX_RATE_DATE))
+        ).distinct().collect()
+    }
+    assert reached == {0, 3}, (
+        "the fallback reaches back across Saturday and Sunday to Friday's quote, and the "
+        "same-day population reaches back nothing at all"
     )
 
 
@@ -290,7 +325,17 @@ def test_two_landed_rows_that_agree_reduce_to_the_earlier_publication_instant(
     it at the earlier instant and the later row re-publishes a number already knowable. Under
     `max()` a payment falling between the two would be denied a rate it could already have
     used and would fall back to the previous business day, which is the model this phase's T3
-    retracted, rebuilt inside the reduce."""
+    retracted, rebuilt inside the reduce.
+
+    AND THE INSTANT IS ASSERTED IN FULL, UNDER TWO SESSION ZONES, WHICH IS T3's "pin it in a
+    test". The zone FIX shipped and its INVARIANCE was asserted nowhere: the only non-UTC
+    session test (`test_fact_payment.py`) has a BRL-only fixture, so the FX interval bounds are
+    computed there and discarded, and this assertion read `.microsecond` -- blind to a
+    whole-hour shift, which is the only thing a wrong zone does. 13:03:25.555497 read as BRT
+    (T3's ruling) is 16:03:25.555497Z, and `_published_instant` spells it `to_utc_timestamp` so
+    the session zone cancels on both sides. The implementation this refuses is the obvious
+    alternative -- adding three hours to a parsed wall clock -- which agrees under UTC and is
+    three hours out under America/Sao_Paulo."""
     twice = ptax_table(
         spark,
         empresas_bronze.db,
@@ -303,8 +348,92 @@ def test_two_landed_rows_that_agree_reduce_to_the_earlier_publication_instant(
     rows = series.intervals.collect()
     assert len(rows) == 1, "an unreduced series fans out every USD fact row"
     assert series.quotes == 1
-    # 13:03:25.555497 BRT is 16:03:25.555497Z. The EARLIER of the two, to the microsecond.
-    assert series.first_published.microsecond == 555_497
+    assert series.first_published == FRIDAY_PUBLISHED, "the EARLIER of the two, in full"
+    assert series.last_published == FRIDAY_PUBLISHED
+    pinned = spark.conf.get(SESSION_TIMEZONE_CONFIG)
+    assert pinned == SESSION_TIMEZONE, "the suite's session is no longer the pinned one"
+    try:
+        spark.conf.set(SESSION_TIMEZONE_CONFIG, "America/Sao_Paulo")
+        moved = rate_intervals(spark.read.table(twice))
+    finally:
+        spark.conf.set(SESSION_TIMEZONE_CONFIG, pinned)
+    assert moved.first_published == FRIDAY_PUBLISHED, (
+        "the publication instant moved with spark.sql.session.timeZone, so which quote is in "
+        "force at a payment's instant is a function of a cluster setting"
+    )
+
+
+def test_an_empty_landed_series_is_refused_rather_than_converting_everything_at_one(
+    spark, empresas_bronze
+):
+    """THE ABSENT SERIES, AND ITS OWN AGGREGATE IS WHY IT NEEDED ITS OWN BRANCH. Over zero rows
+    `max` and `min` return NULL, so `rates` is NULL and `unreadable` is NULL and BOTH refusals
+    below are skipped -- a fact then builds against no PTAX table at all: every BRL row converts
+    at 1 by definition, every USD row is refused for carrying no rate (so a BRL-only lakehouse
+    would not even notice), and the run log prints "converted at ONE rate over 0 quotes
+    published None .. None". That is the pre-phase state reported as a clean conversion.
+
+    A `quotes == 0` REFUSAL NEEDS NO BOUND, which is what separates it from the gaplessness
+    assertion this layer declines: it is a statement about the extraction window that requires
+    neither a holiday calendar nor a number drawn from one window."""
+    with pytest.raises(ValueError, match="reduced to NO quotes at all"):
+        rate_intervals(spark.read.table(ptax_table(spark, empresas_bronze.db, rows=())))
+
+
+def test_a_rate_that_cannot_be_read_is_refused_and_the_distinct_count_cannot_see_it(
+    spark, empresas_bronze
+):
+    """THE UNREADABLE-VALUE REFUSAL, WITH A WITNESS. It was recorded as "suite-only, and
+    deliberately not removed" while nothing in the suite reached it -- and every other
+    suite-only entry in that ledger means a fixture fires the branch.
+
+    AND THE ROUTE TO IT IS THE ARGUMENT FOR COUNTING NULLS SEPARATELY. `cotacao_venda` of
+    `"abc"` casts to NULL; `count_distinct` IGNORES NULLs, so `rates` is 0 rather than 1 and the
+    disagreement branch tests truthiness before comparing -- a series of nothing but unreadable
+    rates would sail past a `> 1` check. The count beside it is what fires, and without it the
+    group would reduce to a NULL rate and convert every payment on that quote date to NULL.
+
+    THE DQ GATE REFUSES THIS SHAPE ONE LAYER UP, so it can only be a bronze row that did not
+    come through the gate -- which is the boundary the gate's own `null_or_empty_*` rules are
+    justified by, and the reason it is not removed."""
+    unreadable = ptax_table(
+        spark,
+        empresas_bronze.db,
+        rows=(_quote("2026-06-19", "2026-06-19 13:03:25.555497", "abc"),),
+    )
+    with pytest.raises(ValueError, match="that is not a decimal"):
+        rate_intervals(spark.read.table(unreadable))
+
+
+def test_two_quote_dates_sharing_one_publication_instant_do_not_depend_on_the_row_order(
+    spark, empresas_bronze
+):
+    """THE TIE-BREAK. `Window.partitionBy(currency).orderBy(publication)` had no second key,
+    and two quote dates CAN share one publication instant -- 2001-12-21's duplicate pair carries
+    identical stamps, and 1984-12-03/04/05 all published on 1984-12-05. One of the tied rows
+    gets the empty interval `[t, t)` and the other the range to the ceiling, and WHICH is
+    undetermined: no fan-out is possible either way, so the row count and every count taken off
+    it stay right while the surviving rate is arbitrary.
+
+    ASSERTED AS ORDER-INDEPENDENCE RATHER THAN AS A CHOSEN WINNER, because that is the property:
+    the same two landed rows in the other order must produce the same intervals. The later quote
+    date is the one that carries the range, which is the answer a reader would predict from the
+    series -- a quote published at the same instant as an earlier one supersedes it."""
+    stamp = "2026-06-19 13:03:25.555497"
+    pair = (_quote("2026-06-18", stamp, "5.14400"), _quote("2026-06-19", stamp, "5.14420"))
+    bounds = [
+        {
+            row[_FX_QUOTE_DATE]: (row[_FX_FROM], row[_FX_TO])
+            for row in rate_intervals(
+                spark.read.table(ptax_table(spark, empresas_bronze.db, rows=rows))
+            ).intervals.collect()
+        }
+        for rows in (pair, tuple(reversed(pair)))
+    ]
+    assert bounds[0] == bounds[1], "which rate survives depends on the landed row order"
+    superseded, in_force = bounds[0][date(2026, 6, 18)], bounds[0][date(2026, 6, 19)]
+    assert superseded[0] == superseded[1], "the superseded quote's interval is empty"
+    assert in_force[1] > in_force[0], "the later quote date carries the open range"
 
 
 def test_a_payment_below_the_series_first_publication_is_refused_and_not_nulled(
@@ -342,6 +471,60 @@ def test_a_payment_below_the_series_first_publication_is_refused_and_not_nulled(
     assert not spark.catalog.tableExists(fact_target), (
         "the refusal is before the first write, so there is nothing to drop"
     )
+
+
+def test_a_series_that_stops_short_of_the_payments_is_REPORTED_by_the_run_it_cannot_refuse(
+    spark, empresas_bronze, dim_loaded, conformed_tables, fact_target
+):
+    """THE TRUNCATED EXTRACTION, WHICH IS THE ONE FAILURE EVERY OTHER NUMBER IN THIS BUILD
+    CALLS CLEAN. `_FX_TO` coalesces the last quote's bound to `VALID_TO_CEILING`, so a payment
+    after the last landed publication does not fail to resolve -- it matches THAT quote and
+    converts at it. Here the series holds one quote, 2026-06-19, and the USD payment is on
+    2026-08-01: it converts at a rate FORTY-THREE DAYS old, the grain is enforced, no key is
+    orphaned, no reference is unresolved, and `fx_rates_used` is the 2 a mixed star should have.
+    Nothing in that list moves.
+
+    SO THE RUN'S OWN NUMBERS ARE WHAT MAKE IT VISIBLE, and they are the two this fix pass added
+    because the publication span alone was one side of a comparison. `fx_beyond_series` counts
+    the conversions that took the last landed quote and `fx_widest_fallback_days` says how far
+    back any conversion reached -- 1 and 43 here, 0 and 3 on the real rebuild. Both are REPORTED
+    and neither is refused: a payment after the most recent bulletin is the normal case (20,000
+    fact rows fall on Saturday 2026-08-01), and telling that from a window that stopped early
+    needs the holiday calendar T3 refuses on the record.
+
+    IT WOULD ALSO HAVE PASSED AGAINST THE PREVIOUS IMPLEMENTATION -- the fact builds, correctly,
+    from a truncated series -- which is exactly why the assertions are on the REPORT and not on
+    a refusal. Against that implementation `FactLoadResult` carried neither field."""
+    short_series = ptax_table(
+        spark,
+        empresas_bronze.db,
+        rows=(_quote("2026-06-19", "2026-06-19 13:03:25.555497", "5.14420"),),
+    )
+    payments_table = f"{empresas_bronze.db}.bronze_payments_past_the_series"
+    (
+        spark.createDataFrame(
+            [payment("tx-usd-late", AFTER, currency="USD"), payment("tx-brl-late", AFTER)],
+            PAYMENTS_SCHEMA,
+        )
+        .write.format("delta").mode("append").saveAsTable(payments_table)
+    )
+    result = build_fact(
+        spark, dim_loaded=dim_loaded, fact_source=payments_table,
+        conformed_tables=conformed_tables, fx_source=short_series, target=fact_target,
+    )
+    assert result.appended == 2 and result.source_identities == 2
+    assert dict(result.unresolved) == {"payer_company_sk": 0, "payee_company_sk": 0}
+    assert set(dict(result.orphaned).values()) == {0}, "every other count reads clean"
+    assert result.fx_rates_used == 2
+    assert result.fx_quotes == 1
+    assert result.fx_last_published == FRIDAY_PUBLISHED
+    assert result.fx_beyond_series == 1, (
+        "the USD payment is later than every publication in the series, so its rate is "
+        "whatever the extraction stopped at and no other number in this build says so"
+    )
+    assert result.fx_widest_fallback_days == 43
+    converted = spark.read.table(fact_target).where(F.col(FX_RATE) != UNIT_RATE).collect()
+    assert [row[FX_RATE] for row in converted] == [FRIDAY_VENDA]
 
 
 def test_the_built_fact_carries_the_declared_fx_types_and_a_joinable_quote_date_key(

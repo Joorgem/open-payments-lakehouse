@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -460,8 +460,10 @@ def _fact_result(**overrides):
             ("currency_key", 0),
         ),
         "fx_quotes": 42,
-        "fx_first_published": "2026-06-03 16:03:00",
-        "fx_last_published": "2026-07-31 16:10:31.061071",
+        "fx_first_published": datetime(2026, 6, 3, 16, 3, tzinfo=UTC),
+        "fx_last_published": datetime(2026, 7, 31, 16, 10, 31, 61_071, tzinfo=UTC),
+        "fx_beyond_series": 0,
+        "fx_widest_fallback_days": 3,
         "fx_rates_used": 3,
     }
     fields.update(overrides)
@@ -543,16 +545,45 @@ def test_the_fx_note_reports_one_rate_as_the_state_the_phase_exists_to_end():
     declines to assert it -- any bound is either a Brazilian holiday calendar, which T3
     refuses, or a number drawn from one extraction window -- so a bounded extraction has to be
     visible in the log instead, as a quote count and a last publication instant that do not
-    reach the days the fact needed."""
+    reach the days the fact needed.
+
+    AND THE PUBLICATION INSTANTS RENDER IN UTC ON EVERY DRIVER, which is asserted here because
+    it is the one number a reader compares against the payment window: they are aware
+    `datetime`s, so the text carries `+00:00` rather than whatever zone the printing machine
+    is on."""
     task = _load("gold_load_fact")
     spec = GOLD_REGISTRY["fact_payment"]
     mixed = task._fx_note(_fact_result(), spec)
     assert "3 distinct amount_brl conversion rates" in mixed
     assert "42 reduced (currency, quote_date) quotes" in mixed
+    assert "2026-07-31 16:10:31.061071+00:00" in mixed
     assert "does NOT equal SUM(amount) x rate to the cent" in mixed
     single = task._fx_note(_fact_result(fx_rates_used=1), spec)
     assert "ONE rate" in single
     assert "the state a mixed-currency stream exists to end" in single
+
+
+def test_the_fx_note_says_whether_the_series_reached_past_the_payments():
+    """THE OTHER SIDE OF THE PUBLICATION SPAN, and the state that must not read as clean. A
+    truncated extraction leaves every other number in this log right -- the rows, the grain,
+    the resolution, the orphans, the rate count -- while up to 10,000 rows convert at whatever
+    quote the series happened to stop at, because a payment past the last quote matches THAT
+    quote rather than nothing.
+
+    ZERO IS THE PREDICTION AND IS SAID AS COVERAGE RATHER THAN AS SILENCE; a non-zero count is
+    said as what it is, since a payment after the most recent bulletin is normal and no number
+    available here can tell it from a window that stopped early."""
+    task = _load("gold_load_fact")
+    spec = GOLD_REGISTRY["fact_payment"]
+    covered = task._fx_note(_fact_result(), spec)
+    assert "no conversion past the last quote" in covered
+    assert "widest fallback taken 3 day(s)" in covered
+    truncated = task._fx_note(
+        _fact_result(fx_beyond_series=4_905, fx_widest_fallback_days=43), spec
+    )
+    assert "4905 conversions PAST the last landed quote" in truncated
+    assert "cannot tell a stale rate from a current one" in truncated
+    assert "widest fallback taken 43 day(s)" in truncated
 
 
 @pytest.mark.parametrize(
