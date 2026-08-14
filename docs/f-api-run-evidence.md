@@ -309,7 +309,11 @@ is that they survived the local derivation they describe.
 
 **The byte-identity probe, re-run from the implemented tree against a worktree at `f564f57`
 created outside the repository root** (a stray worktree under it turns
-`tests/test_revision_stamp.py`'s watched-paths test red locally and is invisible to CI):
+`tests/test_revision_stamp.py`'s watched-paths test red locally and is invisible to CI). **It
+is now a committed artefact, `scripts/probe_byte_identity.py`** (`uv run python
+scripts/probe_byte_identity.py`, ~68 s, exit 0 when nothing moved) — the same repair §0.1
+made for the PTAX rates, applied to a claim that had been published twice with no artefact
+behind it:
 
 ```
 clean              F1B-CLEAN-2026-08      rows= 10000 bytes=  2925069 sha256=fccd6c48…
@@ -319,9 +323,10 @@ between-snapshots  F3-BETWEEN-SNAPSHOTS   rows= 10000 bytes=  2926409 sha256=338
 cross-currency     F-API-CROSS-CURRENCY   rows= 10000 bytes=  2926588 sha256=a527b61c…
 ```
 
-`cmp` is clean on all four pre-existing files, in both directions of the change: once after
-the mechanism commit (the domain widened, the draw moved, no profile declaring a mix) and
-again after the fifth profile landed. **The fifth file's 2,926,588 bytes is the number
+`cmp` is clean on all four pre-existing files, at both stages of the change: once after the
+mechanism commit (the domain widened, the draw moved, no profile declaring a mix) and again
+after the fifth profile landed. The committed probe reports `IDENTICAL` on all five and
+`0 of 5 profile(s) differ from the baseline`. **The fifth file's 2,926,588 bytes is the number
 predicted in §1.1 before the `currencies` field existed**, reproduced by an emission in which
 4,905 of the 10,000 rows carry `USD` — which is the check that the currency draw moved the
 currency and nothing else.
