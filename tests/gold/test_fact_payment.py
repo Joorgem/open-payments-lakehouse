@@ -48,6 +48,7 @@ from opl.gold.facts import (
     event_instant,
     fact_rows,
 )
+from opl.gold.fx import AMOUNT_BRL, FX_RATE, rate_intervals
 from opl.gold.registry import (
     DIM_CHANNEL,
     DIM_COMPANY,
@@ -55,6 +56,7 @@ from opl.gold.registry import (
     DIM_DATE,
     FACT_PAYMENT,
 )
+from opl.gold.specs import contract_role, fact_keys
 from opl.vault.registry import BusinessKeyColumn
 
 from .conftest import (
@@ -286,7 +288,7 @@ def test_the_fact_is_unchanged_when_it_is_built_under_a_non_utc_session_zone(
 
 def _keyed_rows(spark, table) -> dict:
     """Every fact row's keys, by payment -- the columns a session zone must not move."""
-    columns = (*FACT_PAYMENT.role_keys, DIM_DATE.fact_key, DIM_CHANNEL.fact_key)
+    columns = (*FACT_PAYMENT.role_keys, *fact_keys(DIM_DATE), *fact_keys(DIM_CHANNEL))
     return {
         row[FACT_PAYMENT.grain_key]: tuple(row[column] for column in columns)
         for row in spark.read.table(table).collect()
@@ -549,7 +551,8 @@ def test_the_key_a_fact_derives_is_the_key_the_dimension_holds(
                 f"{dimension.fact_column} string",
             )
             .select(
-                F.col(dimension.fact_column), fact_surrogate_key(dimension).alias("k")
+                F.col(dimension.fact_column),
+                fact_surrogate_key(dimension, contract_role(dimension)).alias("k"),
             )
             .collect()
         }
@@ -562,7 +565,10 @@ def test_every_derived_conformed_key_names_a_member_that_exists(fact_loaded):
     not resolve to the unknown member -- it joins to nothing and the payment disappears
     from every report grouped by that dimension, with no count anywhere going wrong."""
     result, _table = fact_loaded
-    assert result.orphaned == (("dim_date", 0), ("dim_channel", 0), ("dim_currency", 0))
+    assert result.orphaned == (
+        ("event_date_key", 0), ("fx_rate_date_key", 0), ("channel_key", 0),
+        ("currency_key", 0),
+    )
 
 
 def test_a_conformed_dimension_older_than_the_payments_is_reported_and_not_refused(
@@ -593,18 +599,18 @@ def test_a_conformed_dimension_older_than_the_payments_is_reported_and_not_refus
         target=fact_target,
     )
     orphans = dict(result.orphaned)
-    assert orphans[DIM_DATE.name] > 0, (
+    assert orphans["event_date_key"] > 0, (
         "the narrow calendar stops at 2026-07-11 and the fact carries payments on "
         "2026-08-01, so those rows key into nothing"
     )
-    assert orphans[DIM_CHANNEL.name] == orphans[DIM_CURRENCY.name] == 0
+    assert orphans["channel_key"] == orphans["currency_key"] == 0
 
 
 # --- the projection, the write, and the re-run ----------------------------------------
 
 
 def test_the_projected_columns_are_the_declared_ones_in_the_declared_order(
-    spark, dim_loaded, fact_source, fact_loaded
+    spark, dim_loaded, fact_source, fx_source, fact_loaded
 ):
     """THE ORDER IS LOAD-BEARING AND NOT TIDY: a Delta append matches POSITIONALLY unless
     `mergeSchema` says otherwise, and this table's first five columns are all integers, so
@@ -614,9 +620,9 @@ def test_the_projected_columns_are_the_declared_ones_in_the_declared_order(
     caller projecting it in another order is exactly what this pins against."""
     _result, table = fact_loaded
     expected = [
-        "payer_company_sk", "payee_company_sk", "event_date_key", "channel_key",
-        "currency_key", FACT_PAYMENT.grain_key, FACT_PAYMENT.measure,
-        payments.EVENT_TIME_COLUMN, "load_date", RECORD_SOURCE,
+        "payer_company_sk", "payee_company_sk", "event_date_key", "fx_rate_date_key",
+        "channel_key", "currency_key", FACT_PAYMENT.grain_key, FACT_PAYMENT.measure,
+        FX_RATE, AMOUNT_BRL, payments.EVENT_TIME_COLUMN, "load_date", RECORD_SOURCE,
     ]
     assert spark.read.table(table).columns == expected
     frame = fact_rows(
@@ -626,6 +632,7 @@ def test_the_projected_columns_are_the_declared_ones_in_the_declared_order(
         conformed=(DIM_DATE, DIM_CHANNEL, DIM_CURRENCY),
         source=spark.read.table(fact_source),
         versions=spark.read.table(dim_loaded.table),
+        rates=rate_intervals(spark.read.table(fx_source)).intervals,
         load_date=BUILT_AT,
     )
     assert frame.columns == expected

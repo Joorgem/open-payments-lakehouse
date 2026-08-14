@@ -30,147 +30,60 @@ from opl.contracts import payments
 from opl.gold.columns import IS_CURRENT, VALID_FROM, VALID_TO
 from opl.gold.registry import (
     DIM_CHANNEL,
-    DIM_COMPANY,
     DIM_CURRENCY,
     DIM_DATE,
-    FACT_PAYMENT,
     PIT_ESTABELECIMENTO,
     REGISTRY,
-    CalendarDimension,
-    EnumeratedDimension,
-    PaymentFact,
-    PointInTimeTable,
-    Scd2Dimension,
+    FactRole,
     UnknownGoldTable,
     build_registry,
     table_spec,
 )
+from opl.gold.spec_fields import (
+    FROM_CONTRACT,
+    FROM_DERIVED,
+    READS_DATE,
+    READS_ISO_TEXT,
+)
 from opl.vault import domains
+
+from .spec_probes import (
+    KINDS,
+    SPELLINGS,
+    _calendar,
+    _dimension,
+    _enumerated,
+    _pit,
+)
 
 _GOLD = Path(__file__).resolve().parents[2] / "src" / "opl" / "gold"
 _MODULE = _GOLD / "registry.py"
 
-# The two modules that refuse at import, and what each is asked to prove. `specs.py`
-# holds the per-table guards (a `__post_init__` calls them) and `registry.py` the
-# whole-set ones (`build_registry` calls them, and this module's own foot calls that) --
-# so only one of the two can be asked whether the registry is built at import, and both
-# must be asked whether every guard they define is reached at all.
-_GUARD_MODULES = {"registry.py": True, "specs.py": False}
-
-
-def _dimension(**overrides) -> Scd2Dimension:
-    """A well-formed dimension, with one field replaced -- so every refusal below is
-    reached by changing exactly the thing it refuses."""
-    fields = {
-        "name": "dim_probe",
-        "surrogate_key": "probe_sk",
-        "source_satellite": "sat_empresa_dados",
-    }
-    fields.update(overrides)
-    return Scd2Dimension(**fields)
-
-
-def _enumerated(**overrides) -> EnumeratedDimension:
-    """A well-formed enumerated dimension, same shape and same purpose as `_dimension`."""
-    fields = {
-        "name": "dim_probe_enum",
-        "surrogate_key": "probe_enum_key",
-        "natural_key": "probe_code",
-        "fact_column": payments.EVENT_TIME_COLUMN,
-        "members": ("A", "B"),
-    }
-    fields.update(overrides)
-    return EnumeratedDimension(**fields)
-
-
-def _calendar(**overrides) -> CalendarDimension:
-    fields = {
-        "name": "dim_probe_date",
-        "surrogate_key": "probe_date_key",
-        "natural_key": "probe_full_date",
-        "fact_column": payments.EVENT_TIME_COLUMN,
-        "applied_date_source": "sat_empresa_dados",
-        "roles": ("probe_event_date_key",),
-    }
-    fields.update(overrides)
-    return CalendarDimension(**fields)
-
-
-def _pit(**overrides) -> PointInTimeTable:
-    """A well-formed point-in-time table, same shape and purpose as `_dimension`.
-
-    ITS HUB AND SATELLITES ARE THE REAL ONES, because `build_registry` resolves them
-    against the live vault registry -- a probe pointing at invented names would be refused
-    by the PIT guard before the cross-layer guard under test could fire, and the sweep
-    would then be measuring the wrong refusal."""
-    fields = {
-        "name": "pit_probe",
-        "hub": "hub_estabelecimento",
-        "satellites": ("sat_estabelecimento_dados", "sat_estabelecimento_endereco"),
-        "as_of_column": "probe_as_of",
-    }
-    fields.update(overrides)
-    return PointInTimeTable(**fields)
-
-
-def _fact(**overrides) -> PaymentFact:
-    """A well-formed payment fact, same shape and purpose as `_dimension`.
-
-    ITS `company_dimension` AND `conformed` NAME THE REAL TABLES, for `_pit`'s reason: the
-    whole-set guards resolve both against this registry, so a probe pointing at invented
-    names would be refused by the fact guard before the cross-layer guard under test could
-    fire, and the sweep would then be measuring the wrong refusal. The sweeps below hand
-    `build_registry` a single spec, and the cross-layer and duplicate-name guards run
-    FIRST -- which is the "individually wrong before collectively wrong" order
-    `opl.bronze.registry` states and which is what keeps this factory usable there."""
-    fields = {
-        "name": "fact_probe",
-        "grain_key": payments.IDENTITY_COLUMN,
-        "measure": "amount",
-        "company_dimension": "dim_company",
-        "roles": (
-            ("payer_cnpj_basico", "probe_payer_sk"),
-            ("payee_cnpj_basico", "probe_payee_sk"),
-        ),
-        "conformed": ("dim_date", "dim_channel", "dim_currency"),
-    }
-    fields.update(overrides)
-    return PaymentFact(**fields)
-
-
-# Every kind the gold registry knows, with a factory that builds a well-formed one. The
-# cross-layer guards below are parametrised over this rather than over `Scd2Dimension`
-# alone: a name collision is a property of the NAME, so a guard that only saw one kind
-# would be a guard the second kind walks past.
+# Every gold module that DEFINES an `_assert_*` guard. Each is asked whether every guard it
+# declares is reached at all -- a guard defined, tested and never called is a guard whose
+# absence is invisible everywhere except in production.
 #
-# `pit` IS THE KIND THAT PROVED THE ARGUMENT RATHER THAN ILLUSTRATING IT. It is the first
-# entry here with no `surrogate_key` and no `fact_column`, and adding it turned
-# `_assert_no_two_dimensions_draw_from_one_payment_column` into an `AttributeError` at
-# import of every gold module -- that guard skipped `Scd2Dimension` and assumed everything
-# else had a `fact_column`. A sweep parametrised over one kind would not have found it.
+# IT WAS TWO ENTRIES AND IS FIVE, WHICH IS WHAT F-API TASK 4'S SPLIT COST AND BOUGHT. It read
+# `{"registry.py": True, "specs.py": False}`, the flag deciding which one was also asked
+# whether the registry is built at import. `registry.py` now defines NO guard -- they moved to
+# `registry_guards.py` -- so it drops off this list entirely and the at-import question became
+# its own test. Enumerated rather than globbed off `_GOLD`, deliberately: a module that
+# defines no guard must not silently satisfy a sweep about guards, and the empty-set assertion
+# below is what makes an omission from this list red rather than invisible.
 #
-# `fact` IS THE FIFTH AND IT IS IN HERE FOR THE SAME REASON, CHECKED THE SAME WAY. It has
-# no `fact_column` either, so it walks the same line the PIT broke; the difference is that
-# this time the direction was checked before the kind was added rather than after, and the
-# guard was already an inclusion.
-KINDS = {
-    "scd2": _dimension,
-    "enumerated": _enumerated,
-    "calendar": _calendar,
-    "pit": _pit,
-    "fact": _fact,
-}
+# THE PREFIX IS `_assert_` AND THAT IS A SCOPE, NOT AN OVERSIGHT. Gold's other refusal family
+# is named `_refuse_*` and reads a MEASUREMENT rather than a declaration -- it lives in the
+# loaders (`conformed.py`, `dimensions.py`, `pit.py`, `fact_guards.py`, `fx.py`) and is reached
+# through a load rather than through an import, so "is it called at all" is answered there by
+# the tests that run the loaders. `fact_guards.py` defines seven of them and NO `_assert_*`,
+# which is why it is absent from this list.
+_GUARD_MODULES = (
+    "fact_spec.py",
+    "registry_guards.py",
+    "spec_fields.py",
+    "specs.py",
+)
 
-# HOW THE COLLIDING NAME IS SPELLED, and the second entry is the whole point. Unity
-# Catalog and Spark resolve identifiers CASE-INSENSITIVELY, so `SAT_EMPRESA_DADOS` and
-# `sat_empresa_dados` are ONE Delta table -- and the sweeps below iterate the registries'
-# own strings, which are all lower case, so a byte comparison passes every one of them
-# while the upper-cased spelling of the same table walks straight through. Measured
-# before the guard was casefolded: `sat_empresa_dados` refused, `SAT_EMPRESA_DADOS`
-# ACCEPTED, same for `ref_pais` and `bronze_cnpj_empresas`. It is the exact defect
-# `opl.bronze.registry_collisions` fixed in F1.4b, reintroduced at the one boundary no
-# other file polices.
-SPELLINGS = {"as declared": str, "upper-cased": str.upper}
 
 
 def test_the_registered_star_is_one_fact_four_dimensions_and_one_pit():
@@ -214,11 +127,19 @@ def test_dim_channel_is_drawn_from_payment_method_and_never_from_the_drift_colum
 @pytest.mark.parametrize("drifting", payments.DRIFT_COLUMNS)
 def test_a_conformed_dimension_drawn_from_a_drift_column_is_refused_at_import(drifting):
     """The guard behind the assertion above, driven through every declared drift column
-    rather than through the one that exists today."""
+    rather than through the one that exists today.
+
+    THROUGH A `FactRole` FOR THE CALENDAR, AND THAT PATH IS THE ONE THAT NEARLY VANISHED. The
+    calendar's `fact_column` became a PROPERTY over its contract-sourced role in F-API T4b, so
+    a drift column now reaches this refusal through `FactRole.__post_init__` and not through
+    the dimension's. Written as a plain membership check on the role, the message would have
+    been "no column the payment contract declares" -- true, and the wrong diagnosis for the
+    single most plausible reason anybody declares `payment_channel`. `FactRole` therefore
+    DELEGATES to the same guard, and this sweep is what proves the delegation."""
     with pytest.raises(ValueError, match="is a drift column"):
         _enumerated(fact_column=drifting)
     with pytest.raises(ValueError, match="is a drift column"):
-        _calendar(fact_column=drifting)
+        _calendar(roles=(_role(fact_column=drifting),))
 
 
 def test_a_conformed_dimension_drawn_from_a_column_the_contract_does_not_declare():
@@ -229,21 +150,29 @@ def test_a_conformed_dimension_drawn_from_a_column_the_contract_does_not_declare
         _enumerated(fact_column="payment_methd")
 
 
-def test_dim_date_has_exactly_one_business_date_role():
-    """T-B. The governing spec asks for role-playing across transação / autorização /
-    liquidação -- three roles. The payment contract carries `event_time` and
-    `emitted_at`, and `emitted_at` is a DELIVERY fact, not a business date: it is when
-    the generator released the record, which is a property of the delivery that may
-    repeat, not of the payment. So there is ONE business date role and the other two are
-    missing rather than manufactured.
+def test_dim_date_has_exactly_one_business_date_role_and_one_derived_one():
+    """T-B, and the count moved for a reason that is not the one T-B refused. The governing
+    spec asks for role-playing across transação / autorização / liquidação -- three BUSINESS
+    dates. The payment contract carries `event_time` and `emitted_at`, and `emitted_at` is a
+    DELIVERY fact, not a business date: it is when the generator released the record, which is
+    a property of the delivery that may repeat, not of the payment. So there is still ONE
+    business-date role and the other two are still missing rather than manufactured.
 
-    WHAT WOULD ADD A SECOND: an `authorized_at` or a `settled_at` column in
-    `opl.contracts.payments`, which is a change to the GENERATOR's contract (and to the
-    schema version it declares), not to this layer."""
-    assert DIM_DATE.roles == ("event_date_key",)
-    assert len(DIM_DATE.roles) == 1
+    WHAT F-API ADDED IS NOT A THIRD BUSINESS DATE. `fx_rate_date_key` is the quote date whose
+    rate the payment converted at -- a real second date the star can group by, produced by
+    the FX join and carried by NO payment column, which is exactly why the string form of
+    `roles` could not express it.
+
+    WHAT WOULD STILL ADD A BUSINESS-DATE ROLE: an `authorized_at` or a `settled_at` column in
+    `opl.contracts.payments`, which is a change to the GENERATOR's contract (and to the schema
+    version it declares), not to this layer."""
+    assert [(role.key, role.source) for role in DIM_DATE.roles] == [
+        ("event_date_key", FROM_CONTRACT),
+        ("fx_rate_date_key", FROM_DERIVED),
+    ]
+    assert len([role for role in DIM_DATE.roles if role.source == FROM_CONTRACT]) == 1
     assert DIM_DATE.fact_column == payments.EVENT_TIME_COLUMN
-    assert payments.EMITTED_AT_COLUMN not in DIM_DATE.roles
+    assert payments.EMITTED_AT_COLUMN not in [role.fact_column for role in DIM_DATE.roles]
 
 
 def test_table_spec_refuses_an_unknown_name_and_names_the_alternatives():
@@ -444,13 +373,54 @@ def test_an_enumerated_dimension_needs_members_and_they_must_be_distinct():
         _enumerated(members=("A", "A"))
 
 
+def _role(**overrides) -> FactRole:
+    """A well-formed contract-sourced role, for the sweeps below to vary one field of."""
+    fields = {
+        "key": "probe_event_date_key",
+        "fact_column": payments.EVENT_TIME_COLUMN,
+        "source": FROM_CONTRACT,
+        "reads": READS_ISO_TEXT,
+    }
+    fields.update(overrides)
+    return FactRole(**fields)
+
+
 def test_a_calendar_dimension_needs_at_least_one_role_and_no_repeats():
     """The roles are the fact's own foreign-key column names. Zero roles is a dimension
-    no fact reaches; a repeated role is two columns of one name in `fact_payment`."""
+    no fact reaches; a repeated KEY is two columns of one name in `fact_payment`, and a
+    repeated COLUMN is two keys derived from one value that agree on every row."""
     with pytest.raises(ValueError, match="declares no role"):
         _calendar(roles=())
-    with pytest.raises(ValueError, match="declares .* twice"):
-        _calendar(roles=("event_date_key", "event_date_key"))
+    with pytest.raises(ValueError, match="declares the key .* twice"):
+        _calendar(roles=(_role(), _role(fact_column="emitted_at")))
+    with pytest.raises(ValueError, match="declares the column .* twice"):
+        _calendar(roles=(_role(), _role(key="other_date_key")))
+
+
+def test_a_calendar_dimension_needs_exactly_one_contract_sourced_role():
+    """The contract-sourced role's column is the one `covered_span` measures the span from,
+    over `bronze_payments`, where a DERIVED column does not exist at all. Zero of them
+    leaves the span unmeasurable with nothing failing about it; two leave it a function of
+    which role a reader picked."""
+    derived = _role(key="probe_fx_date_key", fact_column="fx_rate_date", source=FROM_DERIVED,
+                    reads=READS_DATE)
+    with pytest.raises(ValueError, match="declares 0 contract-sourced roles"):
+        _calendar(roles=(derived,))
+    with pytest.raises(ValueError, match="declares 2 contract-sourced roles"):
+        _calendar(roles=(_role(), _role(key="other_key", fact_column="emitted_at")))
+
+
+def test_a_role_is_refused_in_both_directions_over_its_declared_source():
+    """The refusal that made the second role expressible AND kept the widening from being a
+    hole. A CONTRACT role over a column v1 does not carry would resolve every fact row to
+    the unknown member and report a clean 100%; a DERIVED role over a column the contract
+    DOES carry would be built by the wrong projection and arrive with the right type and
+    another column's meaning. Both halves are load-bearing: without the first the string
+    form's own guard is lost, without the second `source` is a label anybody can apply."""
+    with pytest.raises(ValueError, match="no column the payment contract declares"):
+        _role(fact_column="fx_rate_date")
+    with pytest.raises(ValueError, match="as derived"):
+        _role(source=FROM_DERIVED, reads=READS_DATE)
 
 
 # --- the point-in-time kind ----------------------------------------------------------
@@ -561,166 +531,6 @@ def test_a_pit_needs_a_name_a_hub_and_an_as_of_column():
             _pit(**blank)
 
 
-# --- the fact kind -------------------------------------------------------------------
-
-
-def test_the_fact_carries_a_role_key_for_every_counterparty_the_contract_declares():
-    """T-A's DECLARATION half. The acceptance this phase inherited -- "every
-    `fact_payment` row resolves to exactly one `dim_company` version" -- is ill-formed: a
-    correct row resolves to TWO, one per role. This pins that both roles exist, that both
-    resolve against the SAME dimension (which is what "conformed" means), and that the
-    counterparty half of each pair is the contract's own column and not a copy."""
-    assert FACT_PAYMENT.roles == (
-        ("payer_cnpj_basico", "payer_company_sk"),
-        ("payee_cnpj_basico", "payee_company_sk"),
-    )
-    assert tuple(c for c, _k in FACT_PAYMENT.roles) == payments.COUNTERPARTY_COLUMNS
-    assert FACT_PAYMENT.company_dimension == DIM_COMPANY.name
-    assert FACT_PAYMENT.role_keys == ("payer_company_sk", "payee_company_sk")
-    assert FACT_PAYMENT.grain_key == payments.IDENTITY_COLUMN
-
-
-@pytest.mark.parametrize(
-    "roles",
-    [
-        (("payer_cnpj_basico", "payer_company_sk"),),
-        (("payee_cnpj_basico", "payee_company_sk"),),
-        (("payer_cnpj_basico", "a"), ("payer_cnpj_basico", "b")),
-    ],
-    ids=["payer only", "payee only", "payer twice"],
-)
-def test_a_fact_that_does_not_resolve_every_counterparty_is_refused(roles):
-    """THE READING OF THE PLAN'S CLOSING TEST THAT IS ACTUALLY SATISFIABLE, refused at
-    declaration. A fact joining on the payer alone has the right row count, a clean 100%
-    resolution rate, and no payee at all -- so every report grouped by payee returns
-    nothing and nothing about the build fails. "Payer twice" is the same defect wearing two
-    roles, which is why the guard reads `COUNTERPARTY_COLUMNS` rather than counting."""
-    with pytest.raises(ValueError, match="must play exactly one role|declares roles for"):
-        _fact(roles=roles)
-
-
-@pytest.mark.parametrize("attribute", payments.BUSINESS_ATTRIBUTE_COLUMNS)
-def test_a_fact_grained_on_a_business_attribute_is_refused(attribute):
-    """T-D AT DECLARATION, over every business attribute rather than over the one somebody
-    would reach for first. A legitimate repeat is a DIFFERENT `transaction_id` under an
-    IDENTICAL attribute tuple, so a grain taken from that tuple deletes 1,600 real payments
-    on today's bronze and returns a plausible 18,400 -- with the duplicate count still
-    reporting 150, because that number is `COUNT(*) - COUNT(DISTINCT <grain>)` by
-    definition of the operation and cannot fail."""
-    with pytest.raises(ValueError, match="BUSINESS ATTRIBUTE"):
-        _fact(grain_key=attribute)
-
-
-def test_a_fact_grained_or_measured_on_a_column_the_contract_does_not_declare():
-    """The other half of the grain refusal, and the reason gold may spell a contract column
-    name at all: a name v1 does not carry turns the import of every gold module red rather
-    than failing inside Spark's analysis after a session has started."""
-    with pytest.raises(ValueError, match="no column the payment contract declares"):
-        _fact(grain_key="transaction_di")
-    with pytest.raises(ValueError, match="not a business attribute of a payment"):
-        _fact(measure=payments.EMITTED_AT_COLUMN)
-
-
-@pytest.mark.parametrize("column", [VALID_FROM, VALID_TO, IS_CURRENT, "load_date"])
-def test_a_role_key_that_is_a_column_a_gold_loader_writes_is_refused(column):
-    """One gold namespace, one reserved set -- the collision every other kind here refuses,
-    over the two column names a fact declares for itself."""
-    with pytest.raises(ValueError, match="the gold loaders write that column"):
-        _fact(roles=(("payer_cnpj_basico", column), ("payee_cnpj_basico", "b")))
-
-
-@pytest.mark.parametrize("column", ["amount", "event_time", "transaction_id"])
-def test_a_role_key_that_is_a_column_the_fact_projects_from_the_payment_is_refused(column):
-    """The collision no other kind has, because no other kind projects contract columns. A
-    fact carries the grain, the measure and `event_time` under the contract's own names, so
-    a role key spelled `amount` is one projection writing two values into one column -- the
-    measure survives or the key does, every row is present, and the join matches nothing."""
-    with pytest.raises(ValueError, match="already projects that name from the payment"):
-        _fact(roles=(("payer_cnpj_basico", column), ("payee_cnpj_basico", "b")))
-
-
-def test_a_fact_whose_company_dimension_is_missing_or_is_not_an_scd2_dimension():
-    """Resolved against THIS registry and not the vault's, which is what makes this kind
-    different from every other one here: a fact reads bronze and joins to a GOLD table.
-    Handed a conformed dimension it would look for a half-open interval in a table that has
-    none -- caught by Spark, and only after a serverless session had started."""
-    star = (DIM_COMPANY, DIM_DATE, DIM_CHANNEL, DIM_CURRENCY)
-    with pytest.raises(ValueError, match="not a registered SCD2 dimension"):
-        build_registry((_fact(company_dimension="dim_compnay"), *star))
-    with pytest.raises(ValueError, match="not a registered SCD2 dimension"):
-        build_registry((_fact(company_dimension="dim_date"), *star))
-
-
-def test_a_conformed_dimension_the_fact_does_not_reach_is_refused():
-    """THE ONLY MECHANICAL ANSWER THIS REPOSITORY HAS TO "DECORATIVE IN A STAR SCHEMA".
-    A conformed dimension exists to be reached by a fact; one the fact does not name builds
-    fine, is well-formed, and returns its members and no facts in every report. Stated as an
-    EQUALITY against the registry's conformed set, so the omission turns the import red
-    rather than being a convention somebody has to remember."""
-    with pytest.raises(ValueError, match="reaches .* and this registry holds"):
-        build_registry(
-            (_fact(conformed=("dim_date", "dim_channel")), DIM_COMPANY, DIM_DATE,
-             DIM_CHANNEL, DIM_CURRENCY)
-        )
-    with pytest.raises(ValueError, match="reaches .* and this registry holds"):
-        build_registry((_fact(), DIM_COMPANY, DIM_DATE, DIM_CHANNEL))
-
-
-def test_two_of_the_facts_projected_columns_sharing_a_name_are_refused():
-    """A WHOLE-SET GUARD BECAUSE HALF THE COLUMN LIST IS OTHER TABLES'. Two enumerated
-    dimensions sharing a `surrogate_key` are legal on their own -- nothing in this registry
-    refuses it, and their NAMES differ -- and the fact then projects one foreign key where
-    it declares two. Both are integers, so nothing fails and one dimension is simply
-    unreachable."""
-    collided = EnumeratedDimension(
-        name=DIM_CURRENCY.name,
-        surrogate_key=DIM_CHANNEL.surrogate_key,
-        natural_key=DIM_CURRENCY.natural_key,
-        fact_column=DIM_CURRENCY.fact_column,
-        members=DIM_CURRENCY.members,
-    )
-    with pytest.raises(ValueError, match="projects .* more than once"):
-        build_registry((_fact(), DIM_COMPANY, DIM_DATE, DIM_CHANNEL, collided))
-
-
-def test_the_facts_conformed_keys_are_the_role_and_never_the_dimensions_own_key():
-    """`dim_date`'s own key is `date_key` and the fact's column is `event_date_key`,
-    because a date dimension is the one kind a fact reaches under a name saying WHICH date.
-    The other two have no second name to take, so their fact key IS their surrogate key --
-    and the fact's declared order is the order those keys are projected in, which a Delta
-    append matches positionally."""
-    assert [DIM_DATE.fact_key, DIM_CHANNEL.fact_key, DIM_CURRENCY.fact_key] == [
-        "event_date_key", "channel_key", "currency_key",
-    ]
-    assert DIM_DATE.fact_key == DIM_DATE.roles[0] != DIM_DATE.surrogate_key
-    assert FACT_PAYMENT.conformed == ("dim_date", "dim_channel", "dim_currency")
-
-
-def test_a_calendar_with_two_roles_cannot_hand_a_fact_one_date_key():
-    """The derivation is only total under a stated condition, so it refuses rather than
-    taking the first role. A second role is a second BUSINESS DATE -- an `authorized_at` or
-    a `settled_at` in the payment contract -- and it needs a second `fact_column` beside it;
-    without one, every role but the first would be a key derived from the wrong column and
-    named after the right one."""
-    two_roles = _calendar(roles=("event_date_key", "settled_date_key"))
-    with pytest.raises(ValueError, match="derives its date key from ONE column"):
-        assert two_roles.fact_key
-
-
-def test_a_fact_needs_a_name_a_grain_a_measure_a_dimension_and_a_conformed_set():
-    for blank in (
-        {"name": " "}, {"grain_key": ""}, {"measure": None},
-        {"company_dimension": ""}, {"conformed": ()},
-    ):
-        with pytest.raises(ValueError):
-            _fact(**blank)
-
-
-def test_a_dimension_needs_a_name_a_surrogate_key_and_a_source():
-    for blank in ({"name": " "}, {"surrogate_key": ""}, {"source_satellite": None}):
-        with pytest.raises(ValueError):
-            _dimension(**blank)
-
 
 def test_the_registry_is_read_only():
     """The registry is DATA. A caller who could `REGISTRY[...] = ...` could add a table
@@ -734,6 +544,33 @@ def _module_level(tree: ast.Module, prefix: str) -> set[str]:
         node.name
         for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name.startswith(prefix)
+    }
+
+
+def _tree(module: str) -> ast.Module:
+    return ast.parse((_GOLD / module).read_text(encoding="utf-8"), filename=module)
+
+
+def _defined_in(module: str) -> set[str]:
+    return _module_level(_tree(module), "_assert_")
+
+
+def _called_across_gold() -> set[str]:
+    """Every `_assert_*` name called anywhere in `opl/gold`, whichever module defines it.
+
+    ACROSS THE PACKAGE AND NOT PER FILE, because F-API Task 4's split made a guard's
+    definition and its call site legitimately land in different modules -- `FactRole`'s
+    refusals are declared in `spec_fields.py` and invoked from `specs.py`, and the fact's
+    from `fact_spec.py`. Every `.py` under `opl/gold` is read rather than only the modules
+    that DEFINE guards, so a guard moved to a caller nobody listed here still counts as
+    called."""
+    return {
+        node.func.id
+        for path in sorted(_GOLD.glob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=path.name))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id.startswith("_assert_")
     }
 
 
@@ -759,31 +596,50 @@ def test_every_guard_this_module_defines_is_run_at_import(module):
     and a helper crossing that seam would make each file's claim rest on the other's.
 
     What it closes: a guard that is defined, tested, and never called is a guard whose
-    absence is invisible everywhere except in production. `build_registry` is called at
-    import in `registry.py`'s own foot, so a malformed registry breaks the import of
-    every module that reads it rather than the one job that touches that table.
+    absence is invisible everywhere except in production.
 
-    OVER `specs.py` TOO, since F3 Task 3 split the kinds out of the registry. Its guards
-    are called from a `__post_init__` rather than at module level -- which is what makes
-    them run before pyspark and before any registry exists -- so the same "defined and
-    never called" hole exists there, one layer down."""
-    path = _GOLD / module
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=module)
-    defined = _module_level(tree, "_assert_")
+    OVER FIVE MODULES, WHICH IS WHERE THE GUARDS ACTUALLY LIVE AFTER TWO SPLITS. F3 Task 3
+    moved the kinds out of the registry and F-API Task 4 moved the fact, the field guards and
+    the whole-set guards out again -- and every one of those files can grow a guard nothing
+    calls. The per-table guards run from a `__post_init__` and the whole-set ones from
+    `build_registry`, so "at import" means two different mechanisms and this sweep is
+    indifferent to which: it asks only whether SOMETHING in the gold package calls the
+    guard."""
+    defined = _defined_in(module)
     assert defined, f"no _assert_* guard is defined at module level in opl/gold/{module}"
-    called = {
-        node.func.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id.startswith("_assert_")
-    }
-    assert defined == called, (
-        f"guards defined and never called: {sorted(defined - called)}; called and not "
-        f"defined here: {sorted(called - defined)}"
+    uncalled = defined - _called_across_gold()
+    assert not uncalled, (
+        f"opl/gold/{module} defines guards nothing calls: {sorted(uncalled)}. A guard that "
+        "is defined, tested, and never called is a guard whose absence is invisible "
+        "everywhere except in production"
     )
-    if _GUARD_MODULES[module]:
-        assert _called_at_import(tree, "build_registry"), (
-            f"opl/gold/{module} does not call build_registry at import, so a malformed "
-            "registry would be discovered by whichever job touched the table first"
-        )
+
+
+def test_every_guard_the_gold_layer_calls_is_one_the_gold_layer_defines():
+    """The other direction, and it has to be asked across the whole package rather than
+    per file since F-API Task 4 split three modules out.
+
+    WHAT THE SPLIT BROKE, AND WHY THIS IS NOT A WEAKENING. The lock used to be
+    `defined == called` inside ONE file, which is a stronger claim only while every guard a
+    module calls is also declared in it. `opl.gold.specs` now calls three guards
+    `opl.gold.spec_fields` defines, and `opl.gold.fact_spec` two more -- so read per file the
+    equality is simply false, and the fix that preserves it (re-declaring each guard beside
+    its caller) is the duplication the split existed to remove. Read over the union both
+    halves survive: nothing is defined and never called, and nothing is called that no gold
+    module defines."""
+    assert _called_across_gold() == set().union(*(_defined_in(m) for m in _GUARD_MODULES))
+
+
+def test_the_gold_registry_is_built_at_the_import_of_the_module_that_declares_it():
+    """`build_registry` is called at import in `registry.py`'s own foot, so a malformed
+    registry breaks the import of every module that reads it rather than the one job that
+    touches the table it is malformed about.
+
+    ITS OWN TEST SINCE THE GUARDS MOVED OUT. It was a conditional tail on the sweep above,
+    keyed by a per-module flag -- and `registry.py` now defines no `_assert_*` guard at all,
+    so the sweep no longer visits it and the flag had nowhere to hang."""
+    tree = ast.parse((_GOLD / "registry.py").read_text(encoding="utf-8"), filename="registry.py")
+    assert _called_at_import(tree, "build_registry"), (
+        "opl/gold/registry.py does not call build_registry at import, so a malformed "
+        "registry would be discovered by whichever job touched the table first"
+    )

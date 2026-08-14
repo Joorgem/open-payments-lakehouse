@@ -40,7 +40,7 @@ from uuid import uuid4
 import pytest
 from pyspark.sql import functions as F
 
-from opl.contracts import payments
+from opl.contracts import payments, ptax
 from opl.contracts.cnpj_schemas import columns_for
 from opl.gold import registry as gold_registry
 from opl.gold.conformed import load_conformed_dimension
@@ -53,6 +53,7 @@ from opl.gold.registry import (
     DIM_DATE,
     FACT_PAYMENT,
 )
+from opl.gold.specs import fact_keys
 from opl.vault import domains
 from opl.vault.hubs import load_hub
 from opl.vault.observation import ObservationGrain
@@ -414,10 +415,63 @@ def conformed_tables(spark, empresas_bronze, vault_loaded, fact_source):
     return tables
 
 
-def build_fact(spark, *, dim_loaded, fact_source, conformed_tables, target, **overrides):
+# THE THREE PTAX QUOTES THE FIXTURE STAR CONVERTS AT, AND EVERY ONE OF THEM IS MEASURED.
+# `docs/f-api-run-evidence.md` §0.2 and §1.2 carry the requests: 2026-06-19 venda 5.14420
+# published 13:03:25.555497, 2026-06-22 venda 5.13950 published 13:06:19.750415, 2026-07-31
+# venda 5.07730 published 13:10:31.061071 -- all three READ AS BRT, which is T3's ruling and
+# is what puts them three hours later than the text reads.
+#
+# NO INVENTED RATE, WHICH IS A CHOICE AND NOT AN ACCIDENT. A fixture is free to make up a
+# number, and a made-up PTAX rate is the one kind that would be indistinguishable from a real
+# one in a diff -- so the fixture carries only quotes with a request behind them, and the
+# three happen to cover every payment instant `_payment_rows` emits: 2026-06-20T00:00Z
+# resolves back to 06-19, 2026-07-11T00:00Z to 06-22, and 2026-08-01T13:53:15Z to 07-31.
+#
+# ALL-STRING, because that is what bronze lands (`opl.contracts.ptax`: the rates are carried
+# as the DIGITS BCB published, never as a float, so `5.14420` keeps its trailing zero).
+_PTAX_QUOTES = (
+    ("2026-06-19", "USD", "2026-06-19 13:03:25.555497", "5.14360", "5.14420"),
+    ("2026-06-22", "USD", "2026-06-22 13:06:19.750415", "5.13890", "5.13950"),
+    ("2026-07-31", "USD", "2026-07-31 13:10:31.061071", "5.07670", "5.07730"),
+)
+
+
+def ptax_table(spark, db: str, rows=_PTAX_QUOTES) -> str:
+    """`bronze_ptax` as the fact reads it: all-string, one row per (currency, quote_date).
+
+    CREATED ONCE PER DATABASE AND NOT APPENDED TO, because `bronze_ptax` is written
+    `mode("append")` in the real pipeline and a fixture that appended on every call would be
+    reproducing exactly the duplicate `(currency, quote_date)` rows `opl.gold.fx` refuses --
+    turning every test into an accidental probe of that refusal. A test that WANTS the
+    duplicate passes its own rows under its own name."""
+    table = f"{db}.bronze_ptax_{len(rows)}"
+    if not spark.catalog.tableExists(table):
+        schema = ", ".join(f"{column} string" for column in ptax.COLUMNS)
+        (
+            spark.createDataFrame(list(rows), schema)
+            .write.format("delta").mode("append").saveAsTable(table)
+        )
+    return table
+
+
+@pytest.fixture(scope="module")
+def fx_source(spark, empresas_bronze):
+    """The fixture star's PTAX series, under the name `build_fact` defaults to."""
+    return ptax_table(spark, empresas_bronze.db)
+
+
+def build_fact(
+    spark, *, dim_loaded, fact_source, conformed_tables, target, fx_source=None, **overrides
+):
     """`fact_payment` over the fixture star, with the loader's own arguments overridable --
     so a test that needs a mismatched spec passes one rather than reaching into the
-    loader."""
+    loader.
+
+    `fx_source` DEFAULTS RATHER THAN BEING REQUIRED, which is the one argument here that is
+    not a fixture. The FX series is an input every build needs and almost no test is ABOUT,
+    so defaulting it kept F-API Task 4 from adding one parameter to sixteen call sites and a
+    fixture to sixteen signatures -- and the default is derived from the fact source's own
+    database, so it cannot silently point at another test's table."""
     arguments = {
         "dimension": DIM_COMPANY,
         "hub": HUB,
@@ -425,6 +479,7 @@ def build_fact(spark, *, dim_loaded, fact_source, conformed_tables, target, **ov
         "source_table": fact_source,
         "dimension_table": dim_loaded.table,
         "conformed_tables": conformed_tables,
+        "fx_source_table": fx_source or ptax_table(spark, fact_source.split(".")[0]),
         "target_table": target,
         "load_date": BUILT_AT,
     }
@@ -475,10 +530,10 @@ def recovered(spark, fact_table, dim_company_table, conformed_tables):
     for dimension in (DIM_CHANNEL, DIM_CURRENCY):
         frame = frame.join(
             spark.read.table(conformed_tables[dimension.name]).select(
-                F.col(dimension.surrogate_key).alias(dimension.fact_key),
+                F.col(dimension.surrogate_key).alias(fact_keys(dimension)[0]),
                 F.col(dimension.natural_key).alias(dimension.fact_column),
             ),
-            on=dimension.fact_key,
+            on=fact_keys(dimension)[0],
             how="left",
         )
     return frame

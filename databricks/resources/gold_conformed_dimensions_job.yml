@@ -38,11 +38,23 @@
 # before the run that tests them:
 #   dim_date     50 members + 1 ghost   (2026-06-13 .. 2026-08-01, both RFB applied_dates
 #                                        to the latest payment day), fact-side
-#                                        cardinality 1 -- or 2 once the
-#                                        `between-snapshots` batch is in bronze
+#                                        cardinality 3 -- 2026-06-20, 2026-06-22 and
+#                                        2026-08-01, once all four payment batches are in
+#                                        bronze
 #   dim_channel   5 members + 1 ghost   fact-side cardinality 5
-#   dim_currency  1 member  + 1 ghost   fact-side cardinality 1
-# Two of the three are constant columns on this data. The run log says so in a number.
+#   dim_currency  2 members + 1 ghost   fact-side cardinality 2 -- 4,905 USD fact rows
+#                                        against 35,095 BRL ones
+# NONE of the three is a constant column any more, and that is what F-API changed. This block
+# read "cardinality 1 -- or 2 once the `between-snapshots` batch is in bronze",
+# "dim_currency 1 member + 1 ghost" and "Two of the three are constant columns on this data"
+# until the currency domain gained USD and the fifth payment profile drew from it. The run log
+# still says so in a number rather than in an adjective, which is what made the correction
+# checkable instead of a matter of opinion.
+#
+# `dim_date` MEMBERS STAY 50, which is the one number the fifth profile did NOT move:
+# `covered_span` anchors on 2026-06-13 and 2026-06-22 is inside the existing span, so this
+# re-run appends zero date rows. It is an APPEND-only loader, so re-running it after a payment
+# batch lands is the ordinary repair and not a rebuild.
 resources:
   jobs:
     opl_gold_conformed_dimensions:

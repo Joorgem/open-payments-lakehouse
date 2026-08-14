@@ -12,10 +12,12 @@ THE KIND IS REFUSED BEFORE `getOrCreate()`, AND THIS IS NOW THE FOURTH GOLD ENTR
 Every registered gold name is spelled correctly and sits in a job beside this one, so the
 paste that reaches this task is a name from one of the other three; handed `dim_company`,
 `load_fact` would fail on `spec.roles` several lines into a serverless session that has
-already started costing money. `tests/test_gold_job_wiring.py::test_each_gold_entry_point
+already started costing money. `tests/test_gold_entry_points.py::test_each_gold_entry_point
 _refuses_the_kind_the_other_one_builds` drives all twelve pairings, and it is twelve rather
 than six because the refusals are INCLUSIONS -- a kind added later acquires the other
-tasks' refusals for free only while they are written that way.
+tasks' refusals for free only while they are written that way. (This cited
+`tests/test_gold_job_wiring.py`, which no longer holds that test: it was split, the name
+survived the move, and the citation did not.)
 
 IT TAKES NO `months`, FOR THE THIRD DISTINCT REASON IN THIS DIRECTORY. The SCD2 build
 DECLARES a window so it can refuse a snapshot the launch did not name; the PIT takes none
@@ -26,11 +28,16 @@ PAYMENTS. A payment batch that landed since the last build is a set of new
 than a parameter to find them -- a parameter would state an intention where the anti-join
 reads the table.
 
-FOUR NAMES ARE QUALIFIED AND ALL FOUR COME FROM `opl.config.DEFAULT.table` -- the fact,
-the bronze payments it reads, `dim_company`, and the conformed dimensions (one call, in a
-comprehension over the declared list, which is why the number is four and not six). On
-Free Edition's single catalog a hardcoded `workspace.default.` would be invisible until
-the day there is a second one.
+FIVE NAMES ARE QUALIFIED AND ALL FIVE COME FROM `opl.config.DEFAULT.table` -- the fact,
+the bronze payments it reads, `bronze_ptax`, `dim_company`, and the conformed dimensions
+(one call, in a comprehension over the declared list, which is why the number is five and
+not seven). On Free Edition's single catalog a hardcoded `workspace.default.` would be
+invisible until the day there is a second one.
+
+`bronze_ptax` IS RESOLVED THROUGH `opl.bronze.registry` AND NEVER SPELLED HERE, exactly as
+`bronze_payments` is: the registry lifts every Delta name out of `opl.contracts.ptax`, and
+`tests/test_job_yaml_launch_guards.py`'s anti-hardcode sweep exists because a literal
+`"bronze_ptax"` in an entry point is a name that outlives a rename.
 
 WHAT THE RUN LOG PUBLISHES, AND WHY IT IS FOUR SENTENCES RATHER THAN A ROW COUNT. The row
 count is enforced by the loader and printing it proves nothing; what an operator needs is
@@ -51,7 +58,7 @@ from pyspark.sql import SparkSession
 
 from opl.bronze.registry import table_spec as bronze_table_spec
 from opl.config import DEFAULT, SESSION_TIMEZONE, SESSION_TIMEZONE_CONFIG
-from opl.contracts import payments
+from opl.contracts import payments, ptax
 from opl.gold.facts import FactLoadResult, load_fact
 from opl.gold.registry import table_spec as gold_table_spec
 from opl.gold.specs import PaymentFact
@@ -137,12 +144,17 @@ def _integrity_note(result: FactLoadResult) -> str:
     """Whether every DERIVED conformed key names a member that exists.
 
     THE TWO STATES MUST NOT READ ALIKE, which is why this is a function -- the reason
-    `gold_load_dimension.py` gives for its own note. The three conformed keys are computed
+    `gold_load_dimension.py` gives for its own note. The FOUR conformed keys are computed
     from the fact's own columns with no join, so there is no ghost to fall back on: an
-    orphan is a payment whose day, rail or currency the dimension does not hold. It is
-    REPORTED and not refused because the likeliest cause is order -- a conformed dimension
-    built before this batch of payments landed -- and the repair is to re-run that build,
-    which appends."""
+    orphan is a payment whose event day, whose FX quote date, whose rail or whose currency
+    the dimension does not hold. It is REPORTED and not refused because the likeliest cause
+    is order -- a conformed dimension built before this batch of payments landed -- and the
+    repair is to re-run that build, which appends.
+
+    IT IS LABELLED PER FACT KEY AND NOT PER DIMENSION, which matters exactly because
+    `dim_date` answers two of the four: an event day outside the calendar and an FX quote
+    date outside it are different defects, and a total labelled `dim_date` would name
+    neither."""
     orphans = [(name, count) for name, count in result.orphaned if count]
     if not orphans:
         return "every derived conformed key names a member that exists"
@@ -153,6 +165,38 @@ def _integrity_note(result: FactLoadResult) -> str:
         "does not fall back on the unknown member -- it joins to nothing and disappears "
         "from every report grouped by that dimension. Re-run the conformed build, which "
         "APPENDS the missing members; this fact needs no repair"
+    )
+
+
+def _fx_note(result: FactLoadResult, spec: PaymentFact) -> str:
+    """What the FX resolution did, said so that ONE rate does not read as success.
+
+    THE NUMBER THIS SENTENCE EXISTS FOR IS `fx_rates_used`. With a single-currency domain it
+    was 1.00000 on every row, `amount_brl` equalled `amount` everywhere, and no test over
+    either column could fail -- which is the whole reason this phase widened the domain. So a
+    count of ONE is reported as the state the phase exists to leave behind, not as a clean
+    conversion.
+
+    AND THE SERIES' OWN THREE NUMBERS ARE PRINTED BESIDE IT, because gaplessness is REPORTED
+    rather than refused (`opl.gold.fx` argues why a gap bound would be either a holiday
+    calendar or a guess). A bounded extraction shows up here as a quote count and a last
+    publication instant that do not reach the days the fact needed."""
+    series = (
+        f"{result.fx_quotes} reduced (currency, quote_date) quotes published "
+        f"{result.fx_first_published} .. {result.fx_last_published}"
+    )
+    if result.fx_rates_used <= 1:
+        return (
+            f"and every row converted at ONE rate over {series} -- so {spec.additive_measure} "
+            f"is {spec.measure} under another name and nothing about the conversion can be "
+            "wrong, which is the state a mixed-currency stream exists to end"
+        )
+    return (
+        f"and {result.fx_rates_used} distinct {spec.additive_measure} conversion rates were "
+        f"used over {series}; SUM({spec.additive_measure}) is the only additive total "
+        f"({spec.measure} is additive only within a currency) and it does NOT equal "
+        f"SUM({spec.measure}) x rate to the cent, because the conversion rounds half-up at "
+        "the row"
     )
 
 
@@ -184,6 +228,7 @@ def main(argv: list[str] | None = None) -> None:
         # would check each key against another dimension's members and report every row as
         # an orphan.
         conformed_tables={name: DEFAULT.table(name) for name in spec.conformed},
+        fx_source_table=DEFAULT.table(bronze_table_spec(ptax.CONTRACT).bronze),
         target_table=DEFAULT.table(spec.name),
         load_date=load_date,
     )
@@ -192,7 +237,7 @@ def main(argv: list[str] | None = None) -> None:
         f"{result.source_rows} bronze payments over {result.source_identities} distinct "
         f"{spec.grain_key} keyed on {dimension.name} and "
         f"{[item.name for item in conformed]}; {_resolution_note(result, len(spec.roles))}; "
-        f"{_repeat_note(result)}; {_integrity_note(result)}"
+        f"{_repeat_note(result)}; {_integrity_note(result)}; {_fx_note(result, spec)}"
     )
 
 

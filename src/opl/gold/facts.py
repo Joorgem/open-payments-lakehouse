@@ -25,11 +25,11 @@ count, it raises the row count, and only one of the two measurements can see it.
 DEDUPLICATION IS BY `transaction_id` AND BY NOTHING ELSE. `opl.contracts.payments` grants
 the distinction its whole docstring: a DUPLICATE is one payment delivered twice (the same
 id), a LEGITIMATE REPEAT is a different payment that happens to look the same (a different
-id, an identical business-attribute tuple). Both promoted streams carry
+id, an identical business-attribute tuple). All FOUR promoted streams carry
 `_REPEAT_COUNT = 800` repeats on purpose, so a fact that deduplicated on the attributes --
 or on a "natural key" built from (payer, payee, amount, currency, payment_method), which
-is the obvious thing to reach for -- deletes 1,600 real payments and returns a plausible
-18,400. `opl.gold.specs._assert_the_grain_is_the_events_own_identity` refuses that at
+is the obvious thing to reach for -- deletes 3,200 real payments and returns a plausible
+36,800. `opl.gold.fact_spec._assert_the_grain_is_the_events_own_identity` refuses that at
 declaration; `_refuse_a_row_count_that_is_not_one_per_delivered_identity` refuses it on
 the written table.
 
@@ -37,8 +37,20 @@ AND THE 150-DUPLICATE ACCEPTANCE IS A TAUTOLOGY, WHICH IS WHY IT IS NOT USED AS 
 "The build removed 150 duplicates" is `COUNT(*) - COUNT(DISTINCT <grain>)` BY DEFINITION
 OF THE OPERATION: it re-measures bronze's own arithmetic and comes out right whichever
 column the deduplication was taken over. What is published instead is `legitimate_repeats`
--- rows the fact holds beyond its distinct business tuples -- which is 1,600 when the
+-- rows the fact holds beyond its distinct business tuples -- which is 3,200 when the
 repeats survived and 0 when they did not.
+
+--- THE FX COLUMNS, AND THE ONE JOIN IN THIS LOADER THAT CANNOT BROADCAST ON A BOUND ---
+
+`fx_rate`, `fx_rate_date_key` and `amount_brl` are resolved by `opl.gold.fx`, which owns
+every argument about them: the rate is the most recent quote whose PUBLICATION INSTANT
+precedes the payment's own (a day-grain join would hand a Sunday payment Monday's rate), the
+FX side is reduced to one row per `(currency, quote_date)` BEFORE the join because
+`bronze_ptax` appends and a re-run would otherwise double every USD row, and two landed rows
+that disagree on a rate are REFUSED rather than resolved. What belongs in THIS file is where
+the refusals sit relative to the write: `refuse_payments_no_rate_can_be_resolved` runs over
+the DERIVED frame before `_appended`, because a NULL rate is a NULL `amount_brl` and there
+would be nothing to keep.
 
 HALF-OPEN INTERVALS, NEVER `BETWEEN`. `valid_from <= t < valid_to`. `BETWEEN` is inclusive
 at both ends, so a payment landing exactly on a version boundary matches the version that
@@ -77,8 +89,17 @@ THE DIMENSION SIDE NEEDS NO CONVERSION AT ALL, and that is the other half. `vali
 `opl.config.SESSION_TIMEZONE` sets, and stored as UTC micros -- so reading them back under
 any session zone yields the same instant, and the comparison below is between two instants
 rather than between an instant and a rendering. `tests/gold/test_fact_payment.py` builds
-the whole fact under `America/Sao_Paulo` and asserts every resolved version and every
-`event_date_key` is unchanged.
+the whole fact under `America/Sao_Paulo` and asserts every resolved version and every date
+key is unchanged.
+
+AND THAT TEST CAUGHT THE FX COLUMN, WHICH IS WORTH RECORDING BECAUSE IT WAS THE FIRST DRAFT.
+A reporting-currency payment's `fx_rate_date` was written `to_date(<event instant>)` -- a
+RENDERING -- so under America/Sao_Paulo every midnight-UTC payment dated its own identity
+conversion to the previous day and `fx_rate_date_key` became a function of a cluster setting.
+It is `day_of(event_time)` now, the same ten characters `event_date_key` is read from. The
+zone hazard this section describes is not one this layer met once and closed; it is met by
+every new column that answers "which day", and the only defence that has ever worked here is
+a test that SETS the wrong zone rather than inheriting it.
 
 --- WHERE THE EXPENSIVE FRAME IS CONSUMED, ONCE PER ROLE AND NEVER MORE -------------
 
@@ -86,7 +107,7 @@ the whole fact under `America/Sao_Paulo` and asserts every resolved version and 
 No `persist()`, no `cache()` -- serverless refuses both (master protocol section 4.3) and
 an AST sweep catches them -- so the reduction is structural instead:
 
-  1. `_counterparties` reads the 20,150-row bronze table and produces the <=1,024 distinct
+  1. `_counterparties` reads the 40,150-row bronze table and produces the <=1,024 distinct
      CNPJs this fact can possibly reference.
   2. `_versions_the_fact_can_reach` scans `dim_company` ONCE per role, projected to four
      columns, and filters it by a BROADCAST semi-join against that key set before anything
@@ -96,20 +117,31 @@ an AST sweep catches them -- so the reduction is structural instead:
      on the business key with the interval as a residual predicate. There is no shuffle of
      the dimension anywhere in this loader.
 
-The alternative -- joining 40,000 references straight into 69.2M rows -- cannot broadcast
+The alternative -- joining 80,000 references straight into 69.2M rows -- cannot broadcast
 either side (the build side of a LEFT OUTER join is the right side, whichever way the join
 is spelled), so it is a sort-merge join shuffling 69.2M rows per role.
 
-WHAT *IS* DERIVED TWICE, SAID PLAINLY: the deduplication. `_deduplicated` runs once into
-the write and once for `retained_tuples`, which is 20,150 rows through one window each
-time. That is the cheap frame; the dimension is the expensive one, and it is read once per
-role because two roles need two independent answers.
+THE FX SIDE IS THE SECOND BROADCAST AND ITS BOUND IS DIFFERENT IN KIND. `opl.gold.fx`
+reduces `bronze_ptax` to one row per `(currency, quote_date)` -- 42 rows over this phase's
+extraction window -- so what is broadcast is small because the REDUCE made it small, not
+because the source was. That distinction is the whole of T4c and `opl.gold.fx`'s docstring
+carries it.
+
+WHAT *IS* DERIVED TWICE, SAID PLAINLY: the deduplication, and now the FX projection. The
+first runs once into the write and once for `retained_tuples`; the second is re-derived by
+the pre-write rate refusal, which counts NULL rates over the projected rows before
+`_appended` consumes the same frame. Both are 40,150 rows through one window and three
+broadcast joins. That is the cheap frame; the 69.2M-row dimension is the expensive one, and
+it is read once per ROLE because two roles need two independent answers.
 
 --- WHAT IS MEASURED AND WHAT IS REFUSED --------------------------------------------
 
 Refused BEFORE the first write: a payment whose `event_time` carries no readable instant or
-whose measure is not a number (both would resolve to the ghost or to NULL with the build
-reporting success), and a deduplication that lost a business tuple.
+whose DELIVERED measure is not a number (both would resolve to the ghost or to NULL with the
+build reporting success), a deduplication that lost a business tuple, a landed PTAX quote
+date that does not reduce to one rate, and a payment for which no quote had been published
+yet -- the DERIVED measure's own refusal, which the delivered measure's cannot cover because
+that one reads bronze before anything is derived.
 
 Refused AFTER it, in the shape `opl.gold.dimensions` uses and with the same closing
 sentence: a row count that is not one row per delivered identity. That single number covers
@@ -129,7 +161,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import reduce
 
-from pyspark.sql import Column, DataFrame, SparkSession
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
@@ -141,13 +173,39 @@ from opl.gold.columns import (
     VALID_FROM,
     VALID_TO,
 )
-from opl.gold.conformed import fact_surrogate_key
+from opl.gold.conformed import day_of, fact_surrogate_key
 
 # ONE TIMESTAMP PATH FOR THE WHOLE LAYER, which is the only reason this module imports
 # anything of the SCD2 loader -- `opl.gold.conformed` imports it for the same sentence.
 # `F.lit(datetime)` converts through `time.mktime`, i.e. the DRIVER's operating-system
 # zone, where every other instant gold writes is parsed by Spark in the SESSION zone.
 from opl.gold.dimensions import instant_literal
+
+# THE REFUSALS AND THE TWO READ DECISIONS LIVE NEXT DOOR AND ARE CALLED FROM HERE, in
+# `opl.bronze.registry`'s shape: the guards moved to their own module at the cap, and the
+# three names this file RE-EXPORTS are re-exported so that no consumer's import line moved
+# when they did. `opl.gold.fact_guards` states where each refusal sits relative to the write.
+from opl.gold.fact_guards import (  # noqa: F401  (re-exported for consumers)
+    _CURRENCY_COLUMN,
+    AMOUNT_TYPE,
+    ISO_INSTANT_FORMAT,
+    _refuse_a_deduplication_that_lost_a_business_tuple,
+    _refuse_a_derived_role_this_loader_cannot_produce,
+    _refuse_a_fact_whose_measures_this_loader_cannot_derive,
+    _refuse_a_mismatched_source,
+    _refuse_a_row_count_that_is_not_one_per_delivered_identity,
+    _refuse_payments_no_instant_can_be_read,
+    _refuse_unresolved_rates,
+    event_instant,
+)
+from opl.gold.fx import (
+    AMOUNT_BRL,
+    FX_RATE,
+    FxSeries,
+    converted_amount,
+    rate_intervals,
+    with_resolved_rates,
+)
 from opl.gold.specs import ConformedDimension, PaymentFact, Scd2Dimension
 from opl.vault.loading import BRONZE_RECORD_SOURCE, rows_in
 from opl.vault.registry import Hub
@@ -160,24 +218,12 @@ __all__ = [
     "fact_rows",
     "load_fact",
 ]
-
-# THE ZONE DESIGNATOR IS PART OF THE PATTERN AND THAT IS THE WHOLE POINT -- see the module
-# docstring. `XXX` accepts `+HH:MM` and the literal `Z`; a value carrying neither yields
-# NULL here, where a plain cast would resolve it through the session timezone.
-ISO_INSTANT_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"
-
-# THE MEASURE'S TYPE. The scale is the CONTRACT's (`AMOUNT_SCALE`, two, because BRL has
-# centavos) rather than a literal, so a currency with a different minor unit moves it in
-# one place. The precision is 18: `MAX_AMOUNT_CENTS` is 5,000,000, i.e. seven digits before
-# the point, and a DECIMAL leaves no room for the binary rounding a DOUBLE would introduce
-# into a column whose whole contract is that it is an exact number of centavos.
-AMOUNT_TYPE = f"decimal(18, {payments.AMOUNT_SCALE})"
-
-# Internal to `_deduplicated`, and named because it is selected through by string.
 _DELIVERY = "_delivery"
 
-# Internal to the as-of join: the payment's instant, derived once and compared twice.
+# Internal to the as-of join: the payment's instant, derived once and compared THREE times
+# now -- once per counterparty role and once against the FX series' publication intervals.
 _EVENT_INSTANT = "_event_instant"
+
 
 
 @dataclass(frozen=True)
@@ -214,112 +260,39 @@ class FactLoadResult:
     # measured 1,024/1,024 counterparties resolving to `hub_empresa`, and `dim_company`
     # covers every hub key, so `COALESCE(<lookup>, GHOST)` cannot fire.
     unresolved: tuple[tuple[str, int], ...]
-    # Rows whose DERIVED conformed key matches no member of the dimension it names, per
-    # dimension. The price of deriving those three keys without a join, paid by counting.
+    # Rows whose DERIVED conformed key matches no member of the dimension it names, PER FACT
+    # KEY COLUMN and not per dimension -- `dim_date` answers two of them since F-API T4b, and
+    # a total over the pair would say "dim_date: 12" without saying which date was outside
+    # the calendar. The price of deriving four keys without a join, paid by counting.
     orphaned: tuple[tuple[str, int], ...]
-
-
-def event_instant(column: str) -> Column:
-    """The INSTANT an ISO-8601 payment timestamp names, parsed with its ZONE REQUIRED.
-
-    NOT `CAST(... AS TIMESTAMP)`, and the module docstring tabulates why with the
-    measurement: the cast agrees with this to the microsecond for text that carries `Z`,
-    and ACCEPTS text that does not, resolving it through `spark.sql.session.timeZone`. This
-    yields NULL for that value, which `_refuse_payments_no_instant_can_be_read` turns into
-    a refusal naming the rows.
-
-    NOT `opl.gold.conformed.day_of` EITHER, and the two must not be confused. That one
-    reads a calendar DAY out of the first ten characters, because a day rendered from an
-    instant moves with the session zone; this one reads the INSTANT, which does not move at
-    all. The fact carries both -- `event_date_key` from the text, the as-of comparison from
-    the instant -- and they answer different questions about the same column."""
-    return F.to_timestamp(F.col(column), ISO_INSTANT_FORMAT)
-
-
-def _refuse_a_mismatched_source(
-    fact: PaymentFact,
-    dimension: Scd2Dimension,
-    hub: Hub,
-    conformed: Sequence[ConformedDimension],
-) -> None:
-    """The fact, its dimension, that dimension's hub and the conformed dimensions arrive as
-    four arguments, so something has to check they belong together.
-
-    Four arguments for `opl.gold.dimensions._refuse_a_mismatched_source`'s reason: a loader
-    that resolved its sources through the module-level registry could not be driven with a
-    throwaway spec. What each mismatch would cost is worth naming. Another dimension builds
-    a well-formed fact against another table's version chain. A hub with a COMPOSITE
-    business key cannot be reached from one counterparty column at all -- the join would be
-    on the first component and would match every company sharing it. And the conformed
-    dimensions are checked IN ORDER, because they are projected in order and a Delta append
-    matches POSITIONALLY: two of them transposed writes each key into the other's column,
-    and all three are integers, so nothing fails."""
-    if dimension.name != fact.company_dimension:
-        raise ValueError(
-            f"payment fact {fact.name!r} resolves against {fact.company_dimension!r} and "
-            f"was handed dimension {dimension.name!r}. Both role keys would be as-of "
-            "lookups into another table's version chain, and the build would not fail "
-            "doing it -- resolve the dimension with opl.gold.registry.table_spec rather "
-            "than passing one by hand"
-        )
-    if len(hub.business_key_columns) != 1:
-        raise ValueError(
-            f"payment fact {fact.name!r} joins one counterparty column to "
-            f"{dimension.name!r}, whose business key is "
-            f"{list(hub.business_key_columns)} -- {len(hub.business_key_columns)} columns. "
-            "A composite key cannot be reached from one column: the join would match on "
-            "the first component alone and resolve every company that shares it"
-        )
-    handed = tuple(item.name for item in conformed)
-    if handed != fact.conformed:
-        raise ValueError(
-            f"payment fact {fact.name!r} reaches {list(fact.conformed)} IN THAT ORDER and "
-            f"was handed {list(handed)}. The keys are projected in the declared order and "
-            "a Delta append matches positionally, so a permutation writes each dimension's "
-            "key into another's column -- and all of them are integers, so nothing fails"
-        )
-
-
-def _refuse_payments_no_instant_can_be_read(
-    fact: PaymentFact, *, unreadable_instants: int, unreadable_amounts: int
-) -> None:
-    """Refuse a payment whose `event_time` carries no zone-qualified instant, or whose
-    measure is not a number.
-
-    BOTH ARE SILENT AND BOTH ARE THE SAME SHAPE. A NULL instant matches no half-open
-    interval, so the row resolves to the ghost in BOTH roles and the build reports a
-    resolution rate that is merely lower; a NULL measure sums to nothing and lowers every
-    total by an amount nobody can name. The payment contract makes every column required
-    and non-empty and the DQ gate rejects both spellings of absent, so either count above
-    zero is a bronze row that did not come through the gate -- or an `event_time` written
-    without its `Z`, which is the one this loader's parse exists to catch."""
-    if unreadable_instants:
-        raise ValueError(
-            f"refusing to build {fact.name!r}: {unreadable_instants} bronze rows carry an "
-            f"{payments.EVENT_TIME_COLUMN!r} from which no instant can be read. The format "
-            f"is {ISO_INSTANT_FORMAT} and the ZONE DESIGNATOR IS REQUIRED -- a value "
-            "without one would otherwise be resolved through spark.sql.session.timeZone, "
-            "which makes the as-of answer a function of a cluster setting. Every such row "
-            "matches no half-open interval, so it would resolve to the unknown member in "
-            "BOTH roles with the build reporting success"
-        )
-    if unreadable_amounts:
-        raise ValueError(
-            f"refusing to build {fact.name!r}: {unreadable_amounts} bronze rows carry a "
-            f"{fact.measure!r} that is not a {AMOUNT_TYPE}. It would be written NULL, and "
-            "a SUM over the fact would come back smaller with nothing to show for it. The "
-            "payment contract makes every column required and the DQ gate rejects blanks, "
-            "so this is a row that did not come through the gate"
-        )
+    # How many `(currency, quote_date)` quotes the reduced PTAX series held, and the first and
+    # last publication instant in it. REPORTED and never refused: gaplessness in business
+    # days is not asserted (`opl.gold.fx` says why), so these three numbers are what make a
+    # BOUNDED extraction visible in the run log instead of hiding behind a rate that
+    # resolved.
+    fx_quotes: int
+    fx_first_published: object
+    fx_last_published: object
+    # Distinct `fx_rate` values the fact carries. TWO IS THE POINT AND ONE WOULD BE THE
+    # FAILURE: with a single currency it was 1.0 on every row, and the phase exists to make
+    # that number bigger than one. Counted from the written table rather than predicted.
+    fx_rates_used: int
 
 
 def _measured_source(spark: SparkSession, fact: PaymentFact, source_table: str) -> DataFrame:
     """The bronze payments, with the two unreadable-value counts already refused.
 
-    ONE AGGREGATE FOR BOTH COUNTS, over the 20,150-row source and before anything is
+    ONE AGGREGATE FOR BOTH COUNTS, over the 40,150-row source and before anything is
     derived -- so the refusal happens before the first write rather than after it, which is
     the opposite of where the post-write checks sit and is affordable for exactly the
-    reason they are not: this table is small and the dimension is not."""
+    reason they are not: this table is small and the dimension is not.
+
+    `fact.measure` IS READ OFF BRONZE HERE, WHICH IS WHY IT MUST STAY THE DELIVERED COLUMN.
+    A derived name in that field -- `amount_brl`, the obvious thing to reach for once the
+    star has two currencies -- is not a guard's message but an `AnalysisException` on a
+    column bronze does not have, raised after a session has started. `opl.gold.fact_spec`
+    records that as the reason `amount_brl` is a `DerivedMeasure`, and this line is the
+    reason."""
     source = spark.read.table(source_table)
     measured = source.agg(
         F.count(F.when(event_instant(payments.EVENT_TIME_COLUMN).isNull(), 1)).alias("t"),
@@ -383,7 +356,7 @@ def _deduplicated(source: DataFrame, fact: PaymentFact) -> DataFrame:
     `retained_tuples`: dropping one of two conflicting tuples lowers that count below
     bronze's, and the build refuses.
 
-    ONE WINDOW OVER 20,150 ROWS, and it is derived twice -- see the module docstring."""
+    ONE WINDOW OVER 40,150 ROWS, and it is derived twice -- see the module docstring."""
     ordered = Window.partitionBy(fact.grain_key).orderBy(
         *(F.col(column) for column in (*payments.COLUMNS, BRONZE_RECORD_SOURCE))
     )
@@ -481,6 +454,50 @@ def _resolved(
     ).drop(*matched)
 
 
+def _projected(
+    converted: DataFrame,
+    fact: PaymentFact,
+    conformed: Sequence[ConformedDimension],
+    load_date: datetime,
+) -> DataFrame:
+    """The fact's columns, in the declared order, out of the fully derived frame.
+
+    THE ORDER IS PINNED BY A TEST AND IS LOAD-BEARING, for `opl.gold.dimensions
+    ._versioned`'s reason: a Delta append matches POSITIONALLY unless `mergeSchema` says
+    otherwise, and this table's first six columns are all integers.
+
+    THE FOUR CONFORMED KEYS ARE DERIVED AND NOT JOINED, which `opl.gold.conformed`
+    pre-decided where the two key mechanisms are chosen: a day's key IS its calendar
+    position and an enumerated member's key is a hash of the member, both computable from
+    the fact's own columns. `fact_surrogate_key` is the one spelling of that, shared with
+    the dimension build so the two cannot drift. FOUR AND NOT THREE because `dim_date`
+    answers two roles since F-API T4b, which is why the comprehension is over
+    `item.fact_roles` and not over `conformed`.
+
+    AND `fx_rate_date` IS READ HERE AND NEVER PROJECTED. The star carries `fx_rate_date_key`
+    and no bare date column, which is the second deviation from master spec §4.3's column
+    list -- the first being `amount_original`, satisfied by a documented mapping onto
+    `amount` rather than by a duplicate -- and both are recorded in the T3 ADR."""
+    return converted.select(
+        *(
+            F.coalesce(F.col(key), F.lit(GHOST_SURROGATE_KEY)).alias(key)
+            for key in fact.role_keys
+        ),
+        *(
+            fact_surrogate_key(item, role).alias(role.key)
+            for item in conformed
+            for role in item.fact_roles
+        ),
+        F.col(fact.grain_key),
+        F.col(fact.measure).cast(AMOUNT_TYPE).alias(fact.measure),
+        F.col(FX_RATE),
+        converted_amount(amount_column=fact.measure, amount_type=AMOUNT_TYPE).alias(AMOUNT_BRL),
+        F.col(payments.EVENT_TIME_COLUMN),
+        instant_literal(load_date).alias(LOAD_DATE),
+        F.col(BRONZE_RECORD_SOURCE).alias(RECORD_SOURCE),
+    )
+
+
 def fact_rows(
     fact: PaymentFact,
     *,
@@ -489,19 +506,17 @@ def fact_rows(
     conformed: Sequence[ConformedDimension],
     source: DataFrame,
     versions: DataFrame,
+    rates: DataFrame,
     load_date: datetime,
 ) -> DataFrame:
-    """Every row the fact will hold, in the declared column order.
+    """Every row the fact will hold: deduplicate, resolve both roles as of the payment's own
+    instant, resolve the rate as of it too, then project.
 
-    THE ORDER IS PINNED BY A TEST AND IS LOAD-BEARING, for `opl.gold.dimensions
-    ._versioned`'s reason: a Delta append matches POSITIONALLY unless `mergeSchema` says
-    otherwise, and this table's first five columns are all integers.
-
-    THE THREE CONFORMED KEYS ARE DERIVED AND NOT JOINED, which `opl.gold.conformed`
-    pre-decided where the two key mechanisms are chosen: a day's key IS its calendar
-    position and an enumerated member's key is a hash of the member, both computable from
-    the fact's own columns. `fact_surrogate_key` is the one spelling of that, shared with
-    the dimension build so the two cannot drift.
+    THE FX COLUMNS ARE JOINED AND *THEN* DERIVED, WHICH IS THE ONE ASYMMETRY HERE. The rate
+    comes from a half-open interval join against the reduced series (`opl.gold.fx`), because
+    which quote applies is a fact about two instants and nothing in the payment row can
+    compute it; `amount_brl` is then pure arithmetic over two columns of the same row. The
+    same `_EVENT_INSTANT` is the left side of all three joins, derived once.
 
     Public for `opl.gold.dimensions.dimension_rows`' reason -- the frame is worth having
     without the write, both for a test and for a reader who wants to see the projection."""
@@ -517,79 +532,20 @@ def fact_rows(
         fact.roles,
         deduplicated,
     )
-    return resolved.select(
-        *(
-            F.coalesce(F.col(key), F.lit(GHOST_SURROGATE_KEY)).alias(key)
-            for key in fact.role_keys
-        ),
-        *(fact_surrogate_key(item).alias(item.fact_key) for item in conformed),
-        F.col(fact.grain_key),
-        F.col(fact.measure).cast(AMOUNT_TYPE).alias(fact.measure),
-        F.col(payments.EVENT_TIME_COLUMN),
-        instant_literal(load_date).alias(LOAD_DATE),
-        F.col(BRONZE_RECORD_SOURCE).alias(RECORD_SOURCE),
+    converted = with_resolved_rates(
+        resolved,
+        rates,
+        instant=F.col(_EVENT_INSTANT),
+        # THE DAY IS `day_of` AND NEVER `to_date(<instant>)`, which is the same distinction
+        # `event_instant`'s own docstring draws about the same column: the INSTANT does not
+        # move with the session zone and a DAY rendered from it does. It is the day a
+        # reporting-currency payment's identity conversion is dated, and it must be as stable
+        # as `event_date_key`.
+        day=day_of(payments.EVENT_TIME_COLUMN),
+        currency_column=_CURRENCY_COLUMN,
+        reporting_currency=payments.REPORTING_CURRENCY,
     )
-
-
-def _refuse_a_deduplication_that_lost_a_business_tuple(
-    fact: PaymentFact, *, source_tuples: int, retained_tuples: int
-) -> None:
-    """Refuse a deduplication that changed WHAT THE PAYMENTS WERE.
-
-    A redelivery is byte-identical to its original, so removing it removes no tuple: this
-    number must be equal, exactly, and a shortfall is one `transaction_id` delivered twice
-    with DIFFERENT business attributes -- which is not a redelivery at all but a corrupt
-    stream, and which no resolution rate and no row count can see. It is checked before the
-    first write because there is nothing to keep."""
-    if retained_tuples != source_tuples:
-        raise ValueError(
-            f"refusing to build {fact.name!r}: bronze holds {source_tuples} distinct "
-            f"business-attribute tuples and the deduplicated payments hold "
-            f"{retained_tuples}. Deduplication is by {fact.grain_key!r} and a redelivery "
-            "is byte-identical to its original, so this cannot change -- a shortfall means "
-            "one identity was delivered twice carrying DIFFERENT attributes, and the copy "
-            "that survived was chosen by a sort. Nothing has been written by this run"
-        )
-
-
-def _refuse_a_row_count_that_is_not_one_per_delivered_identity(
-    fact: PaymentFact, *, target_table: str, source_table: str, held: int, identities: int
-) -> None:
-    """Refuse a fact that is not exactly one row per distinct `grain_key` in bronze. THE
-    GRAIN, ENFORCED INSTEAD OF OBSERVED.
-
-    ONE NUMBER COVERING THE TWO FAILURES THAT NOTHING ELSE HERE SEES, and they push it in
-    opposite directions. TOO HIGH is a MULTI-MATCH: a payment resolving to two versions of
-    one company, which `BETWEEN` produces at a version boundary and a broken version chain
-    produces everywhere. A fan-out does NOT lower the resolution rate -- both matches
-    resolve -- so the count is the only measurement that can see it. TOO LOW is a
-    deduplication taken over the wrong columns: on today's bronze, over the business
-    attributes, that is 18,400 rows against 20,000 identities and 1,600 real payments
-    deleted.
-
-    CHECKED ON THE COUNT HELD AND NOT ON THE COUNT APPENDED, for `opl.gold.dimensions
-    ._refuse_a_count_that_is_not_every_version_plus_the_ghost`'s reason: it is an invariant
-    of every state this loader accepts, the idempotent re-run included, and the re-run is
-    the branch a retry lands in (`max_retries: 0` does not prevent one).
-
-    AFTER THE WRITE, so the message says the rows are on disk."""
-    if held == identities:
-        return
-    diagnosis = (
-        "a payment resolving to MORE THAN ONE dimension version -- a multi-match, which "
-        "a resolution rate cannot see because both matches resolve -- or, on a re-run, "
-        "payments this table holds that bronze no longer delivers"
-        if held > identities
-        else "payments deleted by a deduplication taken over something other than "
-        f"{fact.grain_key!r}. Over the business attributes it is the LEGITIMATE REPEATS "
-        "that go, which are real payments the stream emits on purpose"
-    )
-    raise ValueError(
-        f"refusing to accept {target_table}: it holds {held} rows and {source_table} "
-        f"holds {identities} distinct {fact.grain_key} values. The grain of this fact is "
-        f"ONE ROW PER PAYMENT EVENT, so the difference is {diagnosis}. THE TABLE ON DISK "
-        "IS ALREADY WRITTEN and must be dropped before a repaired build"
-    )
+    return _projected(converted, fact, conformed, load_date)
 
 
 def _unresolved_per_role(written: DataFrame, fact: PaymentFact) -> tuple[tuple[str, int], ...]:
@@ -613,9 +569,15 @@ def _conformed_members(
     spark: SparkSession,
     conformed: Sequence[ConformedDimension],
     conformed_tables: Mapping[str, str],
-) -> tuple[tuple[ConformedDimension, DataFrame], ...]:
-    """Each conformed dimension paired with its surrogate keys, aliased to the column the
-    FACT spells them in -- resolved BEFORE the fact is written.
+) -> tuple[tuple[str, DataFrame], ...]:
+    """Each conformed dimension's ROLE paired with that dimension's surrogate keys, aliased
+    to the column the FACT spells them in -- resolved BEFORE the fact is written.
+
+    ONE ENTRY PER ROLE AND NOT PER DIMENSION SINCE F-API T4b, which is what makes the orphan
+    count total over the projection: `dim_date` answers `event_date_key` and
+    `fx_rate_date_key`, so its member frame is read once and aliased twice. The two frames are
+    the same table read under two names -- three catalog lookups became four, and still no
+    scan.
 
     THE READ IS THE PROBE, AND ITS POSITION IS THE WHOLE POINT OF THE FUNCTION.
     `spark.read.table` and the `select` under it are ANALYSED EAGERLY, so a conformed
@@ -636,44 +598,50 @@ def _conformed_members(
     transposed two of them is not expressible here."""
     return tuple(
         (
-            item,
+            role.key,
             spark.read.table(conformed_tables[item.name]).select(
-                F.col(item.surrogate_key).alias(item.fact_key)
+                F.col(item.surrogate_key).alias(role.key)
             ),
         )
         for item in conformed
+        for role in item.fact_roles
     )
 
 
-def _orphaned_per_conformed_dimension(
-    written: DataFrame, members: Sequence[tuple[ConformedDimension, DataFrame]]
+def _orphaned_per_fact_key(
+    written: DataFrame, members: Sequence[tuple[str, DataFrame]]
 ) -> tuple[tuple[str, int], ...]:
-    """Rows whose DERIVED conformed key matches no member of the dimension it names.
+    """Rows whose DERIVED conformed key matches no member of the dimension it names, PER FACT
+    KEY COLUMN.
 
-    THE PRICE OF NOT JOINING, PAID BY COUNTING. The three conformed keys are computed from
+    THE PRICE OF NOT JOINING, PAID BY COUNTING. The four conformed keys are computed from
     the fact's own columns, so there is no lookup to coalesce onto a ghost: a payment whose
     day falls outside the span `dim_date` was built over gets a key no row holds. That is a
     legitimate state of a correct fact built at the wrong moment -- the repair is to re-run
     the conformed build, which APPENDS -- so it is reported and not refused.
 
-    KEYED BY DIMENSION NAME, and `_conformed_members` above is where that keying happens:
-    a positional pairing that transposed two tables would compare each fact key against
-    another dimension's members and report every row as an orphan.
+    PER KEY AND NOT PER DIMENSION, WHICH IS THE RENAME F-API T4b FORCED AND NOT A COSMETIC
+    ONE. `dim_date` answers two of the fact's columns, and the failure the derived role can
+    have is asymmetric: a payment whose EVENT day is outside the calendar and a payment whose
+    FX quote date is outside it are different defects with different repairs, and a total
+    labelled `dim_date` would name neither. The keys are distinct across the whole fact --
+    `opl.gold.registry_guards._assert_no_two_columns_of_one_fact_share_a_name` refuses
+    otherwise -- so the label is unambiguous.
 
-    A BROADCAST ANTI-JOIN PER DIMENSION, against 51, 6 and 2 ROWS -- three passes over the
-    fact and no shuffle. Those are ROWS and not the 50, 5 and 1 MEMBERS
-    `gold_conformed_dimensions_job.yml` predicts, because the whole table is broadcast and
-    each carries its ghost. Nothing derived can equal `GHOST_SURROGATE_KEY`, so the ghost's
-    presence changes no count -- but the numbers in this sentence are what is broadcast,
-    and mixing the two units is how a reader reconciles against the wrong side."""
+    KEYED BY THE FACT'S OWN COLUMN, and `_conformed_members` above is where that keying
+    happens: a positional pairing that transposed two tables would compare each fact key
+    against another dimension's members and report every row as an orphan.
+
+    A BROADCAST ANTI-JOIN PER KEY, against 51, 51, 6 and 3 ROWS -- four passes over the fact
+    and no shuffle, two of them over the same broadcast `dim_date`. Those are ROWS and not the
+    50, 50, 5 and 2 MEMBERS `gold_conformed_dimensions_job.yml` predicts, because the whole
+    table is broadcast and each carries its ghost. Nothing derived can equal
+    `GHOST_SURROGATE_KEY`, so the ghost's presence changes no count -- but the numbers in this
+    sentence are what is broadcast, and mixing the two units is how a reader reconciles
+    against the wrong side."""
     return tuple(
-        (
-            item.name,
-            written.join(
-                F.broadcast(frame), on=item.fact_key, how="left_anti"
-            ).count(),
-        )
-        for item, frame in members
+        (key, written.join(F.broadcast(frame), on=key, how="left_anti").count())
+        for key, frame in members
     )
 
 
@@ -726,6 +694,7 @@ def load_fact(
     source_table: str,
     dimension_table: str,
     conformed_tables: Mapping[str, str],
+    fx_source_table: str,
     target_table: str,
     load_date: datetime,
 ) -> FactLoadResult:
@@ -736,14 +705,23 @@ def load_fact(
     loader that stamps its own clock cannot be asserted against. Idempotent by `grain_key`:
     a re-run over an unchanged source appends nothing and reports 0, a source that GAINED a
     payment batch appends that batch alone, and the grain check holds in every one of those
-    states."""
+    states.
+
+    `fx_source_table` IS `bronze_ptax` AND `rate_intervals` REDUCES AND REFUSES IT BEFORE
+    `fact_rows` BUILDS ANYTHING -- because the fan-out this join could otherwise cause is
+    visible only to a check whose message begins "THE TABLE ON DISK IS ALREADY WRITTEN"."""
     _refuse_a_mismatched_source(fact, dimension, hub, conformed)
+    _refuse_a_fact_whose_measures_this_loader_cannot_derive(fact)
+    _refuse_a_derived_role_this_loader_cannot_produce(fact, conformed)
     members = _conformed_members(spark, conformed, conformed_tables)
+    series = rate_intervals(spark.read.table(fx_source_table))
     source, source_tuples, retained_tuples = _bronze(spark, fact, source_table)
     rows = fact_rows(
         fact, dimension=dimension, hub=hub, conformed=conformed, source=source,
-        versions=spark.read.table(dimension_table), load_date=load_date,
+        versions=spark.read.table(dimension_table), rates=series.intervals,
+        load_date=load_date,
     )
+    _refuse_unresolved_rates(fact, rows)
     before = _appended(spark, fact, rows, target_table)
     held = rows_in(spark, target_table)
     identities = source.select(fact.grain_key).distinct().count()
@@ -751,6 +729,35 @@ def load_fact(
         fact, target_table=target_table, source_table=source_table,
         held=held, identities=identities,
     )
+    return _reconciled(
+        spark, fact, series, members,
+        source_table=source_table, target_table=target_table,
+        before=before, held=held, identities=identities,
+        source_tuples=source_tuples, retained_tuples=retained_tuples,
+    )
+
+
+def _reconciled(
+    spark: SparkSession,
+    fact: PaymentFact,
+    series: FxSeries,
+    members: Sequence[tuple[str, DataFrame]],
+    *,
+    source_table: str,
+    target_table: str,
+    before: int,
+    held: int,
+    identities: int,
+    source_tuples: int,
+    retained_tuples: int,
+) -> FactLoadResult:
+    """Everything the build REPORTS, measured off the written table after the grain has been
+    enforced.
+
+    SPLIT OUT OF `load_fact` WHEN THE FX NUMBERS TOOK IT PAST THE 50-LINE CAP, on the seam
+    that module's docstring already names: `load_fact` reads as check, derive, append,
+    reconcile, and this is the fourth. Nothing here can fail -- every refusal has already
+    run -- which is exactly why it is separable."""
     written = spark.read.table(target_table)
     return FactLoadResult(
         table=target_table,
@@ -762,5 +769,9 @@ def load_fact(
         retained_tuples=retained_tuples,
         legitimate_repeats=held - retained_tuples,
         unresolved=_unresolved_per_role(written, fact),
-        orphaned=_orphaned_per_conformed_dimension(written, members),
+        orphaned=_orphaned_per_fact_key(written, members),
+        fx_quotes=series.quotes,
+        fx_first_published=series.first_published,
+        fx_last_published=series.last_published,
+        fx_rates_used=written.select(FX_RATE).distinct().count(),
     )
