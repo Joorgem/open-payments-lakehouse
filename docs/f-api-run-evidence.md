@@ -1183,7 +1183,7 @@ predictions section, and a prediction edited after the run that tests it stops b
 *(`dim_currency` spells its member `currency_code`, so the string `currency` names a bronze
 column and nothing in gold.)*
 
-### 2.10 The provenance guard: four more accepts, and still no refusal
+### 2.10 The provenance guard: four more accepts, then a deliberate refusal
 
 **Reported**, `assert_deployed_revision` task run `736340098682648`, one of four identical:
 
@@ -1194,18 +1194,38 @@ entry-point files under databricks/src were synced by the same deploy, and a dep
 a modified tree would have stamped +dirty.
 ```
 
-**Eleven accepts across F2 and F3 became FIFTEEN.** Four more accepts are not evidence about
-the refusal half — so it was made to refuse.
+**Eleven accepts across F2 and F3 became FIFTEEN**, and this phase then made the guard refuse
+— see below, together with the retraction of what that was first published as.
 
-### 2.10.1 THE REFUSAL HALF FIRED, FOR THE FIRST TIME IN THIS WORKSPACE
+### 2.10.1 The refusal, re-confirmed under this phase's code — NOT for the first time
 
-**Controller-verified.** Fifteen accepts across F2, F3 and this phase, and **zero refusals**,
-had stood in the unexercised ledger since F2 wave 1 — carried forward untouched through F3,
-which added five accepts and said plainly that five more yeses tell a reader nothing about
-whether the guard can say no.
+> **RETRACTED, AND THE RETRACTION IS THE POINT. This section was published as "THE REFUSAL
+> HALF FIRED, FOR THE FIRST TIME IN THIS WORKSPACE". It was not the first time, and the
+> proof was already on `main`, in this same directory.** `docs/f1.4b-pr-b-run-evidence.md`
+> §12 records the guard refusing on **2026-08-03** across six executions — including run
+> `788625093349052`, the deliberate incident shape, which refused with **8 tasks SKIPPED**
+> against this run's 1 — and [ADR 0009](adr/0009-deployed-revision-provenance.md)'s own
+> **Status** paragraph has said so for eleven days.
+>
+> **The three things this section claimed "fifteen accepts could not establish" were all
+> established there**: that it raises, that downstream tasks are skipped, and that the
+> message names both revisions. And "ADR 0009's central claim is now a measurement rather
+> than a design intent" was already true when it was written.
+>
+> **Authored by this phase's controller**, in the branch's final commit, *after* the
+> independent audit that was dispatched to catch exactly this. The path in: `.plans/HANDOFF.md`
+> and F3's evidence both carried "the provenance guard's REFUSAL is still unexercised in the
+> workspace", **which was itself already false** — F3 inherited it and this phase inherited
+> it from F3. Nobody read the primary source. That is the species this document names three
+> times about other people's work, committed here about its own.
 
-Task 5 left the workspace in exactly the state that answers it: the deployed wheel was built
-from `6cfe0f0`, and the evidence commits moved HEAD to `ac379c9`. Launching
+**What the run below is actually worth, stated at its real size:** the mismatch refusal is
+**re-confirmed against this phase's code and this phase's wheel**, twenty-eight commits and
+one new landing mode later, and it produced one corroboration F1.4b's §12 did not — see the
+retry note at the end.
+
+Task 5 left the workspace in the state that arms it: the deployed wheel was built from
+`6cfe0f0`, and the evidence commits moved HEAD to `ac379c9`. Launching
 `opl-gold-fact-payment` at HEAD against that wheel is the guard's own scenario, costs one
 task, and **writes nothing** — the refusal is the point.
 
@@ -1225,12 +1245,18 @@ over a dist/ that nothing cleans.
 Deploy, then launch again with the same revision.
 ```
 
-**Three things this establishes that fifteen accepts could not.** The guard **raises** rather
-than warning; the downstream task is **skipped**, so a mismatched wheel cannot write a row;
-and the message names **both commits** and the two causes, including the `dist/*.whl` glob
-over a directory nothing cleans — the failure mode a reader could not have diagnosed from a
-bare refusal. **ADR 0009's central claim is now a measurement rather than a design intent**,
-and the entry moves out of §3 after three phases.
+**What it adds, now that the novelty claim is withdrawn.** The mismatch shape still refuses
+under code twenty-eight commits newer, with a fourth landing mode and a fifth profile in the
+tree — a regression check rather than a discovery. And **the guard task ran TWICE**: attempt 0
+(`522276384734989`) and attempt 1 (`414272406289427`), both `RUN_EXECUTION_ERROR`. That is
+master route §4 standing decision 4 — *"`max_retries: 0` does not prevent a retry"* — caught
+in the wild a second time, and it is why the guard task must stay side-effect-free. This
+section first said the experiment "costs one task"; it cost two attempts, and the retry is
+the more useful half.
+
+**The `+dirty` shape is NOT covered by this and remains open.** ADR 0009 separates the two
+deliberately: reproducing it means deploying an artefact known to be built from a dirty tree
+and cleaning up behind it. §3 keeps that entry rather than striking it.
 
 ### 2.11 What this phase made FALSE, re-published in one place
 
@@ -1289,13 +1315,19 @@ Accumulated as the phase runs rather than reconstructed at its end.
 - **The holiday crossing, on fact rows.** No Brazilian national holiday falls in this phase's
   payment range (§0.6), so it is exercised over the series in the unit suite only.
 - **The below-the-series refusal.** Nothing in this phase's range sits below 2026-06-03.
-- ~~**The provenance guard's REFUSAL half**, still, in the workspace. Eleven accepts across F2
-  and F3, zero refusals.~~ **CLOSED — it refused.** The count reached FIFTEEN accepts, and
-  four more instances of a guard saying yes tell a reader nothing about whether it can say
-  no — so it was made to say no. `WrongRevision` raised, the downstream task **skipped**,
-  nothing written: **§2.10.1**, job run `972804892628743`. **This entry had stood since F2
-  wave 1 and survived F3 untouched.** It is the one item this phase removed from the ledger
-  rather than added to it.
+- **The provenance guard's `+dirty` REFUSAL, in the workspace — STILL OPEN.** The
+  **mismatch** shape is not open and never was in this phase: `docs/f1.4b-pr-b-run-evidence.md`
+  §12 proved it on 2026-08-03 and §2.10.1 re-confirmed it here. What has never been reproduced
+  against the workspace is a deploy built from a **dirty tree**, because doing so means
+  publishing an artefact known to be built from uncommitted work and cleaning up after it —
+  [ADR 0009](adr/0009-deployed-revision-provenance.md) states that separation explicitly and
+  keeps it.
+
+  > **This entry was struck as "CLOSED — it refused" and is restored.** The strike collapsed
+  > two shapes ADR 0009 keeps apart, so it removed a genuinely unexercised path from the
+  > ledger whose governing rule is standing decision §4.6. **Authored by this phase's
+  > controller**, in the same commit as the retracted novelty claim above. `.plans/HANDOFF.md`
+  > had it right and was not the source of the error.
 
 Added by Task 2, as the bronze layer was built:
 
@@ -1446,10 +1478,15 @@ are the *residue* of four SUCCESS results rather than a list of things that went
   quotes. The mechanism is proven — and it is proven **once**. The other **40** landed quotes are
   reachable by no payment in this lakehouse, and `fx_rate_date_key` takes 4 of the 51 values
   `dim_date` holds. A reader must not read "42 quotes landed" as "42 quotes exercised".
-- **The `assert_deployed_revision` guard cost 21.5% of this phase's task time and refused
-  nothing**, which is the same sentence as the entry above it in a different currency. Fifteen
-  accepts, zero refusals, ~113 s of serverless start-up spent proving a string equality that
-  has never once been unequal in the workspace.
+- **The `assert_deployed_revision` guard cost 21.5% of this phase's task time — ~113 s of
+  serverless start-up across four accepts** — and refused nothing *during the phase's own five
+  runs*. It was then made to refuse deliberately, off the critical path (§2.10.1), so the cost
+  is now a measured premium on a mechanism this phase watched work rather than on one it only
+  assumed. **This bullet first read "…and refused nothing … a string equality that has never
+  once been unequal in the workspace"**, which was false in two directions at once: the
+  deliberate refusal is recorded forty lines above it, and the mismatch had already been proven
+  in F1.4b. Left corrected rather than deleted, because the *cost* observation survives and a
+  reader meeting only the retraction would think the 21.5% was withdrawn too.
 
 ### 3.1 A gate rule weaker than its name — and the number this document first published was WRONG
 
