@@ -9,10 +9,13 @@ and `BRASILIA`) and `src/opl/contracts/ptax.py` (the landed shape); locked by
 `tests/bronze/test_ptax_rules.py`.
 
 Written in F-API Task 5, after the layer existed **and ran**. Two source sites
-(`src/opl/gold/facts.py` and `tests/gold/test_fact_payment_fx.py`) said these deviations were
-"recorded in the T3 ADR" while `docs/adr/` stopped at 0015 — a citation to nothing, which is
-this repository's own recurring defect species. **Both now name this file, and both were
-repointed without growing `facts.py` past its 799/800 lines.**
+(`src/opl/gold/facts.py` and `tests/gold/test_fact_payment_fx.py`) said these deviations
+"belong in the T3 ADR, **which Task 5 writes**" while `docs/adr/` stopped at 0015. **That is
+a forward reference that discloses itself, not the citation-to-nothing this repository
+usually catches** — a distinction worth making, because the first draft of this section
+called it the latter and an independent audit refused that. The defect it *would* have become
+is the one it no longer can: **both sites now name this file**, repointed without growing
+`facts.py` past its 799/800 lines.
 
 **What it decides.** Five things, and the fifth is inherited rather than new:
 
@@ -40,9 +43,9 @@ Master spec §4.3 (`2026-07-22-flagship-lakehouse-design.md:113`):
 > fx_rate_date + amount_brl`. FX só cross-border (maioria BRL) — showcase, não caminho
 > quente.
 
-Three things in that sentence are deviated from below: the fallback mechanism, and two of
-the five column names. The closing-sale-quote (`cotacaoVenda`) and the cross-border-only
-scope are followed exactly.
+**Four** things in that sentence are deviated from below: the fallback mechanism, and
+**three** of the five column names (Decision 4). The closing-sale-quote (`cotacaoVenda`) and
+the cross-border-only scope are followed exactly.
 
 ### A holiday calendar is a SECOND SPELLING of "is there a quote"
 
@@ -91,17 +94,35 @@ Three clauses, each of which does work:
    opens at `2026-06-22T08:00:00.000Z` and closes at `21:53:15.000Z`; the 2026-06-22 quote
    publishes at `dataHoraCotacao 2026-06-22 13:06:19.750415` read as BRT, i.e.
    `2026-06-22T16:06:19.750415Z`. So **two payments on one calendar day, in one stream, in
-   one currency, convert at two different rates** — 5.14420 for the 5,836 events before the
-   bulletin and 5.13950 for the 4,164 after it. No day-grain implementation can produce
-   that. A day-grain implementation would also hand a payment at `2026-06-22T01:53Z` a rate
-   published 14 h 13 m later — **a rate from the future, in the one project whose headline
-   is as-of-KNOWN-time** (ADR 0015).
+   one currency, convert at two different rates**: of the **2,864** USD payments before that
+   bulletin every one took **5.14420**, and of the **2,041** after it every one took
+   **5.13950**.
+
+   > **THE 5,836 / 4,164 PAIR IS NOT THIS SPLIT, and attaching the rates to it is a mistake
+   > this phase has already made once in writing.** 5,836 / 4,164 is the **all-currency row**
+   > split at the boundary; 2,972 and 2,123 of those are BRL rows converting at 1.00000 and
+   > consulting no quote at all. The populations that *resolve a rate* are 2,864 and 2,041.
+   > `docs/f-api-run-evidence.md` §1.1 retracted exactly this framing before the run; the
+   > first draft of this ADR reinstated it and an independent audit caught it.
+
+   No day-grain implementation can produce that split. A day-grain implementation would also
+   hand a payment landing in the small hours of 2026-06-22 — say a hypothetical
+   `2026-06-22T01:53Z`, which is 22:53 BRT on Sunday and is **earlier than any real payment
+   in this lakehouse**, the stream opening at 08:00Z — a rate published 14 h 13 m later:
+   **a rate from the future, in the one project whose headline is as-of-KNOWN-time**
+   (ADR 0015). The earliest real payment is 08:00Z, 8 h 06 m before the bulletin, and it
+   correctly takes Friday's rate.
 
    > **The model this clause first shipped with was wrong and is recorded rather than
    > deleted.** It said PTAX venda is a closing quote, so the rate for quote date *q*
-   > becomes known "at the end of *q* in BRT", putting the gap at ~19 h. **Measured: every
-   > 2026 row publishes between 13:03 and 13:25 on the quote's own date** — 2026-06-19 at
-   > 13:03:25.555497, 2026-06-22 at 13:06:19.750415, 2026-07-31 at 13:10:31.061071. Under
+   > becomes known "at the end of *q* in BRT", and it put the gap at "some nineteen hours" —
+   > **its own figure, quoted rather than endorsed**: nothing in this repository derives 19 h,
+   > and under that model publication would move to 03:00Z the next day, 10 h 50 m after the
+   > real one. **Measured: every publication instant this project has read lands at ~13:0x on
+   > the quote's own date** — the four that exist anywhere in the evidence are 2026-06-19 at
+   > 13:03:25.555497, 2026-06-22 at 13:06:19.750415, 2026-06-03 at 13:06:26.540000 and
+   > 2026-07-31 at 13:10:31.061071, so the observed band is **13:03–13:10** and any wider
+   > claim would be quantifying over rows nobody printed. Under
    > the retracted model a payment at 21:00 BRT on Friday 2026-07-31 would have been
    > **denied** the 07-31 quote published at 13:10 that same afternoon. The rule stands; its
    > model is now the one the source ships, per row.
@@ -138,7 +159,8 @@ Three clauses, each of which does work:
   the calendar-day comparison it exists to forbid. `opl.contracts.ptax` therefore splits
   `REQUEST_COLUMNS` from `RESPONSE_COLUMNS`, and the extraction is **one single-day request
   per calendar day of the window** rather than one range call — a range response is
-  unattributable many-to-one (1984-11-28 and 1984-11-29 both publish on 1984-12-03). **The
+  unattributable many-to-one — **1984-12-03, 1984-12-04 and 1984-12-05 all publish on
+  1984-12-05**, three quote dates behind one stamp (`docs/f-api-run-evidence.md` §1.3). **The
   measured cost of this window is 60 requests of ~220 bytes in 52 s** — 42 quotes and 18
   empty envelopes, *not* the "42 requests" every document in the phase published until the
   run said otherwise (`docs/f-api-run-evidence.md` §2.5).
@@ -273,8 +295,12 @@ Three consequences worth stating because a reader will otherwise file them as de
   would hide which rows moved; carrying the product's seven decimals into the fact would give
   `amount_brl` a scale no currency explains.
 - **`fx_rate` is `decimal(18, 5)` and is NOT `AMOUNT_TYPE`, and the arithmetic is the
-  argument.** `decimal(18, 2)` would round 5.14420 to 5.14 and put `amount_brl` about **0.08%
-  wrong on every USD row** — plausible in magnitude, in a column nobody re-derives. Five is
+  argument.** `decimal(18, 2)` would round 5.14420 to 5.14 and put `amount_brl` **0.0816%
+  wrong on the 2,864 rows carrying that rate** — plausible in magnitude, in a column nobody
+  re-derives. *(The inherited phrasing, "0.08% wrong on **every** USD row", is true of the
+  direction and not of the magnitude: the other 2,041 USD rows carry 5.13950, which rounds to
+  5.14 and is **0.0097%** off — an order of magnitude smaller. The argument survives on the
+  worse half, and is restated here rather than repeated.)* Five is
   the scale the series publishes at every magnitude it has ever carried: 5.14420 in 2026,
   2828.00000 at the 1984 floor, 0.82900 at the 1994 low, 71153.00000 at the 1993 high. It is
   **non-additive**: a ratio that must never be summed and whose unweighted mean is wrong.
@@ -333,16 +359,19 @@ independent of `links.py`.
 
 ### What this buys — measured, on the run of 2026-08-14
 
-Every number here is from `docs/f-api-run-evidence.md` §2, with statement ids.
+Every number here is in `docs/f-api-run-evidence.md` §2. **The provenance column is not
+decoration**: half of these are SQL against the built table and half are the loader's own run
+log, and this repository has recorded six defects that were a controller labelling its own
+prose as verification.
 
-| | value |
-|---|---|
-| USD rows that **fell back** to Friday 2026-06-19 at venda **5.14420** | **2,864** |
-| USD rows that resolved **same-day** on 2026-06-22 at venda **5.13950** | **2,041** |
-| distinct `fx_rate` on `event_date_key = 20260622` (one calendar day) | **3** — two of them among the USD rows |
-| widest fallback any conversion took | **3 days** |
-| conversions past the series' last landed quote | **0** |
-| BRL rows at `fx_rate` exactly 1.00000, consulting no quote | **35,095** |
+| | value | provenance |
+|---|---|---|
+| USD rows that **fell back** to Friday 2026-06-19 at venda **5.14420** | **2,864** | statement `01f19831-a0bf-17d9-a6ce-815a9b45ce74` |
+| USD rows that resolved **same-day** on 2026-06-22 at venda **5.13950** | **2,041** | same statement |
+| distinct `fx_rate` on `event_date_key = 20260622` (one calendar day) | **3** — two of them among the USD rows | statement `01f19831-ab40-1e2a-bfca-677cce8a0046` |
+| BRL rows at `fx_rate` exactly 1.00000, consulting no quote | **35,095** | statement `01f19831-b024-13c1-9f75-f789b1dd0695` |
+| widest fallback any conversion took | **3 days** | *Reported* — `gold_load_fact` run log |
+| conversions past the series' last landed quote | **0** | *Reported* — same log |
 
 - The two-rates-on-one-calendar-day property is **measurable on real fact rows**, not
   asserted.
@@ -361,11 +390,21 @@ Standing decision §4.6: a path that ran zero rows through it is not a path that
 `docs/f-api-run-evidence.md` §3 is the full ledger; the entries this ADR is directly
 responsible for:
 
-- **The disagreeing-duplicate refusal, at both layers.** Two duplicate pairs exist in 3.6
-  years of series (2025-04-23, 27 ms apart; 2001-12-21, identical stamps) and **both agree**.
-  The refusal has no witness. It is two unexercised refusals and not one counted twice —
-  bronze appends, so `ptax_source.sole_quote` and `fx.rate_intervals` see different
-  populations.
+- **The disagreeing-duplicate refusal, at both layers.** **One** duplicate pair is measured —
+  2025-04-23, two rows 27 ms apart — in the 903-row walk of 2023-01-01 .. 2026-08-05, whose
+  902 distinct dates make one duplicated date arithmetically exact. **It agrees**, so the
+  refusal has no witness. It is two unexercised refusals and not one counted twice — bronze
+  appends, so `ptax_source.sole_quote` and `fx.rate_intervals` see different populations.
+
+  > **AND THE REPOSITORY DOES NOT AGREE WITH ITSELF ABOUT A SECOND ONE, which is recorded
+  > rather than resolved by picking.** `fx.py:51-52` calls 2001-12-21 "a second [duplicate
+  > pair], identical stamps"; `fx.py:416` and `docs/f-api-run-evidence.md` §1.3 describe the
+  > same date as **two quote dates sharing one publication instant** — the `orderBy`
+  > tie-break case, which is a different phenomenon from two rows for one quote date. It is
+  > also **22 years outside** the 3.6-year window the "one pair in 903 rows" figure is taken
+  > over, so it cannot be added to that count in any case. **The measured count of duplicate
+  > pairs in the walked series is ONE**; whether 2001-12-21 is a second is unmeasured here
+  > and neither document should be quoted as if it were settled.
 - **The holiday crossing, on fact rows.** No Brazilian national holiday falls between
   2026-06-13 and 2026-08-01 (Corpus Christi 2026 is 2026-06-04; the next is 2026-09-07), so
   **no payment in this lakehouse can cross one.** The holiday case is exercised over the

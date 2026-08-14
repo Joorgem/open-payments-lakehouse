@@ -615,9 +615,14 @@ either one carries the fix. `opl/gold/fx.py` was unzipped from the downloaded ar
 `cmp`-ed against `src/opl/gold/fx.py`: **identical**. It carries both of this phase's last two
 fixes by source:
 
-- `_as_micros`' `stamped = F.concat(F.col(ptax.PUBLISHED_AT_COLUMN), F.lit(_BRASILIA_OFFSET))`
-  — the offset appended to the text, i.e. the repair for the session-zone dependency §1.3
-  records. The retracted `to_utc_timestamp(...)` spelling is absent from the deployed bytes.
+- **`_published_instant`**'s
+  `stamped = F.concat(F.col(ptax.PUBLISHED_AT_COLUMN), F.lit(_BRASILIA_OFFSET))` — the offset
+  appended to the text, i.e. the repair for the session-zone dependency §1.3 records. **The
+  retracted `to_utc_timestamp(to_timestamp(text), 'UTC-03:00')` spelling is gone as
+  EXECUTABLE code**; the literal string still appears three times in the deployed bytes, in
+  the docstrings that retract it, which is the intended state and not a residue.
+  *(This bullet first named `_as_micros`, a Python-side helper over a `datetime` forty lines
+  above. Caught by an independent audit; §1.3 and ADR 0016 both had it right.)*
 - `FxSeries`' corrected span sentence (last publication **2026-07-31**, not the 2026-08-01 the
   extraction *range* ends on), which is the diff `6cfe0f0` carried in this file.
 
@@ -646,7 +651,13 @@ it cost nothing here because it was read first.
 
 ### 2.2 Task-level durations, captured from the run output rather than reconstructed
 
-**F3 published no durations for its gold runs and recorded that as a gap; this is the repair.**
+**F3 captured five of its six gold builds and recorded the two absences rather than
+estimating them; this closes the same gap on the smaller scale.** *(An earlier draft of this
+line said F3 "published no durations for its gold runs", which is false in both halves:
+`docs/f3-workspace-run-evidence.md` §9.5 publishes `dim_company` 120 s, `pit_estabelecimento`
+168 s and the three conformed builds at 32–35 s, summing to **387 s**. What F3 recorded as
+absent was `fact_payment`'s duration and two of its five guard durations. Caught by an
+independent audit of this section.)*
 
 | job | task | execution | setup |
 |---|---|---|---|
@@ -671,10 +682,19 @@ it cost nothing here because it was read first.
 | | `fact_payment` | **40 s** | 1 s |
 | | **sum** | **66 s** | |
 
-**526 s of measured task execution, of which 113 s — 21% — is the provenance guard.** Four
+**526 s of measured task execution, of which 113 s — 21.5% — is the provenance guard.** Four
 runs, four `assert_deployed_revision` tasks at 26–30 s each, every one of them a cold
-serverless start doing one string comparison. That is the guard's real price at this scale and
-it is worth stating: F3's equivalent figure was 95 s over five runs.
+serverless start doing one string comparison. That is the guard's real price at this scale.
+
+**The like-for-like comparison with F3 runs the OTHER way, and the first draft of this
+sentence had it backwards.** F3's 95 s is **three captured guards**, not five runs — 31 + 32
++ 32, with two of its five never captured (`docs/f3-workspace-run-evidence.md` §9.5). So F3's
+guard cost **31.7 s per captured run** against F-API's **28.25 s**, i.e. this phase's guard is
+marginally *cheaper* per run, not half again as expensive. And the **shares** are nearly
+identical — 95 / 482 = **19.7%** at F3 against 113 / 526 = **21.5%** here. **The guard's cost
+is a per-run constant of ~30 s, and neither phase's builds are big enough to hide it.** That
+is the durable statement; the per-run figure is the one to quote, and the percentage only
+means anything beside the build it is a fraction of.
 
 **NO DURATION PREDICTION WAS PUBLISHED BEFORE THESE RUNS, so no duration below is marked.**
 They are measurements, not confirmations. §1 predicted rows and rates and said nothing about
@@ -683,7 +703,12 @@ which is exactly the standard this document applies to everything else. F3's les
 unexercised here rather than restated: **do not extrapolate gold cost from vault cost on row
 count.**
 
-### 2.3 Storage — the other figure F3 recorded as a gap
+### 2.3 Storage — a figure F3 never published for gold at all
+
+*(F3's evidence contains no `sizeInBytes`, `numFiles` or `DESCRIBE DETAIL`; F2 published
+per-table bytes for all fourteen vault tables and the gold phase published none. An earlier
+draft said F3 "recorded that as a gap" — it did not record it either way, which is a weaker
+and more accurate statement.)*
 
 **Controller-verified**, `DESCRIBE DETAIL` per table:
 
@@ -699,9 +724,10 @@ count.**
 
 `1,690,371` bytes of `bronze_payments` against **11,748,003** bytes of landed JSONL
 (2,925,069 + 2,969,937 + 2,926,409 + 2,926,588, the four promoted profiles' published byte
-counts) is the all-string bronze table's zstd Parquet compression at **7.0×**, not a loss.
-The fact grew 44% for a 33% row increase and three added columns, one of which is a
-`decimal(18,5)` taking three distinct values.
+counts) is the all-string bronze table's Parquet compression at **6.9×** (6.94996), not a
+loss. The codec is measured and not assumed: `DESCRIBE DETAIL`'s `properties` carries
+`"delta.parquet.compression.codec":"zstd"`. The fact grew 44% for a 33% row increase and
+three added columns, one of which is a `decimal(18,5)` taking three distinct values.
 
 ### 2.4 Step 1 — `opl-bronze-payments`, `profile=cross-currency`
 
@@ -756,6 +782,43 @@ currency split at the table rather than at the emitter:
 **None of the 150 injected redeliveries is USD**, which is not a coincidence and is worth one
 line: they come from `promotable`, a BRL-only stream, so `40,150 − 40,000 = 150` and
 `USD = 4,905` are consistent by construction rather than by luck.
+
+**Marked from the same log**, because a number quoted inside a code block is not a marked
+prediction:
+
+| §1.1 predicted | **actual** | | |
+|---|---|---|---|
+| delivered rows | **10,000** | ✅ | `rows=10000 (declared 10000)` |
+| drifted rows | **0** | ✅ | `drifted=0` — this profile declares no defects |
+| landed bytes | **2,926,588** | ✅ | predicted on `f564f57`, before `currencies` existed |
+| BRL / USD, delivered | **5,095 / 4,905** | ✅ | twice: the emitter's own count and `01f19830-7bba-…` at the table |
+| distinct `event_date_key` it adds | **1** (2026-06-22) | ✅ | the fact went 2 → 3 (§2.8) |
+
+#### THE ONE §1.1 PREDICTION NO WORKSPACE RUN CAN MARK, said rather than dropped
+
+§1.1's sharpest refinement — the one it introduced with "No version of the phase plan said
+so" — is that the currency split is **not** a parity draw over 10,000 indices, because a
+legitimate repeat *inherits* its source base event's whole attribute tuple:
+
+| population | BRL | USD |
+|---|---|---|
+| 9,200 base events (drawn at salt 0) | 4,675 | **4,525** |
+| 800 legitimate repeats (inherited) | 420 | **380** |
+
+**Neither row is markable from the workspace, and the reason is structural: nothing landed
+carries a base-versus-repeat flag.** A repeat is a distinct `transaction_id` with an identical
+business tuple; bronze holds the tuple and the id and no marker of which row was drawn and
+which inherited, so no query over `bronze_payments` or `fact_payment` can partition 9,200 from
+800. Their sum, **5,095 / 4,905**, is marked ✅ above; the decomposition is confirmed only by
+the local closing test (§1.2) and by the aggregates it implies at the fact — `36,800 = 4 ×
+9,200` and `3,200 = 4 × 800` (§2.8), which pin the *sizes* of the two populations without
+splitting either by currency.
+
+**Recorded as UNMARKABLE, which is itself a verdict.** F3 closed with "22 confirmed, 1
+unexercised, 2 falsified, **1 unmarkable**", and the fourth category exists so that a
+prediction no run can reach is written down rather than quietly omitted. This is F-API's one.
+*(It was omitted from the first draft of §2 and found by an independent audit, which is the
+argument for the category.)*
 
 ### 2.5 Step 2 — `opl-bronze-ptax`
 
@@ -955,12 +1018,22 @@ over the 4,905 rows with `fx_rate <> 1.00000`:
 
 | route | reads | **answer** |
 |---|---|---|
-| group by `fx_rate` / `fx_rate_date_key` (above) | the resolved rate and its date key | **2,864** |
+| group by `fx_rate` / `fx_rate_date_key` (above) | the resolved rate and its date key | **2,864** / 2,041 |
 | compare `event_time` against the publication instant | the payment's own instant, and nothing the FX join produced | **2,864** ✅ |
-| recover the rate as `ROUND(amount_brl / amount, 4)` | the two money columns only | **2,862** ⚠️ |
+| recover the rate as `ROUND(amount_brl / amount, 4)` | the two money columns only | **2,862** / 2,040 ⚠️ |
 
-**The third route is 3 rows short, and the three rows are the argument rather than a defect.**
-`01f19835-1a4c-1c19-ba3c-457ecc44d3ac`, `from_cache: None`, lists them in full:
+**The third route loses 3 of the 4,905 converted rows — two from the 2,864 bucket and one
+from the 2,041 — and the three rows are the argument rather than a defect.**
+
+> **THIS SENTENCE FIRST READ "the third route is 3 rows short", AGAINST A COLUMN WHOSE OWN
+> SUBTRACTION IS 2** (2,864 − 2,862). Three rows fail to recover, but only two of them are in
+> the 2,864 population: the `6.35` row below carries **5.13950**, so it falls out of the 2,041
+> bucket instead (2,041 − 2,040 = 1). **That is the same "argues about the wrong population"
+> defect as the falsified §1.3 row two subsections below**, committed in the paragraph written
+> to demonstrate a cross-check, and caught by an independent audit rather than by its author.
+> **Three times in one phase.**
+
+`01f19835-1a4c-1c19-ba3c-457ecc44d3ac`, `from_cache: None`, lists all three in full:
 
 | `amount` | `fx_rate` | `amount_brl` | recovered ratio |
 |---|---|---|---|
@@ -968,40 +1041,59 @@ over the 4,905 rows with `fx_rate <> 1.00000`:
 | 31.40 | 5.14420 | 161.53 | 5.14426751… |
 | 73.06 | 5.14420 | 375.84 | 5.14426498… |
 
-They are **the three smallest converted amounts in the table**, and they are short for exactly
-the reason §1.3 published in advance: `amount_brl` is rounded HALF-UP at the row, so half a
-centavo is a larger fraction of a small amount and moves the recovered ratio in the fourth
-decimal. `6.35 × 5.13950 = 32.635825 → 32.64`. **The rate is NOT recoverable from the two
-money columns**, which is why `fx_rate` is a column and not a derivation — and this is the
-sharpest available demonstration that the rounding claim describes real rows rather than a
-bound nobody reached.
+They are short for exactly the reason §1.3 published in advance: `amount_brl` is rounded
+HALF-UP at the row, so half a centavo is a larger fraction of a small amount and moves the
+recovered ratio in the fourth decimal. `6.35 × 5.13950 = 32.635825 → 32.64`, recovering
+5.1402.
+
+> **AND THEY ARE NOT SIMPLY "THE THREE SMALLEST", WHICH IS WHAT THIS PARAGRAPH FIRST
+> ASSERTED WITHOUT MEASURING IT.** `01f19836-e291-134d-b4e6-de3ceac8823f`, `from_cache: None`,
+> lists **all eight** converted rows under R$100 with their recovered ratios: 6.35 → 5.1402
+> ✗, 31.40 → 5.1443 ✗, 46.75 → 5.1395 ✓, **73.06 → 5.1443 ✗**, 87.03 → 5.1442 ✓, 92.40 →
+> 5.1395 ✓, 92.40 → 5.1442 ✓, 99.76 → 5.1395 ✓. **Five of the eight smallest recover
+> correctly and one of the three failures is the fourth-smallest.** Size raises the
+> probability and does not determine it — what determines it is where `amount × rate` falls
+> relative to the half-centavo boundary, which is a property of the product's third decimal
+> and not of the amount's magnitude. `92.40 × 5.14420 = 475.32408 → 475.32`, barely rounded
+> at all; `73.06 × 5.14420 = 375.835252 → 375.84`, rounded up by 0.0047.
+
+**The rate is NOT recoverable from the two money columns**, which is why `fx_rate` is a column
+and not a derivation — and this is the sharpest available demonstration that the rounding
+claim describes real rows rather than a bound nobody reached.
 
 #### THE COUNTS
 
-**Controller-verified**, `01f19831-80ec-1859-ae3d-86a3d31f523e` (the top-level counts),
-`01f19831-b024-13c1-9f75-f789b1dd0695` (the tuple control and the identity rows),
-`01f19831-c979-10b7-8baf-9562377117dc` (the two totals),
-`01f19831-bc82-1694-b89b-b83e3f1db092` (the agreeing-key decomposition), all `from_cache: None`:
+**THE PROVENANCE IS PER ROW AND NOT PER TABLE, because half of these are SQL against the
+built table and half are the loader's own run log.** This repository has recorded six defects
+that were a controller labelling its own prose as verification, so the label is a column here
+rather than a heading. `C` = **Controller-verified**, with the statement id; `R` =
+**Reported**, from `gold_load_fact`'s log quoted above. All statements `from_cache: None`.
 
-| | predicted | **actual** | |
-|---|---|---|---|
-| `fact_payment` rows | **40,000** | **40,000** | ✅ **grain enforced** |
-| …distinct `transaction_id` | 40,000 | **40,000** | ✅ |
-| …distinct business tuples | 36,800 | **36,800** | ✅ `= 4 × 9,200` |
-| **bronze**'s distinct business tuples (the control) | 36,800 | **36,800** | ✅ dedup changed none |
-| …legitimate repeats | 3,200 | **3,200** | ✅ `= 4 × 800` |
-| …distinct `event_date_key` | **3** | **3** | ✅ 20260620, 20260622, 20260801 |
-| …distinct `fx_rate_date_key` | **4** | **4** | ✅ 20260619, 20260620, 20260622, 20260801 |
-| …distinct `fx_rate` values | 3 | **3** | ✅ 1.00000, 5.14420, 5.13950 |
-| …rows at `fx_rate` exactly 1.00000 | 35,095 | **35,095** | ✅ every BRL row, by definition and not by lookup |
-| …channels / currencies reached | 5 / 2 | **5 / 2** | ✅ |
-| …rows resolving to the ghost, both roles | 0 | **0** | ⚠️ **UNEXERCISED, not success** |
-| …orphaned rows per fact key (four of them) | 0 | **0** | ⚠️ reported, and see §3 |
-| reduced PTAX quotes read | 42 | **42** | ✅ |
-| last publication instant printed | 2026-07-31 16:10:31.061071+00:00 | **2026-07-31 16:10:31.061071+00:00** | ✅ to the microsecond |
-| `fx_beyond_series` | 0 | **0** | ✅ *(a report, not a path — see §3)* |
-| `fx_widest_fallback_days` | 3 | **3** | ✅ Monday 06-22 back to Friday 06-19 |
-| rows where the two date keys AGREE | 35,095 | **37,136** | ❌ **FALSIFIED — see below** |
+| | predicted | **actual** | | provenance |
+|---|---|---|---|---|
+| `fact_payment` rows | **40,000** | **40,000** | ✅ **grain enforced** | **C** `01f19831-80ec-1859-ae3d-86a3d31f523e` |
+| …distinct `transaction_id` | 40,000 | **40,000** | ✅ | **C** `…80ec` |
+| …distinct `event_date_key` | **3** | **3** | ✅ 20260620, 20260622, 20260801 | **C** `…80ec` |
+| …distinct `fx_rate_date_key` | **4** | **4** | ✅ 20260619, 20260620, 20260622, 20260801 | **C** `…80ec` |
+| …distinct `fx_rate` values | 3 | **3** | ✅ 1.00000, 5.14420, 5.13950 | **C** `…80ec` |
+| …channels / currencies reached | 5 / 2 | **5 / 2** | ✅ | **C** `…80ec` |
+| **bronze**'s distinct business tuples (the control) | 36,800 | **36,800** | ✅ dedup changed none | **C** `01f19831-b024-13c1-9f75-f789b1dd0695` |
+| …rows at `fx_rate` exactly 1.00000 | 35,095 | **35,095** | ✅ every BRL row, by definition and not by lookup | **C** `…b024` |
+| …**fact-side** distinct business tuples | 36,800 | **36,800** | ✅ `= 4 × 9,200` | **R** |
+| …legitimate repeats | 3,200 | **3,200** | ✅ `= 4 × 800` | **R** |
+| …rows resolving to the ghost, both roles | 0 | **0** | ⚠️ **UNEXERCISED, not success** | **R** |
+| …orphaned rows per fact key (four of them) | 0 | **0** | ⚠️ unexercised, see §3 | **R** |
+| reduced PTAX quotes read | 42 | **42** | ✅ | **R** |
+| last publication instant printed | 2026-07-31 16:10:31.061071+00:00 | **2026-07-31 16:10:31.061071+00:00** | ✅ to the microsecond | **R** |
+| `fx_beyond_series` | 0 | **0** | ✅ *(a report, not a path — see §3)* | **R** |
+| `fx_widest_fallback_days` | 3 | **3** | ✅ Monday 06-22 back to Friday 06-19 | **R** |
+| rows where the two date keys AGREE | 35,095 | **37,136** | ❌ **FALSIFIED — see below** | **C** `…b024`, decomposed at `01f19831-bc82-1694-b89b-b83e3f1db092` |
+| `SUM(amount_brl)` ≠ `SUM(amount) × rate` | stated in words | **0.241039 apart** | ✅ | **C** `01f19831-c979-10b7-8baf-9562377117dc` |
+
+**Fact-side 36,800 and bronze-side 36,800 are two different measurements and only the second
+is a statement.** The first is the loader reporting on the frame it just wrote; the second is
+SQL over bronze, taken as the control precisely because a loader agreeing with itself is not
+evidence that the dedup preserved what the payments *were*.
 
 **`SUM(amount_brl)` is not `SUM(amount) × rate` to the cent, and here is the arithmetic**
 rather than the sentence: `SUM(amount_brl) = 1,501,572,707.34` against a
@@ -1012,8 +1104,10 @@ precisely why `amount_brl` is the declared measure.
 
 #### THE ONE FALSIFIED §1 PREDICTION, AND IT IS THE MOST USEFUL ROW IN THIS SECTION
 
-*(One of **two** falsifications this run produced. The other is not a §1 prediction and so is
-not marked here: **§0.4's "42 requests"**, which the run measured at **60** — §2.5.)*
+*(The only falsified **§1 prediction**. Two other published claims were falsified in this
+pass and are not §1 predictions, so they are corrected where they live rather than marked
+here: **§0.4's "42 requests"**, measured at **60** (§2.5), and **§2.8's own "3 rows short"**,
+which is 2 in the column it was written against (above).)*
 
 > **§1.3 predicted 35,095 rows "where the two date keys AGREE", derived as "the BRL
 > population — an identity conversion is dated to its own day". The measurement is 37,136.**
@@ -1108,8 +1202,10 @@ into a claim.
 
 Protocol §9 condition 5 asks a phase to delete what it falsified rather than leave two
 answers in the repository. Every row below was a published number in
-`docs/f3-workspace-run-evidence.md` or `.plans/HANDOFF.md`; every replacement is
-controller-verified above.
+`docs/f3-workspace-run-evidence.md` or the phase handoff; **every replacement is marked above
+with its provenance** — controller-verified where a statement id is given, *Reported* where
+the loader's own log is the source, and one row below is explicitly a derivation with its
+arithmetic shown rather than either.
 
 | published at F3's close | **now** | where marked |
 |---|---|---|
@@ -1124,12 +1220,23 @@ controller-verified above.
 | §6's payment legs for `47070968`: **18** / 38 | **39 / 38** | §2.8 |
 | `dim_date` **50** members | **50** — unchanged, and predicted so | §2.6 |
 | the guard's **eleven** accepts, zero refusals | **fifteen** accepts, zero refusals | §2.10 |
-| `.plans/HANDOFF.md`: "100% of the 30,000 fact rows fall on days with no quote, and the path that goes unexercised is the DIRECT lookup" | **false twice over.** 2,041 rows resolve a quote same-day; and under an instant rule 6,480 of the original 30,000 already sat in an earlier BRT day | §2.8, ADR 0016 |
+| the handoff's "100% of the 30,000 fact rows fall on days with no quote, and the path that goes unexercised is the DIRECT lookup" | **false twice over.** 2,041 rows resolve a quote same-day (measured); and under an instant rule 6,480 of the original 30,000 already sat in an earlier BRT day — **derived, not measured**: each F1b stream opens at 00:00Z = 21:00 BRT the previous day, so 3 h ÷ 5,000 ms = 2,160 events per stream × 3 promoted streams | §2.8, ADR 0016 |
 | `fact_payment`'s 10 columns | **13** — `fx_rate`, `amount_brl`, `fx_rate_date_key` | §2.7 |
 
-**And one number this document itself made false:** §1.3's **35,095** rows where the two date
-keys agree is **37,136**. It is above rather than in this table because it is *this* phase's
-prediction and not an inherited one — a phase must mark its own.
+**And THREE numbers this document made false about ITSELF**, kept out of the table above
+because that table is for *inherited* claims and a phase must mark its own separately:
+
+| this document said | **is** | where |
+|---|---|---|
+| §1.3: **35,095** rows where the two date keys agree | **37,136** | §2.8 — the one falsified §1 prediction |
+| §0.4: the extraction is **42 requests** of ~220 bytes | **60** requests, 42 quotes + 18 empty | §2.5 |
+| §2.8's own first draft: the ratio route is **"3 rows short"** | **2**, against the column it was written against | §2.8 |
+
+**All three are the same defect**: a number correct about one population, published as the
+answer about another — the keys-agree row counted BRL and was asked about same-day
+resolutions, "42" counted quotes and was asked about calls, "3" counted unrecovered rows and
+was asked about one of the two buckets they fall in. **Two were found by an independent
+audit and one by re-reading the run log.** None was found by the author of the sentence.
 
 ---
 
@@ -1139,7 +1246,12 @@ prediction and not an inherited one — a phase must mark its own.
 Accumulated as the phase runs rather than reconstructed at its end.
 
 - **The duplicate-quote disagreement branch.** One duplicate pair in 3.6 years, and it agrees
-  (§0.7). The refusal has no witness.
+  (§0.7). The refusal has no witness. *(Task 5 note: `src/opl/gold/fx.py:51-52` calls
+  2001-12-21 "a second [pair], identical stamps" while `fx.py:416` and §1.3 describe that same
+  date as **two quote dates sharing one publication instant** — the `orderBy` tie-break case,
+  a different phenomenon — and it falls 22 years outside the 903-row window this count is
+  taken over. **The measured count stays ONE**; the repository does not agree with itself
+  about a second and neither reading is quoted here as settled.)*
 - **The holiday crossing, on fact rows.** No Brazilian national holiday falls in this phase's
   payment range (§0.6), so it is exercised over the series in the unit suite only.
 - **The below-the-series refusal.** Nothing in this phase's range sits below 2026-06-03.
@@ -1223,7 +1335,7 @@ Added by Task 4, as the gold layer was built:
   also exercises the reason the NULL count sits beside `count_distinct`: the cast NULLs, the
   distinct count ignores it, so `rates` is 0 and only the second branch can fire.
 - **The empty-series refusal** (`quotes == 0`), added in the fix pass. A `bronze_ptax` that
-  reduces to no quotes at all cannot happen behind a successful ingest of the 42-day window, so
+  reduces to no quotes at all cannot happen behind a successful ingest of that window, so
   the only population that reaches it is a fixture. Suite-only.
 - **`FactRole`'s reader-versus-source refusal.** `READS_DATE` on a contract-sourced role, or a
   derived role read as ISO text or as a member. Like
@@ -1285,7 +1397,7 @@ are the *residue* of four SUCCESS results rather than a list of things that went
   disagreement refusal remains without a witness at either layer. Corrected here rather than
   left as the stronger claim it was written as.
 - **The empty-series refusal and the below-the-series refusal**, both still fixture-only after
-  the runs, for the reasons already stated — the 42-day window landed successfully and nothing
+  the runs, for the reasons already stated — the 60-day window landed its 42 quotes successfully and nothing
   in the payment range sits below 2026-06-03.
 - **The holiday crossing, on fact rows** — closed as unexercised by measurement rather than by
   argument. §2.5's anti-join found exactly one missing business day, **2026-06-04**, and the
@@ -1294,10 +1406,10 @@ are the *residue* of four SUCCESS results rather than a list of things that went
   central argument is a **series** row, and no fact row crosses a holiday in this lakehouse.
 - **THE TWO-RATE PROPERTY RESTS ON ONE STREAM AND ONE DAY.** 4,905 of 40,000 fact rows are
   converted at all; every one of them falls on 2026-06-22; every one resolves to one of two
-  quotes. The mechanism is proven — and it is proven **once**. The other 41 landed quotes are
+  quotes. The mechanism is proven — and it is proven **once**. The other **40** landed quotes are
   reachable by no payment in this lakehouse, and `fx_rate_date_key` takes 4 of the 51 values
   `dim_date` holds. A reader must not read "42 quotes landed" as "42 quotes exercised".
-- **The `assert_deployed_revision` guard cost 21% of this phase's task time and refused
+- **The `assert_deployed_revision` guard cost 21.5% of this phase's task time and refused
   nothing**, which is the same sentence as the entry above it in a different currency. Fifteen
   accepts, zero refusals, ~113 s of serverless start-up spent proving a string equality that
   has never once been unequal in the workspace.
