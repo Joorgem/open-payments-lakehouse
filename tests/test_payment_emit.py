@@ -40,8 +40,10 @@ from opl.bronze.generated_landing import (
     serialised_bytes,
 )
 from opl.bronze.registry import LANDING_GENERATED, table_spec
+from opl.contracts import payments
 from opl.contracts.payments import DRIFT_COLUMN
 from opl.generator import profiles as profiles_module
+from opl.generator import stream as stream_module
 from opl.generator.cnpj_pool import validated_pool
 from opl.generator.defects import (
     LATENESS_WINDOW_MS,
@@ -429,19 +431,94 @@ def test_the_fourth_profiles_whole_window_lies_strictly_inside_the_vault_interva
     assert last - first == 49_995_000  # 13 h 53 m 15 s, the F1b span unchanged
 
 
-def test_a_window_moved_out_of_the_interval_is_refused_at_import(monkeypatch):
-    """THE PROBE THAT MAKES THE GUARD WORTH HAVING.
+def test_every_profile_sits_where_it_says_it_sits_and_says_where_it_sits():
+    """THE PLACEMENT GUARD READS A DECLARATION AND ITERATES `PROFILES`, WHICH IS F-API's
+    CHANGE TO IT.
 
-    Without it the refusal is a branch nothing has ever taken, which is how a refusal
-    path stays green and wrong. The doctored profile is the declaration with its window
-    moved back onto F1b's -- the single most likely wrong edit, because it is what
-    `_profile`'s default gives anyone who deletes the keyword argument."""
+    F3's version read `PROFILES[BETWEEN_SNAPSHOTS]` -- one hardcoded key -- so a fifth
+    profile inherited none of it and could have sat anywhere without a word going red. The
+    obvious generalisation is WRONG and this test pins that too: a blanket "every profile
+    sits between the two dates" refuses the F1b three, which legitimately sit AFTER both
+    and are the "after" side the as-of join needs. There is no single correct placement, so
+    it became part of the declaration.
+
+    THE FIRST ASSERTION IS WHAT MAKES THE GUARD TOTAL: every declared profile carries a
+    placement, and every one of the three placements is a word the guard dispatches on."""
+    for name, profile in PROFILES.items():
+        assert profile.placement in profiles_module.PLACEMENTS, name
+        assert profiles_module.observed_placement(profile) == profile.placement, name
+    declared = {profile.placement for profile in PROFILES.values()}
+    assert declared == {profiles_module.PLACEMENT_AFTER, profiles_module.PLACEMENT_BETWEEN}
+    profiles_module._refuse_a_window_that_contradicts_its_declared_placement()
+
+
+@pytest.mark.parametrize(
+    ("window_start", "declared"),
+    [
+        # The single most likely wrong edit: `between-snapshots` moved back onto F1b's
+        # window, which is what `_profile`'s default gives anyone who deletes the keyword.
+        ("2026-08-01T00:00:00.000Z", "between"),
+        # Below the earlier applied_date, where the as-of join resolves through
+        # `VALID_FROM_FLOOR` rather than through the version chain.
+        ("2026-06-01T00:00:00.000Z", "between"),
+        # A STRADDLE: the window opens before the later date and closes after it. It is
+        # neither "between" nor "after", and `observed_placement` returns None for it --
+        # so the comparison catches it without a fourth branch.
+        ("2026-07-10T23:00:00.000Z", "between"),
+        # The mirror of the first case, and the one a blanket "every profile is between"
+        # would have made unrefusable: an F1b-shaped window declared as anything else.
+        ("2026-08-01T00:00:00.000Z", "before"),
+    ],
+)
+def test_a_window_that_contradicts_its_declared_placement_is_refused_at_import(
+    monkeypatch, window_start, declared
+):
+    """THE PROBE THAT MAKES THE GUARD WORTH HAVING, over four doctored declarations.
+
+    Without it the refusal is a branch nothing has ever taken, which is how a refusal path
+    stays green and wrong. Each case is a different way for the DECLARATION and the
+    ARITHMETIC to disagree, and the guard's message names both."""
     moved = dataclasses.replace(
-        PROFILES[BETWEEN_SNAPSHOTS], window_start="2026-08-01T00:00:00.000Z"
+        PROFILES[BETWEEN_SNAPSHOTS], window_start=window_start, placement=declared
     )
     monkeypatch.setitem(profiles_module.PROFILES, BETWEEN_SNAPSHOTS, moved)
-    with pytest.raises(ValueError, match="not strictly inside"):
-        profiles_module._refuse_a_window_that_leaves_the_interval_it_was_declared_for()
+    with pytest.raises(ValueError, match="declares placement"):
+        profiles_module._refuse_a_window_that_contradicts_its_declared_placement()
+
+
+def test_the_before_placement_is_a_real_branch_and_not_a_spelling():
+    """`before` HAS NO DECLARED PROFILE, so without this its branch is unreachable code.
+
+    Master protocol §4.6: a path that ran zero rows through it is not a path that works.
+    This is the honest half of that -- the branch is exercised HERE and by no declaration,
+    and the phase's evidence says so rather than reporting it as covered. A window entirely
+    below the earlier `applied_date` is `before`; the same window declared `between` is
+    refused; and `between-snapshots`' real window is not `before`, which is what stops this
+    from passing under an `observed_placement` that returned `before` for everything."""
+    early = dataclasses.replace(
+        PROFILES[BETWEEN_SNAPSHOTS],
+        window_start="2026-06-01T00:00:00.000Z",
+        placement=profiles_module.PLACEMENT_BEFORE,
+    )
+    assert profiles_module.observed_placement(early) == profiles_module.PLACEMENT_BEFORE
+    assert early.last_event_time == "2026-06-01T13:53:15.000Z"
+    assert from_text(early.last_event_time) < from_text(_EARLIER_APPLIED_DATE)
+    assert profiles_module.observed_placement(PROFILES[BETWEEN_SNAPSHOTS]) != (
+        profiles_module.PLACEMENT_BEFORE
+    )
+
+
+@pytest.mark.parametrize("placement", ["sideways", "BETWEEN", "", None])
+def test_a_placement_that_is_not_one_of_the_three_is_refused_at_construction(placement):
+    """AT CONSTRUCTION AND NOT ONLY AT IMPORT, because the two mistakes are different.
+
+    A typo in the WORD is not a window in the wrong place: the guard would compare it
+    against the arithmetic and refuse with a message about applied_dates, sending a reader
+    to look at a window that is exactly where it should be. `BETWEEN` is in the list on
+    purpose -- these are compared exactly, unlike the derivation purposes, which
+    `hash_key` case-folds."""
+    with pytest.raises(ValueError, match="not one of"):
+        dataclasses.replace(PROFILES[BETWEEN_SNAPSHOTS], placement=placement)
 
 
 def test_the_fourth_profiles_predicted_counts_are_arithmetic_on_the_declaration():
@@ -507,6 +584,10 @@ def test_the_three_f1b_streams_are_the_same_input_to_the_generator_as_before():
         "event_count": 10_000, "repeat_count": 800,
         "window_start": "2026-08-01T00:00:00.000Z",
         "event_interval_ms": 5_000, "emission_lag_ms": 1_500, "cnpj_pool": probe,
+        # SPELLED OUT RATHER THAN LEFT TO `StreamSpec`'s DEFAULT, which is the whole point
+        # of a pin: relying on the default would make this test agree with a change to the
+        # default, and the default is exactly what F-API's currency widening rests on.
+        "currencies": ("BRL",),
     }
     expected = {
         "clean": (StreamSpec(seed=20260813, stream_id="F1B-CLEAN-2026-08", **shape),
@@ -520,6 +601,29 @@ def test_the_three_f1b_streams_are_the_same_input_to_the_generator_as_before():
     for name, (spec, defects) in expected.items():
         assert PROFILES[name].stream_spec(probe) == spec
         assert PROFILES[name].defects == defects
+
+
+def test_every_profile_hands_its_own_currency_tuple_to_the_spec_that_draws():
+    """THE ONE LINE THAT WOULD FAIL SILENTLY IF IT WERE DELETED.
+
+    `StreamSpec.currencies` has a DEFAULT -- deliberately, because that default is what
+    keeps four landed streams byte-identical -- so a `stream_spec()` that forgot to pass
+    the profile's own tuple would construct without complaint and generate a BRL-only
+    stream out of a profile declaring a mix. Every count would be green, every guard
+    would pass, and the FX layer would be back to a column that cannot be wrong, which is
+    the failure T1 exists to remove. Nothing else in this repository can see that.
+
+    THE SECOND ASSERTION IS THE GUARD T1 ASKED FOR, reached where it actually lives. No
+    loop over `PROFILES` spells the subset rule: `profiles._assert_every_profile_describes
+    _a_stream_that_can_exist` builds every profile's `StreamSpec` at import, and
+    `StreamSpec.__post_init__` calls `stream._require_currencies`. So this reproduces the
+    rule's verdict on the live declarations rather than adding a second copy of it."""
+    probe = validated_pool(("00000001", "00000002"))
+    for name, profile in PROFILES.items():
+        assert profile.stream_spec(probe).currencies == profile.currencies, name
+        stream_module._require_currencies(profile.currencies)
+        ranks = [payments.CURRENCIES.index(code) for code in profile.currencies]
+        assert ranks == sorted(set(ranks)), f"{name} is not a subsequence of the domain"
 
 
 def test_the_factory_varies_exactly_the_fields_its_docstring_names():
@@ -540,7 +644,9 @@ def test_the_factory_varies_exactly_the_fields_its_docstring_names():
     sentence that stopped naming a field, which is the half a structural check cannot
     see."""
     varying = set(inspect.signature(profiles_module._profile).parameters)
-    assert varying == {"name", "stream_id", "seed", "defects", "window_start"}
+    assert varying == {
+        "name", "stream_id", "seed", "defects", "window_start", "currencies", "placement",
+    }
 
     shared = {field.name for field in dataclasses.fields(StreamProfile)} - varying
     assert shared == {"event_count", "repeat_count", "event_interval_ms", "emission_lag_ms"}

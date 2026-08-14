@@ -40,6 +40,7 @@ from opl.contracts.payments import (
     IDENTITY_COLUMN,
     LANDING_SUBDIR,
     PAYMENT_METHODS,
+    REPORTING_CURRENCY,
     REQUIRED_COLUMNS,
     SCHEMA_VERSION,
 )
@@ -124,12 +125,52 @@ def test_v1_declares_every_column_required_and_no_optional_one():
 def test_the_value_domains_are_declared_and_upper_case_ascii():
     """The generator picks BY INDEX into these tuples, so their contents and their
     order are both part of every stream ever generated. Upper-case ASCII with no
-    spaces, matching how the RFB spells its own coded values."""
-    assert CURRENCIES == ("BRL",)
+    spaces, matching how the RFB spells its own coded values.
+
+    `CURRENCIES` READ `("BRL",)` UNTIL F-API AND THE CHANGE IS NOT THE INTERESTING HALF.
+    What matters is that this tuple is now the value DOMAIN and no longer the tuple the
+    generator draws from -- `opl.gold.registry.DIM_CURRENCY` reads it as its member set,
+    while `opl.generator.stream.StreamSpec.currencies` decides what a stream picks. The
+    test that the widening moved no landed byte is in `tests/test_payment_emit.py`,
+    because that is a statement about a stream rather than about a declaration."""
+    assert CURRENCIES == ("BRL", "USD")
+    assert REPORTING_CURRENCY == "BRL" == CURRENCIES[0]
     assert PAYMENT_METHODS == ("PIX", "TED", "BOLETO", "CARTAO_CREDITO", "CARTAO_DEBITO")
     for value in (*CURRENCIES, *PAYMENT_METHODS):
         assert value.isascii() and value == value.upper() and " " not in value
     assert AMOUNT_SCALE == 2
+
+
+@pytest.mark.parametrize(
+    ("domain", "reporting", "expected"),
+    [
+        (("BRL", "USD", "BRL"), "BRL", "repeats a member"),
+        (("USD", "BRL"), "BRL", "must be its FIRST member"),
+        ((), "BRL", "must be its FIRST member"),
+        (("BRL", "USD"), "EUR", "must be its FIRST member"),
+    ],
+)
+def test_a_currency_domain_that_would_move_landed_bytes_is_refused(
+    monkeypatch, domain, reporting, expected
+):
+    """THE TWO EDITS THIS GUARD EXISTS FOR ARE BOTH SILENT, and neither fails at run time.
+
+    A REPEATED MEMBER appends two `dim_currency` rows on one natural key, and gives that
+    currency a doubled share of any stream drawing from a tuple that carries the repeat --
+    while the declaration still reads as one mention per currency.
+
+    A REORDERED DOMAIN is the one that moves bytes. `stream._require_currencies` requires a
+    profile's tuple to be a subsequence of the domain IN THE DOMAIN'S ORDER, so putting
+    `USD` first forces the mixed-currency profile to be re-declared `("USD", "BRL")` -- at
+    which point `pick`'s index 0 means USD and every currency in that stream flips, with no
+    number anywhere in this repository changing. The third and fourth cases are the same
+    check reached from the other side: a `REPORTING_CURRENCY` that is not the domain's
+    first member makes `stream.DEFAULT_CURRENCIES` a one-tuple of a value `dim_currency`
+    has no member for, so every fact row of every existing stream resolves to the ghost."""
+    monkeypatch.setattr(payments, "CURRENCIES", domain)
+    monkeypatch.setattr(payments, "REPORTING_CURRENCY", reporting)
+    with pytest.raises(ValueError, match=expected):
+        payments._assert_the_currency_domain_leads_with_the_reporting_currency()
 
 
 def test_the_drift_column_is_declared_but_not_by_v1():
