@@ -242,9 +242,15 @@ restating it.
 The 2026-06-22 quote publishes at `dataHoraCotacao 2026-06-22 13:06:19.750415`, **read as
 BRT** (T3), i.e. `2026-06-22T16:06:19.750415Z` — **29,179,750.415 ms** after the window
 opens. Events land on whole 5,000 ms steps, so the first index whose own instant *follows*
-publication is `ceil(29,179,750.415 / 5,000)` = **5,836**. Nothing lands on the boundary: the
-415 µs remainder puts it strictly between two events, so the `<=`-versus-`<` question cannot
-decide a row.
+publication is `ceil(29,179,750.415 / 5,000)` = **5,836**. Nothing lands on the boundary, so the
+`<=`-versus-`<` question cannot decide a row.
+
+> **The reason first published here was not the operative one.** It said the **415 µs**
+> remainder is what puts the boundary strictly between two events. It is the **.750 s**:
+> 29,179,750 mod 5,000 = **4,750**, so publication already sits **249.585 ms** clear of index
+> 5,836 before the microseconds are considered. The conclusion holds and the mechanism was
+> misattributed — found by Task 3's reviewer, and corrected here rather than in the three source
+> comments alone, because this is the copy a reader quotes.
 
 | | rows | of which USD (these resolve a quote) | of which BRL (`fx_rate = 1.0`, no quote consulted) |
 |---|---|---|---|
@@ -270,7 +276,15 @@ reading, so the two-rate property survives a wrong zone; only the counts move.
 | `_batch_id`s **3** | **4** | one ingest per landed file |
 | `fact_payment` **30,000** rows | **40,000** | one fact row per distinct delivered payment |
 | legitimate repeats **2,400 = 3 × 800** | **3,200 = 4 × 800** | `repeat_count` is shared by every profile |
-| distinct business tuples **27,600 = 3 × 9,200** | **36,800 = 4 × 9,200** | and the 4,905 USD rows cannot collide with any existing row, since no existing row is USD |
+| distinct business tuples **27,600 = 3 × 9,200** | **36,800 = 4 × 9,200** | the fifth stream contributes 9,200 base tuples; see the note below on which of them could collide |
+
+> **The 36,800 derivation argued about the wrong population, and is restated.** It said the
+> 4,905 USD rows cannot collide with an existing row because no existing row is USD. True, and
+> irrelevant: the rows that *could* collide are the fifth stream's **4,675 BRL base tuples**
+> against the existing 27,600, and 4,905 is the *delivered* USD count rather than a base count.
+> The number holds — the attribute space is 1024 × 1023 × 4,999,901 × 2 × 5 ≈ 5.2 × 10¹³, so the
+> collision probability is ≈5 × 10⁻⁶ — but as first published it did not establish 36,800. Found
+> by Task 3's reviewer.
 | distinct `event_date_key` **2** | **3** | 2026-06-20, **2026-06-22**, 2026-08-01 |
 | `dim_date` members **50** | **50** | `covered_span` anchors on 2026-06-13 and 2026-06-22 is inside it, so the conformed re-run appends zero date rows |
 | `dim_currency` members **1** | **2** | `members=payments.CURRENCIES`, and the domain gains USD |
@@ -494,9 +508,17 @@ half stays load-bearing rather than becoming decorative behind the regex.
 
 **It is not a pinned `to_timestamp` pattern, and that part of the original reasoning survives**
 (below). The fractional group is `{1,6}`-or-absent, which is the set the series uses, and it
-matches `ptax_source.PUBLICATION_FORMATS` exactly — because whether a spelling is a publication
-instant is one decision spanning the extraction layer and the gate, and a gate looser than the
-extraction tolerates exactly the values a bug between the two could produce.
+is **strictly stricter** than `ptax_source.PUBLICATION_FORMATS` — because whether a spelling is a
+publication instant is one decision spanning the extraction layer and the gate, and a gate
+looser than the extraction tolerates exactly the values a bug between the two could produce.
+
+> **"Matches exactly" was false and is retracted.** Python's `%m`, `%d`, `%H`, `%M` and `%S` all
+> accept **unpadded** fields, so the extraction validates `2026-6-19 13:03:25`,
+> `2026-06-9 13:03:25`, `13:3:25` and `13:03:5` where the regex's `[0-9][0-9]` groups refuse
+> them — **five spellings, not the three first reported.** `%Y` is the one field demanding four
+> digits, so `26-06-19 13:03:25` is refused by both. The divergence runs in the **safe**
+> direction, and the asymmetry is now pinned by a nine-spelling table asserting both verdicts
+> against both real implementations, so the claim cannot go stale again the way this one did.
 
 **And the test asserts the VALUE.** `test_a_bare_time_resolves_to_TODAYS_DATE_and_is_therefore_
 refused` compares the resolved instant's date against `current_date()` in the same session —
