@@ -52,7 +52,13 @@ name and the emitter REFUSES. That is the correct verdict -- silently overwritin
 leave bronze holding the old rate under a checkpoint that says the file was read, so the
 revision could never arrive -- and the repair is a deliberate act, not a retry.
 
-argv: [table, month, first, last] -- all four REQUIRED, none defaulted."""
+THE WINDOW IS DECLARED, NOT PASSED. `opl.extraction.ptax_window` carries the two quote
+dates and says why they are not job parameters: they were, defaulting to a sentinel
+argued from a lock nobody had written, and a real date pasted into that default makes
+every `--params`-less run land a window nobody asked for -- under the filename that
+window derives, which then blocks the correct one by this task's own refusal.
+
+argv: [table, month] -- both REQUIRED, neither defaulted."""
 import sys
 from datetime import date
 
@@ -63,8 +69,14 @@ from opl.bronze.generated_landing import (
     EmittedFile,
     emit_records_file,
 )
-from opl.bronze.registry import LANDING_API, BronzeTable, table_spec
-from opl.config import DEFAULT, require_month, require_quote_date
+from opl.bronze.registry import (
+    LANDING_API,
+    BronzeTable,
+    landing_dir,
+    landing_tmp_dir,
+    table_spec,
+)
+from opl.config import DEFAULT, require_month
 from opl.contracts.ptax import (
     COLUMNS,
     COMPRA_COLUMN,
@@ -74,6 +86,7 @@ from opl.contracts.ptax import (
     VENDA_COLUMN,
 )
 from opl.extraction.ptax_source import QUOTED_CURRENCY, PtaxQuote, fetch_series
+from opl.extraction.ptax_window import WINDOW_FIRST, WINDOW_LAST
 
 # A browser-shaped default User-Agent is what a governed egress path is most likely to
 # refuse, and an anonymous one makes a 403 impossible to attribute. Named for the project
@@ -223,7 +236,7 @@ def _report(
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     # Table first, and resolved BEFORE anything else: a mistyped table name is refused by
-    # `table_spec` naming the valid ones, and none of these four refusals needs the
+    # `table_spec` naming the valid ones, and neither of these two refusals needs the
     # network. An operator should not wait for 42 round trips to be told which argument
     # is wrong.
     spec = table_spec(args[0] if args else "")
@@ -233,8 +246,11 @@ def main(argv: list[str] | None = None) -> None:
     # from the same job parameter. A substituted month would write into one month's
     # landing dir and read another's -- a job that succeeds having ingested nothing.
     month = require_month(args[1] if len(args) > 1 else None, action="fetch")
-    first = require_quote_date(args[2] if len(args) > 2 else None, action="fetch", bound="first")
-    last = require_quote_date(args[3] if len(args) > 3 else None, action="fetch", bound="last")
+    # THE WINDOW IS THE DECLARATION AND NOT AN ARGUMENT, so these two locals are read
+    # rather than validated: a `date` cannot arrive in the API's own `MM-DD-YYYY`
+    # spelling, and a window that was launched wrong is not a state this task can be in.
+    # See `opl.extraction.ptax_window` for the parameters this replaced and why.
+    first, last = WINDOW_FIRST, WINDOW_LAST
     # A WINDOW THE SERIES HAS NOTHING IN IS REFUSED BY `fetch_series` ITSELF, so this task
     # does not check it a second time. It used to, and the refusal moved DOWN a layer
     # rather than being dropped: the condition is identical -- no quote on any day asked
@@ -251,12 +267,20 @@ def main(argv: list[str] | None = None) -> None:
     landed = emit_records_file(
         [record_of(quote) for quote in quotes],
         filename_for(QUOTED_CURRENCY, first, last),
+        # THE ONE MAPPING, ASKED RATHER THAN RE-SPELLED, which is what `bronze_ptax_ingest`
+        # already did: `landing_dir` takes the whole spec, so the directory this task
+        # WRITES cannot drift from the one that task READS, and a mode no root serves is
+        # refused there rather than defaulting into a directory holding another source's
+        # files. This file used to build `landing_api_table` itself -- one directory
+        # resolved two ways inside one job, which is the drift `landing_dir` exists to
+        # remove.
+        #
         # The SAME `month` local for both, so the file cannot be staged under one month
-        # and landed under another -- and `landing_api_tmp` is outside every directory an
-        # Auto Loader reads, so the half-written file the replace makes whole is never
+        # and landed under another -- and the tmp twin is outside every directory an Auto
+        # Loader reads, so the half-written file the replace makes whole is never
         # discoverable by the stream that reads the finished one.
-        directory=DEFAULT.landing_api_table(spec.subdir, month),
-        tmp_directory=DEFAULT.landing_api_tmp(spec.subdir, month),
+        directory=landing_dir(DEFAULT, spec, month),
+        tmp_directory=landing_tmp_dir(DEFAULT, spec, month),
     )
     _report(quotes, first, last, landed)
 

@@ -24,8 +24,21 @@ THE `month` DEFAULT IS HERE TOO, AND IT IS NOT A REVISION GUARD. It sat under th
 section header in the unsplit file, and it belongs on this side of the seam for the
 property it shares rather than the subject: a job-parameter default cannot validate
 anything, so its whole job is to be a value the code refuses. `revision` and `month`
-are the two parameters that have one, and both were real months or real object names
-once.
+are the two whose default is LOCKED against the constant the code names, and both were
+a real object name or a real month once.
+
+THE TWO THAT ARE NOT, NAMED SO THE SENTENCE ABOVE IS NOT READ AS "THE ONLY TWO
+SENTINELS". `bronze_payments_job.yml`'s `profile` defaults to
+`opl.generator.profiles.SENTINEL_PROFILE` and `repromote_batch_job.yml`'s `batch_id` to
+`opl.bronze.promote.SENTINEL_BATCH_ID`; both are refused by the code that reads them,
+and NEITHER default is compared against its constant by any test in this repository. So
+a YAML-side drift into a value nobody checks is still open for those two -- a smaller
+hole than the same one for `month` (a repromote of the wrong batch is loud; a `profile`
+that drifted lands another stream's bytes) and a real one. Recorded rather than closed:
+it predates F-API, and F-API's own attempt to add a third pair of sentinels here is what
+made it visible -- `first`/`last` were added to the PTAX job with a sentinel argued from
+a lock in THIS file that nobody had written, and they are gone (the window is declared in
+`opl.extraction.ptax_window`) rather than locked.
 
 The readers live in `tests/job_yaml.py` -- extracted rather than copied, because this
 seam cuts through every one of them. See that file."""

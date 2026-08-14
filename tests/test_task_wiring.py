@@ -363,9 +363,14 @@ _MONTH_CONSUMERS: dict[str, list[tuple[str, int | None, str | None]]] = {
     # follows resolves ITS source dir from the same job parameter. A month that diverged
     # here would write one month's landing dir and read another's -- a job whose every
     # task reports SUCCESS having ingested nothing, after 42 HTTP round trips.
+    #
+    # Through `registry_landing`'s pair rather than `landing_api_table`/`landing_api_tmp`
+    # since F-API's fix pass, so the month is the THIRD positional argument here: this
+    # task built the api root's path itself while `bronze_ptax_ingest` asked `landing_dir`
+    # for it, which is one directory resolved two ways inside one job.
     "fetch_ptax": [
-        ("landing_api_table", 1, None),
-        ("landing_api_tmp", 1, None),
+        ("landing_dir", 2, None),
+        ("landing_tmp_dir", 2, None),
     ],
 }
 

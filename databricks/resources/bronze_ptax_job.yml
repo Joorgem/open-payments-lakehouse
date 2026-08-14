@@ -21,7 +21,8 @@
 # exactly where unzip_table.py sits in the CNPJ jobs and where generate_payments.py sits
 # in the Payments job, calling the Banco Central's public OData service and writing a
 # record built from the validated response into the Volume. That is the whole difference
-# in the task list, and it is why this job takes two extra parameters.
+# in the task list, and it takes the SAME two parameters every other job does -- the
+# window it fetches is declared in source, not launched (see below).
 #
 # NO CREDENTIAL IS INVOLVED AND NONE MAY BE ADDED. The endpoint is public and
 # unauthenticated. There is no secret scope reference in this file and there must never
@@ -40,16 +41,25 @@
 # presence, because that task is a documented no-op for an unmasked contract and a copied
 # one would tell the next reader these rows are masked when they are not.
 #
-# --- THE WINDOW IS A PARAMETER, AND THE DEFAULTS REFUSE -----------------------------
+# --- THE WINDOW IS NOT A PARAMETER, AND THAT IS THIS FILE'S ONE REVERSAL -------------
 #
-# `first` and `last` bound the QUOTE DATES fetched, and they are a different fact from
-# `month`, which is the landing month. The extraction range F-API Task 0 measured is
-# 2026-06-03 .. 2026-08-01 -- 42 quotes, gapless in business days. 2026-06-03 is a hard
-# floor: starting at 06-04 leaves Corpus Christi with nothing to fall back to.
+# It was: `first` and `last` bounded the QUOTE DATES fetched, defaulting to a sentinel
+# `opl.config` refused. The sentinel was argued from a lock in
+# tests/test_job_yaml_launch_guards.py THAT NOBODY HAD WRITTEN, so the two defaults were
+# tied to nothing -- and the dangerous edit is on this side of the wire: paste
+# `default: "2026-06-03"` in, exactly as `default: "2026-06"` once was for `month`, and
+# every --params-less run fetches a real window, lands it under the filename that window
+# derives, and then BLOCKS the window that was wanted because the fetch refuses to
+# overwrite a file whose bytes differ from the ones it derived.
+#
+# So the window is DECLARED, in opl.extraction.ptax_window, which carries F-API Task 0's
+# measured range (2026-06-03 .. 2026-08-01, 42 quotes, gapless in business days;
+# 2026-06-03 is a hard floor because starting at 06-04 leaves Corpus Christi with nothing
+# to fall back to). A declared constant cannot be launched wrong -- there is nothing to
+# omit -- and it puts every number a landed file depends on in a diff before the run.
 #
 #     databricks bundle run bronze_ptax -t free \
-#       --params month=2026-08,revision=$(git rev-parse HEAD),\
-#                first=2026-06-03,last=2026-08-01
+#       --params month=2026-08,revision=$(git rev-parse HEAD)
 #
 # The landing filename is derived from the window and the currency and carries no run id,
 # month or timestamp, so a re-run of the same window is a no-op and a different window is
@@ -71,16 +81,8 @@ resources:
           # refuses, so a run launched without --params stops instead of checking
           # nothing. Estabelecimentos' job carries the full argument.
           default: "REQUIRED-PASS-A-REVISION"
-        - name: first
-          # The first quote date fetched, ISO YYYY-MM-DD. The default is a value
-          # opl.config.require_quote_date refuses, for the reason the two above are: a
-          # real date here would make a forgotten --params fetch a window nobody asked
-          # for -- and then REFUSE the window that was asked for, because emit_records_file
-          # will not overwrite a file whose bytes differ from the ones it derived.
-          default: "REQUIRED-PASS-A-DATE"
-        - name: last
-          # The last quote date fetched, inclusive. Same sentinel and same argument.
-          default: "REQUIRED-PASS-A-DATE"
+        # AND NO `first`/`last`: the quote-date window is declared in
+        # opl.extraction.ptax_window, not launched. See the block above this resource.
       tasks:
         # FIRST, AND NOTHING BEFORE IT (ADR 0009). Compares the revision above -- the
         # operator's HEAD when the run was submitted -- against the revision the deployed
@@ -103,13 +105,7 @@ resources:
           environment_key: opl_env
           spark_python_task:
             python_file: ../src/fetch_ptax.py
-            parameters:
-              [
-                "ptax",
-                "{{job.parameters.month}}",
-                "{{job.parameters.first}}",
-                "{{job.parameters.last}}",
-              ]
+            parameters: ["ptax", "{{job.parameters.month}}"]
 
         - task_key: ingest
           depends_on: [{ task_key: fetch }]

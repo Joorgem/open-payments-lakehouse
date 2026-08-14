@@ -89,12 +89,18 @@ def test_a_table_that_is_not_api_fed_is_refused_by_both_ptax_tasks(script):
     an api-root directory nothing has ever written to and report SUCCESS having ingested
     zero rows -- indistinguishable from a month in which no file arrived.
 
-    The remaining argv is valid in both, so the landing refusal is the only one that can
-    fire. `payments` rather than a CNPJ table for the same reason: it is the NEAREST
-    wrong answer, being the other table nothing downloads, and it is the one a paste from
-    the job this YAML was copied from would leave behind."""
+    NOTHING FOLLOWS THE TABLE IN THIS ARGV, and that is the assertion rather than a
+    saving: in both tasks this refusal is the FIRST thing after the spec is resolved, so
+    the table can be refused before a month, a batch id or a window is even looked at.
+    The two signatures diverge at position 1 -- the fetch takes the month there, the
+    ingest a batch id -- so one shared argv that is "valid in both" no longer exists, and
+    the `match` is what keeps a missing-month ValueError from passing as this one.
+
+    `payments` rather than a CNPJ table for the same reason: it is the NEAREST wrong
+    answer, being the other table nothing downloads, and it is the one a paste from the
+    job this YAML was copied from would leave behind."""
     with pytest.raises(ValueError, match=LANDING_API):
-        _load(script).main(["payments", "2026-08", "2026-06-03", "2026-08-01"])
+        _load(script).main(["payments"])
 
 
 def test_the_ptax_ingest_refuses_a_missing_batch_id_and_a_missing_month():
@@ -107,32 +113,49 @@ def test_the_ptax_ingest_refuses_a_missing_batch_id_and_a_missing_month():
         module.main(["ptax", "12345"])
 
 
-def test_the_fetch_refuses_a_missing_month_and_each_missing_window_bound():
-    """In order: the month is validated before either bound, and `first` before `last`,
-    so each argv can only fail on the one argument it omits.
-
-    The message names WHICH bound, because an operator with two date parameters and a
-    complaint that says only "not a date" has to guess."""
+def test_the_fetch_refuses_a_missing_month():
+    """The month is the fetch's ONE argument besides the table, and it has no default:
+    it picks the directory the file is written into, and the ingest task that follows
+    resolves its own source dir from the same job parameter."""
     module = _load("fetch_ptax")
     with pytest.raises(ValueError, match="no month was given"):
         module.main(["ptax"])
-    with pytest.raises(ValueError, match="no first quote date"):
-        module.main(["ptax", "2026-08"])
-    with pytest.raises(ValueError, match="no last quote date"):
-        module.main(["ptax", "2026-08", "2026-06-03"])
 
 
-def test_the_fetch_refuses_the_apis_own_date_format_rather_than_reinterpreting_it():
-    """THE ASYMMETRY THIS PHASE IS BUILT ON, refused at the boundary.
+def test_the_window_is_declared_rather_than_launched_and_nothing_can_omit_it():
+    """WHAT REPLACED TWO JOB PARAMETERS, asserted as the property they were removed for.
 
-    The endpoint is asked in `MM-DD-YYYY` in single quotes -- not ISO -- and
-    `opl.extraction.ptax_source.quote_url` does that conversion. An operator who types
-    the API's own spelling into a job parameter must not have it reinterpreted: `06-03-2026`
-    is not June 3rd to `date.fromisoformat`, and a lenient parser that made it one would
-    fetch a window nobody asked for and land it under a filename derived from it."""
+    `first`/`last` were job parameters defaulting to a sentinel `opl.config` refused, and
+    that sentinel was argued from a lock in `tests/test_job_yaml_launch_guards.py` which
+    nobody had written -- so the two YAML defaults were tied to nothing. The edit that
+    costs something is on the YAML side: `default: "2026-06-03"` pasted in, exactly as
+    `default: "2026-06"` once was for `month`, makes every `--params`-less run fetch a
+    real window, land it under the filename that window derives, and then BLOCK the
+    window that was wanted, because `emit_records_file` refuses to overwrite bytes that
+    differ from the ones it derived.
+
+    So there are three claims here and each one is a way that class stays closed:
+
+      * the fetch takes NO window argument. A third argv element is ignored, which is
+        what says the value cannot be supplied at launch at all.
+      * the dates are `date` objects, so the API's own `MM-DD-YYYY` spelling -- the
+        refusal `require_quote_date` existed for -- is not expressible in them.
+      * they are the range F-API Task 0 measured, pinned here rather than in a launch
+        command, so a change to either is a diff before a run rather than a retyped
+        argument after one."""
+    from opl.extraction.ptax_window import WINDOW_FIRST, WINDOW_LAST
+
     module = _load("fetch_ptax")
-    with pytest.raises(ValueError, match="MM-DD-YYYY"):
-        module.main(["ptax", "2026-08", "06-03-2026", "2026-08-01"])
+    assert (WINDOW_FIRST, WINDOW_LAST) == (date(2026, 6, 3), date(2026, 8, 1))
+    assert isinstance(WINDOW_FIRST, date) and isinstance(WINDOW_LAST, date)
+    assert not hasattr(module, "require_quote_date"), (
+        "the window is declared, so nothing in this task parses one out of argv"
+    )
+    source = (_SRC / "fetch_ptax.py").read_text(encoding="utf-8")
+    assert "args[2]" not in source and "args[3]" not in source, (
+        "fetch_ptax.py reads a third argument again, which is how the window becomes a "
+        "job parameter with a default nobody checks"
+    )
 
 
 # --- the fetch's own pieces ----------------------------------------------------------
@@ -153,8 +176,17 @@ def test_the_whole_task_wires_the_window_the_month_and_the_record_together(
     Three requests for a three-day window, inclusive -- one per quote date, because a
     range answers with rows carrying no attributable quote date. Only 2026-06-19 has one
     in this double, so a task that had made ONE wide request would also produce one
-    record; the URL list is what tells the two apart."""
+    record; the URL list is what tells the two apart.
+
+    THE WINDOW IS NARROWED HERE RATHER THAN TAKEN FROM THE DECLARATION, and the narrowing
+    is what makes the URL list a readable assertion instead of sixty lines. The declared
+    window is pinned by `test_the_window_is_declared_rather_than_launched_...`; what this
+    test is about is that whatever the module declares is what reaches the request, the
+    filename and the directory -- so it patches the module's own constants and asserts
+    all three followed."""
     module = _load("fetch_ptax")
+    monkeypatch.setattr(module, "WINDOW_FIRST", date(2026, 6, 18))
+    monkeypatch.setattr(module, "WINDOW_LAST", date(2026, 6, 20))
     monkeypatch.setattr(module, "fetch", fetcher)
     captured: dict[str, object] = {}
 
@@ -171,7 +203,7 @@ def test_the_whole_task_wires_the_window_the_month_and_the_record_together(
         )
 
     monkeypatch.setattr(module, "emit_records_file", _emit)
-    module.main(["ptax", "2026-08", "2026-06-18", "2026-06-20"])
+    module.main(["ptax", "2026-08"])
 
     assert len(fetcher.urls) == 3, "three calendar days, three requests, inclusive"
     assert fetcher.urls == [quote_url(date(2026, 6, d)) for d in (18, 19, 20)]
@@ -247,6 +279,11 @@ def test_a_window_the_series_has_nothing_in_is_refused_rather_than_landed_empty(
     reach `emit_records_file` with nothing to write -- and it would still hold if the
     refusal moved again."""
     module = _load("fetch_ptax")
+    # A weekend, patched in for the reason the wiring test above patches its window: the
+    # DECLARED window has 42 quotes in it, so the only way to reach this refusal through
+    # `main` is to declare a window that has none.
+    monkeypatch.setattr(module, "WINDOW_FIRST", date(2026, 6, 20))
+    monkeypatch.setattr(module, "WINDOW_LAST", date(2026, 6, 21))
     monkeypatch.setattr(module, "fetch", fetcher)
     monkeypatch.setattr(
         module,
@@ -254,7 +291,7 @@ def test_a_window_the_series_has_nothing_in_is_refused_rather_than_landed_empty(
         lambda *a, **k: pytest.fail("an empty window reached the landing writer"),
     )
     with pytest.raises(PtaxResponseRefused, match="no quote at all"):
-        module.main(["ptax", "2026-08", "2026-06-20", "2026-06-21"])
+        module.main(["ptax", "2026-08"])
     assert len(fetcher.urls) == 2, "both days were asked before the window was refused"
 
 

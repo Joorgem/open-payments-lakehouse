@@ -83,8 +83,16 @@ LANDING_MODES = frozenset({LANDING_ZIPS, LANDING_LOCAL, LANDING_GENERATED, LANDI
 FILE_FED_LANDING_MODES = frozenset({LANDING_ZIPS, LANDING_LOCAL})
 
 
-def landing_dir(cfg: OplConfig, spec, month: str) -> str:
-    """The directory `spec`'s Auto Loader reads for `month`. THE one mapping.
+def _landing_and_tmp(cfg: OplConfig, spec, month: str) -> tuple[str, str]:
+    """`spec`'s landing directory for `month` AND its staging twin. THE one mapping.
+
+    ONE DISPATCH FOR BOTH DIRECTORIES, which is the property rather than a saving of
+    six lines. The staging dir is where a producer writes a file whole before
+    `os.replace`-ing it into the landing dir, and `os.replace` works only within one
+    Volume's FUSE mount -- so a landing dir resolved under one root with a tmp resolved
+    under another is either an EXDEV failure or, worse, a successful move into a
+    directory no stream reads. Two dispatches could drift into exactly that; this one
+    cannot.
 
     Takes the spec rather than `(subdir, landing)` for the reason every task test in
     this repository asserts: a coordinate must come from the ONE spec the caller
@@ -97,26 +105,49 @@ def landing_dir(cfg: OplConfig, spec, month: str) -> str:
     Refuses an unknown mode rather than falling through to a default. A dispatch
     written as `if landing == LANDING_ZIPS: ... else: ...` is exactly how a typo
     silently sends a generated table at the CNPJ root -- where cloudFiles would walk
-    a month directory holding every other table's files, recursively.
-
-    IT HAD NO CALLER AT ALL BETWEEN F1b TASK 3 AND F-API TASK 2, and that is worth
-    stating rather than leaving a reader to assume it was load-bearing: the two ingest
-    entry points written in that window each built their own root's path directly.
-    `databricks/src/bronze_ptax_ingest.py` is its first, and it takes the whole spec
-    here for the reason above -- which is also what puts the `api` branch below on a
-    live path instead of in a function nothing runs."""
+    a month directory holding every other table's files, recursively."""
     if spec.landing in FILE_FED_LANDING_MODES:
-        return cfg.landing_table(spec.subdir, month)
+        return cfg.landing_table(spec.subdir, month), cfg.landing_tmp(spec.subdir, month)
     if spec.landing == LANDING_GENERATED:
-        return cfg.landing_generated_table(spec.subdir, month)
+        return (
+            cfg.landing_generated_table(spec.subdir, month),
+            cfg.landing_generated_tmp(spec.subdir, month),
+        )
     if spec.landing == LANDING_API:
-        return cfg.landing_api_table(spec.subdir, month)
+        return (
+            cfg.landing_api_table(spec.subdir, month),
+            cfg.landing_api_tmp(spec.subdir, month),
+        )
     raise ValueError(
         f"{spec.name} names landing mode {spec.landing!r}, which no landing root "
         f"serves. Registered modes are: {', '.join(sorted(LANDING_MODES))}. This is "
         "refused rather than defaulted because either default is a directory holding "
         "another source's files, and cloudFiles walks a source dir RECURSIVELY."
     )
+
+
+def landing_dir(cfg: OplConfig, spec, month: str) -> str:
+    """The directory `spec`'s Auto Loader reads for `month`.
+
+    IT HAD NO CALLER AT ALL BETWEEN F1b TASK 3 AND F-API TASK 2, and that is worth
+    stating rather than leaving a reader to assume it was load-bearing: the two ingest
+    entry points written in that window each built their own root's path directly.
+    `databricks/src/bronze_ptax_ingest.py` is its first, and `fetch_ptax.py` is its
+    second -- it built `landing_api_table` itself until this phase's fix pass, so one
+    directory was resolved two ways inside one job, which is the drift this function
+    exists to remove."""
+    return _landing_and_tmp(cfg, spec, month)[0]
+
+
+def landing_tmp_dir(cfg: OplConfig, spec, month: str) -> str:
+    """Where a producer stages `spec`'s file before it is whole. OUTSIDE every source dir.
+
+    Its own function rather than a second return value at the call site, so a caller
+    that needs only the landing dir cannot bind the pair and hand the wrong half on --
+    but the same dispatch, so the two halves are always of one root. cloudFiles walks a
+    source dir RECURSIVELY and with no glob, so a partial file staged inside one is a
+    file the ingest reads as if it were complete (`opl.bronze.unzip_volume`, F1.3)."""
+    return _landing_and_tmp(cfg, spec, month)[1]
 
 
 def _file_group_prefixes(contract: str) -> list[str]:
