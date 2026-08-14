@@ -26,6 +26,11 @@ delivery mechanism. Nothing downloads a generated table, because its bytes do no
 exist until this lakehouse writes them: `opl.generator` derives the payment stream
 from a seed and `opl.bronze.generated_landing` puts it in the Volume.
 
+Each mode is CLASSIFIED as file-fed or not, in a declaration the import guards
+(`_assert_every_landing_mode_is_classified`) refuse to leave half-written -- because the
+two prefix guards below ask opposite questions and the classification is what decides
+which one a table's declaration is held to.
+
 `api` is the fourth (F-API Task 2), and it is a third kind again. Its bytes are
 produced by somebody else -- the Banco Central's PTAX series -- but nothing
 DOWNLOADS A FILE, because there is no file: a job task calls an HTTP endpoint, and a
@@ -71,16 +76,37 @@ LANDING_API = "api"
 
 LANDING_MODES = frozenset({LANDING_ZIPS, LANDING_LOCAL, LANDING_GENERATED, LANDING_API})
 
-# The modes a DOWNLOADER feeds, and therefore the ones for which a `FILE_GROUPS`
-# entry is required rather than forbidden. Declared as its own set instead of
-# `LANDING_MODES - {LANDING_GENERATED}`, because the two guards below read it in
-# OPPOSITE directions and a subtraction would make a fourth mode default into the
-# file-fed half silently -- which is the half that requires a producer to exist.
+# --- THE CLASSIFICATION, WHICH IS A DECLARATION AND IS GUARDED AS ONE ----------------
 #
-# THE FOURTH MODE ARRIVED AND THIS SET DID NOT MOVE, which is the whole point of it
-# having been declared positively: `api` is not file-fed, so it fell out of the
-# cross-check and into the mirror guard below with no edit here at all.
+# The modes a DOWNLOADER feeds, and therefore the ones for which a `FILE_GROUPS` entry is
+# REQUIRED; and the modes nothing downloads, for which one is FORBIDDEN. Two opposite
+# questions, so which half a mode is in decides which question its tables are asked --
+# and that is why both halves are declared positively instead of one being
+# `LANDING_MODES - <the other>`.
+#
+# WHAT A SUBTRACTION WOULD COST, WHICH IS THE HOLE F-API'S FIX PASS CLOSED. Nothing used
+# to guard this membership at all. A fifth mode that IS file-fed, added to `LANDING_MODES`
+# and not to the set below, would be examined by the MIRROR -- whose empty-group +
+# `None`-prefix path ACCEPTS -- so it would lose
+# `_assert_prefixes_match_their_file_groups`' "no prefixes -> raise" branch, whose own
+# message says the ingest "would report SUCCESS having read an empty source dir". That
+# refusal has no complement anywhere, so it would be GONE rather than moved: a file-fed
+# table with no producer, silently unchecked.
+#
+# SO THE PARTITION ITSELF IS ASSERTED AT IMPORT, by
+# `_assert_every_landing_mode_is_classified` below. A mode in neither half, in both, or in
+# a half without being a registered mode is refused where it is DECLARED -- which is the
+# same argument `_assert_landing_modes_known` makes below about a mode's spelling, applied
+# to its classification. Adding a fifth mode is therefore an edit HERE by construction,
+# and that is the correction to three sentences this module used to carry: "the next mode
+# needs no edit here at all" was true of a NON-file-fed mode and false of a file-fed one,
+# and it was stated unconditionally.
 FILE_FED_LANDING_MODES = frozenset({LANDING_ZIPS, LANDING_LOCAL})
+# The complement, DECLARED and not derived, for the reason above read the other way: this
+# is the half where a `FILE_GROUPS` entry or a `prefix` is a false sentence rather than a
+# requirement. `api` was added here by the fix pass; it was in neither half before, and
+# the mirror caught it only because that guard's skip is a literal complement.
+NON_FILE_FED_LANDING_MODES = frozenset({LANDING_GENERATED, LANDING_API})
 
 
 def _landing_and_tmp(cfg: OplConfig, spec, month: str) -> tuple[str, str]:
@@ -153,6 +179,50 @@ def landing_tmp_dir(cfg: OplConfig, spec, month: str) -> str:
 def _file_group_prefixes(contract: str) -> list[str]:
     """The distinct FILE_GROUPS prefixes whose zips feed `contract`, sorted."""
     return sorted({g["prefix"] for g in FILE_GROUPS.values() if g["table"] == contract})
+
+
+def _assert_every_landing_mode_is_classified() -> None:
+    """Fail at import if a landing mode is not in exactly one of the two halves.
+
+    THE GUARD THE TWO SKIPS WERE STANDING IN FOR. It takes no registry: this is a claim
+    about the DECLARATION, not about today's tables, and it must hold before any table
+    declares the mode -- otherwise the first table to use a misfiled mode is the one that
+    discovers it, by not being checked.
+
+    Three refusals, and the middle one is the one that costs something. A mode in NEITHER
+    half is a mode whose tables the file-fed cross-check skips and the mirror accepts (no
+    file group, no prefix -> pass), so a file-fed table with no producer at all imports
+    clean; see the comment block above `FILE_FED_LANDING_MODES`. A mode in BOTH would be
+    asked two contradictory questions and refused whatever it declared. And a half naming a
+    mode `LANDING_MODES` does not carry is a classification of something no spec can name,
+    which is how the two sets stop describing the same universe.
+
+    A plain ValueError, matching every other guard in this module: nothing here is an
+    unknown table, and no operator supplied it -- this is a source edit that half-added a
+    landing mode."""
+    both = sorted(FILE_FED_LANDING_MODES & NON_FILE_FED_LANDING_MODES)
+    unclassified = sorted(
+        LANDING_MODES ^ (FILE_FED_LANDING_MODES | NON_FILE_FED_LANDING_MODES)
+    )
+    if both:
+        raise ValueError(
+            f"{both} are declared BOTH file-fed and not. The two halves ask opposite "
+            "questions -- a file-fed table MUST have a cnpj_schemas.FILE_GROUPS producer, "
+            "one nothing downloads must have none and no prefix -- so a mode in both is "
+            "refused whatever its tables declare."
+        )
+    if unclassified:
+        raise ValueError(
+            f"{unclassified} are landing modes with no classification, or classified "
+            f"without being modes. LANDING_MODES is {sorted(LANDING_MODES)}, "
+            f"FILE_FED_LANDING_MODES is {sorted(FILE_FED_LANDING_MODES)} and "
+            f"NON_FILE_FED_LANDING_MODES is {sorted(NON_FILE_FED_LANDING_MODES)}. An "
+            "unclassified mode is not merely undocumented: the file-fed cross-check skips "
+            "it and the mirror ACCEPTS it (no file group and no prefix is the mirror's "
+            "pass), so a file-fed table with no producer would import clean and its "
+            "ingest would report SUCCESS having read an empty source dir. Put the mode in "
+            "the half that says which of the two questions its tables must answer."
+        )
 
 
 def _assert_landing_modes_known(registry) -> None:
@@ -228,7 +298,41 @@ def _assert_landing_modes_known(registry) -> None:
 # (a false sentence nothing would have refused). Two positive scopes leave a FIFTH mode
 # uncovered again, one mode later. The mirror's skip is now the exact complement of this
 # one's, so every registered table is checked by exactly one of the pair whatever modes
-# exist later, and adding a mode requires no edit to either.
+# exist later.
+#
+# WHAT THE COMPLEMENT DOES NOT BUY, corrected here because this comment claimed it and
+# two other places claimed it too: "adding a mode requires no edit to either" is TRUE OF A
+# NON-FILE-FED MODE ONLY. The complement makes EXAMINATION total -- every table is looked
+# at by one of the pair -- and it does not make the VERDICT right. A fifth mode that is
+# file-fed and is not added to `FILE_FED_LANDING_MODES` is examined by the mirror, which
+# ACCEPTS it (no file group, no prefix is the mirror's pass), and the "no prefixes ->
+# raise" branch below is lost rather than moved: that refusal has no complement anywhere.
+# `_assert_every_landing_mode_is_classified` is what makes the membership itself a
+# declaration, so a fifth mode is an edit to the classification by construction, and only
+# the two guard bodies are left needing none.
+#
+# --- WHY THE MIRROR'S OWN PROSE IS UP HERE ------------------------------------------
+#
+# Its docstring grew to 52 lines when F-API Task 2 rewrote it, in a module whose FIRST
+# comment block exists because a guard's prose outgrew the project's 50-line function
+# limit. So the same remedy: the reasoning lives here and the function stays a loop and
+# two refusals. What was there and is now here --
+#
+# ITS SKIP IS THE EXACT COMPLEMENT OF THE FILE-FED ONE'S, and that is the property the
+# rename buys and the only thing it buys (see the paragraph above for what it does not).
+# `_assert_prefixes_match_their_file_groups` continues on anything NOT in
+# `FILE_FED_LANDING_MODES`; the mirror continues on anything IN it.
+#
+# IT WAS SCOPED TO `LANDING_GENERATED` UNTIL F-API TASK 2, and that was the defect. Two
+# POSITIVELY-scoped guards do not cover the modes nobody has invented yet: `api` was not
+# file-fed and was not generated, so it fell into neither and was free to declare a prefix
+# that no cross-check would have compared against anything. Pasting the function with one
+# constant changed would have closed that instance and left a FIFTH mode in the identical
+# hole.
+#
+# THE MESSAGES NAME THE MODE THEY ACTUALLY FOUND rather than a constant, which matters now
+# that more than one mode reaches that loop: a PTAX operator reading a refusal that said
+# `landing='generated'` would go looking at the payment generator.
 
 
 def _assert_prefixes_match_their_file_groups(registry) -> None:
@@ -276,23 +380,8 @@ def _assert_no_table_nothing_downloads_claims_a_downloader(registry) -> None:
     repository treats as the answer to "what is table X?". A plain ValueError: nothing
     here is an unknown table, and no operator supplied it.
 
-    ITS SKIP IS THE EXACT COMPLEMENT OF THE FILE-FED ONE'S, and that is the property the
-    rename buys and the only thing it buys. `_assert_prefixes_match_their_file_groups`
-    continues on anything NOT in `FILE_FED_LANDING_MODES`; this continues on anything IN
-    it. So the two scopes partition the registry: every registered table is checked by
-    exactly one of the pair, for any set of landing modes that ever exists.
-
-    IT WAS SCOPED TO `LANDING_GENERATED` UNTIL F-API TASK 2, and that was the defect.
-    Two POSITIVELY-scoped guards do not cover the modes nobody has invented yet: `api`
-    was not file-fed and was not generated, so it fell into neither and was unguarded in
-    both directions -- free to declare a prefix that no cross-check would have compared
-    against anything. Pasting this function with one constant changed would have closed
-    that instance and left a FIFTH mode in the identical hole. The scopes are
-    complementary instead, so the next mode needs no edit here at all.
-
-    THE MESSAGES NAME THE MODE THEY ACTUALLY FOUND rather than a constant, which matters
-    now that more than one mode reaches this loop: a PTAX operator reading a refusal that
-    said `landing='generated'` would go looking at the payment generator."""
+    See the comment block above for what its complementary skip buys, what it does NOT
+    buy, and why that prose is not in here."""
     for spec in registry.values():
         if spec.landing in FILE_FED_LANDING_MODES:
             continue

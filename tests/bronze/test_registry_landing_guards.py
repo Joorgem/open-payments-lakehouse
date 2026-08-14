@@ -28,6 +28,7 @@ whether anything ever runs it -- `test_registry_guard_wiring.py` is what closes 
 vacuity, for the guards in this module as for every other."""
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 
 import pytest
@@ -36,9 +37,12 @@ from opl.bronze.registry import (
     FILE_FED_LANDING_MODES,
     LANDING_API,
     LANDING_LOCAL,
+    LANDING_MODES,
     LANDING_ZIPS,
+    NON_FILE_FED_LANDING_MODES,
     REGISTRY,
     BronzeTable,
+    _assert_every_landing_mode_is_classified,
     _assert_no_table_nothing_downloads_claims_a_downloader,
     _assert_prefixes_match_their_file_groups,
 )
@@ -163,37 +167,176 @@ def test_a_table_no_downloader_feeds_may_not_claim_a_file_prefix(monkeypatch):
     assert "prefix=None" in message
 
 
-def test_the_two_skips_partition_the_registry(monkeypatch):
-    """WHAT THE RENAME BOUGHT, asserted as a property rather than as prose.
+# --- THE PARTITION, ASSERTED BY CALLING BOTH GUARDS (F-API's fix pass) ---------------
+#
+# WHAT WAS HERE WAS A TAUTOLOGY FOR THE PROPERTY IT WAS NAMED AFTER.
+# `test_the_two_skips_partition_the_registry` built both "checked by" sets INSIDE the test
+# from a predicate and its own negation over one dict, so disjointness and totality held
+# for ANY predicate and ANY guard body -- neither guard was called at all until its last
+# three lines. Change the cross-check's skip to `not in {LANDING_ZIPS}` and every `local`
+# table falls through BOTH guards while that test stays green: measured, and it is why the
+# rewrite below calls the functions instead of re-deriving their scopes.
 
-    Each guard skips what the other checks, so every registered table -- under any
-    landing mode that ever exists -- is examined by exactly one of the pair. A fifth mode
-    added tomorrow needs no edit to either, which is precisely what was NOT true when
-    both were scoped positively and `api` fell between them.
 
-    A synthesised mode is used because the property has to hold for modes nobody has
-    declared yet; `_assert_landing_modes_known` is what refuses this value in the live
-    registry, and it runs before both of these."""
-    trap = replace(REGISTRY["payments"], name="future", landing="a-mode-nobody-declared")
+def _refusals_of_the_pair() -> list[tuple[str, str]]:
+    """Which of the two landing guards refuses the live `REGISTRY`, and what it said.
+
+    Both are called, always, and their verdicts collected rather than short-circuited --
+    "exactly one refused" is the assertion, and a helper that stopped at the first
+    refusal could not tell it from "at least one"."""
+    refused = []
+    for guard in (
+        _assert_prefixes_match_their_file_groups,
+        _assert_no_table_nothing_downloads_claims_a_downloader,
+    ):
+        try:
+            guard(REGISTRY)
+        except ValueError as refusal:
+            refused.append((guard.__name__, str(refusal)))
+    return refused
+
+
+@pytest.mark.parametrize("landing", sorted(LANDING_MODES))
+def test_exactly_one_of_the_pair_refuses_a_spec_that_is_wrong_for_its_half(
+    monkeypatch, landing
+):
+    """EVERY DECLARED MODE, HELD TO THE QUESTION ITS HALF ASKS -- by calling both guards.
+
+    The trap is a spec that is WRONG for whichever half `landing` is in, so one of the two
+    is obliged to refuse it and the other is obliged not to:
+
+      * a FILE-FED mode on the `payments` contract, which no `cnpj_schemas.FILE_GROUPS`
+        entry feeds. That is the cross-check's "no prefixes -> raise" branch, whose own
+        message says the ingest "would report SUCCESS having read an empty source dir".
+      * a mode nothing downloads, declaring a `prefix`. That is the mirror's second
+        refusal -- a false sentence about a downloader that does not exist.
+
+    EXACTLY ONE, which is two claims in one number. Two refusals would mean the scopes
+    overlap and a table is held to contradictory requirements; ZERO means a mode is
+    examined by a guard that has nothing to say about it, which is the whole defect this
+    pair has had twice -- `api` in neither half before F-API Task 2, and `local` falling
+    through both under a one-character change to the cross-check's skip.
+
+    PARAMETRISED OVER `LANDING_MODES` rather than over a list, so a fifth mode arrives
+    with its case already written and has to pass this on the same day it is declared."""
+    file_fed = landing in FILE_FED_LANDING_MODES
+    trap = replace(
+        REGISTRY["payments"],
+        name="probe",
+        landing=landing,
+        prefix=None if file_fed else "Probe",
+    )
+    monkeypatch.setitem(REGISTRY, "probe", trap)
+
+    refused = _refusals_of_the_pair()
+    assert len(refused) == 1, (
+        f"landing={landing!r} was refused by {[name for name, _ in refused]}, and exactly "
+        "one of the pair must: none means the mode is examined by a guard with nothing to "
+        "say about it, two means the scopes overlap"
+    )
+    guard, message = refused[0]
+    expected = (
+        "_assert_prefixes_match_their_file_groups"
+        if file_fed
+        else "_assert_no_table_nothing_downloads_claims_a_downloader"
+    )
+    assert guard == expected, f"landing={landing!r} was answered by the wrong half"
+    assert repr(landing) in message, "the refusal must name the mode it FOUND"
+
+
+def test_an_undeclared_mode_still_falls_to_the_mirror_rather_than_through_both(monkeypatch):
+    """THE COMPLEMENT'S RESIDUAL VALUE, kept exercised now that the classification is
+    declared rather than inferred.
+
+    `_assert_every_landing_mode_is_classified` refuses a DECLARED mode nobody classified,
+    and `_assert_landing_modes_known` refuses a mode nobody declared -- both at import,
+    both before either guard here runs. So this is defence in depth rather than the load
+    path: the mirror's skip is a literal complement over any string, so a mode that
+    reached these guards without passing either of those is still examined by one of them
+    instead of by neither."""
+    trap = replace(
+        REGISTRY["payments"],
+        name="future",
+        landing="a-mode-nobody-declared",
+        prefix="Future",
+    )
     monkeypatch.setitem(REGISTRY, "future", trap)
 
-    checked_by_the_cross_check = {
-        spec.name for spec in REGISTRY.values() if spec.landing in FILE_FED_LANDING_MODES
-    }
-    checked_by_the_mirror = {
-        spec.name for spec in REGISTRY.values() if spec.landing not in FILE_FED_LANDING_MODES
-    }
-    assert not checked_by_the_cross_check & checked_by_the_mirror
-    assert checked_by_the_cross_check | checked_by_the_mirror == {
-        spec.name for spec in REGISTRY.values()
-    }
-    assert "future" in checked_by_the_mirror, (
-        "an undeclared mode must fall to the mirror rather than through both"
+    refused = _refusals_of_the_pair()
+    assert [name for name, _ in refused] == [
+        "_assert_no_table_nothing_downloads_claims_a_downloader"
+    ]
+    assert "'a-mode-nobody-declared'" in refused[0][1]
+
+
+# --- THE CLASSIFICATION ITSELF, WHICH IS WHAT THE COMPLEMENT DOES NOT GUARANTEE -------
+#
+# The complement buys total EXAMINATION and not a total VERDICT. Which of the two
+# questions a table is asked turns on membership of `FILE_FED_LANDING_MODES`, and until
+# F-API's fix pass NOTHING guarded that membership: a fifth mode that IS file-fed and was
+# not added to it would be examined by the mirror, which ACCEPTS (no file group and no
+# prefix is the mirror's pass), so the cross-check's "no producer -> raise" branch would be
+# LOST rather than moved -- it has no complement anywhere.
+
+
+def test_the_live_classification_passes_its_own_guard():
+    """Guard the guard. Every refusal below is of a synthesised classification, and all of
+    them would also be produced by a guard that refused everything -- which runs at import,
+    so a false positive breaks every module that reads the registry, including the
+    extraction scripts that never touch Spark."""
+    _assert_every_landing_mode_is_classified()
+    assert FILE_FED_LANDING_MODES | NON_FILE_FED_LANDING_MODES == LANDING_MODES
+    assert not FILE_FED_LANDING_MODES & NON_FILE_FED_LANDING_MODES
+
+
+@pytest.mark.parametrize("half", ["FILE_FED_LANDING_MODES", "NON_FILE_FED_LANDING_MODES"])
+def test_a_declared_mode_in_neither_half_is_refused_at_import(monkeypatch, half):
+    """THE HOLE THIS GUARD CLOSES, in both directions of the edit that opens it.
+
+    Dropping `api` from the non-file-fed half is the harmless-looking version; dropping a
+    mode from the file-fed half is the one that costs something, because it is a real
+    file-fed table whose missing producer nothing would then refuse. The guard reads the
+    declaration and not the registry, so both are refused before any table names the mode.
+
+    A fifth mode added to `LANDING_MODES` and to neither half is the same edit seen from
+    the other side, and it is the one this repository will actually make."""
+    module = sys.modules[_assert_every_landing_mode_is_classified.__module__]
+    dropped = sorted(getattr(module, half))[0]
+    monkeypatch.setattr(module, half, getattr(module, half) - {dropped})
+
+    with pytest.raises(ValueError) as excinfo:
+        _assert_every_landing_mode_is_classified()
+    message = str(excinfo.value)
+    assert repr(dropped) in message
+    # The consequence, not just the fact: an operator told "classify it" would otherwise
+    # pick the half that reads as tidier, and one of the two halves silently accepts.
+    assert "SUCCESS having read an empty source dir" in message
+
+
+def test_a_mode_declared_in_both_halves_is_refused_at_import(monkeypatch):
+    """The other failure, and it is a different sentence: a mode that is both file-fed and
+    not is asked two opposite questions -- a producer is required AND forbidden -- so
+    whatever its tables declare, one of the pair refuses them. Refused where the
+    classification is written rather than met as a contradiction at a table."""
+    module = sys.modules[_assert_every_landing_mode_is_classified.__module__]
+    monkeypatch.setattr(
+        module, "NON_FILE_FED_LANDING_MODES", NON_FILE_FED_LANDING_MODES | {LANDING_ZIPS}
     )
-    # And the mirror actually refuses it, rather than merely being scoped over it: this
-    # spec has no file group and no prefix, so it passes -- which is the correct verdict
-    # and is what makes the scope real instead of vacuous.
-    _assert_no_table_nothing_downloads_claims_a_downloader(REGISTRY)
-    monkeypatch.setitem(REGISTRY, "future", replace(trap, prefix="Future"))
-    with pytest.raises(ValueError, match="'a-mode-nobody-declared'"):
-        _assert_no_table_nothing_downloads_claims_a_downloader(REGISTRY)
+
+    with pytest.raises(ValueError, match="BOTH file-fed and not") as excinfo:
+        _assert_every_landing_mode_is_classified()
+    assert repr(LANDING_ZIPS) in str(excinfo.value)
+
+
+def test_a_classified_mode_that_is_not_a_landing_mode_is_refused_at_import(monkeypatch):
+    """The same equality read the other way: a half naming a mode `LANDING_MODES` does not
+    carry classifies something no spec can declare, which is how the two sets stop
+    describing one universe -- and a mode later added under that name would inherit a
+    classification nobody chose deliberately."""
+    module = sys.modules[_assert_every_landing_mode_is_classified.__module__]
+    monkeypatch.setattr(
+        module, "FILE_FED_LANDING_MODES", FILE_FED_LANDING_MODES | {"ftp"}
+    )
+
+    with pytest.raises(ValueError, match="'ftp'"):
+        _assert_every_landing_mode_is_classified()

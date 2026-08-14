@@ -49,6 +49,8 @@ from opl.bronze.registry_landing import (  # noqa: F401  (re-exported for consum
     LANDING_LOCAL,
     LANDING_MODES,
     LANDING_ZIPS,
+    NON_FILE_FED_LANDING_MODES,
+    _assert_every_landing_mode_is_classified,
     _assert_landing_modes_known,
     _assert_no_table_nothing_downloads_claims_a_downloader,
     _assert_prefixes_match_their_file_groups,
@@ -726,13 +728,24 @@ _assert_no_two_tables_share_a_contract()
 # exempted from both. Ordered this way, a bad mode is refused before any guard has to
 # ask what it means.
 _assert_landing_modes_known(REGISTRY)
+# AND THE MODE'S CLASSIFICATION BEFORE THE GUARDS THAT BRANCH ON IT, which is the same
+# ordering argument one line up carried one step further. `_assert_landing_modes_known`
+# refuses a mode nobody DECLARED; this refuses a declared mode nobody CLASSIFIED as
+# file-fed or not. Unclassified, its tables are skipped by the cross-check below and
+# ACCEPTED by the mirror, so the "no FILE_GROUPS producer -> raise" branch is lost rather
+# than moved -- and that branch's own message says the ingest "would report SUCCESS having
+# read an empty source dir". It takes no registry because it is a claim about the
+# declaration, which must hold before any table names the mode.
+_assert_every_landing_mode_is_classified()
 _assert_prefixes_match_their_file_groups(REGISTRY)
 # The COMPLEMENT of the line above, and it must stay beside it: the prefix cross-check
 # skips every table no downloader feeds, and this is the only thing that says anything
 # about those. The two skips are exact complements since F-API Task 2, so between them
 # they are total over the registry for any set of landing modes -- which is what stops a
 # fifth mode falling into neither, the way `api` fell into neither when both were scoped
-# positively. Split rather than folded in, for the reason the subdir trio is three
+# positively. Total EXAMINATION and not a total verdict: which of the two questions a
+# table is asked still turns on the classification the guard above now refuses to leave
+# unstated. Split rather than folded in, for the reason the subdir trio is three
 # functions -- each refusal is a different sentence about a different mistake.
 _assert_no_table_nothing_downloads_claims_a_downloader(REGISTRY)
 # Also keyed on the contract, so it belongs in this group: `MASKED_COLUMNS` is
