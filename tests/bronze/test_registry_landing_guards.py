@@ -45,7 +45,9 @@ from opl.bronze.registry import (
     _assert_every_landing_mode_is_classified,
     _assert_no_table_nothing_downloads_claims_a_downloader,
     _assert_prefixes_match_their_file_groups,
+    landing_dir,
 )
+from opl.config import DEFAULT
 
 
 def test_a_prefix_that_disagrees_with_its_file_group_is_refused_at_import(monkeypatch):
@@ -340,3 +342,58 @@ def test_a_classified_mode_that_is_not_a_landing_mode_is_refused_at_import(monke
 
     with pytest.raises(ValueError, match="'ftp'"):
         _assert_every_landing_mode_is_classified()
+
+
+# --- WHAT THE CLASSIFICATION GUARD DOES *NOT* CLOSE, EXERCISED RATHER THAN COMMENTED ---
+#
+# It closes the OMISSION edit -- a mode classified in neither half -- and not the MISFILING
+# one. That residual was stated in a comment inside the test above, which is not where an
+# operator reads a declaration, so it now sits above `FILE_FED_LANDING_MODES` in the source
+# and is MEASURED here. Nothing in the module can refuse a misfiling: the classification is
+# the only place this repository records whether a mode's bytes are downloaded, so there is
+# no second declaration to cross-check it against.
+#
+# The test below therefore asserts the hole is a hole, which is deliberate and is the only
+# honest shape for it: if a later change closes it, this test fails and names the paragraph
+# to delete instead of leaving the source claiming a gap that no longer exists.
+
+
+def test_a_file_fed_mode_MISFILED_as_non_file_fed_passes_both_guards_and_fails_at_the_root(
+    monkeypatch,
+):
+    """The residual, in three steps and one refusal that is not either guard's.
+
+    A fifth mode that IS file-fed, put in `NON_FILE_FED_LANDING_MODES`, is in exactly one
+    half -- so the classification guard passes. A table on it whose contract has no
+    `FILE_GROUPS` producer is then SKIPPED by the cross-check and ACCEPTED by the mirror (no
+    group, no prefix is the mirror's pass), which is verbatim the hole the classification
+    guard's own message describes. A table whose contract DOES have a producer is still
+    caught, by the mirror's first refusal -- that case is `test_a_table_no_downloader_feeds_
+    may_not_claim_a_file_group` above.
+
+    WHAT CATCHES IT NEXT IS THE ROOT DISPATCH, and that is why the guard's "SUCCESS having
+    read an empty source dir" is not what this edit alone produces: `_landing_and_tmp` serves
+    each mode from one declared root and refuses a mode it has no branch for, so the misfiled
+    mode has no landing dir at all and `landing_dir` raises before any Auto Loader is pointed
+    anywhere. Reaching the silent version needs the same author to also give the mode a root
+    -- a third edit, in a third place, all of them in this module."""
+    module = sys.modules[_assert_every_landing_mode_is_classified.__module__]
+    misfiled = "sftp"  # file-fed in reality: something downloads it
+    monkeypatch.setattr(module, "LANDING_MODES", LANDING_MODES | {misfiled})
+    monkeypatch.setattr(
+        module, "NON_FILE_FED_LANDING_MODES", NON_FILE_FED_LANDING_MODES | {misfiled}
+    )
+    _assert_every_landing_mode_is_classified()  # the misfiling is invisible to it
+
+    # `payments` because no FILE_GROUPS entry feeds it: a table with no producer at all.
+    trap = replace(REGISTRY["payments"], name="probe", landing=misfiled, prefix=None)
+    monkeypatch.setitem(REGISTRY, "probe", trap)
+    assert not _refusals_of_the_pair(), (
+        "the pair now refuses a misfiled file-fed mode. That is an improvement, not a "
+        "failure -- delete the residual paragraph above `FILE_FED_LANDING_MODES` and this "
+        "test with it, rather than leaving the source describing a hole that is closed"
+    )
+
+    with pytest.raises(ValueError, match="no landing root serves") as excinfo:
+        landing_dir(DEFAULT, trap, "2026-08")
+    assert repr(misfiled) in str(excinfo.value)

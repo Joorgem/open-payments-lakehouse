@@ -101,6 +101,26 @@ LANDING_MODES = frozenset({LANDING_ZIPS, LANDING_LOCAL, LANDING_GENERATED, LANDI
 # and that is the correction to three sentences this module used to carry: "the next mode
 # needs no edit here at all" was true of a NON-file-fed mode and false of a file-fed one,
 # and it was stated unconditionally.
+#
+# WHAT THAT GUARD STILL CANNOT SEE, STATED AT THE DECLARATION BECAUSE THIS IS WHERE THE
+# MISTAKE IS MADE. It closes the OMISSION edit -- a mode classified nowhere -- and not the
+# MISFILING one. A fifth mode that IS file-fed and is put in `NON_FILE_FED_LANDING_MODES`
+# is in exactly one half, so the guard passes; a table on it whose contract has no
+# `FILE_GROUPS` producer then reaches the cross-check, which SKIPS it, and the mirror,
+# which ACCEPTS it (no group, no prefix is the mirror's pass) -- verbatim the hole the
+# guard's own message describes, and no guard in this module refuses it. Nothing here can:
+# the classification is the ONLY place this repository records whether a mode's bytes are
+# downloaded, so no declaration exists for it to be checked against. A table whose contract
+# DOES have a producer is still caught, by the mirror's first refusal.
+#
+# WHAT CATCHES IT NEXT, AND WHY THE SILENT VERSION NEEDS A THIRD EDIT. `_landing_and_tmp`
+# below serves each mode from ONE declared root and refuses a mode it has no branch for, so
+# a misfiled fifth mode has no landing dir at all: `landing_dir` raises before any Auto
+# Loader is pointed anywhere, which is loud and is not the "SUCCESS over an empty source
+# dir" the guard's message warns about. Reaching THAT needs the same author to also give
+# the mode a root here. Measured both ways in
+# `tests/bronze/test_registry_landing_guards.py` -- the hole is exercised rather than
+# described, so closing it later fails a test that names this paragraph.
 FILE_FED_LANDING_MODES = frozenset({LANDING_ZIPS, LANDING_LOCAL})
 # The complement, DECLARED and not derived, for the reason above read the other way: this
 # is the half where a `FILE_GROUPS` entry or a `prefix` is a false sentence rather than a
@@ -196,6 +216,11 @@ def _assert_every_landing_mode_is_classified() -> None:
     asked two contradictory questions and refused whatever it declared. And a half naming a
     mode `LANDING_MODES` does not carry is a classification of something no spec can name,
     which is how the two sets stop describing the same universe.
+
+    IT CLOSES THE OMISSION AND NOT THE MISFILING -- a file-fed mode put in the NON-file-fed
+    half is in exactly one half and passes here. See the comment block above
+    `FILE_FED_LANDING_MODES` for why no guard in this module can refuse that, and for what
+    does catch it next.
 
     A plain ValueError, matching every other guard in this module: nothing here is an
     unknown table, and no operator supplied it -- this is a source edit that half-added a
