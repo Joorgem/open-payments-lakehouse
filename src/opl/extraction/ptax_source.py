@@ -119,9 +119,28 @@ PUBLICATION_FORMATS = ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S")
 # pair of DISTINCT quotes the series holds.
 MAX_PUBLICATION_SPREAD = timedelta(minutes=1)
 
-# A URL in, a response body out. Injected rather than imported so this module executes
-# no I/O: `requests 2.32.2` is in the Databricks serverless base environment (measured on
-# run 1112844532335593), and the timeout, retry and status policy are the caller's.
+# A URL in, a response BODY out -- and the caller's obligations are part of the contract,
+# stated here because the transport is injected and this module cannot see a status code.
+#
+# THE CALLER MUST REFUSE ANY NON-200 AND MUST NEVER HAND ON ITS BODY. 2026-06-20 answers
+# HTTP 200 with `"value":[]` because it is a Saturday, so a status quietly dropped turns a
+# failure into a day the series has no quote for -- and T3 resolves an absence by falling
+# back, which makes the fallback cross a hole nobody can see afterwards. The timeout and
+# the retry policy are the caller's for the same reason: this module executes no I/O.
+# `requests 2.32.2` is in the Databricks serverless base environment (measured on run
+# 1112844532335593), so a caller has one without shipping a wheel.
+#
+# WHAT IS ENFORCED FROM IN HERE ANYWAY, because an obligation nobody checks is a comment:
+#
+#   * OLINDA'S OWN ERROR BODY IS NOT JSON. Measured, three ways: `$select=dataCotacao`
+#     answers 400, an unquoted date answers 400 and a missing `@df` answers 500, and every
+#     one of them carries `/*{ "codigo": ..., "mensagem": ... }*/` -- a JSON object inside a
+#     comment wrapper. `json.loads` refuses the `/*`, so a caller that ignored the status is
+#     still refused rather than read as a day with no quote.
+#   * AN EMPTY BODY IS REFUSED BY NAME. It is what `response.text` looks like on a 204, on a
+#     dropped connection, and on an error whose status nobody checked.
+#   * A 200 CARRYING AN EMPTY ENVELOPE CANNOT BE TOLD FROM A WEEKEND in one response, so it
+#     is refused over the SPAN instead -- see `fetch_series`.
 Fetch = Callable[[str], str]
 
 
@@ -171,6 +190,14 @@ def quote_url(quote_date: date) -> str:
 def _envelope_rows(body: str, quote_date: date) -> list[object]:
     """The OData envelope's row list, or a refusal saying what arrived instead."""
     url = quote_url(quote_date)
+    if not body.strip():
+        raise PtaxResponseRefused(
+            f"{url} answered an EMPTY body. The transport must refuse a non-200 rather "
+            "than hand its body on (see `Fetch`), and an empty body is what "
+            "`response.text` looks like on a 204, on a dropped connection, and on an "
+            "error status nobody checked -- while zero rows is exactly what a weekend "
+            "looks like, so a forgiving reader cannot tell them apart"
+        )
     try:
         parsed = json.loads(body, parse_float=Decimal)
     except json.JSONDecodeError as exc:
@@ -487,6 +514,40 @@ def quote_dates(first: date, last: date) -> Iterator[date]:
         current += timedelta(days=1)
 
 
+def _refuse_a_span_with_no_quote_at_all(
+    quotes: tuple[PtaxQuote, ...], first: date, last: date
+) -> None:
+    """Refuse a span that answered no quote on any of its days.
+
+    ONE DAY WITH NO QUOTE IS NORMAL; A WHOLE SPAN WITH NONE IS NOT. Weekends and holidays
+    carry none and T3 resolves them by falling back, so a single absence must reach the
+    caller as an absence. An absence on EVERY day asked for is a property of the request
+    rather than a fact about the series.
+
+    THIS MODULE GUARDED THE IMPROBABLE VERSION AND LEFT THE LIKELY ONE OPEN. `quote_dates`
+    raises on an inverted span for exactly this reason -- it "would otherwise yield nothing
+    and land an empty series that every downstream count reports as clean" -- while the
+    operational form of that same sentence, every request answering nothing, returned `()`
+    and raised nothing at all.
+
+    AND IT IS NOT ONLY AN OUTAGE, which is what makes it worth a refusal rather than a log
+    line. MEASURED: `@di='2026-06-19'` -- an ISO date where this endpoint wants
+    `MM-DD-YYYY` -- answers HTTP 200 with `"value":[]`. The date format this repository
+    polices hardest fails by producing exactly the shape a weekend produces, on every day
+    of the span, with a 200 on every response. No per-response check can tell those apart.
+    Only the span can."""
+    if quotes:
+        return
+    raise PtaxResponseRefused(
+        f"no quote at all in {first} .. {last} ({(last - first).days + 1} calendar days). "
+        "One day without a quote is normal -- weekends and holidays have none -- but a "
+        "whole span without one is a property of the request: check that it contains a "
+        "business day, sits above the 1984-11-28 series floor and is not in the future. An "
+        "ISO date where this endpoint wants MM-DD-YYYY answers 200 with an empty row list "
+        "on every day of the span, which no single response can be told from a Saturday"
+    )
+
+
 def fetch_series(first: date, last: date, fetch: Fetch) -> tuple[PtaxQuote, ...]:
     """Every quote in `[first, last]`, in date order, ONE REQUEST PER QUOTE DATE.
 
@@ -496,6 +557,11 @@ def fetch_series(first: date, last: date, fetch: Fetch) -> tuple[PtaxQuote, ...]
 
     Days with no quote are ABSENT from the result rather than present as None: T3
     resolves them by falling back over the series, and asserting the series is gapless in
-    business days belongs to the layer that lands it, not to this one."""
+    business days belongs to the layer that lands it, not to this one.
+
+    A SPAN THAT ANSWERS NO QUOTE AT ALL IS A REFUSAL -- see the guard below for why that
+    is not the same statement as the sentence above it."""
     found = (fetch_quote(day, fetch) for day in quote_dates(first, last))
-    return tuple(quote for quote in found if quote is not None)
+    quotes = tuple(quote for quote in found if quote is not None)
+    _refuse_a_span_with_no_quote_at_all(quotes, first, last)
+    return quotes

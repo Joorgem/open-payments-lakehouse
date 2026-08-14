@@ -527,6 +527,56 @@ def test_an_inverted_span_is_refused_rather_than_landing_an_empty_series():
     assert list(quote_dates(date(2026, 6, 3), date(2026, 6, 3))) == [date(2026, 6, 3)]
 
 
+def test_a_span_where_no_day_answers_a_quote_is_refused():
+    """THE LIKELY VERSION OF THE TEST ABOVE, which was the one left open. An inverted span
+    is a caller's typo and was refused; every request answering nothing is an outage, or
+    worse, and returned `()` raising nothing -- landing an empty series that every
+    downstream count reports as clean.
+
+    IT IS NOT ONLY AN OUTAGE, and that is why it is a refusal. MEASURED: `@di='2026-06-19'`
+    -- an ISO date where this endpoint wants `MM-DD-YYYY`, the format this repository polices
+    hardest -- answers HTTP 200 with `"value":[]`. So the malformed request fails by wearing
+    a Saturday's exact shape on every day of the span. No single response can tell them
+    apart, which is why the check cannot live in `quotes_in`.
+
+    A weekend INSIDE a span stays an absence rather than a refusal: the second block is the
+    boundary, one real quote carrying the whole span."""
+    weekend = {
+        quote_url(date(2026, 6, 20)): BODY_NO_QUOTE,
+        quote_url(date(2026, 6, 21)): BODY_NO_QUOTE,
+    }
+    asked: list[str] = []
+
+    def only_empty(url: str) -> str:
+        asked.append(url)
+        return weekend[url]
+
+    with pytest.raises(PtaxResponseRefused) as refusal:
+        fetch_series(date(2026, 6, 20), date(2026, 6, 21), only_empty)
+    assert "no quote at all" in str(refusal.value)
+    assert "2026-06-20" in str(refusal.value) and "2026-06-21" in str(refusal.value)
+    assert len(asked) == 2, "every day was asked before the span was refused"
+
+    bodies = {**weekend, quote_url(date(2026, 6, 19)): BODY_2026_06_19}
+    survived = fetch_series(date(2026, 6, 19), date(2026, 6, 21), lambda url: bodies[url])
+    assert [quote.quote_date for quote in survived] == [date(2026, 6, 19)], (
+        "one quote is enough: the absences inside a span are still absences"
+    )
+
+
+def test_an_empty_body_is_refused_because_zero_rows_is_what_a_weekend_looks_like():
+    """THE OBLIGATION THE `Fetch` CONTRACT PUTS ON ITS CALLER, enforced as far as it can be
+    from inside a module that never sees a status code.
+
+    An empty body is `response.text` on a 204, on a dropped connection, and on an error
+    whose status nobody checked. Olinda's own error body is refused by the same path for a
+    different reason: measured, every error shape it serves is
+    `/*{ "codigo": ..., "mensagem": ... }*/`, and the `/*` wrapper is not JSON."""
+    for body in ("", "   ", "\n"):
+        with pytest.raises(PtaxResponseRefused, match="EMPTY body"):
+            quotes_in(body, date(2026, 6, 19))
+
+
 def test_nothing_here_can_send_a_credential_because_nothing_here_makes_the_request():
     """THE API IS PUBLIC AND UNAUTHENTICATED, asserted over the AST rather than the text:
     the module docstring SAYS the words "token" and "credential", and a substring check

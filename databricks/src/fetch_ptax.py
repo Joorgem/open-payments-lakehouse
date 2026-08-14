@@ -192,31 +192,6 @@ def filename_for(currency: str, first: date, last: date) -> str:
     return f"{currency.lower()}-{first.isoformat()}_{last.isoformat()}{STREAM_FILE_SUFFIX}"
 
 
-def _refuse_a_window_with_no_quotes(quotes: tuple[PtaxQuote, ...], first: date, last: date) -> None:
-    """Refuse a window the series has nothing in, rather than landing an empty file.
-
-    ZERO ROWS IS NOT AN ERROR FOR ONE DAY -- weekends and holidays have none, and T3
-    resolves those by falling back -- but zero rows for a whole WINDOW is not a property
-    of the series, it is a property of the request. A window entirely inside a weekend, a
-    window below the series floor (1984-11-28) and a window in the future all produce it.
-
-    LANDING IT ANYWAY IS THE FAILURE THIS REPOSITORY NAMES MOST OFTEN: an empty file in
-    the landing dir is ingested cleanly, the gate finds nothing to reject, the promote
-    appends nothing, and every task reports SUCCESS having moved zero rows -- which is
-    indistinguishable from a month in which nothing new arrived. And the empty file then
-    OWNS the name derived from this window, so the correct fetch of the same window is
-    refused by the emitter afterwards."""
-    if not quotes:
-        raise ValueError(
-            f"the window {first} .. {last} carries no PTAX quote at all. One day with no "
-            "quote is normal -- weekends and holidays have none -- but a whole window "
-            "with none is a wrong window rather than a fact about the series: check that "
-            "it contains a business day, sits above the 1984-11-28 series floor, and is "
-            "not in the future. Landing an empty file here would report SUCCESS having "
-            "ingested nothing, and would take the filename this window derives."
-        )
-
-
 def _report(
     quotes: tuple[PtaxQuote, ...], first: date, last: date, landed: EmittedFile
 ) -> None:
@@ -260,8 +235,19 @@ def main(argv: list[str] | None = None) -> None:
     month = require_month(args[1] if len(args) > 1 else None, action="fetch")
     first = require_quote_date(args[2] if len(args) > 2 else None, action="fetch", bound="first")
     last = require_quote_date(args[3] if len(args) > 3 else None, action="fetch", bound="last")
+    # A WINDOW THE SERIES HAS NOTHING IN IS REFUSED BY `fetch_series` ITSELF, so this task
+    # does not check it a second time. It used to, and the refusal moved DOWN a layer
+    # rather than being dropped: the condition is identical -- no quote on any day asked
+    # for -- and two spellings of one refusal means the second can never fire, which this
+    # repository treats as worse than no guard because the next reader trusts it.
+    #
+    # What this file knows and the extraction layer does not is why the refusal has to
+    # exist at all, so it is recorded here: an empty file in the landing dir is ingested
+    # cleanly, the gate finds nothing to reject, the promote appends nothing, and every
+    # task reports SUCCESS having moved zero rows -- indistinguishable from a month in
+    # which nothing new arrived. The empty file then OWNS the name this window derives, so
+    # the correct fetch of the same window is refused by the emitter ever afterwards.
     quotes = fetch_series(first, last, fetch)
-    _refuse_a_window_with_no_quotes(quotes, first, last)
     landed = emit_records_file(
         [record_of(quote) for quote in quotes],
         filename_for(QUOTED_CURRENCY, first, last),

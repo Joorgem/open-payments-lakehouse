@@ -229,17 +229,33 @@ def test_the_landing_filename_is_the_window_and_the_currency_and_nothing_else():
     assert name != module.filename_for(QUOTED_CURRENCY, date(2026, 6, 4), date(2026, 8, 1))
 
 
-def test_a_window_the_series_has_nothing_in_is_refused_rather_than_landed_empty(tmp_path):
+def test_a_window_the_series_has_nothing_in_is_refused_rather_than_landed_empty(
+    monkeypatch, fetcher
+):
     """An empty file in the landing dir is ingested cleanly, rejects nothing, promotes
     nothing, and every task reports SUCCESS having moved zero rows -- and it then OWNS
     the filename this window derives, so the correct fetch of the same window is refused
     by the emitter ever afterwards.
 
     One day with no quote is normal (weekends, holidays) and is not this: the refusal is
-    about a whole window, which is a property of the request."""
+    about a whole window, which is a property of the request.
+
+    IT IS REFUSED ONE LAYER DOWN, in `ptax_source.fetch_series`, and asserted here through
+    `main` rather than against a helper of this task's own. This file used to carry a copy;
+    the condition was identical, so once the extraction layer refused it the local one could
+    never fire. Through `main` the test says what actually matters -- that the task cannot
+    reach `emit_records_file` with nothing to write -- and it would still hold if the
+    refusal moved again."""
     module = _load("fetch_ptax")
-    with pytest.raises(ValueError, match="carries no PTAX quote at all"):
-        module._refuse_a_window_with_no_quotes((), date(2026, 6, 20), date(2026, 6, 21))
+    monkeypatch.setattr(module, "fetch", fetcher)
+    monkeypatch.setattr(
+        module,
+        "emit_records_file",
+        lambda *a, **k: pytest.fail("an empty window reached the landing writer"),
+    )
+    with pytest.raises(PtaxResponseRefused, match="no quote at all"):
+        module.main(["ptax", "2026-08", "2026-06-20", "2026-06-21"])
+    assert len(fetcher.urls) == 2, "both days were asked before the window was refused"
 
 
 def test_a_non_200_is_a_refusal_and_never_an_empty_day(monkeypatch):
