@@ -102,6 +102,23 @@ ENVELOPE_ROWS = "value"
 # fraction at all, which no observed row has: it is here so an absence is not a refusal.
 PUBLICATION_FORMATS = ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S")
 
+# TWO ROWS FOR ONE QUOTE DATE ARE TWO PUBLICATIONS OF ONE QUOTE, AND THIS IS THE BOUND
+# THAT MAKES THAT A CLAIM RATHER THAN AN ASSUMPTION. Measured over the whole series --
+# 1984-11-28 .. 2026-08-13, 10,447 rows:
+#
+#   * WITHIN one quote date the series holds exactly TWO fan-outs, and both agree on both
+#     rates: 2001-12-21 (two rows, identical stamps) and 2025-04-23 (27 ms apart). The
+#     widest re-publication of a single quote the series has ever carried is 27 ms.
+#   * BETWEEN two different quote dates the tightest publication gap in 42 years is SIX
+#     MINUTES: quote date 1996-04-10 published `1996-04-11 18:36:00.0` while quote date
+#     1996-04-11 published `1996-04-11 18:30:00.0`. The later quote date published first,
+#     so publication order does not even follow quote-date order.
+#
+# One minute sits ~2,200x above the first number and 6x below the second: it cannot fire
+# on the re-publication behaviour the series exhibits, and it cannot admit the closest
+# pair of DISTINCT quotes the series holds.
+MAX_PUBLICATION_SPREAD = timedelta(minutes=1)
+
 # A URL in, a response body out. Injected rather than imported so this module executes
 # no I/O: `requests 2.32.2` is in the Databricks serverless base environment (measured on
 # run 1112844532335593), and the timeout, retry and status policy are the caller's.
@@ -275,6 +292,38 @@ def _refuse_a_second_quote_date(quotes: tuple[PtaxQuote, ...]) -> None:
         )
 
 
+def _refuse_publications_too_far_apart(quotes: tuple[PtaxQuote, ...]) -> None:
+    """Refuse rows whose publication instants are too far apart to be one quote.
+
+    THE BOUND IS WHAT MAKES `min()` SAFE, so the two are one decision taken twice. Without
+    it the reduce asserts nothing: rows 5 hours or 43 days apart were accepted and one of
+    their stamps became the instant T3 reads. Keeping the EARLIER stamp is right for a
+    re-publication 27 ms later and wrong for anything that is not one, because it would
+    make a rate available hours before BCB released it -- the fail-OPEN direction T3
+    exists to refuse.
+
+    IT IS ALSO THE SECOND NET UNDER A RANGE REQUEST, and the one that catches the case
+    nothing else can. `quotes_in` carries the REQUESTED quote date onto every row, so a
+    range response arrives wearing one quote date however many it really spans and
+    `_refuse_a_second_quote_date` cannot see it. Measured:
+    `@di='11-28-1984'&@df='11-29-1984'` answers two rows with IDENTICAL rates published
+    5 h 09 m apart, so the disagreement branch cannot see it either. Between that request
+    and a silently wrong landing there is only this check."""
+    stamps = sorted(quote.published_at for quote in quotes)
+    spread = stamps[-1] - stamps[0]
+    if spread > MAX_PUBLICATION_SPREAD:
+        raise PtaxResponseRefused(
+            f"{quote_url(quotes[0].quote_date)} answered {len(quotes)} rows whose "
+            f"publication instants span {spread}, wider than {MAX_PUBLICATION_SPREAD}: "
+            f"{[quote.published_raw for quote in quotes]}. Two rows for one quote date "
+            "are two publications of ONE quote, and in this series a re-publication is "
+            "27 ms at the widest while the closest two DISTINCT quotes are six minutes "
+            "apart. A spread this wide means these are not one quote -- most often a "
+            "range request, whose rows carry no quote date of their own and arrive here "
+            "wearing the one that was asked for"
+        )
+
+
 def sole_quote(quotes: tuple[PtaxQuote, ...]) -> PtaxQuote | None:
     """The one quote for a `(currency, quote_date)` IN ONE RESPONSE, or None if that
     response carries none.
@@ -314,6 +363,10 @@ def sole_quote(quotes: tuple[PtaxQuote, ...]) -> PtaxQuote | None:
     if not quotes:
         return None
     _refuse_a_second_quote_date(quotes)
+    # BEFORE the disagreement branch, because the spread reframes what a disagreement
+    # means: two rows five hours apart that differ are not a contradiction to resolve,
+    # they are two different quotes that should never have been grouped.
+    _refuse_publications_too_far_apart(quotes)
     rates = {(quote.compra, quote.venda) for quote in quotes}
     if len(rates) > 1:
         raise PtaxResponseRefused(

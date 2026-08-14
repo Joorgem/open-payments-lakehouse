@@ -18,6 +18,7 @@ from opl.extraction.ptax_source import (
     BRASILIA,
     COMPRA_FIELD,
     ENVELOPE_ROWS,
+    MAX_PUBLICATION_SPREAD,
     PTAX_ENDPOINT,
     PUBLISHED_FIELD,
     RESPONSE_FIELDS,
@@ -59,6 +60,15 @@ BODY_2025_04_23 = (
     "{" + _CONTEXT + ',"value":[{"cotacaoCompra":5.68740,"cotacaoVenda":5.68800,'
     '"dataHoraCotacao":"2025-04-23 13:06:30.416"},{"cotacaoCompra":5.68740,'
     '"cotacaoVenda":5.68800,"dataHoraCotacao":"2025-04-23 13:06:30.443"}]}'
+)
+# THE RANGE REQUEST THAT SUCCEEDS SILENTLY, captured live from
+# `@di='11-28-1984'&@df='11-29-1984'`. Two quote dates, and BOTH publish on 1984-12-03 --
+# so attribution is many-to-one, not merely absent. Their rates are IDENTICAL, which is
+# what makes this the decisive body: every other check in the module passes on it.
+BODY_1984_RANGE = (
+    "{" + _CONTEXT + ',"value":[{"cotacaoCompra":2814.00000,"cotacaoVenda":2828.00000,'
+    '"dataHoraCotacao":"1984-12-03 11:29:00.0"},{"cotacaoCompra":2814.00000,'
+    '"cotacaoVenda":2828.00000,"dataHoraCotacao":"1984-12-03 16:38:00.0"}]}'
 )
 # A weekend: the API answers 200 with an empty envelope, not an error.
 BODY_NO_QUOTE = "{" + _CONTEXT + ',"value":[]}'
@@ -249,6 +259,44 @@ def test_the_reduce_is_per_response_and_is_not_the_one_the_landed_table_needs():
     assert "rather than in gold before the FX join" not in said, (
         "that is the retracted claim, restored. The request-layer reduce is an addition "
         "to the gold-side one, never a replacement for it"
+    )
+
+
+def test_publications_too_far_apart_to_be_one_quote_are_refused():
+    """THE BOUND WITHOUT WHICH THE REDUCE ASSERTS NOTHING, and the body is the real range
+    response for 1984-11-28..1984-11-29.
+
+    WHY THIS BODY IS THE DECISIVE ONE. Both quote dates publish on 1984-12-03, so a range
+    response cannot be attributed even in principle -- the collision is many-to-one, not a
+    missing column. And their rates are IDENTICAL, so the disagreement branch does not fire;
+    `quotes_in` carries the one REQUESTED quote date onto both rows, so the mixed-date
+    refusal cannot fire either. Every other check in this module passes on this body. Before
+    the bound, `sole_quote` reduced it to a single quote whose publication instant was five
+    hours away from the other row's, and the extraction landed a rate under a quote date
+    that was never asked for.
+
+    The bound's two sides are pinned rather than trusted, because a number chosen from one
+    measurement can be widened by anyone: 27 ms is the widest re-publication of a single
+    quote in 42 years, and six minutes is the tightest gap between two DISTINCT quotes
+    (1996-04-10 published 18:36, 1996-04-11 published 18:30 -- the later date first)."""
+    assert timedelta(milliseconds=27) < MAX_PUBLICATION_SPREAD < timedelta(minutes=6), (
+        "the bound must not fire on the series' own widest re-publication, and must not "
+        "admit the series' closest pair of distinct quotes"
+    )
+    leaked = quotes_in(BODY_1984_RANGE, date(1984, 11, 28))
+    assert len(leaked) == 2
+    assert leaked[0].venda == leaked[1].venda, "identical rates: no disagreement to catch"
+    assert {quote.quote_date for quote in leaked} == {date(1984, 11, 28)}, (
+        "one requested quote date on both rows, so the mixed-date refusal cannot see this"
+    )
+    assert leaked[1].published_at - leaked[0].published_at == timedelta(hours=5, minutes=9)
+    with pytest.raises(PtaxResponseRefused) as refusal:
+        sole_quote(leaked)
+    message = str(refusal.value)
+    assert "5:09:00" in message and "11-28-1984" in message
+    assert "1984-12-03 16:38:00.0" in message, (
+        "the refusal has to carry both stamps: a spread without them leaves the reader "
+        "unable to tell a range request from a genuine re-publication"
     )
 
 
