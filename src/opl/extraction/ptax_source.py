@@ -88,7 +88,17 @@ BASE_CURRENCY = "BRL"
 # no system tz database -- and `pyproject.toml:18-29` records how little room the
 # serverless install budget has. The limit, stated rather than left to be discovered: a
 # publication instant inside a pre-2019 Brazilian DST window is an hour late here. The
-# 1984-12-03 stamp in the tests is not one of them; tzdata puts that day at UTC-03:00.
+# 1984-12-03 stamp in the tests is not one of them; tzdata puts that day at UTC-03:00
+# (re-verified against `zoneinfo` while this module was being reviewed).
+#
+# THE LIMIT IS STATED AND NOT ENFORCED, which is a decision and not an omission. Enforcing
+# it needs a table of Brazilian DST windows -- a SECOND CALENDAR that can disagree with its
+# source, which is the exact species plan T3 refuses for holidays, and it would have to be
+# carried by the wheel that declined `tzdata` for size. It also could not be a refusal: the
+# 1984 row this module's headline test is built on is pre-2019, so a DST guard's first
+# victim would be the one row that proves the quote date is not in the response. What
+# bounds the risk instead is the extraction range -- 2026 only, where the fixed offset and
+# tzdata agree on every row -- and the limit is recorded in the phase's accepted-limit list.
 BRASILIA = timezone(timedelta(hours=-3))
 
 COMPRA_FIELD = "cotacaoCompra"
@@ -461,19 +471,16 @@ def sole_quote(quotes: tuple[PtaxQuote, ...]) -> PtaxQuote | None:
     LANDED TABLE MUST STILL REDUCE OVER THAT TABLE. This is an addition to that reduce,
     not a replacement for it, and a re-run is an ordinary event rather than an incident.
 
-    MEASURED: 2025-04-23 carries TWO rows, publication stamps 27 ms apart, AGREEING on
-    both rates.
-
     THE EARLIER STAMP IS KEPT, BECAUSE `max()` IS THE ONE REDUCE THAT CHANGES T3'S ANSWER
-    AND `min()` IS THE IDENTITY. The branch below has already refused any group whose rates
-    differ, so whatever this returns, both rows carry the SAME rate -- which means BCB had
-    published that rate at the earlier instant and the later row re-publishes a number
-    already knowable. T3 hands a payment the most recent quote whose publication instant
-    PRECEDES the payment's own, so keeping the LATER stamp denies a payment falling between
-    the two a rate it could already have used and sends it back to the previous business
-    day, at a different rate. That is the model this plan retracted at T3, rebuilt inside
-    the reduce. It is not the fail-safe direction either, because there is nothing here to
-    be safe from: the rate is identical either way and only its availability moves.
+    AND `min()` IS THE IDENTITY. Measured: 2025-04-23 carries two rows 27 ms apart, AGREEING
+    on both rates -- and the branch below has already refused any group whose rates differ,
+    so whatever this returns, both rows carry the SAME rate. BCB therefore published it at
+    the earlier instant and the later row re-publishes a number already knowable. T3 hands a
+    payment the most recent quote whose publication instant PRECEDES the payment's own, so
+    keeping the LATER stamp denies a payment falling between the two a rate it could already
+    have used and sends it back to the previous business day at a different rate -- the model
+    this plan retracted at T3, rebuilt inside the reduce. Not the fail-safe direction either:
+    the rate is identical either way and only its availability moves.
 
     THE DISAGREEMENT BRANCH HAS NO WITNESS. No quote date in the series holds rows that
     differ, so this branch ships unexercised by the source; the only body that has ever

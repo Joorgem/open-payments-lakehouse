@@ -19,6 +19,7 @@ from opl.extraction.ptax_source import (
     COMPRA_FIELD,
     ENVELOPE_ROWS,
     MAX_PUBLICATION_SPREAD,
+    PTAX_DATE_FORMAT,
     PTAX_ENDPOINT,
     PUBLISHED_FIELD,
     RESPONSE_FIELDS,
@@ -72,6 +73,14 @@ BODY_1984_RANGE = (
 )
 # A weekend: the API answers 200 with an empty envelope, not an error.
 BODY_NO_QUOTE = "{" + _CONTEXT + ',"value":[]}'
+# OLINDA'S REAL ERROR BODY, captured from `$select=dataCotacao` (HTTP 400). A JSON object
+# wrapped in a `/*...*/` COMMENT, which is not JSON -- so it is refused by the not-JSON
+# branch and never by the missing-member one. The same shape comes back for an unquoted date
+# (400) and for a missing `@df` (500), and none of the three carries a content-type header.
+BODY_ODATA_ERROR = (
+    '/*{\n  "codigo" : 400,\n  "mensagem" : "The property \'dataCotacao\', used in a query '
+    "expression, is not defined in type 'TipoCotacaoDolar'.\"\n}*/"
+)
 
 
 def test_the_quote_date_survives_a_publication_five_days_later():
@@ -95,13 +104,34 @@ def test_the_quote_date_survives_a_publication_five_days_later():
     assert quote.published_at.date() - quote.quote_date == timedelta(days=5)
     assert quote.published_raw == "1984-12-03 11:29:00.0"
     assert str(quote.venda) == "2828.00000"
-    for spelling in ("1984-11-28", "11-28-1984", "28-11-1984", "28/11/1984", "1984/11/28"):
-        assert spelling not in BODY_1984, (
-            f"{spelling!r} is in the response after all, so the quote date COULD have "
-            "been read off the body and this test no longer separates the two "
-            "implementations"
-        )
+    # EXHAUSTIVE, replacing an enumeration of five date spellings. The service's own
+    # `$metadata` declares `TipoCotacaoDolar` with exactly these three properties and
+    # `$select=dataCotacao` is an HTTP 400, so this equality settles every spelling at once
+    # -- where a list of five could only ever settle the five it listed.
+    row = json.loads(BODY_1984)["value"][0]
+    assert set(row) == set(RESPONSE_FIELDS), (
+        "the response carries exactly three fields, so there is no field the quote date "
+        "could be hiding in under any spelling at all"
+    )
+    assert [value for value in row.values() if isinstance(value, str)] == [
+        "1984-12-03 11:29:00.0"
+    ], (
+        "and the row's only TEXT value is the publication instant, on 1984-12-03. The "
+        "other two are numbers, so no value carries the quote date either and there is "
+        "nothing in this body to derive it from"
+    )
     assert "11-28-1984" in quote_url(date(1984, 11, 28))
+    # PUBLICATION DATES COLLIDE ACROSS QUOTE DATES, which makes a range response
+    # unattributable MANY-TO-ONE rather than merely short of a column. Measured live:
+    # 1984-11-28 and 1984-11-29 both publish on 1984-12-03, and 1984-12-03/04/05 all
+    # publish on 1984-12-05. So even a reader willing to key on `dataHoraCotacao` cannot
+    # recover which quote date a row belongs to -- there is no function to write.
+    collided = json.loads(BODY_1984_RANGE)["value"]
+    assert len({row[PUBLISHED_FIELD][:10] for row in collided}) == 1
+    assert len(collided) == 2
+    assert {(row[COMPRA_FIELD], row[VENDA_FIELD]) for row in collided} == {
+        (2814.00000, 2828.00000)
+    }, "and the two collided rows are identical in both rates, so nothing tells them apart"
 
 
 def test_a_range_request_is_not_offered_because_its_rows_cannot_be_attributed():
@@ -128,18 +158,19 @@ def test_the_date_format_is_month_first_in_single_quotes_and_is_not_iso():
     assert url.endswith("&$format=json")
 
 
-def _f0_ptax_url() -> str:
-    """The literal `scripts/validate_cnpj_snapshots.py` has carried since F0, read out of
-    that file rather than re-typed here. Parsed, never executed: the script imports `opl`
-    at module scope and running it would make this test a network test."""
-    script = _REPO / "scripts" / "validate_cnpj_snapshots.py"
+def _script_literal(script_name: str, name: str) -> str:
+    """A module-level string assignment read out of a tracked script, by AST.
+
+    Parsed, NEVER EXECUTED: these scripts import `requests` and `opl` at module scope, and
+    running one would turn this into a network test."""
+    script = _REPO / "scripts" / script_name
     tree = ast.parse(script.read_text(encoding="utf-8"), filename=script.name)
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "PTAX" for target in node.targets
+            isinstance(target, ast.Name) and target.id == name for target in node.targets
         ):
             return str(ast.literal_eval(node.value))
-    raise AssertionError("scripts/validate_cnpj_snapshots.py no longer defines PTAX")
+    raise AssertionError(f"scripts/{script_name} no longer defines {name}")
 
 
 def test_the_endpoint_and_its_date_format_are_f0s_and_not_a_second_spelling():
@@ -147,12 +178,25 @@ def test_the_endpoint_and_its_date_format_are_f0s_and_not_a_second_spelling():
     HARDEST, so this compares against F0's own literal instead of re-stating it. The date
     format is compared the same way: F0's URL asks for 02 January 2026, and this module
     asked for the same day must spell it identically."""
-    f0 = _f0_ptax_url()
+    f0 = _script_literal("validate_cnpj_snapshots.py", "PTAX")
     assert f0.startswith(PTAX_ENDPOINT), (
         f"F0 carries {f0!r}; this module spells the endpoint {PTAX_ENDPOINT!r}"
     )
     assert "@di='01-02-2026'" in f0
     assert "@di='01-02-2026'" in quote_url(date(2026, 1, 2))
+
+
+def test_the_probe_script_is_not_a_third_spelling_of_the_endpoint():
+    """`scripts/probe_ptax.py` CARRIES ITS OWN COPY OF THE ENDPOINT AND THE DATE FORMAT, and
+    nothing pinned either -- so the phase had three spellings of one URL with a test over
+    only two of them. The probe is the artefact the run evidence cites for every measured
+    rate, which makes a drifted copy worse than an unpinned one: it would keep producing
+    numbers, from a different request than the extraction makes.
+
+    Compared to this module rather than to F0, because the probe was written from this
+    module's constants. All three agree transitively via the test above."""
+    assert _script_literal("probe_ptax.py", "PTAX_ENDPOINT") == PTAX_ENDPOINT
+    assert _script_literal("probe_ptax.py", "PTAX_DATE_FORMAT") == PTAX_DATE_FORMAT
 
 
 def test_the_trailing_zero_the_api_published_survives_the_parse():
@@ -346,18 +390,33 @@ def test_a_row_missing_any_of_the_three_fields_is_refused(field: str):
     "body, expected",
     [
         ("<html>service temporarily unavailable</html>", "not JSON"),
+        (BODY_ODATA_ERROR, "not JSON"),
         ('{"error":{"code":"500"}}', "member"),
         ("[]", "member"),
         ('{"' + ENVELOPE_ROWS + '":{"cotacaoVenda":5.14420}}', "rather than a"),
         ('{"' + ENVELOPE_ROWS + '":["cotacaoVenda"]}', "where a quote row was expected"),
     ],
-    ids=["html-interstitial", "odata-error", "bare-list", "object-not-list", "row-not-object"],
+    ids=[
+        "html-interstitial",
+        "odata-error",
+        "json-without-value-member",
+        "bare-list",
+        "object-not-list",
+        "row-not-object",
+    ],
 )
 def test_a_body_that_is_not_the_odata_envelope_is_refused(body: str, expected: str):
     """The 200-carrying-an-interstitial case is the one that matters: it parses as zero
     rows under a forgiving reader, and zero rows is exactly what a weekend looks like. A
     day the API failed on would then be indistinguishable from a day with no quote, and
-    T3 would fall back over a hole nobody could see."""
+    T3 would fall back over a hole nobody could see.
+
+    `odata-error` IS THIS SERVICE'S REAL ERROR SHAPE, and it is not the JSON error object
+    an OData reader expects: Olinda answers `/*{ "codigo": ..., "mensagem": ... }*/`, a JSON
+    object inside a comment wrapper, measured from three different bad requests. The earlier
+    fixture here was an invented `{"error": ...}`, which took the wrong branch -- so the
+    branch that actually fires on a real API error had never been exercised. Both are kept:
+    the invented one is a fine test of the missing-member branch under its own name."""
     with pytest.raises(PtaxResponseRefused) as refusal:
         quotes_in(body, date(2026, 6, 19))
     assert expected in str(refusal.value)
