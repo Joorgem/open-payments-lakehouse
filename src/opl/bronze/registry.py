@@ -280,9 +280,17 @@ REGISTRY: dict[str, BronzeTable] = {
         #
         # WHAT IS DELIBERATELY ABSENT, since the gate is all-or-nothing and every
         # statement here is a new way for a promote to fail over the WHOLE table: no
-        # CHECK on `currency`. `CURRENCIES` holds one member today, and the contract
-        # says plainly that a second currency is meant to be a VALUE change rather
-        # than a schema change -- a CHECK would silently make it a migration.
+        # CHECK on `currency`. THE PREMISE THIS ARGUMENT USED TO REST ON IS NOW FALSE --
+        # it said "`CURRENCIES` holds one member today", and F-API made the tuple
+        # `("BRL", "USD")` -- so the argument is restated on what actually carries it.
+        # `payments.CURRENCIES` is a VALUE DOMAIN that gains members: the contract says
+        # so, `opl.gold.registry.DIM_CURRENCY` reads the tuple as its member set, and
+        # this phase has now added to it once. A CHECK here would have turned that append
+        # into a MIGRATION on a live bronze table -- an ALTER before the next promote
+        # could succeed -- which is a schema change made by a value edit, and no count of
+        # members is needed to see it. No number is quoted deliberately: a count in this
+        # comment is a second copy of `len(CURRENCIES)` and would go stale again on the
+        # third member.
         constraints=(
             "ALTER TABLE {table} ALTER COLUMN transaction_id SET NOT NULL",
             "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS transaction_id_not_blank",
@@ -353,8 +361,11 @@ REGISTRY: dict[str, BronzeTable] = {
         # upstream of it, which is the one direction this repository does not allow.
         #
         # WHAT IS DELIBERATELY ABSENT: no CHECK on `currency`, for exactly the reason the
-        # payments entry gives -- a second currency must be a VALUE change rather than a
-        # schema change, and a CHECK would silently make it a migration on a live table.
+        # payments entry gives -- the currency domain is a declaration that GAINS members
+        # (F-API added one), and a CHECK would turn each addition into a migration on a
+        # live table. Here it is weaker still: this column is decided by WHICH ENDPOINT
+        # was called rather than by the body, so a wrong value means the task called a
+        # different pair, which a value list would report as a bad row.
         constraints=(
             "ALTER TABLE {table} ALTER COLUMN quote_date SET NOT NULL",
             "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS quote_date_iso_shape",
