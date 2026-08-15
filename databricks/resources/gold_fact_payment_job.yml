@@ -123,10 +123,16 @@
 # collision. `_EVENT_COUNT = 10,000` and `_REPEAT_COUNT = 800` are shared by every profile, so
 # each stream carries exactly 9,200. Across four streams the only way the total is below
 # 36,800 is a CROSS-stream collision, which the guard does not cover: the tuple space is
-# 1024 x 1023 ordered counterparty pairs x 4,999,901 amounts x 2 currencies x 5 methods =
-# 5.2e13, so a collision between the fifth stream's 4,675 BRL base tuples and the existing
-# 27,600 has probability about 5e-6. 36,800 is therefore a prediction that can fail, and its
-# failure would be a finding about the generator's independence rather than about gold.
+# 1024 x 1023 ordered counterparty pairs x 4,999,901 amounts x <currencies> x 5 methods, and
+# BOTH POPULATIONS IN THIS COMPARISON ARE BRL -- the existing 27,600 because no earlier
+# stream draws USD, the fifth stream's 4,675 because that is the BRL half of its base events
+# -- so the currency factor is ONE and the space is 2.6e13. A collision between them has
+# probability 4,675 x 27,600 / 2.6e13 = about 5e-6. THIS BLOCK USED TO STATE THE SPACE AS
+# "x 2 currencies = 5.2e13" AND THEN PRINT 5e-6, which does not follow from it: over 5.2e13
+# the answer is 2.5e-6. The printed figure was right and its stated derivation was not --
+# the same "argued about a population wider than the one it counted" defect the paragraph
+# above this one already records once. Either way 36,800 is a prediction that can fail, and
+# its failure would be a finding about the generator's independence rather than about gold.
 #
 # THE FX SPLIT, WHICH IS THE PHASE'S HEADLINE NUMBER AND IS DERIVED RATHER THAN ESTIMATED. The
 # `cross-currency` window opens 2026-06-22T08:00:00.000Z and steps 5,000 ms per event; the

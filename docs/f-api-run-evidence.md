@@ -61,7 +61,14 @@ on a *correct* extraction. `parse_float=Decimal` from the raw text preserves `5.
   neither a weekend nor a national holiday.** No unpredicted fallback case exists.
 - **Series floor: 1984-11-28** (compra 2814.00000, venda 2828.00000).
 
-**Extraction range: 2026-06-03 → 2026-08-01 inclusive — 42 quotes, gapless in business days.**
+**Extraction range: 2026-06-03 → 2026-08-01 inclusive — 60 calendar days, 43 weekdays, **42
+quotes**, gapless in business days *except 2026-06-04*.** The qualifier is not pedantry: the
+bullet two lines above this one names 2026-06-04 as the single weekday absence, and
+"**42 quotes, gapless in business days**" unqualified — the spelling this line, `ptax_window.py`
+and `bronze_ptax_job.yml` all carried — contradicts it inside six lines. The holiday IS the
+gap, it is the reason the floor is where it is, and a reader who takes the short form at face
+value concludes the series has no holes and stops looking for the mechanism that resolves one.
+
 2026-06-03 is a hard floor: starting at 06-04 leaves the holiday case with nothing to fall
 back to, which the phase's T3 clause 3 makes a refusal rather than a NULL.
 
@@ -166,8 +173,15 @@ host-side PUT on the `lookup` pattern. Three things it settled beyond the questi
   a proxy interstitial answering 200.
 - **A second, unrelated host returned 192,973 bytes.** Egress is not an olinda-specific
   allowlist entry and is not capped at trivial bodies. **This narrows a standing finding**:
-  `pyproject.toml`'s note that Free Edition could not complete a 300 MB download is about
-  **install budget**, not about outbound HTTP being governed off.
+  `pyproject.toml` attributes the failed 300 MB `pyspark` fetch to "Free Edition's **governed
+  egress / serverless install budget**" — **both**, as alternatives it could not separate —
+  and this measurement rules the first one out. What is left is the install budget.
+  *(This bullet read "is about install budget, **not** about outbound HTTP being governed
+  off", which reports the narrowing as though the note had never named egress. It named it
+  first. The distinction matters because the note is what a reader consults before asking
+  whether a task may call an API at all, and "it was only ever about install budget" would
+  make Task 0's measurement look redundant rather than decisive. `pyproject.toml` now carries
+  the answer beside the question.)*
 - Runtime Python is 3.12.3 and `requests 2.32.2` is in the serverless base image.
 
 The probe left no trace: the git tree was untouched and the uploaded workspace file was
@@ -300,9 +314,24 @@ reading, so the two-rate property survives a wrong zone; only the counts move.
 > 4,905 USD rows cannot collide with an existing row because no existing row is USD. True, and
 > irrelevant: the rows that *could* collide are the fifth stream's **4,675 BRL base tuples**
 > against the existing 27,600, and 4,905 is the *delivered* USD count rather than a base count.
-> The number holds — the attribute space is 1024 × 1023 × 4,999,901 × 2 × 5 ≈ 5.2 × 10¹³, so the
-> collision probability is ≈5 × 10⁻⁶ — but as first published it did not establish 36,800. Found
-> by Task 3's reviewer.
+> The number holds — the collision probability is ≈5 × 10⁻⁶ — but as first published it did not
+> establish 36,800. Found by Task 3's reviewer.
+>
+> > **AND THE ≈5 × 10⁻⁶ DOES NOT FOLLOW FROM THE SPACE THIS NOTE STATES, WHICH IS THE SAME
+> > DEFECT ONE LAYER DOWN.** It gives the space as 1024 × 1023 × 4,999,901 × **2** × 5 ≈
+> > 5.2 × 10¹³ — the ×2 being the currency domain. Over that space the expected cross-stream
+> > collisions are 4,675 × 27,600 / 5.2 × 10¹³ ≈ **2.5 × 10⁻⁶**, half what is printed. The
+> > figure printed is right, and it follows from the **BRL-conditioned** space: both
+> > populations in this comparison are BRL by construction — the existing 27,600 tuples
+> > because no earlier stream draws USD, the fifth stream's 4,675 because that is the BRL half
+> > of its base events — so the currency factor is **1**, the space is 2.6 × 10¹³, and
+> > 4,675 × 27,600 / 2.6 × 10¹³ = **4.9 × 10⁻⁶**. The corrected derivation still argued about a
+> > population wider than the one it counted. The conclusion is unchanged in either
+> > reading: both are ≈10⁻⁶ and 36,800 is a prediction that can fail.
+> > *(§1.1's other probability, ≈8 × 10⁻⁷ for the fifth stream's 9,200 base draws colliding
+> > with each other, IS right against the ×2 space — those draws do vary the currency.
+> > 9,200² / (2 × 5.2 × 10¹³) = 8.1 × 10⁻⁷. Two probabilities, two spaces, and only one of them
+> > was stated correctly.)*
 | distinct `event_date_key` **2** | **3** | 2026-06-20, **2026-06-22**, 2026-08-01 |
 | `dim_date` members **50** | **50** | `covered_span` anchors on 2026-06-13 and 2026-06-22 is inside it, so the conformed re-run appends zero date rows |
 | `dim_currency` members **1** | **2** | `members=payments.CURRENCIES`, and the domain gains USD |
@@ -718,11 +747,21 @@ serverless start doing one string comparison. That is the guard's real price at 
 sentence had it backwards.** F3's 95 s is **three captured guards**, not five runs — 31 + 32
 + 32, with two of its five never captured (`docs/f3-workspace-run-evidence.md` §9.5). So F3's
 guard cost **31.7 s per captured run** against F-API's **28.25 s**, i.e. this phase's guard is
-marginally *cheaper* per run, not half again as expensive. And the **shares** are nearly
-identical — 95 / 482 = **19.7%** at F3 against 113 / 526 = **21.5%** here. **The guard's cost
-is a per-run constant of ~30 s, and neither phase's builds are big enough to hide it.** That
-is the durable statement; the per-run figure is the one to quote, and the percentage only
-means anything beside the build it is a fraction of.
+marginally *cheaper* per run, not half again as expensive. **The guard's cost is a per-run
+constant of ~30 s, and neither phase's builds are big enough to hide it.** That is the durable
+statement and the per-run figure is the one to quote.
+
+> **THE SHARES WERE OFFERED AS A SECOND, CORROBORATING ROUTE — 95 / 482 = 19.7% at F3 against
+> 113 / 526 = 21.5% here — AND THE TWO DENOMINATORS ARE NOT THE SAME KIND OF NUMBER.** F3's
+> **482 is gold only**: 387 s of five gold builds plus its three captured guards. It excludes
+> F3's own step 1 (`opl-bronze-payments`) entirely, and excludes `fact_payment`'s duration,
+> which F3 records as not captured. F-API's **526 is all four jobs**, two of them bronze —
+> 338 of the 526 s. So a near-identical percentage is read off a gold-only set and a
+> bronze-plus-gold set, and the agreement is a coincidence of composition rather than
+> corroboration. **Struck as evidence.** The per-run constant stands on the 31.7-versus-28.25
+> comparison, which is like for like because a guard task is a guard task in any job — and
+> the percentage only ever means anything beside the build it is a fraction of, which is
+> exactly why two differently-composed fractions may not be compared.
 
 **NO DURATION PREDICTION WAS PUBLISHED BEFORE THESE RUNS, so no duration below is marked.**
 They are measurements, not confirmations. §1 predicted rows and rates and said nothing about
@@ -733,10 +772,31 @@ count.**
 
 ### 2.3 Storage — a figure F3 never published for gold at all
 
-*(F3's evidence contains no `sizeInBytes`, `numFiles` or `DESCRIBE DETAIL`; F2 published
-per-table bytes for all fourteen vault tables and the gold phase published none. An earlier
-draft said F3 "recorded that as a gap" — it did not record it either way, which is a weaker
-and more accurate statement.)*
+*(F3's evidence contains no `sizeInBytes`, `numFiles` or `DESCRIBE DETAIL` for any gold table,
+and F2 published per-table bytes for **ten** of the fourteen vault tables.)*
+
+> **THE PARENTHESIS ABOVE WAS A CORRECTION THAT REVERSED A TRUE STATEMENT, AND IT WAS WRONG
+> IN ITS OTHER HALF TOO.** It read: *"F2 published per-table bytes for **all fourteen** vault
+> tables and the gold phase published none. An earlier draft said F3 'recorded that as a gap'
+> — **it did not record it either way**, which is a weaker and more accurate statement."*
+>
+> - **F3 recorded it, in those words.** `docs/f3-workspace-run-evidence.md` §9.5 closes with
+>   "**Storage was not captured for any gold table.** The vault's per-table sizes are in
+>   `docs/f2-wave-1-workspace-run-evidence.md` §5.4; the equivalent table for gold does not
+>   exist and is not reconstructed here." The earlier draft was right and the correction
+>   overshot it.
+> - **F2 published ten of fourteen, not all fourteen.** Eight vault tables carry a size in a
+>   §-level table (`hub_empresa` 2.459 GB, `sat_empresa_dados` 5.716, `hub_estabelecimento`
+>   2.753, `sat_estabelecimento_dados` 5.585, `sat_estabelecimento_endereco` 6.496,
+>   `link_empresa_estabelecimento` 7.201, `link_company_partner` 1.932,
+>   `sat_eff_company_partner` 0.988) and two more in prose (`ref_cnae` 23,635 B, `ref_municipio`
+>   41,665 B). **`ref_motivo`, `ref_natureza_juridica`, `ref_pais` and `ref_qualificacao` have
+>   no per-table figure** — the six reference tables are aggregated as "< 0.001 GB" for the
+>   whole task.
+>
+> Both halves propagated to `.plans/HANDOFF.md`, where they are corrected in the same pass.
+> **"Check a correction as hard as the claim it replaces" is a bullet this repository already
+> carries, and this is its fourth instance.**
 
 **Controller-verified**, `DESCRIBE DETAIL` per table:
 
@@ -1311,20 +1371,35 @@ arithmetic shown rather than either.
 | the handoff's "100% of the 30,000 fact rows fall on days with no quote, and the path that goes unexercised is the DIRECT lookup" | **false twice over.** 2,041 rows resolve a quote same-day (measured); and under an instant rule 6,480 of the original 30,000 already sat in an earlier BRT day — **derived, not measured**: each F1b stream opens at 00:00Z = 21:00 BRT the previous day, so 3 h ÷ 5,000 ms = 2,160 events per stream × 3 promoted streams | §2.8, ADR 0016 |
 | `fact_payment`'s 10 columns | **13** — `fx_rate`, `amount_brl`, `fx_rate_date_key` | §2.7 |
 
-**And THREE numbers this document made false about ITSELF**, kept out of the table above
-because that table is for *inherited* claims and a phase must mark its own separately:
+**And numbers this document made false about ITSELF**, kept out of the table above because
+that table is for *inherited* claims and a phase must mark its own separately. **This list
+said THREE and there are SIX**, which is the smallest thing on it and the most on-brand:
 
-| this document said | **is** | where |
-|---|---|---|
-| §1.3: **35,095** rows where the two date keys agree | **37,136** | §2.8 — the one falsified §1 prediction |
-| §0.4: the extraction is **42 requests** of ~220 bytes | **60** requests, 42 quotes + 18 empty | §2.5 |
-| §2.8's own first draft: the ratio route is **"3 rows short"** | **2**, against the column it was written against | §2.8 |
+| this document said | **is** | where | **found by** |
+|---|---|---|---|
+| §1.3: **35,095** rows where the two date keys agree | **37,136** | §2.8 — the one falsified §1 prediction | the **SQL that tested it** (`01f19831-bc82-1694-b89b-b83e3f1db092`), in `fc8dd8d` |
+| §0.4: the extraction is **42 requests** of ~220 bytes | **60** requests, 42 quotes + 18 empty | §2.5, and now marked at §0.4 | **re-reading the run log**, in `fc8dd8d` |
+| §2.8's own first draft: the ratio route is **"3 rows short"** | **2**, against the column it was written against | §2.8 | the **independent audit**, in `ac379c9` |
+| §1.3: `fx_rate_date` is the **second** deviation from §4.3's column list | the **third of three** | §2.9 | reading the rebuilt table's schema |
+| §0.4 and §3.1: the fractional-second width is **1, 3 or 6** digits | **every width from 1 to 6**, five of them in this window | §3.1 | the **whole-branch docs review**, then measured twice |
+| §1.3: two quote dates sharing one publication instant, witnessed by 2001-12-21 and 1984-12-03/04/05 | **neither is that case**, and the series has no witness | §3 | the **whole-branch docs review**, then measured over 10,447 rows |
 
-**All three are the same defect**: a number correct about one population, published as the
+**The first three are one defect**: a number correct about one population, published as the
 answer about another — the keys-agree row counted BRL and was asked about same-day
 resolutions, "42" counted quotes and was asked about calls, "3" counted unrecovered rows and
-was asked about one of the two buckets they fall in. **Two were found by an independent
-audit and one by re-reading the run log.** None was found by the author of the sentence.
+was asked about one of the two buckets they fall in. **The last three are a second defect
+this phase should name as squarely**: an ENUMERATION or a CITATION offered where the argument
+needed neither — two deviations where the criterion yields three, three fractional widths
+where the source uses six, two witnesses for a case the series does not exhibit. In every one
+the operative conclusion survived and the specifics beside it did not, which is precisely why
+nobody re-derived them.
+
+**Attribution, from the git history rather than from memory** — the column above. This
+paragraph read "**Two were found by an independent audit and one by re-reading the run log**",
+which is wrong on the first two rows: `fc8dd8d` introduced both the 37,136 and the 60, one
+from the statement that tested the prediction and one from the run log, and the audit
+(`ac379c9`) came afterwards and found the third. **None of the six was found by the author of
+the sentence carrying it.**
 
 ---
 
@@ -1684,3 +1759,39 @@ and `2026-07-23 13:11:15.6614` among them.
 > which is what the row demonstrates); only its billing as a series row was wrong.
 > `tests/bronze/test_ptax_rules.py` carried the same transposition and now carries the real
 > stamp.
+
+---
+
+## 4. How this phase ends, against protocol §9's six conditions
+
+**F3's evidence walked these six in public and this document did not**, which left a reader
+of `docs/` unable to see the one thing about F-API that most needs seeing: **CI has never run
+on this branch.** The walk is the mechanism that makes a phase's own incompleteness legible
+from outside `.plans/`, and omitting it is the same failure as F3's empty §0.4 placeholder —
+a public reader following a claim to nothing.
+
+| # | condition | status |
+|---|---|---|
+| 1 | every artefact the phase promised exists, built by its own code | ✅ `bronze_ptax` (42 rows), `bronze_payments` at 40,150, `dim_currency` at 2 members, `fact_payment` rebuilt at 40,000 × 13 — all four jobs SUCCESS at `6cfe0f0` (§2.1) |
+| 2 | every prediction marked, the falsified ones kept | ✅ §2 marks every §1 row; **one falsified** (35,095 → 37,136, §2.8) and kept unadjusted, plus six numbers this document made false about itself (§2.11) |
+| 3 | **CI green on the MERGED PR** | ❌ **OPEN, and it is not close.** Nothing is pushed, so no PR exists, so **CI has never run on this branch at all** — `.github/workflows/ci.yml` triggers on `push: [main]` and `pull_request:` only. There is no green whole-suite verdict for F-API from any process |
+| 4 | `docs/<phase>-run-evidence.md` exists, controller-verified separated from reported | ✅ this file — one document rather than F3's two, and every claim labelled |
+| 5 | `.plans/HANDOFF.md` updated, including deleting what the phase made false | ✅ §2.11 is the public half; the handoff carries the rest |
+| 6 | what remains unexercised is listed as unexercised | ✅ §3, accumulated as the phase ran rather than reconstructed at its end |
+
+**Condition 3 is the only one open, and the local number that stands in for it is not a
+substitute.** `uv run pytest --collect-only -q` selects **2,106 of 2,112 collected, 6
+deselected, no collection errors** at this revision. **That is a COLLECTION and not a run.**
+The whole suite has never executed on this branch: it does not fit this Windows box in one
+command (`tests/gold` alone exceeds the 600 s local tool cap, and two local Spark suites must
+never run concurrently — `.plans/HANDOFF.md` measures why), and CI is the only place it runs
+in one process. Individual files have been run and pass; **nobody may quote that as "the
+suite passes".**
+
+**On review.** The review of record is the **split two-reviewer whole-branch pass**, code and
+docs as disjoint packages — the shape F2 established because one reviewer does not read that
+volume carefully. **The code reviewer would merge. The docs reviewer would not**, until four
+blockers cleared; three were closed by the controller and the fourth (§0.4 unmarked while
+§2.8 claimed it corrected) by the consolidation pass that wrote this section. Protocol §A5:
+a CodeRabbit `pass` under "Review rate limited" is **absence, not approval**, and would not
+have counted here either way.

@@ -42,9 +42,16 @@ from __future__ import annotations
 
 from datetime import date
 
-# THE RANGE, MEASURED BY F-API TASK 0 AND NOT ARGUED: 2026-06-03 .. 2026-08-01, 42
-# quotes, gapless in business days, with the probe that produced it committed as
-# `scripts/probe_ptax.py` and its output in `docs/f-api-run-evidence.md`.
+# THE RANGE, MEASURED BY F-API TASK 0 AND NOT ARGUED: 2026-06-03 .. 2026-08-01 -- 60
+# calendar days, 43 weekdays, 42 QUOTES, gapless in business days EXCEPT 2026-06-04. The
+# probe that produced it is committed as `scripts/probe_ptax.py` and its output is in
+# `docs/f-api-run-evidence.md`.
+#
+# THE EXCEPTION IS NOT A CAVEAT, IT IS THE POINT OF THE FLOOR, and this comment said "42
+# quotes, gapless in business days" unqualified -- as did the evidence's §0.3 and
+# `bronze_ptax_job.yml`, each of them three lines from the sentence naming Corpus Christi.
+# A reader who takes the short form at face value concludes the landed series has no holes,
+# and the next two paragraphs are then unmotivated.
 #
 # 2026-06-03 IS A HARD FLOOR AND NOT A ROUND NUMBER. The only weekday absence in this
 # span is 2026-06-04 (Corpus Christi, computed), which resolves back to 2026-06-03,

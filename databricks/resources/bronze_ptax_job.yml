@@ -6,7 +6,9 @@
 # repromote operator job all rest on.
 #
 # WRITTEN AS A COPY of the Payments job, which is the risk every file in this directory
-# carries: `ptax` appears in four task parameter lists below and every wrong value it
+# carries: `ptax` appears in FIVE task parameter lists below -- fetch, ingest,
+# dq_gate_batch, promote and fail_on_dq; this line said four and the miscount is the
+# same class of defect it exists to warn about -- and every wrong value it
 # could carry is the name of a table that EXISTS, so a leftover string does not fail the
 # run -- it fetches, ingests, gates or promotes another table and reports SUCCESS.
 # tests/test_job_yaml_wiring.py refuses any registered table name in this file other than
@@ -53,8 +55,9 @@
 # overwrite a file whose bytes differ from the ones it derived.
 #
 # So the window is DECLARED, in opl.extraction.ptax_window, which carries F-API Task 0's
-# measured range (2026-06-03 .. 2026-08-01, 42 quotes, gapless in business days;
-# 2026-06-03 is a hard floor because starting at 06-04 leaves Corpus Christi with nothing
+# measured range (2026-06-03 .. 2026-08-01 -- 60 calendar days, 43 weekdays, 42 quotes,
+# gapless in business days EXCEPT 2026-06-04; that day is Corpus Christi and is exactly
+# why 2026-06-03 is a hard floor, since starting at 06-04 leaves the holiday with nothing
 # to fall back to). A declared constant cannot be launched wrong -- there is nothing to
 # omit -- and it puts every number a landed file depends on in a diff before the run.
 #
