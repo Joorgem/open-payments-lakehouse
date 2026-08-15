@@ -452,6 +452,31 @@ def _append_changed(
     )
 
 
+# WHY `load_satellite`'S ARGUMENT PROSE IS HERE. F-DB Task 2 added the axis paragraph and
+# pushed this function to 56 lines against the `< 50 INCLUDING comments` cap (master
+# protocol §4.9). No test enforces that cap, which is how it was reported compliant on a
+# docstring-excluded measure; `opl.bronze.rules:413` moved prose to module level for the
+# same reason. Nothing here is dropped.
+#
+# `load_date` HAS NO DEFAULT, for `load_hub`'s reason: a loader that stamps its own clock
+# cannot be asserted against, and in the data it would make the LDTS a record of when the
+# pipeline happened to run rather than of the load it belongs to.
+#
+# `report_diagnostics` DEFAULTS OFF, AND OFF REPORTS `None` RATHER THAN `0`. On, this load
+# pays a second full scan of the source and materialises the ledger's key-space grid to
+# fill `collapsed_duplicates` and `candidate_departures`; off it pays neither, and "not
+# measured" is a thing no reader can confuse with "measured, found none". The first real
+# run spent most of 5,635 s on the two and both answered 0; see `_diagnostics`.
+#
+# THE AXIS COMES OFF THE GRAIN AND IS NOT A SECOND PARAMETER. The grain was already
+# required, `_refuse_a_mismatched_grain` has already pinned it to this source table, and
+# its axis is the source's own declaration -- so an `axis=` argument here would be a second
+# spelling of one decision, whose disagreement would land as a window that silently
+# selected nothing.
+#
+# IDEMPOTENT: a re-run finds every (key, applied_date) it would write already persisted,
+# drops them before the window, and appends nothing. The write is a single Delta append, so
+# there is no partial state between the refusals and the committed rows.
 def load_satellite(
     spark: SparkSession,
     satellite: Satellite,
@@ -466,27 +491,10 @@ def load_satellite(
 ) -> SatelliteLoadResult:
     """Append a row for every (hash key, `applied_date`) whose payload changed.
 
-    `load_date` is an argument with no default, for `load_hub`'s reason: a loader that
-    stamps its own clock cannot be asserted against, and in the data it would make the
-    LDTS a record of when the pipeline happened to run.
-
-    `report_diagnostics` DEFAULTS OFF, AND OFF REPORTS `None` RATHER THAN `0`. On, this
-    load pays a second full scan of the source and materialises the ledger's key-space
-    grid to fill `collapsed_duplicates` and `candidate_departures`; off it pays neither,
-    and "not measured" is a thing no reader can confuse with "measured, found none". The
-    first real run spent most of 5,635 s on the two and both answered 0; see _diagnostics.
-
-    Idempotent: a re-run finds every (key, applied_date) it would write already
-    persisted, drops them before the window, and appends nothing. The write is a single
-    Delta append, so there is no partial state between the refusals and the committed
-    rows."""
+    Idempotent, and its three arguments-without-defaults are argued in the comment block
+    above this function."""
     _refuse_a_mismatched_hub(satellite, hub)
     _refuse_a_mismatched_grain(hub, grain, source_table)
-    # THE AXIS COMES OFF THE GRAIN AND IS NOT A SECOND PARAMETER. The grain was already
-    # required, `_refuse_a_mismatched_grain` has already pinned it to this source table,
-    # and its axis is the source's own declaration -- so an `axis=` argument here would
-    # be a second spelling of one decision whose disagreement would land as a window
-    # that silently selected nothing.
     axis = grain.snapshot_axis
     candidates = satellite_candidates(
         spark, satellite, hub, source_table=source_table, months=months, axis=axis
