@@ -47,9 +47,11 @@ the `tables` fixture records what a temp-view alternative was measured to cost, 
 why it lost.
 
 `ObservationGrain`'s OWN CONSTRUCTION REFUSALS ARE `test_observation_grain.py`, split
-out by F-DB Task 1 at exactly 800 lines with Task 2's snapshot axis (T7) still to come.
-The seam was already here and undrawn: those six were the only tests in this module
-with no `tables` and no `spark` in their signature, because a grain that refuses its
+out by F-DB Task 1 at exactly 800 lines, BEFORE Task 2's snapshot axis (T7), which has
+since landed -- this said "still to come" and ADR 0010 names why that matters: a claim
+that something has not happened yet is the first thing a reader trusts and the last
+thing anyone revisits. The seam was already here and undrawn: those were the only
+CONSTRUCTION-TIME refusals in this module, because a grain that refuses its
 arguments never reaches a table. What is left here is the LEDGER -- its derivation over
 the four fixtures, and its own argument guards, three of which run against real data and
 one of which is worth an eager Spark job. Read together they say "this grain, over these

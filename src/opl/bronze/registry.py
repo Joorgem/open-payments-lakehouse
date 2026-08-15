@@ -125,7 +125,7 @@ class BronzeTable:
     # source observed twice inside one calendar month needs an axis finer than a month
     # or both observations fold into one and a departure reads as `observed`.
     #
-    # DEFAULTED, AND THE DEFAULT IS WHAT EVERY ENTRY BELOW ALREADY WAS. Six of the seven
+    # DEFAULTED, AND THE DEFAULT IS WHAT EVERY ENTRY BELOW ALREADY WAS. ALL SIX registered
     # tables are monthly by construction -- four RFB file drops, the generated payment
     # stream and the PTAX fetch, each stamped with the month parameter its job ran with
     # -- so declaring it on each would be six copies of one fact. A source that is NOT

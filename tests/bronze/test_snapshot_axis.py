@@ -13,7 +13,7 @@ where it is held.
 
 THE REGISTRY ASSERTION IS THE OTHER HALF OF F-DB TASK 2's ACCEPTANCE. The axis became a
 field on `BronzeTable` for a source that does not exist yet, and the thing that had to
-stay true is that the six -- now seven -- tables the lakehouse has actually loaded read
+stay true is that the SIX tables the lakehouse has actually loaded read
 exactly the column they read before. Asserting the DEFAULT is not the same claim: a
 default is what an omitted declaration means, and this asserts that every entry really
 did omit it."""

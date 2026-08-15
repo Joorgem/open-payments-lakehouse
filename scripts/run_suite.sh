@@ -138,7 +138,9 @@ WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
 # nearest other was 42 lines short of it. The decision the parenthesis supports is
 # unaffected (a chunk carrying the suite's single largest vault module is still the one
 # with least room for a sixth), so the sentence is corrected here rather than deleted,
-# and its count is now six files at 467 / 747 / 96 / 758 / 378 / 218.
+# and its count is now six files at 468 / 748 / 161 / 758 / 378 / 218. (Re-measured after
+# Task 2 and the fix passes; the first spelling read 467 / 747 / 96 and went stale inside
+# the same phase, which is what a size list in a comment does.)
 CHUNKS=(
   "non-vault|--ignore=tests/vault"
   "vault-cnpj-hashing|tests/vault/test_cnpj_vault.py tests/vault/test_hashing.py tests/vault/test_hashing_spark.py tests/vault/test_satellite_diagnostics.py tests/vault/test_observation_axis.py"

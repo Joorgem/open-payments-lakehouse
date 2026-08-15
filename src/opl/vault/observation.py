@@ -132,14 +132,17 @@ from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT, SnapshotAxis
 from opl.config import DEFAULT
 from opl.vault.months import validated_months
 
-# THE DEFAULT AXIS'S COLUMN, DERIVED AND NOT RESTATED, kept as a name because the CNPJ
-# domain and its tests read it and because it is genuinely the column every source in
-# this lakehouse carried before F-DB. It is NOT what this module reads: every site
+# THE DEFAULT AXIS'S COLUMN, DERIVED AND NOT RESTATED, kept as a name because TESTS read
+# it and because it is genuinely the column every source in this lakehouse carried before
+# F-DB. (This said "the CNPJ domain and its tests"; `grep -rn MONTH_COLUMN src/ databricks/`
+# finds only this definition, so the domain does not read it and the tests are the whole
+# reason the name survives.) It is NOT what this module reads: every site
 # below asks the GRAIN, because the axis is now the source's declaration and this
 # constant is only the default one's spelling. A grain-dependent path that reaches for
 # this name instead is the bug `ObservationGrain.snapshot_column` exists to prevent --
-# it would answer correctly for six of the seven registered tables and silently
-# wrongly for the seventh.
+# it would answer correctly for all six registered tables today and silently wrongly
+# for the first one that is not monthly -- `bronze_merchant`, which Task 4 adds. (This
+# read "six of the seven" before that table existed; the registry holds SIX.)
 MONTH_COLUMN = MONTHLY_SNAPSHOT.column
 
 # THE EVIDENCE, kept beside the verdict. These three are output columns rather than
