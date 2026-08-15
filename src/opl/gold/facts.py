@@ -285,9 +285,9 @@ class FactLoadResult:
     # `opl.gold.fx.coverage`'s reason: a bound on either is a calendar or a guess.
     fx_beyond_series: int
     fx_widest_fallback_days: int
-    # Distinct `fx_rate` values the fact carries. TWO IS THE POINT AND ONE WOULD BE THE
-    # FAILURE: with a single currency it was 1.0 on every row, and the phase exists to make
-    # that number bigger than one. Counted from the written table rather than predicted.
+    # Distinct `fx_rate` values the fact carries, from the WRITTEN table. MORE THAN ONE is the
+    # point and ONE the failure (`<= 1` branches). This read "TWO IS THE POINT" -- a count of
+    # QUOTES; the fact carries THREE: 1.00000 (the reporting currency), 5.14420, 5.13950.
     fx_rates_used: int
 
 

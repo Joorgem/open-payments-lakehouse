@@ -312,6 +312,26 @@ def test_two_landed_rows_for_one_quote_date_that_disagree_are_refused(spark, emp
         rate_intervals(spark.read.table(disagreeing))
 
 
+# HOW `_published_instant` REACHES 16:03:25.555497Z, AND THE RETRACTED CLAIM THIS FILE STILL
+# GAVE AS THE REASON. It APPENDS THE OFFSET TO THE TEXT --
+# `to_timestamp(concat(data_hora_cotacao, '-03:00'))` -- so the instant is a function of the
+# value and not of `spark.sql.session.timeZone`.
+#
+# The docstring below said "`_published_instant` spells it `to_utc_timestamp` so the session
+# zone cancels on both sides". That is the sentence commit `9d83efe` retracted in the source
+# and did not follow here. `to_utc_timestamp` does NOT cancel: it renders its input in UTC
+# rather than in the session zone, while `to_timestamp` over zoneless text parses IN the
+# session zone -- so only one of the two ever varied, and the shipped instant moved to
+# 19:03:25.555497Z under America/Sao_Paulo. There is no `to_utc_timestamp` anywhere in `src/`,
+# `databricks/` or `scripts/` except the three sites in `fx.py` that retract it.
+#
+# THE ASSERTIONS WERE ALWAYS RIGHT AND ONLY THE REASON WAS FALSE, which is the shape this
+# phase keeps catching: a test that pins the verdict does not pin the explanation beside it,
+# and a stale claim survives longest in the file a reader consults about that very subject.
+# The implementation they refuse is the other obvious alternative -- adding three hours to a
+# parsed wall clock -- which agrees under UTC and is three hours out under America/Sao_Paulo.
+
+
 def test_two_landed_rows_that_agree_reduce_to_the_earlier_publication_instant(
     spark, empresas_bronze
 ):
@@ -332,10 +352,9 @@ def test_two_landed_rows_that_agree_reduce_to_the_earlier_publication_instant(
     session test (`test_fact_payment.py`) has a BRL-only fixture, so the FX interval bounds are
     computed there and discarded, and this assertion read `.microsecond` -- blind to a
     whole-hour shift, which is the only thing a wrong zone does. 13:03:25.555497 read as BRT
-    (T3's ruling) is 16:03:25.555497Z, and `_published_instant` spells it `to_utc_timestamp` so
-    the session zone cancels on both sides. The implementation this refuses is the obvious
-    alternative -- adding three hours to a parsed wall clock -- which agrees under UTC and is
-    three hours out under America/Sao_Paulo."""
+    (T3's ruling) is 16:03:25.555497Z -- see the comment block above for how
+    `_published_instant` gets there, and for the retracted claim this docstring used to give
+    as the reason."""
     twice = ptax_table(
         spark,
         empresas_bronze.db,

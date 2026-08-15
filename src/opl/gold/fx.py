@@ -10,8 +10,20 @@ difference is visible in one measurable place: the `cross-currency` stream opens
 2026-06-22T08:00Z and closes at 21:53:15Z, and the 2026-06-22 quote publishes at
 `dataHoraCotacao 2026-06-22 13:06:19.750415` READ AS BRT, i.e. 2026-06-22T16:06:19.750415Z.
 So two payments ON ONE CALENDAR DAY, in one stream, in one currency, convert at two
-different rates -- 5.14420 for the 5,836 events before the bulletin and 5.13950 for the
-4,164 after it. No day-grain implementation can produce that, and a day-grain
+different rates -- 5.14420 for the **2,864** USD payments before the bulletin and 5.13950
+for the **2,041** after it.
+
+THIS SENTENCE ATTACHED THE RATES TO 5,836 / 4,164, AND THAT IS THE WRONG PAIR -- the last
+site of a framing ADR 0016 and two test files were already corrected for, in the module the
+whole rule lives in. 5,836 / 4,164 is the ALL-CURRENCY row split at the publication
+boundary; 2,972 and 2,123 of those are BRL rows converting at exactly 1 through
+`with_resolved_rates`' reporting-currency branch below, consulting no quote and touching no
+interval. The populations that RESOLVE a rate are 2,864 and 2,041, they sum to the 4,905 USD
+rows, and they are the two numbers `tests/gold/test_fact_payment_fx.py` and
+`tests/test_payment_profiles.py` are marked against. The boundary index is 5,836 -- that
+part was right, and it is an index into the stream rather than a count of conversions.
+
+No day-grain implementation can produce that split, and a day-grain
 implementation would ALSO hand a payment at 2026-06-22T01:53Z a rate published 14 h 13 m
 later, which is a rate from the future in the one project whose headline is
 as-of-KNOWN-time.
