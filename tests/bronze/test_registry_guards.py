@@ -1,11 +1,26 @@
-"""The registry's guards, exercised -- each refusal reached by the paste that
-reaches it.
+"""The registry's NAME, SUBDIR, CONTRACT and CONSTRAINT guards, exercised -- each
+refusal reached by the paste that reaches it.
 
 SPLIT OUT OF `test_registry.py`, which crossed this project's 800-line file limit
 when F1.4b registered two more tables. The seam is not the line count: these tests
 change when a GUARD changes, and the ones left behind change when a TABLE is added.
 Two reasons to edit a file are two files -- and this half is the one that grows per
 guard, which is the axis this phase has been growing along.
+
+AND SPLIT AGAIN BY F-API'S FIX PASS, at 784 of 800 and the closest file in the tree to
+the cap, because "a guard changes" turned out to be two reasons rather than one.
+`test_registry_landing_guards.py` holds the LANDING pair -- the file-fed prefix
+cross-check and its complement -- which is the half that changes when a landing MODE is
+added, and which the source side had already split along: `opl.bronze.registry_landing`
+is its own module for exactly that reason. What is left here exercises the guards
+`registry.py`, `registry_collisions.py` and `registry_subdirs.py` define, none of which
+knows what a landing mode is.
+
+THE SUBDIR TRIO MOVED MODULE IN THE SAME PASS AND ITS TESTS DID NOT, which is deliberate:
+`registry_subdirs.py` exists because `registry.py` reached 802 lines, and the guards it
+holds are still about "what may this table's `subdir` be" -- the same reason-to-edit as
+everything else here. They take `REGISTRY` as an argument now, like the collision trio
+below and for the identical reason, so the call sites in this file pass it.
 
 Every test here works the same way: put a spec that must not exist into `REGISTRY`
 with `monkeypatch`, call the guard, and assert it refuses AND says why. They are
@@ -41,7 +56,6 @@ from opl.bronze.registry import (
     _assert_no_table_claims_a_reserved_subdir,
     _assert_no_two_tables_share_a_contract,
     _assert_no_two_tables_share_a_landing_subdir,
-    _assert_prefixes_match_their_file_groups,
     _assert_subdirs_are_single_path_components,
 )
 
@@ -304,7 +318,7 @@ def test_a_pasted_subdir_is_refused_at_import(monkeypatch):
     monkeypatch.setitem(REGISTRY, "empresas", pasted)
 
     with pytest.raises(ValueError, match="both claim landing subdir"):
-        _assert_no_two_tables_share_a_landing_subdir()
+        _assert_no_two_tables_share_a_landing_subdir(REGISTRY)
 
 
 def test_a_table_claiming_a_reserved_subdir_is_refused_by_name(monkeypatch):
@@ -330,7 +344,7 @@ def test_a_table_claiming_a_reserved_subdir_is_refused_by_name(monkeypatch):
     monkeypatch.setitem(REGISTRY, "socios", trap)
 
     with pytest.raises(ValueError) as excinfo:
-        _assert_no_table_claims_a_reserved_subdir()
+        _assert_no_table_claims_a_reserved_subdir(REGISTRY)
     message = str(excinfo.value)
     assert "socios" in message and "'zips'" in message
     # The operator has to be told WHY, not just refused: the reason is recursion.
@@ -375,65 +389,12 @@ def test_a_subdir_that_is_a_path_rather_than_a_name_is_refused(monkeypatch, subd
     monkeypatch.setitem(REGISTRY, "socios", trap)
 
     with pytest.raises(ValueError) as excinfo:
-        _assert_subdirs_are_single_path_components()
+        _assert_subdirs_are_single_path_components(REGISTRY)
     message = str(excinfo.value)
     assert "socios" in message and repr(subdir) in message
     # Refused as MALFORMED, not as one more reserved name -- the distinction is the
     # decision recorded in the guard, and the message has to carry it.
     assert "ONE directory" in message
-
-
-def test_a_prefix_that_disagrees_with_its_file_group_is_refused_at_import(monkeypatch):
-    """The refusal exercised, not just today's entries proved clean.
-
-    `Estabelecimento` (singular) is the probe on purpose: it is unique, it is a
-    single directory name, it names no reserved dir, and it passes every other check
-    in either registry test file. What it does is go looking for files that are not
-    there and
-    under-ingest without erroring -- the failure class this project rejected globs
-    for."""
-    trap = BronzeTable(
-        name="estabelecimentos",
-        contract="estabelecimentos",
-        table_key="bronze_cnpj_estab",
-        staging="bronze_cnpj_estab_staging",
-        bronze="bronze_cnpj_estabelecimentos",
-        quarantine="bronze_cnpj_estab_quarantine",
-        subdir="estabelecimentos",
-        landing=LANDING_ZIPS,
-        prefix="Estabelecimento",  # singular: a real typo, unique, silent
-        constraints=(),
-    )
-    monkeypatch.setitem(REGISTRY, "estabelecimentos", trap)
-
-    with pytest.raises(ValueError) as excinfo:
-        _assert_prefixes_match_their_file_groups(REGISTRY)
-    message = str(excinfo.value)
-    assert "'Estabelecimento'" in message and "'Estabelecimentos'" in message
-
-
-def test_a_table_fed_by_several_groups_must_declare_no_prefix(monkeypatch):
-    """The lookup's `None` is a real property, so the assertion has to hold in that
-    direction too: six differently-named files routed into one table by filename
-    suffix have no single prefix, and inventing one would look declarative while
-    matching nothing."""
-    trap = BronzeTable(
-        name="lookup",
-        contract="lookup",
-        table_key="bronze_cnpj_lookup",
-        staging="bronze_cnpj_lookup_staging",
-        bronze="bronze_cnpj_lookup",
-        quarantine="bronze_cnpj_lookup_quarantine",
-        subdir="lookups",
-        landing=LANDING_LOCAL,
-        prefix="Cnaes",  # one of the six, which is worse than none
-        constraints=(),
-    )
-    monkeypatch.setitem(REGISTRY, "lookup", trap)
-
-    with pytest.raises(ValueError) as excinfo:
-        _assert_prefixes_match_their_file_groups(REGISTRY)
-    assert "prefix=None" in str(excinfo.value)
 
 
 def test_a_contract_claimed_by_two_tables_is_refused_at_import(monkeypatch):
@@ -621,9 +582,9 @@ def test_an_unmasked_contract_keeps_its_check_constraint():
         for spec in REGISTRY.values()
         if any("CHECK" in statement for statement in spec.constraints)
     ]
-    assert sorted(checked) == ["empresas", "estabelecimentos", "lookup", "payments"], (
-        f"expected the four unmasked tables to keep their CHECK, got {checked}"
-    )
+    assert sorted(checked) == [
+        "empresas", "estabelecimentos", "lookup", "payments", "ptax",
+    ], f"expected every unmasked table to keep its CHECK, got {checked}"
 
 
 def test_the_registry_still_imports_where_pyspark_is_not_installed():

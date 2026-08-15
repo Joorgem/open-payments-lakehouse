@@ -20,19 +20,22 @@ Nothing in this file mutates `REGISTRY`. A test that needs a spec the registry m
 never contain belongs on the other side of the seam."""
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
 from opl.bronze.registry import (
     FILE_FED_LANDING_MODES,
+    LANDING_API,
     LANDING_GENERATED,
     LANDING_LOCAL,
+    LANDING_MODES,
     LANDING_ZIPS,
     REGISTRY,
     RESERVED_SUBDIRS,
     UnknownTable,
     _malformed_subdir_reason,
+    landing_dir,
     spec_for_contract,
     table_spec,
 )
@@ -282,30 +285,91 @@ def test_an_unregistered_contract_is_refused_and_says_what_to_do():
     assert "opl.bronze.registry" in message
 
 
-def test_no_generated_table_claims_a_downloader():
-    """The other half of the prefix cross-check, over the live registry.
+def test_no_table_nothing_downloads_claims_a_downloader():
+    """The COMPLEMENT of the prefix cross-check, over the live registry.
 
     `test_every_declared_prefix_agrees_with_the_file_group_that_downloads_it` skips
-    generated tables because no `FILE_GROUPS` entry can feed one. This is what stops
-    that skip from being a hole: a generated table must have NO file group and NO
-    prefix. A file group would put two producers -- a downloader and this lakehouse's
+    every table that is not file-fed, because no `FILE_GROUPS` entry can feed one. This
+    is what stops that skip from being a hole: such a table must have NO file group and
+    NO prefix. A file group would put two producers -- a downloader and this lakehouse's
     own writer -- into one landing directory that one Auto Loader reads with no glob;
     a prefix would be a false sentence in the file this repository treats as the
     answer to "what is table X?", and would enter that table into
     `test_no_two_tables_share_a_file_prefix` competing for a real producer's string.
 
-    Guard the guard: with no generated table registered the loop is vacuous, so the
-    last line asserts one exists."""
+    THE SKIP IS THE EXACT COMPLEMENT OF THE OTHER SWEEP'S, and it was `!=
+    LANDING_GENERATED` until F-API Task 2. Two positively-scoped sweeps say nothing
+    about a mode nobody has invented yet -- `api` was neither file-fed nor generated, so
+    it fell through both -- and pasting this loop with one constant changed would have
+    left a fifth mode in the same hole. Written this way the two are total over the
+    registry for any set of landing modes.
+
+    Guard the guard: with no such table registered the loop is vacuous, so the last line
+    asserts exactly which non-file-fed modes the live registry reaches -- a set rather
+    than "at least one", so registering a table under a new mode has to be a deliberate
+    edit here rather than something this sweep absorbs."""
+    modes = set()
     for spec in REGISTRY.values():
-        if spec.landing != LANDING_GENERATED:
+        if spec.landing in FILE_FED_LANDING_MODES:
             continue
+        modes.add(spec.landing)
         fed_by = [g for g, entry in FILE_GROUPS.items() if entry["table"] == spec.contract]
-        assert not fed_by, f"{spec.name} is generated and FILE_GROUPS {fed_by} feed it"
-        assert spec.prefix is None, (
-            f"{spec.name} is generated and declares prefix {spec.prefix!r} -- a prefix "
-            "is what a DOWNLOADER builds its file list from"
+        assert not fed_by, (
+            f"{spec.name} lands as {spec.landing!r}, which no downloader feeds, and "
+            f"FILE_GROUPS {fed_by} feed it"
         )
-    assert any(spec.landing == LANDING_GENERATED for spec in REGISTRY.values())
+        assert spec.prefix is None, (
+            f"{spec.name} lands as {spec.landing!r} and declares prefix {spec.prefix!r} "
+            "-- a prefix is what a DOWNLOADER builds its file list from"
+        )
+    assert modes == {LANDING_GENERATED, LANDING_API}
+
+
+# --- WHERE A SPEC LANDS: `registry_landing.landing_dir` --------------------------------
+#
+# IT HAD NO TEST AT ALL BEFORE F-API TASK 2, and no caller either -- the two ingest entry
+# points written since it appeared each built their own root's path directly. It has one
+# now (`databricks/src/bronze_ptax_ingest.py`), which is what puts its `api` branch on a
+# live path; these are what say the mapping is the one intended. Nothing below mutates
+# REGISTRY: `replace` makes a spec object, and `landing_dir` takes a spec rather than
+# reading the dict.
+
+
+@pytest.mark.parametrize(
+    ("landing", "root"),
+    [
+        (LANDING_ZIPS, DEFAULT.landing_cnpj_root),
+        (LANDING_LOCAL, DEFAULT.landing_cnpj_root),
+        (LANDING_GENERATED, DEFAULT.landing_generated_root),
+        (LANDING_API, DEFAULT.landing_api_root),
+    ],
+)
+def test_each_landing_mode_resolves_to_its_own_root(landing, root):
+    """Every mode, to the root `opl.config` declares for it, for one month.
+
+    THREE ROOTS AND NOT ONE, and the whole value of this function is that a consumer asks
+    the landing mode instead of knowing the layout. A table resolved to the wrong root
+    does not error: it reads a directory holding another source's files, which cloudFiles
+    walks RECURSIVELY and with no glob."""
+    spec = replace(table_spec("lookup"), landing=landing, subdir="probe")
+    resolved = landing_dir(DEFAULT, spec, "2026-08")
+    assert resolved == f"{root}/2026-08/probe"
+
+
+def test_a_landing_mode_no_root_serves_is_refused_rather_than_defaulted():
+    """The `else` this dispatch deliberately does not have.
+
+    A mode that fell through to either root would give the table a source directory
+    belonging to something else, and the run would SUCCEED having read it. The refusal
+    names the registered modes so an operator meeting it knows what the value should have
+    been."""
+    spec = replace(table_spec("lookup"), landing="ftp")
+    with pytest.raises(ValueError) as excinfo:
+        landing_dir(DEFAULT, spec, "2026-08")
+    message = str(excinfo.value)
+    assert "'ftp'" in message and "RECURSIVELY" in message
+    for mode in LANDING_MODES:
+        assert mode in message
 
 
 def test_every_registered_table_has_a_contract():
@@ -454,3 +518,74 @@ def test_the_new_tables_carry_a_constraint_no_other_contract_could_have():
         "ALTER TABLE {table} ALTER COLUMN cnpj_basico SET NOT NULL",
         "ALTER TABLE {table} ALTER COLUMN identificador_socio SET NOT NULL",
     )
+
+
+def test_the_ptax_table_carries_constraints_no_other_contract_could_have():
+    """The same anti-paste property for the third source, and it needs its own test
+    because the one above is written over `cnpj_schemas.TABLES` -- PTAX is not an RFB
+    file layout, so that loop cannot see it at all.
+
+    TWO COLUMNS, and each is unique to this contract across the WHOLE catalogue rather
+    than across the RFB half: a constraint tuple pasted from any other registered table
+    would be missing both, and one pasted FROM here onto another table names columns that
+    table does not have, so `test_every_constraint_references_a_column_of_its_own_contract`
+    refuses it.
+
+    They are also the right columns. `quote_date` is the key the FX join resolves against
+    and the value this phase invites a writer to get wrong -- the endpoint is asked in
+    `MM-DD-YYYY`, so the request's own spelling produces a ten-character string that
+    joins to nothing while every count stays green. `cotacao_venda` is the rate gold
+    converts with: a NULL there is an `amount_brl` that lowers a total by an amount nobody
+    can name.
+
+    `quote_date_iso_shape` NOW ENFORCES ITS OWN NAME, which it did not. It was
+    `length(trim(quote_date)) = 10`, and ten characters is exactly what `06-19-2026` is --
+    so the constraint named for the ISO shape admitted the one non-ISO spelling this phase
+    invites, while its own comment named that value as the thing to worry about. Every
+    other CHECK here is named for what it checks (`cnpj_basico_len8` -> `length = 8`).
+    `test_the_iso_shape_check_refuses_the_apis_own_spelling_on_a_real_delta_table` is the
+    behavioural half of this pin, against Delta rather than against the string.
+
+    NO CHECK ON `currency`, asserted as an absence for the reason the payments entry gives,
+    and that reason is now a demonstration rather than a hypothetical: `payments.CURRENCIES`
+    is the value domain `dim_currency` reads, F-API appended `USD` to it, and a CHECK here
+    would have made that append a migration on a live table -- an ALTER before the next
+    promote could succeed. The registry's own comment used to argue this from "`CURRENCIES`
+    holds one member today", which Task 3 made false; it quotes no count now, and neither
+    does this."""
+    for contract, columns in CONTRACT_COLUMNS.items():
+        if contract == "ptax":
+            continue
+        assert "quote_date" not in columns and "cotacao_venda" not in columns, contract
+
+    assert table_spec("ptax").constraints == (
+        "ALTER TABLE {table} ALTER COLUMN quote_date SET NOT NULL",
+        "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS quote_date_iso_shape",
+        "ALTER TABLE {table} ADD CONSTRAINT quote_date_iso_shape CHECK "
+        "(regexp_like(quote_date, '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$'))",
+        "ALTER TABLE {table} ALTER COLUMN cotacao_venda SET NOT NULL",
+    )
+    assert not [s for s in table_spec("ptax").constraints if "currency" in s]
+
+
+def test_every_constraint_survives_being_formatted_with_its_table():
+    """THE TRAP THE ISO-SHAPE FIX WALKED UP TO, closed for every table rather than one.
+
+    `promote_batch._assert_constraints` issues `statement.format(table=tbl)`, so any
+    literal brace in a constraint is a format field: the natural spelling of the new
+    regex, `[0-9]{4}-[0-9]{2}-[0-9]{2}`, raises `IndexError: Replacement index 4 out of
+    range` -- and it raises inside the promote, AFTER the append has committed, on the run
+    that was meant to assert the constraint. The repair run then correctly skips the
+    committed append and fails on the same statement.
+
+    So this asserts what the promote actually does, with `{table}` the only field any
+    statement may carry. A brace-free regex is what the PTAX entry declares; this is what
+    stops the next author's `{2}` from being discovered in a workspace."""
+    for spec in REGISTRY.values():
+        for statement in spec.constraints:
+            formatted = statement.format(table="catalog.schema.tbl")
+            assert "catalog.schema.tbl" in formatted
+            assert "{" not in formatted and "}" not in formatted, (
+                f"{spec.name} constraint {statement!r} still holds a brace after "
+                "formatting, so it carries a format field that is not {table}"
+            )

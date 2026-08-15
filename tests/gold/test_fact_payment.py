@@ -5,10 +5,21 @@ EVERY NUMBER HERE IS A FIXTURE'S AND NOT THE WORKSPACE'S, and the distinction is
 once, at the top, rather than left for a reader to infer. The fixture is a five-company
 vault built by the REAL vault loaders and seven bronze payments over four business
 attribute tuples, all of it declared in `tests/gold/conftest.py`; the workspace claims --
-20,150 rows, 20,000 identities, 18,400 tuples, 1,600 legitimate repeats -- are PREDICTIONS
-published in `databricks/resources/gold_fact_payment_job.yml` and tested by a run that has
-not happened. What the fixture proves is that the MECHANISM does the thing; what the run
-proves is what the mechanism answers on real data. Neither is offered as the other.
+40,150 rows, 40,000 identities, 36,800 tuples, 3,200 legitimate repeats -- are PREDICTIONS
+published in `databricks/resources/gold_fact_payment_job.yml`, and the run of 2026-08-14
+confirmed all four (`docs/f-api-run-evidence.md` §2.4, §2.8). What the fixture proves is
+that the MECHANISM does the thing; what the run proves is what the mechanism answers on
+real data. Neither is offered as the other.
+
+THOSE FOUR NUMBERS READ 20,150 / 20,000 / 18,400 / 1,600 HERE UNTIL THE CONSOLIDATION PASS
+-- TWO PHASES STALE, AND ATTRIBUTED TO A YAML THAT NO LONGER SAID THEM. They were the
+two-promoted-stream state; F3 landed a third stream (30,150 / 30,000 / 27,600 / 2,400) and
+F-API a fourth. `gold_fact_payment_job.yml` retired both earlier states explicitly -- "a
+third pair of columns would be two stale states above one live one" -- and
+`fact_guards.py`'s own refusal message was moved to 36,800 / 40,000 / 3,200 in the same
+phase. This file was the half that was not, and it cited the YAML for figures the YAML had
+deleted. The workspace numbers are quoted here because the tests below drive the guards at
+them; a fixture number and a workspace number are never mixed in one assertion.
 
 THE STAR'S FIXTURES ARE IN THE CONFTEST, WHICH IS A SPLIT AND NOT A TIDY-UP. With them
 inline this file stood at 894 lines against the project's 800-line cap, and the master
@@ -48,6 +59,7 @@ from opl.gold.facts import (
     event_instant,
     fact_rows,
 )
+from opl.gold.fx import AMOUNT_BRL, FX_RATE, rate_intervals
 from opl.gold.registry import (
     DIM_CHANNEL,
     DIM_COMPANY,
@@ -55,6 +67,7 @@ from opl.gold.registry import (
     DIM_DATE,
     FACT_PAYMENT,
 )
+from opl.gold.specs import contract_role, fact_keys
 from opl.vault.registry import BusinessKeyColumn
 
 from .conftest import (
@@ -286,7 +299,7 @@ def test_the_fact_is_unchanged_when_it_is_built_under_a_non_utc_session_zone(
 
 def _keyed_rows(spark, table) -> dict:
     """Every fact row's keys, by payment -- the columns a session zone must not move."""
-    columns = (*FACT_PAYMENT.role_keys, DIM_DATE.fact_key, DIM_CHANNEL.fact_key)
+    columns = (*FACT_PAYMENT.role_keys, *fact_keys(DIM_DATE), *fact_keys(DIM_CHANNEL))
     return {
         row[FACT_PAYMENT.grain_key]: tuple(row[column] for column in columns)
         for row in spark.read.table(table).collect()
@@ -369,7 +382,7 @@ def test_a_conformed_table_that_does_not_exist_stops_the_build_before_it_writes(
     )
 
 
-# --- T-D: the 1,600 legitimate repeats ------------------------------------------------
+# --- T-D: the 3,200 legitimate repeats ------------------------------------------------
 
 
 def test_the_fact_keeps_every_business_tuple_bronze_holds_and_more_rows_than_tuples(
@@ -386,7 +399,7 @@ def test_the_fact_keeps_every_business_tuple_bronze_holds_and_more_rows_than_tup
     fact is STRICTLY GREATER THAN ZERO. A fact deduplicated on the business attributes --
     or on a "natural key" built from (payer, payee, amount, currency, payment_method),
     which is the obvious thing to reach for -- SATISFIES THE FIRST ASSERTION PERFECTLY:
-    18,400 rows over 18,400 tuples on the workspace's data. Zero here is the 1,600 real
+    36,800 rows over 36,800 tuples on the workspace's data. Zero here is the 3,200 real
     payments it deleted.
 
     THE 150-DUPLICATE ACCEPTANCE IS NOT USED, because it cannot fail. `COUNT(*) -
@@ -412,7 +425,7 @@ def test_the_fact_keeps_every_business_tuple_bronze_holds_and_more_rows_than_tup
     held = result.appended + result.already_present
     assert held - fact_tuples > 0, (
         "the fact holds exactly one row per business tuple, which means it deduplicated on "
-        "the ATTRIBUTES and deleted every legitimate repeat -- 1,600 real payments on the "
+        "the ATTRIBUTES and deleted every legitimate repeat -- 3,200 real payments on the "
         "workspace's own data"
     )
     assert (held - fact_tuples, result.legitimate_repeats) == (
@@ -423,16 +436,22 @@ def test_the_fact_keeps_every_business_tuple_bronze_holds_and_more_rows_than_tup
 @pytest.mark.parametrize(
     ("held", "identities", "expected"),
     [
-        (18_400, 20_000, "LEGITIMATE REPEATS"),
-        (40_000, 20_000, "MORE THAN ONE dimension version"),
+        (36_800, 40_000, "LEGITIMATE REPEATS"),
+        (80_000, 40_000, "MORE THAN ONE dimension version"),
     ],
     ids=["deduplicated on the attributes", "multi-matched"],
 )
 def test_a_row_count_that_is_not_one_per_delivered_identity_is_refused(
     held, identities, expected
 ):
-    """THE TWO FAILURES ONE NUMBER COVERS, driven at the workspace's own predicted counts
-    rather than at the fixture's -- so this test also pins what the job YAML promises.
+    """THE TWO FAILURES ONE NUMBER COVERS, driven at the workspace's own counts rather than
+    at the fixture's -- so this test also pins what the job YAML promises.
+
+    THE PAIRS WERE 18,400 / 20,000 AND 40,000 / 20,000, WHICH THE YAML STOPPED PROMISING TWO
+    PHASES AGO, so a docstring saying "this pins what the YAML promises" was pinning what it
+    used to. They are the four-stream figures now: 36,800 tuples against 40,000 identities
+    for the deduplication, and 80,000 -- the (row, role) reference count -- against 40,000
+    for a two-way fan-out.
 
     They push the count in opposite directions and neither is visible in a resolution rate:
     a fan-out RAISES it (both matches resolve, so the rate is still 100%), and a
@@ -549,7 +568,8 @@ def test_the_key_a_fact_derives_is_the_key_the_dimension_holds(
                 f"{dimension.fact_column} string",
             )
             .select(
-                F.col(dimension.fact_column), fact_surrogate_key(dimension).alias("k")
+                F.col(dimension.fact_column),
+                fact_surrogate_key(dimension, contract_role(dimension)).alias("k"),
             )
             .collect()
         }
@@ -562,7 +582,10 @@ def test_every_derived_conformed_key_names_a_member_that_exists(fact_loaded):
     not resolve to the unknown member -- it joins to nothing and the payment disappears
     from every report grouped by that dimension, with no count anywhere going wrong."""
     result, _table = fact_loaded
-    assert result.orphaned == (("dim_date", 0), ("dim_channel", 0), ("dim_currency", 0))
+    assert result.orphaned == (
+        ("event_date_key", 0), ("fx_rate_date_key", 0), ("channel_key", 0),
+        ("currency_key", 0),
+    )
 
 
 def test_a_conformed_dimension_older_than_the_payments_is_reported_and_not_refused(
@@ -593,18 +616,18 @@ def test_a_conformed_dimension_older_than_the_payments_is_reported_and_not_refus
         target=fact_target,
     )
     orphans = dict(result.orphaned)
-    assert orphans[DIM_DATE.name] > 0, (
+    assert orphans["event_date_key"] > 0, (
         "the narrow calendar stops at 2026-07-11 and the fact carries payments on "
         "2026-08-01, so those rows key into nothing"
     )
-    assert orphans[DIM_CHANNEL.name] == orphans[DIM_CURRENCY.name] == 0
+    assert orphans["channel_key"] == orphans["currency_key"] == 0
 
 
 # --- the projection, the write, and the re-run ----------------------------------------
 
 
 def test_the_projected_columns_are_the_declared_ones_in_the_declared_order(
-    spark, dim_loaded, fact_source, fact_loaded
+    spark, dim_loaded, fact_source, fx_source, fact_loaded
 ):
     """THE ORDER IS LOAD-BEARING AND NOT TIDY: a Delta append matches POSITIONALLY unless
     `mergeSchema` says otherwise, and this table's first five columns are all integers, so
@@ -614,18 +637,19 @@ def test_the_projected_columns_are_the_declared_ones_in_the_declared_order(
     caller projecting it in another order is exactly what this pins against."""
     _result, table = fact_loaded
     expected = [
-        "payer_company_sk", "payee_company_sk", "event_date_key", "channel_key",
-        "currency_key", FACT_PAYMENT.grain_key, FACT_PAYMENT.measure,
-        payments.EVENT_TIME_COLUMN, "load_date", RECORD_SOURCE,
+        "payer_company_sk", "payee_company_sk", "event_date_key", "fx_rate_date_key",
+        "channel_key", "currency_key", FACT_PAYMENT.grain_key, FACT_PAYMENT.measure,
+        FX_RATE, AMOUNT_BRL, payments.EVENT_TIME_COLUMN, "load_date", RECORD_SOURCE,
     ]
     assert spark.read.table(table).columns == expected
-    frame = fact_rows(
+    frame, _coverage = fact_rows(
         FACT_PAYMENT,
         dimension=DIM_COMPANY,
         hub=HUB,
         conformed=(DIM_DATE, DIM_CHANNEL, DIM_CURRENCY),
         source=spark.read.table(fact_source),
         versions=spark.read.table(dim_loaded.table),
+        series=rate_intervals(spark.read.table(fx_source)),
         load_date=BUILT_AT,
     )
     assert frame.columns == expected

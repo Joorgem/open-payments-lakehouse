@@ -84,11 +84,17 @@ def _reach_note(spec: ConformedDimension, result: ConformedLoadResult) -> str:
 
     THE TWO STATES MUST NOT READ ALIKE, which is why this is a function and not an
     f-string. A dimension every fact row resolves to ONE member of is a constant column
-    wearing a dimension's name -- true today of `dim_currency` and of `dim_date` -- and a
-    run log that printed the member count alone would let the phase's evidence describe
-    it as thin instead of measuring it. Master protocol §4.6: a path that ran zero rows
-    through it is not a path that works, and the same applies to a dimension whose
-    fact-side cardinality is one."""
+    wearing a dimension's name, and a run log that printed the member count alone would let
+    the phase's evidence describe it as thin instead of measuring it. Master protocol §4.6: a
+    path that ran zero rows through it is not a path that works, and the same applies to a
+    dimension whose fact-side cardinality is one.
+
+    AND NO DIMENSION IN THIS STAR IS IN THAT STATE ANY MORE, which this docstring used to say
+    the opposite of ("true today of `dim_currency` and of `dim_date`"). F-API widened the
+    currency domain to `("BRL", "USD")` and landed a profile drawing from both, so
+    `dim_currency` reaches 2 and `dim_date` reaches 3. The branch below therefore ships
+    UNEXERCISED against the live star -- which is the outcome it was written to produce, and
+    is not the same statement as it being untested."""
     reached = result.fact_side_cardinality
     if reached <= 1:
         return (

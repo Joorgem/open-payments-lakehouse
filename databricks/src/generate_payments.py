@@ -32,6 +32,8 @@ payments, and the promote's `_batch_id` idempotence cannot see that.
 
 argv: [table, month, profile] -- all three REQUIRED, none defaulted."""
 import sys
+from collections import Counter
+from collections.abc import Mapping, Sequence
 
 from pyspark.sql import SparkSession
 
@@ -41,6 +43,14 @@ from opl.config import DEFAULT, require_month
 from opl.generator.cnpj_pool import KEY_COLUMN, validated_pool
 from opl.generator.defects import delivered_records
 from opl.generator.profiles import POOL_SIZE, SENTINEL_PROFILE, StreamProfile, profile_for
+
+# The record key the currency mix is counted over. A SECOND SPELLING of a contract column,
+# and it is here rather than imported because `opl.contracts.payments` declares no
+# per-column constant -- `COLUMNS` is a tuple and indexing it by position would be worse.
+# Cross-checked against the contract by `test_the_run_log_carries_the_currency_mix_...`, the
+# way this repository ties down every other duplicated string: the spelling is asserted
+# rather than trusted, so it cannot drift from the column the generator renders.
+_CURRENCY_COLUMN = "currency"
 
 
 def _refuse_a_table_nothing_generates(spec: BronzeTable) -> None:
@@ -89,7 +99,28 @@ def _counterparty_pool(spark: SparkSession, profile: StreamProfile) -> tuple[str
     return pool
 
 
-def _report(profile: StreamProfile, landed: EmittedFile) -> None:
+def _currency_mix(records: Sequence[Mapping[str, str]], profile: StreamProfile) -> str:
+    """`records`' currency counts, in the order the profile DECLARES its currencies.
+
+    Declared order and never sorted: `profiles.py` treats that order as authoritative
+    because it decides what a drawn index means, so a log line sorted differently would
+    invite a reader to compare two runs' mixes position by position and be wrong.
+
+    A currency the records carry and the profile does not declare is printed LAST rather
+    than dropped -- it cannot happen through `stream._require_currencies`, and a mix line
+    that silently omitted a value would be a count that adds up to less than the row count
+    with nothing saying so."""
+    counted = Counter(record[_CURRENCY_COLUMN] for record in records)
+    undeclared = sorted(set(counted) - set(profile.currencies))
+    return " ".join(
+        f"{currency}={counted[currency]}"
+        for currency in (*profile.currencies, *undeclared)
+    )
+
+
+def _report(
+    profile: StreamProfile, landed: EmittedFile, records: Sequence[Mapping[str, str]]
+) -> None:
     """What the run log says, and it is written to be quotable as evidence.
 
     The digest and the byte count are the same two numbers the golden pins are stated
@@ -98,11 +129,20 @@ def _report(profile: StreamProfile, landed: EmittedFile) -> None:
     asserted, because they are properties of the declaration and this task's job is to
     show that what landed is what was declared.
 
-    THE EVENT WINDOW IS THE THIRD LINE BECAUSE IT IS THE ONLY THING `between-snapshots`
-    VARIES. Its rows, bytes and defect counts are `clean`'s, so the first two lines
-    cannot tell the two streams apart; where the payments SIT is the whole claim, and
-    an evidence document should be able to quote it from the run rather than re-derive
-    it from `profiles.py`."""
+    THE EVENT WINDOW IS THE THIRD LINE, AND IT IS WHAT DISTINGUISHES `between-snapshots`.
+    That profile's rows, bytes and defect counts are `clean`'s, so the first two lines
+    cannot tell the two streams apart; where the payments SIT is its whole claim, and an
+    evidence document should be able to quote it from the run rather than re-derive it from
+    `profiles.py`. It stopped being the ONLY thing that profile varies when F-API's fifth
+    profile arrived carrying a currency tuple and a placement of its own, which is why
+    there is now a fourth line.
+
+    THE CURRENCY MIX IS THE FOURTH, AND IT IS A MEASUREMENT NO OTHER LINE CARRIES. It is
+    not derivable from the declaration -- the split is the outcome of a draw, not a
+    declared count -- and the published prediction for the cross-currency profile is stated
+    in exactly these two numbers. Without this line that prediction cannot be marked from a
+    workspace run at all: an operator would have to re-run the generator locally and count,
+    which is re-deriving the thing the run was supposed to show."""
     state = "already present, byte-identical" if landed.was_already_there else "written"
     print(
         f"generate_payments: profile={profile.name} stream_id={profile.stream_id} "
@@ -117,6 +157,10 @@ def _report(profile: StreamProfile, landed: EmittedFile) -> None:
         f"generate_payments: event_time {profile.window_start} .. "
         f"{profile.last_event_time} ({profile.event_count} events, "
         f"{profile.event_interval_ms} ms apart)"
+    )
+    print(
+        f"generate_payments: currency {_currency_mix(records, profile)} "
+        f"(declared {', '.join(profile.currencies)})"
     )
 
 
@@ -137,8 +181,12 @@ def main(argv: list[str] | None = None) -> None:
     profile = profile_for(args[2] if len(args) > 2 else SENTINEL_PROFILE)
     spark = SparkSession.builder.getOrCreate()
     stream = profile.stream_spec(_counterparty_pool(spark, profile))
+    # BOUND rather than passed inline, so the report counts the records that were LANDED
+    # rather than a second derivation of them. `delivered_records` returns a tuple, so this
+    # is the same object the emitter serialised and not a re-run of the generator.
+    records = delivered_records(stream, profile.defects)
     landed = emit_stream_file(
-        delivered_records(stream, profile.defects),
+        records,
         stream,
         # The SAME `month` local for both, so the file cannot be staged under one
         # month and landed under another -- and `landing_generated_tmp` is outside
@@ -148,7 +196,7 @@ def main(argv: list[str] | None = None) -> None:
         directory=DEFAULT.landing_generated_table(spec.subdir, month),
         tmp_directory=DEFAULT.landing_generated_tmp(spec.subdir, month),
     )
-    _report(profile, landed)
+    _report(profile, landed, records)
 
 
 if __name__ == "__main__":

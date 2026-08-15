@@ -1,6 +1,18 @@
 # src/opl/bronze/generated_landing.py
-"""The one place a generated stream becomes BYTES ON DISK, and the one place the
-byte-identity property F1b rests on can be defeated.
+"""The one place records this lakehouse holds in memory become BYTES ON DISK IN THE
+VOLUME, and the one place the byte-identity property F1b rests on can be defeated.
+
+THE MODULE IS NAMED FOR THE FIRST SOURCE THAT NEEDED IT AND NOW SERVES TWO, which is a
+statement worth making rather than a rename to hide. F-API Task 2 lands PTAX through
+`emit_records_file` below -- an api-fed table, not a generated one -- and the four
+properties it comes here for are the same four: a binary write, an explicit UTF-8
+encoding, a read-back verification, and a refusal to put a different file under a name
+that already exists. A SECOND MODULE was the alternative and is refused for the reason
+this repository states most often: a second spelling of the byte-identity mechanism is
+the defect class it polices hardest, and it would cost two parametrised sweep ids to
+duplicate code that is already correct. A RENAME was the other alternative and is
+refused on `opl.config.landing_cnpj_root`'s own precedent -- it would touch every
+importer, this module's golden-digest prose and two test files to gain a word.
 
 UNDER `opl.bronze` AND NOT UNDER `opl.generator`, AND THAT WAS A FINDING RATHER THAN A
 CHOICE. It was written as `opl.generator.emit` and
@@ -84,7 +96,7 @@ STREAM_FILE_SUFFIX = ".jsonl"
 
 @dataclass(frozen=True, kw_only=True)
 class EmittedFile:
-    """What one call to `emit_stream_file` put in the Volume, or found already there.
+    """What one call to `emit_records_file` put in the Volume, or found already there.
 
     THE DIGEST AND THE BYTE COUNT ARE THE EVIDENCE, not decoration: they are the same
     two numbers the golden pins are stated in, so a workspace run's log line and a
@@ -165,44 +177,77 @@ def _write_verified(payload: bytes, path: Path) -> None:
         )
 
 
-def _refuse_a_different_stream(existing: bytes, payload: bytes, path: Path) -> None:
+def _refuse_a_different_file(existing: bytes, payload: bytes, path: Path) -> None:
     """Refuse a landed file whose bytes are not the ones this run would write.
 
-    A RE-RUN IS EXPECTED AND IS NOT THIS. The generator is a pure function of
-    (seed, stream_id, pool), so a repair run produces identical bytes and the caller
-    treats that as a no-op. Different bytes under the same name mean the derivation,
-    the pool or the profile moved -- and overwriting would silently replace a file an
-    Auto Loader checkpoint may already record as read, so the new rows would never be
-    ingested while the old rows stay in bronze describing a stream that no longer
-    exists anywhere."""
+    A RE-RUN IS EXPECTED AND IS NOT THIS. Every producer that reaches this module is
+    reproducible from its declared inputs -- the generator from (seed, stream_id, pool),
+    a PTAX fetch from the window and currency it was asked for -- so a repair run
+    produces identical bytes and the caller treats that as a no-op. Different bytes under
+    the same name mean an input moved, and overwriting would silently replace a file an
+    Auto Loader checkpoint may already record as read: the new rows would never be
+    ingested while the old rows stay in bronze describing something that no longer exists
+    anywhere.
+
+    THE PTAX CASE IS THE ONE THAT MAKES THIS MORE THAN A DETERMINISM CHECK, and it is
+    worth naming because the source is not ours. A re-fetch of a window whose quotes have
+    been revised by BCB lands different bytes under the same filename, and this refusal
+    is the only place that difference is ever seen -- a revision that was silently
+    overwritten would leave bronze holding the OLD rate under a checkpoint that says the
+    file was read, so the new one could never arrive."""
     raise ValueError(
-        f"{path} already holds a different stream: {len(existing)} bytes, sha256 "
+        f"{path} already holds different bytes: {len(existing)} bytes, sha256 "
         f"{hashlib.sha256(existing).hexdigest()}, against the {len(payload)} bytes "
-        f"(sha256 {hashlib.sha256(payload).hexdigest()}) this run derived. The "
-        "generator is deterministic, so identical inputs give identical bytes -- a "
-        "difference means the seed, the pool or the profile changed. Auto Loader "
-        "tracks files by path and may already have read this one, so overwriting it "
-        "would leave bronze describing a stream that no longer exists. Land the new "
-        "stream under a new stream_id, or delete this file deliberately."
+        f"(sha256 {hashlib.sha256(payload).hexdigest()}) this run derived. Every producer "
+        "that lands here is reproducible from its declared inputs, so identical inputs "
+        "give identical bytes -- a difference means an input moved, or the source revised "
+        "what it had already published. Auto Loader tracks files by path and may already "
+        "have read this one, so overwriting it would leave bronze describing something "
+        "that no longer exists. Land the new content under a new name, or delete this "
+        "file deliberately."
     )
 
 
-def emit_stream_file(
+# --- WHAT A CALLER OWES `emit_records_file`, AND WHY THAT PROSE IS UP HERE ------------
+#
+# Module level for the reason `opl.bronze.rules` and `opl.bronze.registry_landing` state
+# above their own long guards: this reasoning grew past the point where the function
+# carrying it stayed under the project's 50-line limit. F-API Task 2 generalised a 47-line
+# `emit_stream_file` into a 60-line `emit_records_file` and every added line was prose.
+#
+# FILENAME-AGNOSTIC IS THE ONLY THING THAT SEPARATES IT FROM `emit_stream_file` BELOW.
+# Every other property -- the binary write, the explicit UTF-8, the read-back
+# verification, the run-unique staged name and the refuse-a-different-file rule -- is the
+# same statement whatever produced the records, so it is made once rather than twice in
+# two modules.
+#
+# WHAT A CALLER OWES IT IS A FILENAME THAT IS A FUNCTION OF THE CONTENT'S DECLARED
+# IDENTITY, and nothing else. Auto Loader tracks files by PATH: a name carrying a run id,
+# a timestamp or a month would make every re-run a NEW file, so the same rows would be
+# ingested again under a fresh `_batch_id` -- which the promote's idempotence is keyed on
+# and therefore cannot see. `filename_for` below is the payment stream's answer;
+# `fetch_ptax.filename_for` derives PTAX's from the window and currency it fetched.
+#
+# `directory` IS A LANDING DIR (`registry_landing.landing_dir`, which resolves it from the
+# spec's landing mode) and `tmp_directory` ITS STAGING TWIN. Both are required and neither
+# is defaulted, for `unzip_volume.unzip_dir`'s reason -- this module cannot know which
+# directories an Auto Loader reads, and getting that wrong puts a half-written file where a
+# stream will ingest it.
+
+
+def emit_records_file(
     records: Sequence[Mapping[str, str]],
-    spec: StreamSpec,
+    filename: str,
     *,
     directory: str | Path,
     tmp_directory: str | Path,
 ) -> EmittedFile:
-    """Put `records` in `directory` as `spec`'s one landing file, idempotently.
+    """Put `records` in `directory` under `filename`, idempotently. THE emitter.
 
-    `directory` is `OplConfig.landing_generated_table(...)` and `tmp_directory` is
-    `landing_generated_tmp(...)`; both are required and neither is defaulted, for
-    `unzip_volume.unzip_dir`'s reason -- this module cannot know which directories an
-    Auto Loader reads, and getting that wrong puts a half-written file where a stream
-    will ingest it."""
+    See the comment block above for what a caller owes it, what makes it the one emitter
+    both sources reach, and why that prose is not in here."""
     payload = serialised_bytes(records)
-    destination = Path(directory) / filename_for(spec)
+    destination = Path(directory) / filename
     digest = hashlib.sha256(payload).hexdigest()
     landed = EmittedFile(
         path=str(destination),
@@ -215,11 +260,11 @@ def emit_stream_file(
     if destination.exists():
         existing = destination.read_bytes()
         if existing != payload:
-            _refuse_a_different_stream(existing, payload, destination)
+            _refuse_a_different_file(existing, payload, destination)
         return replace(landed, was_already_there=True)
     os.makedirs(tmp_directory, exist_ok=True)
     # RUN-UNIQUE, AND THE UNIQUENESS IS ABOUT FALSE ALARMS RATHER THAN CORRUPTION. The
-    # staged name used to be `filename_for(spec)`, which is the SAME path for every run
+    # staged name used to be the landing filename, which is the SAME path for every run
     # of one profile and month. Two overlapping runs write identical bytes, so nothing
     # downstream is wrong -- but one run can read back a file the other is mid-rewrite
     # and fail `_write_verified`, or lose the `os.replace` to `FileNotFoundError` after
@@ -227,10 +272,32 @@ def emit_stream_file(
     # the one property this phase spends three layers proving. The DESTINATION stays
     # exactly as it was, so landing is still idempotent; only the scratch name moves.
     # Found by review on PR #14.
-    staged = Path(tmp_directory) / f"{os.getpid()}-{filename_for(spec)}"
+    staged = Path(tmp_directory) / f"{os.getpid()}-{filename}"
     _write_verified(payload, staged)
     # Atomic within the Volume's one FUSE mount, so the landing dir goes from holding
     # nothing to holding the whole file. Never a partial one, which cloudFiles would
     # discover and ingest as if it were complete.
     os.replace(staged, destination)
     return landed
+
+
+def emit_stream_file(
+    records: Sequence[Mapping[str, str]],
+    spec: StreamSpec,
+    *,
+    directory: str | Path,
+    tmp_directory: str | Path,
+) -> EmittedFile:
+    """Put `records` in `directory` as `spec`'s one landing file, idempotently.
+
+    THE PAYMENT STREAM'S WRAPPER, and all it adds is the filename. Kept as its own
+    function rather than folded into the caller when F-API Task 2 generalised the
+    emitter: `filename_for(spec)` is the one line that says a stream's landing file is
+    named for the stream and nothing else, and putting it at the call site would let a
+    second call site name it differently."""
+    return emit_records_file(
+        records,
+        filename_for(spec),
+        directory=directory,
+        tmp_directory=tmp_directory,
+    )

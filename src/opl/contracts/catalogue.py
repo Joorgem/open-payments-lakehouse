@@ -34,46 +34,69 @@ is checking. A tuple removes the question instead of documenting it.
 """
 from __future__ import annotations
 
-from opl.contracts import payments
+from opl.contracts import payments, ptax
 from opl.contracts.cnpj_schemas import TABLES
+
+# Every source that is NOT the RFB's own file layouts, as (contract key, owning module).
+# A LIST RATHER THAN TWO NAMES IN A GUARD, because the guard below has to compare these
+# against EACH OTHER as well as against the RFB half -- see it for what that fixes.
+_SINGLE_CONTRACT_SOURCES = (
+    (payments.CONTRACT, "opl.contracts.payments"),
+    (ptax.CONTRACT, "opl.contracts.ptax"),
+)
 
 
 def _assert_no_contract_is_declared_twice() -> None:
-    """Fail at import if the two sources claim one contract key.
+    """Fail at import if two sources claim one contract key.
 
-    THE MERGE BELOW IS LAST-ONE-WINS, which is the whole reason this runs. A payments
-    contract key that collided with an RFB one would silently REPLACE that contract's
-    column list: `struct_for("empresas")` would build the payment columns, the Auto
+    THE MERGE BELOW IS LAST-ONE-WINS, which is the whole reason this runs. A contract key
+    that collided with another source's would silently REPLACE that contract's column
+    list: `struct_for("empresas")` would build some other source's columns, the Auto
     Loader would read the RFB's semicolon CSV against them, and every row would arrive
     NULL or rescued. Nothing raises -- the dict is perfectly valid -- so the collision
     has to be refused where it is made.
+
+    IT COMPARED ONLY THE PAYMENTS KEY AGAINST THE RFB HALF UNTIL F-API TASK 2, and that
+    made it blind in the one direction this phase opened. With two single-contract
+    sources, `{payments.CONTRACT} & set(TABLES)` says nothing about payments colliding
+    with PTAX -- and those two are the pair most likely to collide, because they are the
+    two written by this repository rather than by the Receita, and neither is constrained
+    by an external file layout. The merge is still last-one-wins, so that collision was
+    exactly as silent as the one the guard did catch.
+
+    So the check is now total over the mapping's inputs: no non-RFB source may claim an
+    RFB key, and no two non-RFB sources may claim the same key.
 
     This is also, verbatim, the assertion F1b Task 0 wrote as
     `test_payments_is_deliberately_not_registered_yet_and_the_refusal_says_so`'s first
     line (`CONTRACT not in TABLES`). That test's scope line is now spent -- Task 3
     registered the table -- and the property it opened with survives here as a guard
     rather than being deleted with it."""
-    collisions = sorted({payments.CONTRACT} & set(TABLES))
-    if collisions:
-        raise ValueError(
-            f"{collisions} is declared by BOTH opl.contracts.cnpj_schemas.TABLES and "
-            "opl.contracts.payments. The mapping below is a last-one-wins merge, so a "
-            "shared key silently replaces one source's column list with the other's -- "
-            "the reader would then parse one source's bytes against the other's "
-            "columns and produce a table of NULLs rather than an error."
-        )
+    claimed: dict[str, str] = {contract: "opl.contracts.cnpj_schemas" for contract in TABLES}
+    for contract, module in _SINGLE_CONTRACT_SOURCES:
+        if contract in claimed:
+            raise ValueError(
+                f"contract {contract!r} is declared by BOTH {claimed[contract]} and "
+                f"{module}. The mapping below is a last-one-wins merge, so a shared key "
+                "silently replaces one source's column list with the other's -- the "
+                "reader would then parse one source's bytes against the other's columns "
+                "and produce a table of NULLs rather than an error."
+            )
+        claimed[contract] = module
 
 
 _assert_no_contract_is_declared_twice()
 
 # EVERY contract a bronze table may declare, and the only thing that decides whether
 # `opl.bronze.registry` accepts one. Built from the owning modules rather than
-# restated: the CNPJ half is `cnpj_schemas.TABLES` and the payments half is
+# restated: the CNPJ half is `cnpj_schemas.TABLES`, the payments half is
 # `opl.contracts.payments.COLUMNS`, whose ORDER is authoritative for the emitted JSON
-# bytes and is pinned as a golden copy in `tests/test_payment_contract.py`.
+# bytes and is pinned as a golden copy in `tests/test_payment_contract.py`, and the PTAX
+# half is `opl.contracts.ptax.COLUMNS`, whose order is authoritative for the same reason.
 CONTRACT_COLUMNS: dict[str, tuple[str, ...]] = {
     **{contract: tuple(columns) for contract, columns in TABLES.items()},
     payments.CONTRACT: tuple(payments.COLUMNS),
+    ptax.CONTRACT: tuple(ptax.COLUMNS),
 }
 
 

@@ -57,18 +57,47 @@ merges two populations with both runs reporting success. `opl.bronze.registry` c
 see it (it does not import the vault) and `opl.vault.registry` cannot see it (it does
 not import bronze, and deliberately: bronze's registry must import where pyspark is
 not installed). This module imports both, which it can afford to because gold has no
-life outside Spark, and it is therefore the only place the question can be asked."""
+life outside Spark, and it is therefore the only place the question can be asked. THE
+GUARD ITSELF now lives in `opl.gold.registry_guards`; this module is still the one that
+imports both layers and calls it, so the sentence above is unchanged in substance.
+
+AND THE SPLIT THE PARAGRAPH ABOVE PRE-DECLARED HAS HAPPENED. F-API Task 4 is "the next
+table this file gains" -- it widens the fact's columns and gives `dim_date` a second role --
+so the nine whole-set guards moved wholesale to `opl.gold.registry_guards` before anything
+was added, which is master protocol section 4.12's rule rather than a preference. What is
+left here is what this file was always for: the DECLARATIONS, the ORDER `build_registry`
+runs the guards in, and `table_spec`."""
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 
-from opl.bronze.registry import REGISTRY as BRONZE_REGISTRY
 from opl.contracts import payments
-from opl.gold.columns import DIMENSION_COLUMNS, LOAD_DATE, RECORD_SOURCE
+from opl.gold.registry_guards import (
+    _assert_every_dimension_reads_a_registered_satellite,
+    _assert_every_fact_reaches_every_dimension_this_star_holds,
+    _assert_every_pit_resolves_its_hub_and_its_satellites,
+    _assert_no_gold_name_is_owned_by_another_layer,
+    _assert_no_source_column_collides_with_a_column_the_loader_writes,
+    _assert_no_surrogate_key_collides_with_its_source,
+    _assert_no_two_columns_of_one_fact_share_a_name,
+    _assert_no_two_dimensions_draw_from_one_payment_column,
+    _assert_no_two_gold_tables_share_a_name,
+)
+from opl.gold.spec_fields import (
+    ADDITIVE,
+    ADDITIVE_WITHIN_CURRENCY,
+    FROM_CONTRACT,
+    FROM_DERIVED,
+    NON_ADDITIVE,
+    READS_DATE,
+    READS_ISO_TEXT,
+    FactRole,
+)
 from opl.gold.specs import (
     CalendarDimension,
     ConformedDimension,
+    DerivedMeasure,
     EnumeratedDimension,
     GoldTable,
     PaymentFact,
@@ -76,7 +105,7 @@ from opl.gold.specs import (
     Scd2Dimension,
 )
 from opl.vault import domains
-from opl.vault.registry import Hub, Satellite, VaultTable
+from opl.vault.registry import VaultTable
 
 __all__ = [
     "DIM_CHANNEL",
@@ -89,7 +118,9 @@ __all__ = [
     "TABLES",
     "CalendarDimension",
     "ConformedDimension",
+    "DerivedMeasure",
     "EnumeratedDimension",
+    "FactRole",
     "GoldTable",
     "PaymentFact",
     "PointInTimeTable",
@@ -111,450 +142,6 @@ class UnknownGoldTable(ValueError):
     message with a generic one."""
 
 
-
-
-def _same_table_note(name: str, other: str) -> str:
-    """Why two names that are not equal are nonetheless one Delta table -- and NOTHING
-    when they are equal.
-
-    `opl.bronze.registry_collisions._delta_name_collision`'s shape, verbatim in intent:
-    the comparison is casefolded, so the two strings a refusal reports may differ, and an
-    operator handed only a normalised name would search the source for a string nobody
-    wrote. Conditional because the ordinary duplicate is the case that actually happens,
-    and annotating it with a case explanation sends the reader looking for a difference
-    that is not there."""
-    if name == other:
-        return ""
-    return (
-        f" -- spelled {other!r} there, and Unity Catalog and Spark identifiers are "
-        "CASE-INSENSITIVE, so two spellings that differ only in case name ONE physical "
-        "table"
-    )
-
-
-def _bronze_delta_names() -> Mapping[str, tuple[str, str]]:
-    """Every Delta name bronze owns, by its CASEFOLDED spelling, mapped to that name as
-    bronze writes it and to what it is -- staging, bronze table or quarantine -- so a
-    refusal can say which one was collided with and in whose words.
-
-    ALL THREE AND NOT ONLY THE BRONZE ONE. A promote appends into staging and the DQ
-    gate appends into quarantine, so a dimension sitting on either is reached by a job
-    nobody would think to look at -- and the quarantine is the documented case, the one
-    `opl.bronze.registry`'s own docstring records as having "sent estab triagers to a
-    table full of unrelated F1.2 lookup rows"."""
-    owners: dict[str, tuple[str, str]] = {}
-    for spec in BRONZE_REGISTRY.values():
-        for role, name in (
-            ("staging table", spec.staging),
-            ("bronze table", spec.bronze),
-            ("quarantine", spec.quarantine),
-        ):
-            owners[name.casefold()] = (name, f"{spec.name}'s {role}")
-    return owners
-
-
-def _assert_no_gold_name_is_owned_by_another_layer(
-    tables: Iterable[GoldTable], vault_tables: Mapping[str, VaultTable]
-) -> None:
-    """Refuse a gold table whose name a bronze or vault table already holds.
-
-    THE GUARD THE FLAT SCHEMA FORCES -- see the module docstring for why no other file
-    in this repository can hold it. Ordered FIRST among the whole-set guards for
-    `opl.bronze.registry`'s "individually wrong before collectively wrong" reason: a
-    name another layer owns is wrong on its own, and reporting a duplicate first would
-    tell the operator to rename one of two tables that both must be renamed.
-
-    CASEFOLDED, WHICH IS THE WHOLE POINT AND WAS MISSING. UC and Spark resolve
-    identifiers case-insensitively, so `SAT_EMPRESA_DADOS` IS the satellite -- and under
-    the byte comparison this used until now it was ACCEPTED while `sat_empresa_dados` was
-    refused, with every consequence below intact. Measured, on `sat_empresa_dados`,
-    `ref_pais` and `bronze_cnpj_empresas` alike. It is exactly the defect
-    `opl.bronze.registry_collisions` fixed in F1.4b, and this is the one boundary no
-    other file in this repository polices."""
-    bronze = _bronze_delta_names()
-    vault = {name.casefold(): name for name in vault_tables}
-    for table in tables:
-        folded = table.name.casefold()
-        if folded in vault:
-            raise ValueError(
-                f"gold table {table.name!r} is a name already owned by the vault"
-                f"{_same_table_note(table.name, vault[folded])}. "
-                "Free Edition ships ONE catalog and ONE schema, so both would resolve "
-                "to the same Delta table -- and every loader in this repository writes "
-                "with mode('append'), which does not refuse a name it does not own: it "
-                "appends dimension rows into the satellite, or merges two populations "
-                "where the shapes happen to agree, with both runs reporting success"
-            )
-        if folded in bronze:
-            owned, role = bronze[folded]
-            raise ValueError(
-                f"gold table {table.name!r} is a name already owned by bronze "
-                f"({role}){_same_table_note(table.name, owned)}. One catalog, one "
-                "schema, and every writer in this repository appends -- so the promote "
-                "or the DQ gate would append into this dimension, or this loader into "
-                "theirs, without failing"
-            )
-
-
-def _assert_no_two_gold_tables_share_a_name(tables: Iterable[GoldTable]) -> dict[str, GoldTable]:
-    """Every gold table by name, refusing a name two of them claim -- IN ANY CASE.
-
-    Returns the mapping rather than only checking, so there is no second loop that could
-    build a different one -- `opl.vault.registry._collected_tables`' shape. The returned
-    mapping is keyed by the DECLARED spelling, because that is what a job parameter names
-    and what `table_spec` must answer to; only the collision check is casefolded, which
-    is the same split `opl.bronze.registry_collisions` makes.
-
-    CASEFOLDED for the guard above's reason, and needed here too: two gold specs called
-    `dim_x` and `DIM_X` are one Delta table, so one of them loads into the other with
-    both runs reporting success -- and this file is where a second kind gets declared."""
-    collected: dict[str, GoldTable] = {}
-    seen: dict[str, str] = {}
-    for table in tables:
-        folded = table.name.casefold()
-        if folded in seen:
-            raise ValueError(
-                f"two specs both declare a gold table called {table.name!r}"
-                f"{_same_table_note(table.name, seen[folded])}. One of "
-                "them would load into the other's Delta table, with both runs "
-                "reporting success"
-            )
-        seen[folded] = table.name
-        collected[table.name] = table
-    return collected
-
-
-def _satellite_readers(tables: Iterable[GoldTable]) -> Iterable[tuple[GoldTable, str]]:
-    """Every gold table that names a vault satellite, with the name it declares.
-
-    TWO FIELDS, ONE ITERATION, and the two fields are deliberately not one name -- see
-    the module docstring. `Scd2Dimension` reads a satellite's VERSIONS; a
-    `CalendarDimension` reads one date column of one and none of its payload. Both must
-    resolve against the vault registry, so the resolution is shared; nothing else about
-    them is."""
-    for table in tables:
-        if isinstance(table, Scd2Dimension):
-            yield table, table.source_satellite
-        elif isinstance(table, CalendarDimension):
-            yield table, table.applied_date_source
-
-
-def _scd2(tables: Iterable[GoldTable]) -> Iterable[Scd2Dimension]:
-    """The SCD2 dimensions among `tables`, for the guards whose subject is a satellite's
-    PAYLOAD -- which no other kind projects, so no other kind can collide with it."""
-    return (table for table in tables if isinstance(table, Scd2Dimension))
-
-
-def _source_satellite(
-    table: GoldTable, declared: str, vault_tables: Mapping[str, VaultTable]
-) -> Satellite:
-    """`table`'s source, resolved against the vault registry, or refuse naming it.
-
-    ONE RESOLUTION, SHARED BY THE GUARD AND BY THE TWO CHECKS THAT FOLLOW IT, for
-    `opl.vault.registry._link_hubs`' reason: a resolver that repeated the guard's
-    conditions in a weaker form is how a registry that passed its guards still returns
-    something wrong."""
-    source = vault_tables.get(declared)
-    if source is None:
-        raise ValueError(
-            f"gold dimension {table.name!r} derives from {declared!r}, "
-            f"which no vault domain registers. Registered: "
-            f"{', '.join(sorted(vault_tables))}"
-        )
-    if not isinstance(source, Satellite):
-        raise ValueError(
-            f"gold dimension {table.name!r} derives from {declared!r}, "
-            "which is not a satellite. An SCD2 dimension is a satellite's version chain "
-            "with a surrogate key on it: the loader reads `payload_columns` and resolves "
-            "a parent hub, so any other kind fails inside Spark's analysis naming a "
-            "dataclass field rather than a table"
-        )
-    return source
-
-
-def _assert_every_dimension_reads_a_registered_satellite(
-    tables: Iterable[GoldTable], vault_tables: Mapping[str, VaultTable]
-) -> None:
-    """Refuse a dimension whose source is missing or is not a satellite."""
-    for table, declared in _satellite_readers(tables):
-        _source_satellite(table, declared, vault_tables)
-
-
-def _assert_no_two_dimensions_draw_from_one_payment_column(
-    tables: Iterable[GoldTable],
-) -> None:
-    """Refuse two conformed dimensions drawing from one payment-contract column.
-
-    CONFORMANCE, MADE CHECKABLE. "Conformed" means one dimension answers one question
-    for every fact that asks it. Two dimensions over `payment_method` are two answers:
-    the fact would carry two foreign keys resolving to the same five members, and
-    nothing about it fails -- both build, both are well-formed, and a report joining one
-    agrees with a report joining the other right up until their member sets diverge.
-
-    THE FILTER IS AN INCLUSION AND WAS AN EXCLUSION, WHICH IS THE CORRECTION F3 TASK 2
-    HAD TO MAKE BEFORE IT COULD REGISTER ANYTHING. It read `if isinstance(table,
-    Scd2Dimension): continue` -- "everything that is not SCD2 has a `fact_column`" -- a
-    claim that was true of the three kinds that existed and that nothing checked. Adding
-    `PointInTimeTable`, which has no `fact_column` because nothing joins to it, turned
-    this line into an `AttributeError` raised at IMPORT of `opl.gold.registry`, i.e. at
-    import of every gold module and every gold job. An exclusion list is a guard that
-    assumes the shape of the kinds it has not met; the inclusion below names the two
-    kinds this question is actually about, so the next kind is simply not asked."""
-    drawn: dict[str, str] = {}
-    for table in tables:
-        if not isinstance(table, ConformedDimension):
-            continue
-        if table.fact_column in drawn:
-            raise ValueError(
-                f"{drawn[table.fact_column]!r} and {table.name!r} both draw from the "
-                f"payment column {table.fact_column!r}. A conformed dimension answers "
-                "ONE question for every fact that asks it; two of them are two keys on "
-                "one column, agreeing until their member sets do not"
-            )
-        drawn[table.fact_column] = table.name
-
-
-def _assert_no_surrogate_key_collides_with_its_source(
-    tables: Iterable[GoldTable], vault_tables: Mapping[str, VaultTable]
-) -> None:
-    """Refuse a surrogate key that is already a column the source delivers.
-
-    A WHOLE-SET GUARD AND NOT A `__post_init__` CHECK, because it cannot be answered
-    about one table in isolation: `razao_social` is a perfectly good surrogate-key name
-    until you know which satellite this dimension reads. The parent hub's business key
-    is checked with the payload for the same reason -- `cnpj_basico` is written into the
-    dimension from the hub, so a surrogate key of that name loses one of the two.
-
-    SCD2 ONLY, and that is a statement about what a payload can collide with rather than
-    an exemption: a conformed dimension projects no column of any satellite, so there is
-    nothing of its source's for its keys to overwrite."""
-    for table in _scd2(tables):
-        source = _source_satellite(table, table.source_satellite, vault_tables)
-        delivered = {
-            **{name: "a payload column of" for name in source.payload_columns},
-            **{
-                name: "a business-key column of the parent hub of"
-                for name in domains.parent_hub(source).business_key_columns
-            },
-        }
-        if table.surrogate_key in delivered:
-            raise ValueError(
-                f"gold dimension {table.name!r} names {table.surrogate_key!r} as its "
-                f"surrogate key, and that is {delivered[table.surrogate_key]} "
-                f"{source.name!r}. The projection writes both into one column, so the "
-                "delivered value disappears and the column is still there, full of "
-                "plausible numbers"
-            )
-
-
-def _assert_no_source_column_collides_with_a_column_the_loader_writes(
-    tables: Iterable[GoldTable], vault_tables: Mapping[str, VaultTable]
-) -> None:
-    """Refuse a source column named like one of the dimension's own.
-
-    THE DIRECTION THE VAULT CANNOT REFUSE FOR US, and the gap is exact:
-    `opl.vault.specs._validated_columns` refuses a payload column that collides with
-    `opl.vault.columns.METADATA_COLUMNS` -- `load_date`, `record_source`, `applied_date`,
-    `hash_diff` -- and knows nothing about `valid_from`, `valid_to` or `is_current`. A
-    satellite payload column of one of those names is legal in the vault, correct in the
-    vault, and would be silently overwritten here by the interval this loader computes.
-
-    SCD2 ONLY, for the guard above's reason."""
-    for table in _scd2(tables):
-        source = _source_satellite(table, table.source_satellite, vault_tables)
-        hub = domains.parent_hub(source)
-        for role, columns in (
-            ("payload column", source.payload_columns),
-            ("business-key column", hub.business_key_columns),
-        ):
-            collided = sorted(set(columns) & DIMENSION_COLUMNS)
-            if collided:
-                raise ValueError(
-                    f"gold dimension {table.name!r} reads {source.name!r}, whose "
-                    f"{role}s include {collided}, and the loader writes that itself "
-                    f"({', '.join(sorted(DIMENSION_COLUMNS))}). The vault does not "
-                    "refuse it -- its own reserved set is four other names -- so the "
-                    "column arrives here legal and leaves the projection replaced"
-                )
-
-
-def _pit_hub(table: PointInTimeTable, vault_tables: Mapping[str, VaultTable]) -> Hub:
-    """`table`'s hub, resolved against the vault registry, or refuse naming it.
-
-    `_source_satellite`'s shape and its reason: one resolution shared by the guard and by
-    everything that follows it, so a resolver cannot repeat the guard's conditions in a
-    weaker form."""
-    hub = vault_tables.get(table.hub)
-    if hub is None:
-        raise ValueError(
-            f"point-in-time table {table.name!r} is built over {table.hub!r}, which no "
-            f"vault domain registers. Registered: {', '.join(sorted(vault_tables))}"
-        )
-    if not isinstance(hub, Hub):
-        raise ValueError(
-            f"point-in-time table {table.name!r} is built over {table.hub!r}, which is "
-            "not a hub. A PIT's spine is a hub's KEY SET -- one row per key per as-of "
-            "date -- and every other vault kind either has no key set of its own or has "
-            "one at a grain the satellites below it do not share"
-        )
-    return hub
-
-
-def _assert_every_pit_resolves_its_hub_and_its_satellites(
-    tables: Iterable[GoldTable], vault_tables: Mapping[str, VaultTable]
-) -> None:
-    """Refuse a PIT whose hub or satellites are missing, are the wrong kind, or -- the
-    one that matters -- do not belong together.
-
-    THE PARENTAGE CHECK IS THIS GUARD'S WHOLE POINT AND IT IS SILENT WHEN IT FAILS. A PIT
-    joins nothing: it UNIONS the hub's keys with each satellite's (hash key, applied_date)
-    pairs and groups them. Handed a satellite of ANOTHER hub, the union is between a
-    column called `hub_estabelecimento_hk` and one called `hub_empresa_hk` -- which
-    `unionByName` refuses loudly ONLY while the two hubs spell their hash keys
-    differently. They do today, and nothing in `opl.vault.specs` requires it: two hubs may
-    name their hash key the same string, at which point the union succeeds, the group-by
-    merges two key spaces, and every pointer for a key that exists in both is taken over
-    the wrong satellite's history. The refusal is here so it cannot depend on a naming
-    accident in another package.
-
-    THE HASH KEY AND THE AS-OF COLUMN ARE CHECKED TOGETHER FOR THE SAME REASON THE SPEC
-    COULD NOT DO IT: `as_of_date` is a perfectly good column name until you know which
-    hub this table is over, and a hub whose hash key is spelled that way would have both
-    written into one column by one projection."""
-    for table in tables:
-        if not isinstance(table, PointInTimeTable):
-            continue
-        hub = _pit_hub(table, vault_tables)
-        _assert_the_as_of_column_is_not_the_hubs_hash_key(table, hub)
-        for declared in table.satellites:
-            _assert_the_satellite_hangs_off_this_pits_hub(table, declared, hub, vault_tables)
-
-
-def _assert_the_as_of_column_is_not_the_hubs_hash_key(
-    table: PointInTimeTable, hub: Hub
-) -> None:
-    if table.as_of_column == hub.hash_key:
-        raise ValueError(
-            f"point-in-time table {table.name!r} names {table.as_of_column!r} as its "
-            f"as-of column, and that is {hub.name!r}'s hash key. One projection writes "
-            "both into one column, so every row's key is a date or every row's as-of is a "
-            "digest -- and the table is still the right size"
-        )
-
-
-def _assert_the_satellite_hangs_off_this_pits_hub(
-    table: PointInTimeTable,
-    declared: str,
-    hub: Hub,
-    vault_tables: Mapping[str, VaultTable],
-) -> None:
-    source = vault_tables.get(declared)
-    if not isinstance(source, Satellite):
-        raise ValueError(
-            f"point-in-time table {table.name!r} points at {declared!r}, which is not a "
-            f"registered satellite. Registered: {', '.join(sorted(vault_tables))}. A PIT "
-            "points at version chains; a hub has no `applied_date` and a link's chain is "
-            "at another grain"
-        )
-    if source.parent != hub.name:
-        raise ValueError(
-            f"point-in-time table {table.name!r} is built over {hub.name!r} and points at "
-            f"{declared!r}, which hangs off {source.parent!r}. The two are unioned on the "
-            "hash key, so this is caught by name today only because the two hubs spell "
-            "their hash keys differently -- nothing requires that. Where they agree, the "
-            "union succeeds and every pointer is taken over another hub's history"
-        )
-
-
-def _facts(tables: Iterable[GoldTable]) -> Iterable[PaymentFact]:
-    """The facts among `tables`. AN INCLUSION, like `_scd2` and unlike the guard this
-    repository has already been bitten by -- see
-    `_assert_no_two_dimensions_draw_from_one_payment_column`."""
-    return (table for table in tables if isinstance(table, PaymentFact))
-
-
-def _assert_every_fact_reaches_every_dimension_this_star_holds(
-    tables: Iterable[GoldTable], by_name: Mapping[str, GoldTable]
-) -> None:
-    """Refuse a fact whose company dimension is missing or is the wrong kind, and refuse a
-    registry whose CONFORMED dimensions are not exactly the set the fact reaches.
-
-    THE SECOND HALF IS THE ONE WORTH HAVING, and it is the only mechanical answer this
-    repository has to the charge it levels at `pit_estabelecimento`. A conformed dimension
-    exists to be reached by a fact: `dim_channel` costs a job task and a table and buys
-    nothing at all unless `fact_payment` carries a key into it. Left as a convention, a
-    dimension added later is a dimension the fact silently does not reach, with both
-    builds reporting success and every report over it returning one row per member and no
-    facts. Stated as an equality, adding a conformed dimension without adding it to the
-    fact turns the import of every gold module red.
-
-    IT IS AN EQUALITY AND NOT A SUBSET IN BOTH DIRECTIONS ON PURPOSE. A fact naming a
-    conformed dimension the registry does not hold would fail in Spark's analysis on a
-    column; a registry holding one the fact does not name fails nowhere, which is exactly
-    why the check has to be written from the registry's side as well.
-
-    THE SCD2 SIDE IS RESOLVED AGAINST *THIS* REGISTRY AND NOT THE VAULT'S, which is the
-    difference between this kind and every other one here: a fact reads BRONZE and joins to
-    a GOLD table, so `company_dimension` is a gold name. Handed a conformed dimension it
-    would look for a satellite's version chain in a table that has no interval at all --
-    every as-of predicate over a missing column, caught by Spark and only after a session
-    has started."""
-    conformed = {
-        name for name, table in by_name.items() if isinstance(table, ConformedDimension)
-    }
-    for fact in _facts(tables):
-        dimension = by_name.get(fact.company_dimension)
-        if not isinstance(dimension, Scd2Dimension):
-            raise ValueError(
-                f"payment fact {fact.name!r} resolves its counterparties against "
-                f"{fact.company_dimension!r}, which is not a registered SCD2 dimension of "
-                f"this star ({', '.join(sorted(by_name))}). Both role keys are as-of "
-                "lookups over a half-open interval, and only an SCD2 dimension has one"
-            )
-        if set(fact.conformed) != conformed:
-            raise ValueError(
-                f"payment fact {fact.name!r} reaches {sorted(fact.conformed)} and this "
-                f"registry holds the conformed dimensions {sorted(conformed)}. A conformed "
-                "dimension no fact reaches is a table nothing joins to -- it builds, it is "
-                "well-formed, and every report over it returns its members and no facts"
-            )
-
-
-def _assert_no_two_columns_of_one_fact_share_a_name(
-    tables: Iterable[GoldTable], by_name: Mapping[str, GoldTable]
-) -> None:
-    """Refuse a fact whose projected columns are not distinct.
-
-    A WHOLE-SET GUARD BECAUSE HALF THE COLUMN LIST IS OTHER TABLES'. The role keys, the
-    grain and the measure are the fact's own and `opl.gold.specs` refuses a collision among
-    them; the conformed foreign keys are DERIVED from the dimensions the fact reaches
-    (`fact_key`), so the collision that this catches is one nobody can see from either spec
-    alone -- two enumerated dimensions sharing a `surrogate_key`, which nothing else in
-    this file refuses, or a calendar whose role is spelled like a role key.
-
-    ORDERED AFTER THE GUARD ABOVE, which is load-bearing rather than tidy: that one
-    establishes that every name in `fact.conformed` is a registered conformed dimension, so
-    the lookup below cannot raise a `KeyError` from a mistyped name and hide behind it."""
-    for fact in _facts(tables):
-        columns = [
-            *fact.role_keys,
-            *(by_name[name].fact_key for name in fact.conformed),
-            fact.grain_key,
-            fact.measure,
-            payments.EVENT_TIME_COLUMN,
-            LOAD_DATE,
-            RECORD_SOURCE,
-        ]
-        repeated = sorted({name for name in columns if columns.count(name) > 1})
-        if repeated:
-            raise ValueError(
-                f"payment fact {fact.name!r} projects {repeated} more than once "
-                f"({columns}). One projection writes two values into one column, so one "
-                "of them survives, every row is still present and every join on the lost "
-                "key matches nothing"
-            )
-
-
 def build_registry(
     tables: Iterable[GoldTable],
     *,
@@ -569,7 +156,13 @@ def build_registry(
     the guard's whole subject is the LIVE namespace.
 
     Returns a read-only mapping: the registry is data, and a caller who could
-    `registry[...] = ...` could add a table that never passed a guard."""
+    `registry[...] = ...` could add a table that never passed a guard.
+
+    THE GUARDS LIVE IN `opl.gold.registry_guards` AND ARE CALLED HERE, in this one ordered
+    block, for `opl.bronze.registry`'s reason: the ORDER is load-bearing -- individually
+    wrong before collectively wrong, and the fact's conformed set resolved before its column
+    names are looked up -- and it has to be reviewable in one place rather than distributed
+    across the file the guards live in."""
     collected = tuple(tables)
     known = domains.REGISTRY if vault_tables is None else vault_tables
     _assert_no_gold_name_is_owned_by_another_layer(collected, known)
@@ -626,29 +219,28 @@ DIM_COMPANY = Scd2Dimension(
     source_satellite="sat_empresa_dados",
 )
 
-# `dim_date`, AND ITS FACT-SIDE CARDINALITY IS 1 TODAY. Task 0 measured every payment in
-# `bronze_payments` at 2026-08-01 (`docs/f3-run-evidence.md` §0.5, P1-P3: 10,000 distinct
-# `event_time` values, all on one day), and the `between-snapshots` profile adds a second
-# day, 2026-06-20. So the fact reaches ONE member of this dimension today and TWO once
-# that profile lands, against a span of about fifty days. That is not an argument against
-# building it -- a conformed date dimension is what makes the fact's date column a
-# question anybody can group by -- but it IS the number that must be published beside it,
-# which is why `opl.gold.conformed` measures `fact_side_cardinality` from the fact rather
-# than letting the evidence say "thin".
+# `dim_date`, AND ITS FACT-SIDE CARDINALITY IS 3. `docs/f3-run-evidence.md` §0.5 (P1-P3)
+# measured the two August streams' 20,000 payments all on 2026-08-01; `between-snapshots`
+# adds 2026-06-20 and F-API's `cross-currency` adds 2026-06-22, whose whole window sits
+# inside one calendar day in BOTH UTC and BRT -- so the count is 3 and not 4, against a span
+# of fifty days. (This comment said "1 today and TWO once that profile lands" until F-API
+# Task 4; a fact-side count written into a comment is what goes stale when a stream lands,
+# which is why `opl.gold.conformed` MEASURES `fact_side_cardinality` on every load rather
+# than letting the evidence say "thin".)
 #
-# ONE ROLE, NOT THREE AND NOT TWO. The governing spec §4.3 asks for role-playing across
-# transação / autorização / liquidação. `opl.contracts.payments` carries `event_time` and
-# `emitted_at`; `emitted_at` is when the GENERATOR RELEASED the record, which is a
-# property of the delivery -- the thing that may legitimately repeat -- and not a date
-# the business transacted on. Counting it as a second role would buy a bigger number and
-# a `dim_date` join that means nothing. A second role arrives with an `authorized_at` or
-# a `settled_at` column in the payment contract, which bumps `SCHEMA_VERSION` and is a
-# change to the generator, not to gold.
+# TWO ROLES, AND THE SECOND ONE IS NOT THE ONE §4.3 ASKED FOR. The governing spec asks for
+# role-playing across transação / autorização / liquidação. `opl.contracts.payments` carries
+# `event_time` and `emitted_at`; `emitted_at` is when the GENERATOR RELEASED the record,
+# which is a property of the delivery -- the thing that may legitimately repeat -- and not a
+# date the business transacted on. Counting it would buy a bigger number and a `dim_date`
+# join that means nothing, so it is still refused. What DID arrive is `fx_rate_date_key`:
+# the quote date whose rate a payment converted at, which is a real second date the star can
+# group by and which no payment contract column carries. `opl.gold.spec_fields` argues why
+# that made the role a four-field declaration instead of a string.
 DIM_DATE = CalendarDimension(
     name="dim_date",
     surrogate_key="date_key",
     natural_key="full_date",
-    fact_column=payments.EVENT_TIME_COLUMN,
     # WHERE THE SPAN'S OTHER END COMES FROM. `dim_date` must contain both RFB
     # `applied_date`s -- 2026-06-13 and 2026-07-11 -- because `dim_company`'s version
     # boundaries sit on them, and a calendar that cannot name the day a version opened is
@@ -656,7 +248,35 @@ DIM_DATE = CalendarDimension(
     # satellite's `applied_date` column at build time rather than declared: a date
     # literal here would be a second spelling of a value the vault owns.
     applied_date_source="sat_empresa_dados",
-    roles=("event_date_key",),
+    roles=(
+        # THE CONTRACT-SOURCED ROLE, AND THERE MAY BE EXACTLY ONE. It is the column
+        # `covered_span` measures this calendar's span from, over `bronze_payments` --
+        # which is why the derived role below cannot be it: `fx_rate_date` does not exist
+        # in the fact SOURCE at all, only in the fact.
+        FactRole(
+            key="event_date_key",
+            fact_column=payments.EVENT_TIME_COLUMN,
+            source=FROM_CONTRACT,
+            reads=READS_ISO_TEXT,
+        ),
+        # THE DERIVED ROLE. `opl.gold.fx` resolves it per payment from the PTAX series and
+        # the payment's own instant, so it is `FROM_DERIVED` and the guard refuses it being
+        # a contract column -- the mirror of the refusal above. `READS_DATE` because the FX
+        # join produces a real `date` where bronze hands the contract ISO TEXT; both roles
+        # then go through one key mechanism, so the fact and the dimension cannot drift.
+        #
+        # ITS ORPHANS ARE REPORTED AND NOT REFUSED, which is the price of a derived role and
+        # is paid deliberately. Every quote date this phase can resolve to -- 2026-06-19,
+        # 2026-06-22, 2026-07-31 -- is inside the 2026-06-13 .. 2026-08-01 span, so the
+        # count is predicted 0; a fallback reaching below 2026-06-13 would be a number in
+        # the run log rather than a silent join to nothing.
+        FactRole(
+            key="fx_rate_date_key",
+            fact_column="fx_rate_date",
+            source=FROM_DERIVED,
+            reads=READS_DATE,
+        ),
+    ),
 )
 
 # `dim_channel` FROM `payment_method`, AND NEVER FROM `payment_channel`. The drift column
@@ -664,10 +284,12 @@ DIM_DATE = CalendarDimension(
 # refuses it at import; `opl.contracts.payments`' own `DRIFT_COLUMN` block records that
 # the name was chosen to be TEMPTING for exactly a dimension like this one.
 #
-# FIVE MEMBERS AND A FACT-SIDE CARDINALITY OF FIVE -- the one of these three that is not
-# a constant column wearing a dimension's name. `opl.generator.stream` picks a method by
-# index into `PAYMENT_METHODS` for every event, so all five rails appear in 20,150
-# payments with overwhelming probability, and the measurement is what says so.
+# FIVE MEMBERS AND A FACT-SIDE CARDINALITY OF FIVE. `opl.generator.stream` picks a method
+# by index into `PAYMENT_METHODS` for every event, so all five rails appear in 40,150
+# payments with overwhelming probability, and the measurement is what says so. (It read
+# 20,150 until F-API landed the fourth and fifth streams, and this dimension is no longer
+# "the one of these three that is not a constant column": `dim_currency` below reached
+# fact-side cardinality 2 in the same phase.)
 DIM_CHANNEL = EnumeratedDimension(
     name="dim_channel",
     surrogate_key="channel_key",
@@ -680,17 +302,20 @@ DIM_CHANNEL = EnumeratedDimension(
     members=payments.PAYMENT_METHODS,
 )
 
-# `dim_currency`, AND IT HAS EXACTLY ONE MEMBER. `CURRENCIES = ("BRL",)`, every payment
-# carries it, so every fact row points at that one row: fact-side cardinality 1 against
-# 1 member. A dimension of one member cannot be wrong, and no test over it can fail --
-# which is the honest thing to say about it rather than "thin".
+# `dim_currency`, AND IT HAS TWO MEMBERS AND A FACT-SIDE CARDINALITY OF TWO. It read "AND
+# IT HAS EXACTLY ONE MEMBER. `CURRENCIES = ("BRL",)` ... A dimension of one member cannot be
+# wrong, and no test over it can fail" until F-API T1 split the declared DOMAIN from the
+# tuple each stream DRAWS from: `payments.CURRENCIES` is `("BRL", "USD")` now, this
+# declaration is the only way the dimension gains a member, and the `cross-currency` profile
+# put 4,905 USD rows against 35,095 BRL ones in the fact. The two numbers the phase publishes
+# -- 2 members, fact-side cardinality 2 -- are what retires the sentence above.
 #
-# IT IS BUILT ANYWAY, FOR TWO REASONS THAT ARE NOT DECORATION. The contract's own comment
-# says the column exists "so that a second currency is a value change instead of a schema
-# change"; this dimension is where that value change lands, and a star that gained FX
-# later would otherwise have to add a dimension AND rewrite the fact's projection. And
-# the amount's two decimal places are a consequence of BRL's minor unit -- the fact
-# carries a scale it cannot explain unless something holds the currency.
+# THE CONTRACT'S PREDICTION WAS THE RIGHT ONE, WHICH IS WORTH RECORDING WHERE IT CAME TRUE.
+# `opl.contracts.payments` says the column exists "so that a second currency is a value
+# change instead of a schema change". It was: the domain gained a member, this line reads the
+# domain, and no dimension was added. What DID change is the fact -- `fx_rate`,
+# `fx_rate_date_key` and `amount_brl` -- because a currency mix without a conversion is a
+# `SUM` with no unit (F-API T4a), and that half was not free.
 DIM_CURRENCY = EnumeratedDimension(
     name="dim_currency",
     surrogate_key="currency_key",
@@ -741,9 +366,11 @@ PIT_ESTABELECIMENTO = PointInTimeTable(
 # `dim_company` answers for both -- so the fact carries `payer_company_sk` AND
 # `payee_company_sk`, both resolved AS OF the payment's own `event_time`, and the plan's
 # closing test ("every row resolves to exactly one `dim_company` version") is ill-formed:
-# a correct row resolves to TWO. `opl.gold.specs._assert_every_counterparty_plays_exactly
+# a correct row resolves to TWO. `opl.gold.fact_spec._assert_every_counterparty_plays_exactly
 # _one_role` refuses the reading that is satisfiable, which is a fact that joins on the
-# payer alone.
+# payer alone. (It cited `opl.gold.specs`, where the fact kind lived until F-API T4a split it
+# out; that module re-exports `PaymentFact` and not its guards, so the old name resolved to
+# nothing.)
 #
 # THE KEY HALF OF EACH PAIR IS A NAME THIS LAYER INVENTS AND IS THEREFORE DECLARED; the
 # counterparty half is the CONTRACT's and is refused at import if it is not. Deriving
@@ -754,23 +381,72 @@ PIT_ESTABELECIMENTO = PointInTimeTable(
 # names it only as a member of `BUSINESS_ATTRIBUTE_COLUMNS`, not as a constant, and the
 # guard that refuses a measure v1 does not carry is what stops this copy drifting behind a
 # rename -- it turns the import of every gold module red instead.
+#
+# AND IT IS NO LONGER THE SUMMABLE ONE (F-API T4a). `amount` is what the payment DELIVERED,
+# in the currency it was denominated in, and with two currencies in the domain `SUM(amount)`
+# is a number with no unit. So it is declared ADDITIVE ONLY WITHIN A CURRENCY and
+# `amount_brl` -- computed here, in one currency -- is the one measure a reader sums without
+# being told which column to sum. `_assert_exactly_one_measure_is_additive` reads
+# `payments.CURRENCIES` rather than the data, so declaring `amount` additive again is a
+# refusal at import and not a wrong number in a report.
 FACT_PAYMENT = PaymentFact(
     name="fact_payment",
     grain_key=payments.IDENTITY_COLUMN,
     measure="amount",
+    measure_additivity=ADDITIVE_WITHIN_CURRENCY,
     company_dimension="dim_company",
     roles=(
         ("payer_cnpj_basico", "payer_company_sk"),
         ("payee_cnpj_basico", "payee_company_sk"),
     ),
-    # IN PROJECTION ORDER, and a Delta append matches POSITIONALLY -- the same property
-    # `PIT_ESTABELECIMENTO.satellites` carries. Permuting these three re-writes each key
-    # into another's column, and all three are integers, so nothing fails.
-    #
+    # IN PROJECTION ORDER *AND* IN COMPUTATION ORDER, which for these two is the same tuple
+    # read twice: a Delta append matches POSITIONALLY, and
+    # `_assert_the_derived_measures_are_computable` resolves each measure's inputs against
+    # the ones declared above it. Swapping these two is refused at import rather than
+    # producing a NULL column.
+    derived=(
+        # `fx_rate` IS NOT `AMOUNT_TYPE`, AND THAT IS THE WHOLE OF ITS TYPE ARGUMENT.
+        # `decimal(18, 2)` would round 5.14420 to 5.14 and put `amount_brl` 0.0816% wrong
+        # on the 2,864 rows carrying that rate -- plausibly, in a column nobody would
+        # re-derive. NOT "every USD row": 5.13950 also rounds to 5.14 and is 0.0097% off
+        # the other way, which ADR 0016 records. It carries the series' own five digits
+        # (`opl.gold.fx.FX_RATE_TYPE`).
+        #
+        # NON-ADDITIVE, AND THE MEAN IS WRONG TOO. A ratio's sum is nonsense, and an
+        # UNWEIGHTED mean over fact rows answers a question nobody asked: the rate a
+        # portfolio converted at is `SUM(amount_brl) / SUM(amount)` over one currency, not
+        # `AVG(fx_rate)`. It is a legitimate fact column as a DENORMALISATION -- the rate
+        # this row actually used, so a reader can re-derive the conversion without joining
+        # the series back.
+        #
+        # ITS INPUTS ARE THE TWO PAYMENT COLUMNS THAT DECIDE WHICH QUOTE APPLIES, not the
+        # series' own: `currency` says whether a quote is consulted at all (BRL is 1.0 by
+        # definition) and `event_time` says which quote had been published by then.
+        DerivedMeasure(
+            name="fx_rate",
+            inputs=("currency", payments.EVENT_TIME_COLUMN),
+            additivity=NON_ADDITIVE,
+        ),
+        # THE ONE ADDITIVE MEASURE. `amount * fx_rate`, rounded HALF-UP to the contract's
+        # own `AMOUNT_SCALE` at the ROW -- so `SUM(amount_brl)` is not `SUM(amount) * rate`
+        # to the cent, and `docs/f-api-run-evidence.md` says so in those words rather than
+        # leaving a reader to file it as a defect.
+        DerivedMeasure(
+            name="amount_brl",
+            inputs=("amount", "fx_rate"),
+            additivity=ADDITIVE,
+        ),
+    ),
     # ALL THREE, AND THE REGISTRY REFUSES ANYTHING LESS. `_assert_every_fact_reaches_every
     # _dimension_this_star_holds` states it as an EQUALITY against the registry's conformed
     # set, so a conformed dimension added later without a key here turns the import red
     # rather than quietly becoming a table nothing joins to.
+    #
+    # THREE NAMES AND FOUR KEYS SINCE F-API T4b. `dim_date` answers two of the fact's
+    # columns -- `event_date_key` and `fx_rate_date_key` -- so this is a list of DIMENSIONS
+    # and `opl.gold.specs.fact_keys` is what turns one into its columns. Permuting the three
+    # re-writes each key into another's column, and every one of them is an integer, so
+    # nothing fails.
     conformed=("dim_date", "dim_channel", "dim_currency"),
 )
 

@@ -125,6 +125,56 @@ class OplConfig:
             f"{require_month(month, action='locate the generated staging dir')}/{table}"
         )
 
+    # --- the THIRD landing root: sources fetched from an API ------------------------
+    #
+    # A THIRD ROOT AND NOT `generated/`, and this is the decision F-API Task 2 took
+    # against the one that fits mechanically. The block above says what the files under
+    # `generated/` have in common: "no downloader produced them ... the discriminator is
+    # the LANDING MODE and not the table". PTAX's bytes are BCB's -- the Banco Central
+    # produced them and this lakehouse only asked for them -- so landing them there
+    # would make that sentence false for its own root, and the mode it implies
+    # (`LANDING_GENERATED`) stamps `_record_source = opl_payment_generator` on rows a
+    # public institution published. Reusing the root to save a property is how a root
+    # stops meaning anything.
+    #
+    # `api/` AND NOT `ptax/`, for exactly the reason `generated/` is not `payments/`:
+    # the discriminator is HOW THE BYTES ARRIVE, so a second API source lands beside
+    # this one under one root instead of forcing a fourth. It is a property of the
+    # arrival, the same way `zips/` is.
+    #
+    # THE MONTH IS REQUIRED HERE TOO AND FALLS BACK NOWHERE -- see the generated block
+    # above for the full argument, including the empty-string hole that collapses a
+    # table dir onto the month root.
+    @property
+    def landing_api_root(self) -> str:
+        return f"{self.volume_root}/api"
+
+    def landing_api_month(self, month: str) -> str:
+        return (
+            f"{self.landing_api_root}/"
+            f"{require_month(month, action='locate the api landing month')}"
+        )
+
+    def landing_api_table(self, table: str, month: str) -> str:
+        """The directory an api-fed table's Auto Loader reads for `month`."""
+        return f"{self.landing_api_month(month)}/{table}"
+
+    def landing_api_tmp(self, table: str, month: str) -> str:
+        """Where an api-fed table's writer may stage a half-written file.
+
+        The twin of `landing_generated_tmp`, under the same `_tmp/` root and for the same
+        two reasons: it is OUTSIDE every directory an Auto Loader reads, so a partial
+        file cannot be discovered by the stream that is about to read the finished one;
+        and it is on the SAME UC Volume, which is one FUSE mount, so `os.replace` from
+        here into `landing_api_table` works where a system temp dir would raise EXDEV.
+
+        Mirrors the landing layout (`<month>/<table>`) so an operator listing this tree
+        maps each staging dir 1:1 onto the landing dir it feeds."""
+        return (
+            f"{self.volume_root}/_tmp/api/"
+            f"{require_month(month, action='locate the api staging dir')}/{table}"
+        )
+
     def table(self, name: str) -> str:
         return f"{self.catalog}.{self.schema}.{name}"
 
@@ -184,6 +234,18 @@ def is_month(value: str) -> bool:
 # the reason the revision sentinel is asserted the same way: a default that happened
 # to be a real month would put every un-parameterised run back on that path.
 SENTINEL_MONTH = "REQUIRED-PASS-A-MONTH"
+
+# THERE IS NO `SENTINEL_QUOTE_DATE` HERE ANY MORE, AND THE ABSENCE IS THE DECISION.
+# F-API Task 2 added `first`/`last` job parameters to the PTAX job with a sentinel
+# default, and argued this constant's location from a comparison in
+# `tests/test_job_yaml_launch_guards.py` that NOBODY HAD WRITTEN -- so the two YAML
+# defaults were tied to nothing at all, and `revision` and `month` were no longer "the
+# two job parameters whose defaults exist only to fail". The Task 2 spec had already
+# ruled the other way and priced the cost: two more refusing sentinels and two more
+# locks. The window is a DECLARED CONSTANT instead
+# (`opl.extraction.ptax_window`), which deletes both sentinels rather than adding both
+# locks, and it is the smaller diff. `SENTINEL_MONTH` above stays because `month` is a
+# real job parameter with four consumers and a measured incident behind its default.
 
 
 # THE SESSION TIMEZONE, PINNED, AND IT IS A CORRECTNESS SETTING RATHER THAN A
@@ -308,3 +370,14 @@ def require_month(month: str | None, *, action: str) -> str:
             "given."
         )
     return candidate
+
+
+# `require_quote_date` LIVED HERE AND IS GONE WITH THE PARAMETERS IT VALIDATED. It parsed
+# an ISO date out of a `first`/`last` job parameter and refused the API's own `MM-DD-YYYY`
+# spelling, which was the right refusal for the wrong design: nothing types a window any
+# more, so there is no operator input for it to police. A `date(2026, 6, 3)` literal in
+# `opl.extraction.ptax_window` cannot be written in the API's spelling, so the class this
+# function existed for is structurally absent rather than guarded -- which is why removing
+# the parameters was the smaller diff than writing the two locks they needed. Recorded
+# here rather than deleted silently, because "the ISO/API asymmetry is refused at the
+# boundary" was a real property and this says where it went.

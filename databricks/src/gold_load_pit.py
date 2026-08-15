@@ -13,8 +13,10 @@ and every registered name is spelled correctly, so the paste that reaches this t
 name from one of the other two jobs. Handed `dim_company`, `load_pit` would fail on
 `spec.hub` several lines into a serverless session that has already started costing
 money; handed here it is refused by kind, on the driver, before Spark exists.
-`tests/test_gold_job_wiring.py::test_each_gold_entry_point_refuses_the_kind_the_other_one
-_builds` drives all six pairings.
+`tests/test_gold_entry_points.py::test_each_gold_entry_point_refuses_the_kind_the_other_one
+_builds` drives all twelve pairings. (This said `tests/test_gold_job_wiring.py` and "six":
+the file was split and the test moved with its name, and the fourth entry point took the
+pairings from six to twelve. Both halves of a citation go stale independently.)
 
 IT TAKES NO `months`, AND THAT IS A DECISION RATHER THAN AN OMISSION. The SCD2 build
 DECLARES a window so it can refuse when the vault has gained a snapshot the launch did

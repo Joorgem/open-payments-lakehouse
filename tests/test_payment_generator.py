@@ -26,6 +26,7 @@ from opl.contracts.payments import COLUMNS, CURRENCIES, PAYMENT_METHODS
 from opl.generator import events as events_module
 from opl.generator import stream as stream_module
 from opl.generator.cnpj_pool import validated_pool
+from opl.generator.derivation import draw_below, pick
 from opl.generator.events import (
     LINE_SEPARATOR,
     PaymentEvent,
@@ -36,7 +37,7 @@ from opl.generator.events import (
 )
 from opl.generator.instants import from_text, to_text
 from opl.generator.measures import late_arrivals
-from opl.generator.stream import StreamSpec, generate, records_for
+from opl.generator.stream import DEFAULT_CURRENCIES, StreamSpec, generate, records_for
 
 _GENERATOR = Path(stream_module.__file__).parent
 
@@ -69,6 +70,7 @@ def _spec(**overrides) -> StreamSpec:
         "event_interval_ms": _SPEC.event_interval_ms,
         "emission_lag_ms": _SPEC.emission_lag_ms,
         "cnpj_pool": _SPEC.cnpj_pool,
+        "currencies": _SPEC.currencies,
     }
     return StreamSpec(**{**fields, **overrides})
 
@@ -110,6 +112,40 @@ def test_the_pinned_stream_is_this_one_and_no_other():
         '"payee_cnpj_basico":"00000015","amount":"23815.80","currency":"BRL",'
         '"payment_method":"PIX"}'
     )
+
+
+def test_a_one_tuple_draw_is_index_zero_for_every_seed_and_position():
+    """THE MECHANISM T1's BYTE-IDENTITY CLAIM RESTS ON, MEASURED RATHER THAN ARGUED.
+
+    `opl.contracts.payments.CURRENCIES` gained a second member and not one byte of the
+    four landed streams moved. The reason is arithmetic and not luck: `pick` is
+    `items[draw_below(..., bound=len(items))]` and `draw_below` reduces a 256-bit digest
+    modulo the bound, so `bound = 1` gives 0 for every seed, purpose, index and salt --
+    `n % 1 == 0` for every n. A one-tuple therefore yields its single member forever, and
+    the DOMAIN's length never enters a draw at all.
+
+    ASSERTED OVER A SPREAD RATHER THAN OVER ONE CASE, because the claim quantifies over
+    seeds and positions and the failure it guards against would be an implementation of
+    `draw_below` that stopped being a plain modulo -- a rejection-sampling rewrite, say,
+    which the module docstring records as considered and refused. Four seeds, four
+    purposes, sixteen positions and two salts is 512 draws in well under a second.
+
+    AND THE CONVERSE, because "always 0" is trivially satisfiable by a bug: the same
+    positions against `bound = 2` must NOT be constant, or the mechanism above would be
+    describing a `draw_below` that returns zero unconditionally."""
+    seeds = (0, 1, 20260813, 20260817)
+    purposes = ("currency", "F1B-CLEAN-2026-08/currency", "amount", "z")
+    ones, twos = set(), set()
+    for seed in seeds:
+        for purpose in purposes:
+            for index in range(16):
+                for salt in (0, 1):
+                    kwargs = {"seed": seed, "purpose": purpose, "index": index, "salt": salt}
+                    ones.add(draw_below(bound=1, **kwargs))
+                    twos.add(draw_below(bound=2, **kwargs))
+                    assert pick(("BRL",), **kwargs) == "BRL"
+    assert ones == {0}
+    assert twos == {0, 1}, "a bound of 2 that draws one value would make the above vacuous"
 
 
 @pytest.mark.parametrize(
@@ -380,9 +416,28 @@ def test_an_amount_that_is_not_a_positive_whole_number_of_cents_is_refused(cents
 
 
 def test_the_currency_and_method_come_from_the_declared_domains():
+    """AND THE CURRENCY COMES FROM THE SPEC, NOT FROM THE CONTRACT'S DOMAIN.
+
+    This test asserted `record["currency"] in CURRENCIES` until F-API, and that
+    assertion survives the widening while saying strictly less than it used to: with two
+    members in the domain it passes for a stream that draws either one. The property that
+    is load-bearing after T1 is that a spec's stream draws only what THAT SPEC declares,
+    which is what keeps a one-tuple spec byte-identical to the day it was written."""
+    assert _SPEC.currencies == DEFAULT_CURRENCIES == ("BRL",)
+    assert set(_SPEC.currencies) < set(CURRENCIES), "the domain is wider than this draw"
     for record in records_for(_SPEC):
-        assert record["currency"] in CURRENCIES
+        assert record["currency"] in _SPEC.currencies
         assert record["payment_method"] in PAYMENT_METHODS
+
+
+def test_a_stream_drawing_two_currencies_draws_both_and_only_from_its_own_tuple():
+    """THE OTHER HALF, because a one-currency stream cannot tell a working draw from a
+    constant. With `("BRL", "USD")` the same code has to produce both values -- and only
+    those two -- at indices decided by the same purpose, index and salt as before."""
+    mixed = _spec(currencies=("BRL", "USD"))
+    drawn = [record["currency"] for record in records_for(mixed)]
+    assert set(drawn) == {"BRL", "USD"}, "a two-tuple that draws one value is a constant"
+    assert set(drawn) <= set(CURRENCIES)
 
 
 def test_a_contract_column_with_no_renderer_is_refused(monkeypatch):
@@ -443,6 +498,42 @@ def test_a_pool_that_is_not_canonical_is_refused_rather_than_sorted():
     argument describes -- and the argument is what a reader reconstructs a run from."""
     with pytest.raises(ValueError, match="not canonical"):
         _spec(cnpj_pool=tuple(reversed(_POOL)))
+
+
+@pytest.mark.parametrize(
+    ("currencies", "expected"),
+    [
+        (("BRL", "EUR"), "not a subset"),
+        (("USD", "BRL"), "reorders the contract"),
+        (("BRL", "BRL"), "repeats a member"),
+        ((), "non-empty tuple"),
+        ("BRL", "non-empty tuple"),
+        (["BRL"], "non-empty tuple"),
+    ],
+)
+def test_a_currency_tuple_that_is_not_a_subsequence_of_the_domain_is_refused(
+    currencies, expected
+):
+    """FOUR DISTINCT SILENT FAILURES BEHIND ONE GUARD, and none of them raises anywhere
+    else.
+
+    OUTSIDE THE DOMAIN lands rows `dim_currency` has no member for: they resolve to the
+    ghost key, which is the one population that dimension's own tests assert cannot exist.
+
+    REORDERED is the one that moves landed bytes, and it is why the rule is a SUBSEQUENCE
+    and not a subset. `pick` is positional, so `("USD", "BRL")` makes index 0 mean USD and
+    flips the currency of every row in the stream -- with the same declared members, the
+    same seed and the same purpose.
+
+    REPEATED gives one currency a doubled share while reading as a tuple that mentions
+    each once.
+
+    A BARE `str` IS THE FOURTH, and it is refused here rather than three frames down in
+    `pick`: `"BRL"` satisfies `Sequence[str]`, so the draw would return one CHARACTER and
+    the stream's currency column would hold `B`, `R` or `L`. A `list` is refused with it,
+    because the field is part of a frozen spec that has to stay hashable."""
+    with pytest.raises((TypeError, ValueError), match=expected):
+        _spec(currencies=currencies)
 
 
 def test_a_lower_case_stream_id_is_refused_because_the_hash_folds_case():

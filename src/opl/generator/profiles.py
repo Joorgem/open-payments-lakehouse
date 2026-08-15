@@ -56,6 +56,28 @@ answer from the naive one.
                        fourth defect class, so every count F1b published about
                        `bronze_payments` survives its arrival unchanged.
 
+--- AND A FIFTH, WHICH CARRIES TWO CURRENCIES SO THAT FX CAN BE WRONG ---------------
+
+F-API's headline is an FX rate joined to a payment as of the instant the rate was
+PUBLISHED, and every payment this lakehouse held before it was BRL -- so `fx_rate` would
+be 1.0 on every row, `amount_brl` would equal `amount` everywhere, and `dim_currency`
+would stay a constant column wearing a dimension's name. An FX layer measured on that
+cannot be wrong, which is the same thing as saying nothing about it is testable.
+
+    CROSS-CURRENCY  the same shape, the same pool and the same absence of defects as
+                    CLEAN, drawing from ("BRL", "USD") instead of ("BRL",) and placed at
+                    2026-06-22T08:00Z so that its window STRADDLES that day's PTAX
+                    bulletin. Two properties no other profile can produce: a currency
+                    that varies WITHIN one stream rather than between streams, and two
+                    payments on one calendar day resolving to two different rates.
+
+THE CURRENCY IS A PROPERTY OF THE PAYMENT AND NOT OF THE DELIVERY, which is why it is a
+tuple here rather than one currency per profile. A per-profile constant would give
+`dim_currency` two members too -- and it would be perfectly correlated with `_batch_id`,
+so any `GROUP BY currency` would be a `GROUP BY batch` under another name. See the
+declaration block below for the arithmetic of the window and for why the tuple is a
+literal rather than `payments.CURRENCIES`.
+
 THEIR STREAM IDS AND SEEDS DIFFER, WHICH IS LOAD-BEARING. `stream._transaction_id`
 folds the stream id into its derivation purpose, so each profile produces its own
 disjoint identity space -- and `COUNT(*) - COUNT(DISTINCT transaction_id)` over the
@@ -69,9 +91,9 @@ profile describes a DELIVERY -- what was sent, how badly, and when -- not a diff
 economy: the same companies pay each other across every stream, which is what
 makes a cross-profile join mean anything and what lets the 100%-resolution
 measurement be one claim about one pool rather than one per stream. It is also the
-whole force of `between-snapshots`: an as-of join across the four streams compares
-the SAME companies at two different times, which a fourth pool would turn into a
-comparison of two populations.
+whole force of `between-snapshots` and `cross-currency`: an as-of join across the five
+streams compares the SAME companies at two different times, which a second pool would turn
+into a comparison of two populations.
 """
 from __future__ import annotations
 
@@ -85,11 +107,11 @@ from opl.generator.defects import (
     _require_defects_fit,
 )
 from opl.generator.instants import from_text, to_text
-from opl.generator.stream import StreamSpec
+from opl.generator.stream import DEFAULT_CURRENCIES, StreamSpec
 
 # How many real `hub_empresa` keys every generated stream draws its counterparties
 # from. 1,024 against 69,062,849 in the hub: large enough that the attribute space
-# (|pool| * (|pool|-1) * |amounts| * |currencies| * |methods| ~ 2.6e13) makes a
+# (|pool| * (|pool|-1) * |amounts| * |spec.currencies| * |methods| >= 2.6e13) makes a
 # forced re-derivation in `_distinct_attributes` vanishingly unlikely at this stream
 # length, and small enough that `pool_query`'s ORDER BY over the whole hub returns a
 # top-N rather than a full sort of 69M rows.
@@ -110,6 +132,26 @@ POOL_SEED = 20260812
 # `emit_stream_file` will not overwrite a different file.
 SENTINEL_PROFILE = "REQUIRED-PASS-A-PROFILE"
 
+# WHERE A STREAM'S WINDOW SITS RELATIVE TO THE VAULT'S TWO `applied_date`s, DECLARED BY
+# THE PROFILE RATHER THAN INFERRED FROM IT.
+#
+# F3 asserted this for ONE profile by name -- the guard read `PROFILES[BETWEEN_SNAPSHOTS]`
+# -- so a fifth profile inherited none of it and could sit anywhere without a word going
+# red. The obvious generalisation is wrong: a blanket "every profile sits between the two
+# dates" would refuse the F1b three, which legitimately sit AFTER both and are the "after"
+# side the as-of join needs. There is no single correct placement, so the placement becomes
+# part of the declaration and the guard checks the declaration against the arithmetic.
+#
+# `before` HAS NO DECLARED PROFILE TODAY and is not speculative padding: it is the third of
+# three exhaustive positions, and leaving it out would make the guard's dispatch a
+# two-branch check that silently accepts anything below the earlier date. It is exercised
+# in `tests/test_payment_profiles.py` rather than by a declaration, and §7 of the phase plan
+# records that distinction rather than reporting the branch as working.
+PLACEMENT_BEFORE = "before"
+PLACEMENT_BETWEEN = "between"
+PLACEMENT_AFTER = "after"
+PLACEMENTS = (PLACEMENT_BEFORE, PLACEMENT_BETWEEN, PLACEMENT_AFTER)
+
 
 @dataclass(frozen=True, kw_only=True)
 class StreamProfile:
@@ -128,7 +170,25 @@ class StreamProfile:
     window_start: str
     event_interval_ms: int
     emission_lag_ms: int
+    currencies: tuple[str, ...]
+    placement: str
     defects: DefectSpec
+
+    def __post_init__(self) -> None:
+        """Refuse a placement that is not one of the three, AT CONSTRUCTION.
+
+        Here rather than only in the import guard below, because the guard compares a
+        DECLARED placement against the one the window actually has -- and an unrecognised
+        spelling would make that comparison fail with a message about a window, when the
+        mistake is a typo in a word. `dataclasses.replace` reaches this too, so a doctored
+        profile in a test cannot invent a fourth placement either."""
+        if self.placement not in PLACEMENTS:
+            raise ValueError(
+                f"profile {self.name!r} declares placement {self.placement!r}, which is "
+                f"not one of {PLACEMENTS}. The placement says where this stream's window "
+                "sits relative to the vault's two applied_dates, and the guard at the foot "
+                "of this module refuses a window that contradicts it."
+            )
 
     def stream_spec(self, cnpj_pool: tuple[str, ...]) -> StreamSpec:
         """This profile against a real pool. The pool is the only run-time input.
@@ -137,7 +197,14 @@ class StreamProfile:
         redundant: `StreamSpec` refuses a pool it would have had to normalise rather
         than normalising it silently, so a caller passing rows straight out of Spark
         -- in whatever order the partitions produced them -- would otherwise get a
-        refusal one frame away from the query that caused it."""
+        refusal one frame away from the query that caused it.
+
+        `currencies` IS PASSED THROUGH AND THAT LINE IS LOAD-BEARING. `StreamSpec`
+        defaults the field, so forgetting it here would silently generate a BRL-only
+        stream out of a profile that declares a mix -- every count green, the FX layer
+        back to a column that cannot be wrong. `placement` is deliberately NOT passed:
+        it is a claim about where the window sits, checked at import, and the generator
+        has no use for it."""
         return StreamSpec(
             seed=self.seed,
             stream_id=self.stream_id,
@@ -147,6 +214,7 @@ class StreamProfile:
             event_interval_ms=self.event_interval_ms,
             emission_lag_ms=self.emission_lag_ms,
             cnpj_pool=validated_pool(cnpj_pool),
+            currencies=self.currencies,
         )
 
     @property
@@ -173,7 +241,7 @@ class StreamProfile:
         redeliveries the sentence above promises. `drifting` declares
         `duplicate_count=0`, so the published number was right by accident; a profile
         declaring BOTH would publish a prediction LOWER than the rows actually carrying
-        the column -- and `tests/test_payment_emit.py` compares this against
+        the column -- and `tests/test_payment_profiles.py` compares this against
         `drift_positions`, which is index-based too, **so the suite would have stayed
         GREEN while the prediction was wrong**. Found by review on PR #14.
 
@@ -260,10 +328,114 @@ _EMISSION_LAG_MS = 1_500
 # between-window on that basis (`docs/f3-run-evidence.md` 0.3) and the existing streams
 # already supply the "after" side, so nothing needs the straddle. The arithmetic is
 # recorded because the plan's own stated reason was a refusal that does not fire, and
-# `tests/test_payment_emit.py` pins both halves.
+# `tests/test_payment_profiles.py` pins both halves.
 BETWEEN_SNAPSHOTS = "between-snapshots"
 _BETWEEN_SNAPSHOTS_WINDOW_START = "2026-06-20T00:00:00.000Z"
 _VAULT_APPLIED_DATES = ("2026-06-13T00:00:00.000Z", "2026-07-11T00:00:00.000Z")
+
+
+# THE FIFTH PROFILE, AND THE ONLY ONE WHOSE CURRENCY IS A PROPERTY OF THE PAYMENT.
+#
+# WHY IT EXISTS AT ALL. Every payment this lakehouse held before it was BRL, so `fx_rate`
+# would be 1.0 on every row of `fact_payment`, `amount_brl` would equal `amount`
+# everywhere, and `dim_currency` would stay a constant column wearing a dimension's name.
+# An FX layer measured on that data cannot be wrong, which is the same thing as saying
+# nothing about it is testable. This stream is where FX becomes falsifiable.
+#
+# A TUPLE AND NOT A SCALAR, WHICH IS THE DECISION THAT MATTERS. Declaring one currency per
+# profile -- BRL for four streams and USD for a fifth -- would also give `dim_currency` two
+# members, and it would be wrong: the currency would be functionally determined by the
+# delivery, perfectly correlated with `_batch_id`, so any `GROUP BY currency` would be a
+# `GROUP BY batch` under another name. `payments.BUSINESS_ATTRIBUTE_COLUMNS` is "what the
+# payment WAS, as opposed to which delivery of it this row is", and a per-delivery currency
+# violates that sentence while passing every guard in this repository. So the mix is inside
+# one stream.
+#
+# A LITERAL TUPLE AND NEVER `payments.CURRENCIES`, and this is the trap T1 exists to
+# prevent, reproduced in the one place that would spring it. Writing
+# `currencies=payments.CURRENCIES` reads as "draw from the domain" and would make this
+# stream's bytes a function of the DOMAIN's length -- so a sixth currency added for some
+# later phase would re-draw every row of this stream, which is exactly the coupling the
+# domain/draw split was made to remove. The literal is the whole point.
+#
+# THE WINDOW IS THE FOURTH ONE PROPOSED AND THE FIRST THAT SURVIVES MEASUREMENT, and the
+# three that did not are recorded in the phase plan rather than deleted. What it has to do
+# is put payments on BOTH SIDES of a PTAX bulletin: the rate for a payment is the most
+# recent quote whose PUBLICATION precedes the payment's own instant, so two payments on one
+# calendar day, in one stream, in one currency, get DIFFERENT rates when one happens before
+# that day's bulletin and one after. No calendar-day implementation can produce that.
+#
+#   - The 2026-06-22 quote publishes at `dataHoraCotacao 2026-06-22 13:06:19.750415`, read
+#     as BRT, i.e. 2026-06-22T16:06:19.750415Z -- 29,179,750.415 ms after this window
+#     opens. Events land on whole 5,000 ms steps, so indices 0..5,835 precede publication
+#     and the USD rows among them fall back to Friday 2026-06-19 (venda 5.14420) while the
+#     USD rows in 5,836..9,999 resolve same-day (venda 5.13950) -- 2,864 and 2,041 of them.
+#     The BRL rows in both ranges convert at exactly 1 and consult no quote, which is why
+#     the rates attach to those two counts and never to the 5,836 / 4,164 ROW split.
+#     29,179,750 mod 5,000 = 4,750, so publication sits 249.585 ms BEFORE index 5,836: no
+#     row is on the boundary and the `<=`-versus-`<` question decides nothing. (It is the
+#     .750 SECOND that does that, not the "415 us remainder" this comment used to name --
+#     drop the microseconds and the clearance is still 250 ms. Retracted in
+#     `docs/f-api-run-evidence.md` §1.1 and in `opl.gold.fx`; this was a surviving copy.)
+#   - THE WEEKEND CROSSING IS NOT LOST. Those 5,836 rows reach back past Sunday 2026-06-21
+#     and Saturday 2026-06-20 to Friday 2026-06-19: a fallback across a whole weekend AND
+#     across the unquoted part of a business day, on real fact rows.
+#   - IT COSTS ONE `event_date_key` AND NOT TWO. The whole window sits inside 2026-06-22 in
+#     BOTH UTC and BRT (08:00..21:53:15 Z is 05:00..18:53:15 BRT), so the distinct
+#     `event_date_key` count goes 2 -> 3, and this profile's calendar day does not depend
+#     on a timezone convention at all.
+#   - 08:00 AND NOT 00:00, which is the only reason the window is not the F1b shape moved.
+#     Opening at 00:00Z would close at 13:53:15Z -- 10:53 BRT, before the ~13:0x bulletin
+#     hour -- so every row would fall back and the direct lookup would go unexercised for a
+#     fifth time.
+CROSS_CURRENCY = "cross-currency"
+_CROSS_CURRENCY_WINDOW_START = "2026-06-22T08:00:00.000Z"
+_CROSS_CURRENCY_CURRENCIES = ("BRL", "USD")
+
+
+# --- WHAT THE FACTORY BELOW VARIES, AND WHY THAT PROSE IS UP HERE ---------------------
+#
+# Module level for the reason `opl.bronze.generated_landing` and `opl.bronze.rules` state
+# above their own long functions: this reasoning grew past the point where the function
+# carrying it stayed under the project's 50-line limit. F-API Task 3 added two parameters
+# and the docstring took `_profile` to 57 lines, every one of the added lines prose -- which
+# is the species §0.4 of the phase plan recorded twice, so it is repaired rather than
+# repeated.
+#
+# THE INVARIANT, SPELLED SO IT CAN BE CHECKED RATHER THAN BELIEVED: the declared profiles
+# differ in `name`, `stream_id`, `seed`, `defects`, `window_start`, `currencies` and
+# `placement`, and share `event_count`, `repeat_count`, `event_interval_ms` and
+# `emission_lag_ms`. Written as a factory rather than five literal constructions so that
+# sentence is a property of the code -- the shared four cannot vary, because no argument
+# exists that would let them -- rather than a claim about five blocks a reader has to diff.
+# The shared shape is what makes the profiles comparable at all.
+# `tests/test_payment_profiles.py::test_the_factory_varies_exactly_the_fields_its_docstring
+# _names` reads this sentence's field names out of the signature and out of the dataclass,
+# so the two cannot drift apart.
+#
+# `window_start` BECAME A PARAMETER AND THIS PROSE CHANGED IN THE SAME COMMIT, deliberately,
+# and `currencies` and `placement` did the same one phase later. It was hardcoded while the
+# sentence above read "differ ONLY in their id, their seed and their defects", and both
+# halves were true; F3's `between-snapshots` profile makes that sentence false, and a factory
+# whose docstring still described the old invariant is precisely the drift that let
+# `drifted_row_count` promise redeliveries its arithmetic did not count while the suite
+# stayed green (found by review on PR #14).
+#
+# TWO DEFAULTS AND ONE REQUIRED KEYWORD, AND THE ASYMMETRY IS THE POINT.
+#
+# THE DEFAULTS ARE WHAT KEEP F1b's BYTES WHERE THEY ARE. Not passing `window_start` or
+# `currencies` is the identical construction the three F1b profiles already had, so their
+# `StreamSpec`s -- and therefore their files, digests and every count published against
+# them -- are untouched by the parameters existing. `currencies` defaults to a ONE-tuple,
+# which is the whole of the byte-identity argument (see
+# `opl.generator.stream.DEFAULT_CURRENCIES`).
+#
+# `placement` HAS NO DEFAULT, and that is a deliberate refusal to inherit. Every other field
+# here describes what a stream IS; placement is a CLAIM about it that the guard at the foot
+# of this module checks against the arithmetic, and a claim nobody made is not a claim that
+# can be wrong. A default would also have to be `after` -- the F1b value -- so the one
+# profile most likely to be added next, a new window somebody has not thought about, would
+# silently inherit the assertion least likely to be true of it.
 
 
 def _profile(
@@ -271,30 +443,15 @@ def _profile(
     stream_id: str,
     seed: int,
     defects: DefectSpec,
+    *,
+    placement: str,
     window_start: str = _WINDOW_START,
+    currencies: tuple[str, ...] = DEFAULT_CURRENCIES,
 ) -> StreamProfile:
     """One profile over the shared shape. Only the parameters above differ.
 
-    THE INVARIANT, SPELLED SO IT CAN BE CHECKED RATHER THAN BELIEVED: the declared
-    profiles differ in `name`, `stream_id`, `seed`, `defects` and `window_start`, and
-    share `event_count`, `repeat_count`, `event_interval_ms` and `emission_lag_ms`.
-    Written as a factory rather than four literal constructions so that sentence is a
-    property of the code -- the shared four cannot vary, because no argument exists
-    that would let them -- rather than a claim about four blocks a reader has to diff.
-    The shared shape is what makes the profiles comparable at all.
-
-    `window_start` BECAME A PARAMETER AND THIS DOCSTRING CHANGED IN THE SAME COMMIT,
-    deliberately. It was hardcoded while the sentence above read "differ ONLY in their
-    id, their seed and their defects", and both halves were true; F3's
-    `between-snapshots` profile makes that sentence false, and a factory whose
-    docstring still described the old invariant is precisely the drift that let
-    `drifted_row_count` promise redeliveries its arithmetic did not count while the
-    suite stayed green (found by review on PR #14).
-
-    THE DEFAULT IS WHAT KEEPS F1b's BYTES WHERE THEY ARE. Not passing `window_start` is
-    the identical construction the three F1b profiles already had, so their
-    `StreamSpec`s -- and therefore their files, digests and every count published
-    against them -- are untouched by the parameter existing."""
+    See the comment block above for the invariant this factory makes checkable, and for
+    why two of its three keyword parameters have defaults and one does not."""
     return StreamProfile(
         name=name,
         stream_id=stream_id,
@@ -304,12 +461,16 @@ def _profile(
         window_start=window_start,
         event_interval_ms=_EVENT_INTERVAL_MS,
         emission_lag_ms=_EMISSION_LAG_MS,
+        currencies=currencies,
+        placement=placement,
         defects=defects,
     )
 
 
 PROFILES: dict[str, StreamProfile] = {
-    "clean": _profile("clean", "F1B-CLEAN-2026-08", 20260813, NO_DEFECTS),
+    "clean": _profile(
+        "clean", "F1B-CLEAN-2026-08", 20260813, NO_DEFECTS, placement=PLACEMENT_AFTER
+    ),
     "promotable": _profile(
         "promotable",
         "F1B-PROMOTABLE-2026-08",
@@ -321,6 +482,7 @@ PROFILES: dict[str, StreamProfile] = {
         # `_require_the_delay_matches_the_count` enforces, so every late record crosses
         # a boundary a windowed aggregation had already closed.
         DefectSpec(duplicate_count=150, late_count=100, late_by_ms=LATENESS_WINDOW_MS),
+        placement=PLACEMENT_AFTER,
     ),
     "drifting": _profile(
         "drifting",
@@ -333,6 +495,7 @@ PROFILES: dict[str, StreamProfile] = {
         # would silently drop, this repository's own 8,761-row defect very nearly to
         # the row.
         DefectSpec(drift_from_index=8_000),
+        placement=PLACEMENT_AFTER,
     ),
     BETWEEN_SNAPSHOTS: _profile(
         BETWEEN_SNAPSHOTS,
@@ -354,6 +517,30 @@ PROFILES: dict[str, StreamProfile] = {
         # promotes: a drifted one would stop at `fail_on_dq` and never reach the fact.
         NO_DEFECTS,
         window_start=_BETWEEN_SNAPSHOTS_WINDOW_START,
+        placement=PLACEMENT_BETWEEN,
+    ),
+    CROSS_CURRENCY: _profile(
+        CROSS_CURRENCY,
+        # `F-API-` rather than `F3-`, on `between-snapshots`' own precedent: the phase that
+        # needs the stream names it, and no month suffix, because its events are in June
+        # and it lands wherever `--params month=...` says.
+        "F-API-CROSS-CURRENCY",
+        # The next seed in the sequence, and it must be new for the reason
+        # `_assert_the_profiles_are_declared_consistently` gives about ids: seed and stream
+        # id are hashed TOGETHER, so a reused seed under a new id is already a disjoint
+        # stream -- but a sequence a reader can follow is worth more than the reuse.
+        20260817,
+        # NO DEFECTS, DECLARED RATHER THAN OMITTED, for `between-snapshots`' reason
+        # exactly. F1b's published totals -- 150 redeliveries, 100 late arrivals, 2,000
+        # drifted rows -- are all stated against `bronze_payments` AS A WHOLE, so a fifth
+        # defect class would make those sentences describe a table they no longer describe,
+        # for no claim this phase makes. It also keeps `delivered_row_count` equal to
+        # `event_count`, and a clean batch promotes: a drifted one stops at `fail_on_dq`
+        # and never reaches the fact, which is where the FX columns are.
+        NO_DEFECTS,
+        window_start=_CROSS_CURRENCY_WINDOW_START,
+        currencies=_CROSS_CURRENCY_CURRENCIES,
+        placement=PLACEMENT_BETWEEN,
     ),
 }
 
@@ -445,6 +632,14 @@ def _assert_every_profile_describes_a_stream_that_can_exist() -> None:
     a second copy here would be a second thing to drift from the module that owns the
     definition.
 
+    AND IT IS WHAT MAKES T1's CURRENCY GUARD REACH EVERY PROFILE, which is worth stating
+    because the phase plan asked for a guard here and this is where it already is.
+    `stream_spec` builds a real `StreamSpec`, whose `__post_init__` calls
+    `stream._require_currencies` -- so a profile drawing from outside the contract's
+    domain, repeating a member, or reordering it is refused AT IMPORT by the loop below.
+    A second loop over `PROFILES` spelling the same rule is exactly the duplication this
+    repository polices hardest, so there is not one.
+
     WHAT IS DELIBERATELY NOT DONE HERE, AND WHERE IT IS DONE INSTEAD. The remaining
     bound -- that a defect count is not larger than the set of positions eligible for
     it -- is enforced by `defects._selected`, which raises naming the purpose and both
@@ -452,7 +647,7 @@ def _assert_every_profile_describes_a_stream_that_can_exist() -> None:
     `late_positions` and `drift_positions`, each of which digests EVERY candidate
     position: nine sorts of 10,000 SHA-256 draws, about two seconds, paid on every
     import of this module by every test that touches the generator. It is checked once
-    in `tests/test_payment_emit.py` instead, which is where an expensive total check
+    in `tests/test_payment_profiles.py` instead, which is where an expensive total check
     belongs, and at generation time it fails before a byte is written."""
     probe = validated_pool(("00000001", "00000002"))
     for profile in PROFILES.values():
@@ -465,7 +660,7 @@ def _refuse_drift_beside_duplicates() -> None:
     `drifted_row_count` counts emission INDICES from `drift_from_index` onward. A
     redelivery carries its original's bytes -- drift column included -- so a profile
     declaring both would deliver MORE rows carrying the column than it predicts, and
-    `tests/test_payment_emit.py` compares the prediction against `drift_positions`,
+    `tests/test_payment_profiles.py` compares the prediction against `drift_positions`,
     which is index-based in the same way. **The suite would stay green while the
     published number was wrong**, which is the one failure this phase's whole method is
     built to prevent. Found by review on PR #14.
@@ -496,22 +691,60 @@ def _refuse_drift_beside_duplicates() -> None:
             )
 
 
-def _refuse_a_window_that_leaves_the_interval_it_was_declared_for() -> None:
-    """Fail at import if `between-snapshots` stops sitting between the two snapshots.
+def observed_placement(profile: StreamProfile) -> str | None:
+    """Where `profile`'s window ACTUALLY sits, or None if it contains a boundary.
 
-    ITS PLACEMENT IN TIME IS ITS ONLY REASON TO EXIST. Its shape, its pool and its
-    absence of defects are `clean`'s; move its window and it becomes a fourth copy of
-    the other three that lands under its own filename, promotes without complaint, and
-    makes the as-of join it was added for resolve to the same version the naive join
-    does. Nothing goes red -- the phase simply publishes a join whose answer does not
-    change, which is the exact failure F3 Task 0 measured and this profile answers.
+    STRICT AT EVERY END, and the strictness is the same argument at each of them. A
+    payment landing exactly ON an `applied_date` matches two company versions under a
+    half-open interval join, which is the multi-match F3's own acceptance forbids -- so a
+    window touching a boundary is not "before" or "after" it, and this returns None.
 
-    STRICTLY INSIDE, at both ends, and neither bound is decoration. Past the LATER date
-    the stream joins the 20,150 rows that already resolve to the last version, which is
-    the failure above. Before the EARLIER one it resolves through
-    `opl.gold.columns.VALID_FROM_FLOOR` to the first version -- a different answer, but
-    one produced by the sentinel rather than by the version chain, so it would prove
-    the floor works and say nothing about as-of joining at all.
+    None IS A FOURTH ANSWER RATHER THAN A REFUSAL, because the guard below is what turns
+    it into one. A window straddling a date is a real thing to declare one day (it needs
+    48x the shared event interval, which is why F3 rejected it -- see
+    `tests/test_payment_profiles.py`), and this function's job is to report the arithmetic,
+    not to decide what is allowed.
+
+    PUBLIC, unlike the guards around it: `tests/test_payment_profiles.py` reads it to check
+    the three placements against windows the declarations do not contain, and `before`
+    has no declared profile at all -- so without a public reader its branch would be
+    unreachable code wearing a green suite."""
+    earlier, later = (from_text(instant) for instant in _VAULT_APPLIED_DATES)
+    first = from_text(profile.window_start)
+    last = from_text(profile.last_event_time)
+    if last < earlier:
+        return PLACEMENT_BEFORE
+    if earlier < first and last < later:
+        return PLACEMENT_BETWEEN
+    if later < first:
+        return PLACEMENT_AFTER
+    return None
+
+
+def _refuse_a_window_that_contradicts_its_declared_placement() -> None:
+    """Fail at import if any profile's window is not where the profile says it is.
+
+    WHERE A STREAM SITS IN TIME IS THE ONLY THING SOME OF THESE PROFILES VARY. Move
+    `between-snapshots`' window and it becomes a fourth copy of the F1b three that lands
+    under its own filename, promotes without complaint, and makes the as-of join it was
+    added for resolve to the same version the naive join does. Nothing goes red -- the
+    phase simply publishes a join whose answer does not change, which is the exact failure
+    F3 Task 0 measured and that profile answers. It holds for `cross-currency` too, and
+    with a second cost: pushed past the later `applied_date` it stops being the "before"
+    side, and every FX row joins the population that already resolves to the last company
+    version -- so the one stream carrying two currencies would say nothing about as-of
+    joining either.
+
+    IT READS THE DECLARATION AND ITERATES `PROFILES`, WHICH IS F-API's CHANGE. F3's
+    version read `PROFILES[BETWEEN_SNAPSHOTS]` -- one hardcoded key -- so the fifth
+    profile inherited none of it. A blanket "every profile sits between the two dates"
+    would have been worse than nothing: it refuses the F1b three, which legitimately sit
+    AFTER both dates and are the "after" side the join needs. So each profile declares its
+    placement and this compares that word against the arithmetic.
+
+    A STRADDLE IS CAUGHT BY THE SAME COMPARISON RATHER THAN BY A FOURTH BRANCH:
+    `observed_placement` returns None for a window containing a boundary, and None equals
+    no declared placement, so the refusal below fires with the window in the message.
 
     FROM THE DECLARATION ALONE AND AT IMPORT, for the reason
     `_assert_every_profile_describes_a_stream_that_can_exist` gives: `window_start` and
@@ -519,14 +752,16 @@ def _refuse_a_window_that_leaves_the_interval_it_was_declared_for() -> None:
     generated byte, and the alternative is discovering it after a deploy, a run and an
     ingest have all succeeded."""
     earlier, later = _VAULT_APPLIED_DATES
-    profile = PROFILES[BETWEEN_SNAPSHOTS]
-    first, last = from_text(profile.window_start), from_text(profile.last_event_time)
-    if not from_text(earlier) < first or not last < from_text(later):
+    for name, profile in PROFILES.items():
+        observed = observed_placement(profile)
+        if observed == profile.placement:
+            continue
         raise ValueError(
-            f"profile {BETWEEN_SNAPSHOTS!r} runs {profile.window_start} .. "
-            f"{profile.last_event_time}, which is not strictly inside the vault's "
-            f"applied_date interval ({earlier} .. {later}). Every payment outside it "
-            "resolves to the same company version the existing streams already do, so "
+            f"profile {name!r} declares placement {profile.placement!r} and runs "
+            f"{profile.window_start} .. {profile.last_event_time}, which is "
+            f"{observed or 'astride one of the two dates'} relative to the vault's "
+            f"applied_dates ({earlier} .. {later}). A payment on the wrong side of those "
+            "dates resolves to the same company version the other streams already do, so "
             "the as-of join stops being distinguishable from `WHERE valid_to = "
             "<sentinel>` and this profile proves nothing it was added to prove."
         )
@@ -535,4 +770,4 @@ def _refuse_a_window_that_leaves_the_interval_it_was_declared_for() -> None:
 _assert_the_profiles_are_declared_consistently()
 _assert_every_profile_describes_a_stream_that_can_exist()
 _refuse_drift_beside_duplicates()
-_refuse_a_window_that_leaves_the_interval_it_was_declared_for()
+_refuse_a_window_that_contradicts_its_declared_placement()

@@ -44,95 +44,35 @@ from opl.bronze.registry_collisions import (
 # DEFINED is this package's business.
 from opl.bronze.registry_landing import (  # noqa: F401  (re-exported for consumers)
     FILE_FED_LANDING_MODES,
+    LANDING_API,
     LANDING_GENERATED,
     LANDING_LOCAL,
     LANDING_MODES,
     LANDING_ZIPS,
+    NON_FILE_FED_LANDING_MODES,
+    _assert_every_landing_mode_is_classified,
     _assert_landing_modes_known,
-    _assert_no_generated_table_claims_a_downloader,
+    _assert_no_table_nothing_downloads_claims_a_downloader,
     _assert_prefixes_match_their_file_groups,
     landing_dir,
+    landing_tmp_dir,
 )
-from opl.config import OplConfig
-from opl.contracts import payments
+
+# The subdir machinery -- the reserved-name derivation and the three guards over the
+# `subdir` field -- moved to `registry_subdirs.py` in F-API's fix pass, when the sixth
+# table's constraint prose took this file to 802 lines. RE-EXPORTED for the landing
+# constants' reason: `RESERVED_SUBDIRS` is read by `registry_collisions.py`'s prose and by
+# two test modules that import it from here, and rewriting live import lines to move a
+# derivation is churn that buys nothing.
+from opl.bronze.registry_subdirs import (  # noqa: F401  (re-exported for consumers)
+    RESERVED_SUBDIRS,
+    _assert_no_table_claims_a_reserved_subdir,
+    _assert_no_two_tables_share_a_landing_subdir,
+    _assert_subdirs_are_single_path_components,
+    _malformed_subdir_reason,
+)
+from opl.contracts import payments, ptax
 from opl.contracts.catalogue import CONTRACT_COLUMNS, is_known
-
-# Values that make the derivation below independent of any real table or month --
-# they are joined into a path and the added component is read back out, so they
-# only have to be non-empty and contain no separator.
-_LAYOUT_PROBE_TABLE = "__probe__"
-_LAYOUT_PROBE_MONTH = "__month__"
-
-# What disqualifies a `subdir` from being a single directory name. Both separators
-# because Windows `os.path` accepts either; the aliases because each resolves
-# `landing_table(...)` back onto a directory that already exists -- `""` and `"."`
-# onto the month root (the F1.4b blocker itself), `".."` onto `cnpj/`, every month.
-_PATH_SEPARATORS = ("/", "\\")
-_RELATIVE_ALIASES = frozenset({"", ".", ".."})
-
-
-def _component_under(path: str, prefix: str) -> str:
-    """The single directory `path` adds directly under `prefix`.
-
-    Raises rather than returning something wrong if `path` is not under `prefix`:
-    that means the Volume layout moved, and a guard that silently derives the
-    empty string from a moved layout reserves nothing while still looking green."""
-    if not path.startswith(f"{prefix}/"):
-        raise ValueError(
-            f"the Volume layout moved: {path!r} is no longer under {prefix!r}, so "
-            "RESERVED_SUBDIRS can no longer derive the names it has to reserve"
-        )
-    return path[len(prefix) + 1:].split("/", 1)[0]
-
-
-def _reserved_subdirs() -> frozenset[str]:
-    """Directory names no table's `subdir` may claim.
-
-    DERIVED from `OplConfig`, not restated as a literal list, so the guard cannot
-    drift from the layout it guards: renaming the zips directory in one place moves
-    this reservation with it, where a literal would go on reserving a name nothing
-    uses and stop reserving the one that matters.
-
-    `zips` is the LIVE collision and the reason this exists. `landing_zips` puts
-    every table's raw ZIPs at `cnpj/<month>/zips/<table>`, a SIBLING of each
-    table's `landing_table` dir -- so a table registered with `subdir="zips"` would
-    get `cnpj/<month>/zips` as its source dir, and because cloudFiles walks a source
-    dir RECURSIVELY (F1.3, empirically: a probe.txt planted in
-    `zips/estabelecimentos/` was ingested by a stream reading the month root) that
-    one stream would swallow every other table's ZIPs and the multi-gigabyte
-    `.ESTABELE` extracts. Subdir UNIQUENESS cannot see this: `zips` collides with no
-    other table's subdir.
-
-    `_tmp`, `_schemas` and `_checkpoints` are reserved DEFENSIVELY, and are a weaker
-    case worth stating honestly: all three live under `volume_root`, not under
-    `cnpj/<month>`, so `cnpj/<month>/_tmp` would not actually collide with
-    `volume_root/_tmp` today. They are refused because a leading-underscore
-    directory means "state, not data" everywhere else in this Volume, and an
-    operator listing a month who found `_schemas` there would read it as state.
-
-    `_tmp` is derived like `zips`. `_schemas` and `_checkpoints` are literals: they
-    are built by `opl.bronze.autoloader.schema_location` / `checkpoint_location`,
-    and `autoloader` imports THIS module, so deriving them would be a cycle. If
-    either is renamed there and not here, this guard stops reserving the old name --
-    the only consequence is that the weaker defensive half goes stale; the live
-    `zips` collision stays covered either way."""
-    cfg = OplConfig()
-    month_root = cfg.landing_cnpj_month(_LAYOUT_PROBE_MONTH)
-    return frozenset(
-        {
-            _component_under(
-                cfg.landing_zips(_LAYOUT_PROBE_TABLE, _LAYOUT_PROBE_MONTH), month_root
-            ),
-            _component_under(
-                cfg.landing_tmp(_LAYOUT_PROBE_TABLE, _LAYOUT_PROBE_MONTH), cfg.volume_root
-            ),
-            "_schemas",
-            "_checkpoints",
-        }
-    )
-
-
-RESERVED_SUBDIRS = _reserved_subdirs()
 
 
 class UnknownTable(ValueError):
@@ -300,9 +240,9 @@ REGISTRY: dict[str, BronzeTable] = {
     #
     # `landing=LANDING_GENERATED` IS WHAT MAKES THE ENTRY LEGAL. Two import-time
     # guards refuse it under any other mode -- `_assert_prefixes_match_their_file_
-    # groups` because no FILE_GROUPS entry feeds `payments`, and its mirror
-    # `_assert_no_generated_table_claims_a_downloader` because declaring one would
-    # put two producers in one landing directory.
+    # groups` because no FILE_GROUPS entry feeds `payments`, and its complement
+    # `_assert_no_table_nothing_downloads_claims_a_downloader` because declaring one
+    # would put two producers in one landing directory.
     #
     # NO `reclaim_landing` TASK EXISTS FOR THIS TABLE, which is a consequence of the
     # mode rather than an omission: that task refuses anything that is not
@@ -321,7 +261,7 @@ REGISTRY: dict[str, BronzeTable] = {
         subdir=payments.LANDING_SUBDIR,
         landing=LANDING_GENERATED,
         # No downloader, so no prefix. Refused as a false statement by
-        # `_assert_no_generated_table_claims_a_downloader` if one is ever pasted in.
+        # `_assert_no_table_nothing_downloads_claims_a_downloader` if one is pasted in.
         prefix=None,
         # `transaction_id` IS THE COLUMN NO OTHER CONTRACT HAS, which is what makes
         # this tuple satisfy `test_the_new_tables_carry_a_constraint_no_other_
@@ -340,9 +280,17 @@ REGISTRY: dict[str, BronzeTable] = {
         #
         # WHAT IS DELIBERATELY ABSENT, since the gate is all-or-nothing and every
         # statement here is a new way for a promote to fail over the WHOLE table: no
-        # CHECK on `currency`. `CURRENCIES` holds one member today, and the contract
-        # says plainly that a second currency is meant to be a VALUE change rather
-        # than a schema change -- a CHECK would silently make it a migration.
+        # CHECK on `currency`. THE PREMISE THIS ARGUMENT USED TO REST ON IS NOW FALSE --
+        # it said "`CURRENCIES` holds one member today", and F-API made the tuple
+        # `("BRL", "USD")` -- so the argument is restated on what actually carries it.
+        # `payments.CURRENCIES` is a VALUE DOMAIN that gains members: the contract says
+        # so, `opl.gold.registry.DIM_CURRENCY` reads the tuple as its member set, and
+        # this phase has now added to it once. A CHECK here would have turned that append
+        # into a MIGRATION on a live bronze table -- an ALTER before the next promote
+        # could succeed -- which is a schema change made by a value edit, and no count of
+        # members is needed to see it. No number is quoted deliberately: a count in this
+        # comment is a second copy of `len(CURRENCIES)` and would go stale again on the
+        # third member.
         constraints=(
             "ALTER TABLE {table} ALTER COLUMN transaction_id SET NOT NULL",
             "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS transaction_id_not_blank",
@@ -350,6 +298,81 @@ REGISTRY: dict[str, BronzeTable] = {
             "CHECK (length(trim(transaction_id)) > 0)",
             "ALTER TABLE {table} ALTER COLUMN payer_cnpj_basico SET NOT NULL",
             "ALTER TABLE {table} ALTER COLUMN payee_cnpj_basico SET NOT NULL",
+        ),
+    ),
+    # THE THIRD SOURCE, and the first whose bytes somebody else produced and nobody
+    # downloaded: a job task calls BCB's public PTAX endpoint and writes a record built
+    # from the validated response. `landing=LANDING_API` is what makes the entry legal,
+    # under the SAME two guards the payments entry names above -- they are complements
+    # since F-API Task 2, so this table is checked by the mirror rather than falling
+    # between them, and it must have no file group AND no prefix.
+    #
+    # `LANDING_GENERATED` WAS CONSIDERED AND REJECTED, though it fits mechanically and
+    # would have reused `bronze_payments_ingest.py` unchanged. That mode stamps
+    # `_record_source = opl_payment_generator`, which would say this repository produced
+    # the Banco Central's published rates -- a false claim in the one column that answers
+    # who produced a row. `opl.config` carries the same argument for the third root.
+    #
+    # Every string is lifted from `opl.contracts.ptax`; `name` is the only literal, for
+    # the reason the payments entry gives.
+    "ptax": BronzeTable(
+        name="ptax",
+        contract=ptax.CONTRACT,
+        table_key=ptax.BRONZE_TABLE_KEY,
+        staging=ptax.BRONZE_STAGING_TABLE,
+        bronze=ptax.BRONZE_TABLE,
+        quarantine=ptax.BRONZE_QUARANTINE_TABLE,
+        subdir=ptax.LANDING_SUBDIR,
+        landing=LANDING_API,
+        prefix=None,
+        # `quote_date` AND `cotacao_venda` ARE THE COLUMNS NO OTHER CONTRACT HAS, which
+        # is what satisfies `test_the_new_tables_carry_a_constraint_no_other_contract_
+        # could_have`: a tuple pasted from any other entry here would be missing both,
+        # and one pasted FROM here names columns no other table carries.
+        #
+        # They are also the right columns on their own merits. `quote_date` is the key
+        # the FX join resolves against and the one this phase invites a writer to get
+        # wrong -- the API is asked in `MM-DD-YYYY`, so writing the request's own
+        # spelling produces a value that joins to nothing while every count stays green.
+        # `cotacao_venda` is the rate gold converts with, so a NULL there is an
+        # `amount_brl` that lowers every total by an amount nobody can name.
+        #
+        # `quote_date_iso_shape` WAS NAMED FOR A PROPERTY IT DID NOT ENFORCE, and that is
+        # F-API's fix pass. It was `length(trim(quote_date)) = 10`, which ADMITS
+        # `06-19-2026` -- the API's own spelling, and the exact value the constraint's own
+        # comment says this phase invites. Measured on local Delta: the length CHECK
+        # accepted that string, the regex refuses it along with `2026-6-19`, `19/06/2026`
+        # and `2026-06-1x`, and accepts `2026-06-19`. Every other CHECK in this registry
+        # is named for what it checks (`cnpj_basico_len8` -> `length = 8`), so the choice
+        # was enforce the name or rename to the truth; the name is the useful half,
+        # because a ten-character non-ISO date is precisely what a triager would not think
+        # to look for behind a passing constraint called `iso_shape`.
+        #
+        # NO `{n}` QUANTIFIER, AND THAT IS NOT A STYLE CHOICE. `promote_batch.
+        # _assert_constraints` issues `statement.format(table=tbl)`, so `[0-9]{4}` raises
+        # IndexError from str.format -- AFTER the append has committed, on the run that was
+        # meant to assert the constraint. Spelled out digit by digit instead, and
+        # `test_every_constraint_survives_being_formatted_with_its_table` is what keeps the
+        # next author from reintroducing it.
+        #
+        # NOT `trim(...)`, unlike the length CHECK it replaces: the gate's own
+        # `bad_quote_date_shape` anchors on the raw column, and a CHECK that trimmed would
+        # accept a padded value the gate refuses -- a constraint looser than the rule
+        # upstream of it, which is the one direction this repository does not allow.
+        #
+        # WHAT IS DELIBERATELY ABSENT: no CHECK on `currency`, for exactly the reason the
+        # payments entry gives -- the currency domain is a declaration that GAINS members
+        # (F-API added one), and a CHECK would turn each addition into a migration on a
+        # live table. Here it is weaker still: this column is decided by WHICH ENDPOINT
+        # was called rather than by the body, so a wrong value means the task called a
+        # different pair, which a value list would report as a bad row.
+        constraints=(
+            "ALTER TABLE {table} ALTER COLUMN quote_date SET NOT NULL",
+            "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS quote_date_iso_shape",
+            "ALTER TABLE {table} ADD CONSTRAINT quote_date_iso_shape CHECK "
+            "(regexp_like(quote_date, "
+            "'^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$'))",
+            "ALTER TABLE {table} ALTER COLUMN cotacao_venda SET NOT NULL",
         ),
     ),
 }
@@ -545,122 +568,6 @@ def _assert_no_masked_contract_declares_a_check_constraint() -> None:
 
 
 
-def _malformed_subdir_reason(subdir: str) -> str | None:
-    """Why `subdir` is not a single directory name, or None if it is."""
-    if any(sep in subdir for sep in _PATH_SEPARATORS):
-        return "contains a path separator"
-    if subdir.strip() in _RELATIVE_ALIASES:
-        return "is blank or names an existing directory instead of a new one"
-    return None
-
-
-def _assert_subdirs_are_single_path_components() -> None:
-    """Fail at import if a `subdir` is a PATH rather than a directory name.
-
-    A DECISION, not a fallout: a landing subdir is ONE component by definition, so
-    a `/` in it is not a value to be checked against the reserved list -- it is
-    MALFORMED. The alternative was to normalise and check only the first component,
-    i.e. to accept nesting as long as the root is unreserved. Rejected: that is the
-    strictly stronger claim (`we support nested landing dirs`) and it would have to
-    hold against every directory that ever appears under a table dir, forever.
-    Refusing nesting outright is one rule that needs no such forecast.
-
-    What it closes, both reached PAST the two checks that look total:
-    `subdir="zips/estabelecimentos"` collides with no table (uniqueness passes) and
-    does not equal `"zips"` (the reserved check passes), yet reads INSIDE the
-    layout-owned zips dir. `subdir="lookups/x"` reads inside another table's source
-    dir, where that table's stream discovers it RECURSIVELY -- the exact defect this
-    branch exists to remove, re-entered through the guard built for it.
-
-    `""` and `"."` are refused for a sharper reason: both resolve
-    `landing_table(...)` to `cnpj/<month>` itself, which is the F1.4b blocker
-    verbatim -- a stream on the month root, recursively discovering every table's
-    files. `".."` escapes to `cnpj/`, which contains every MONTH.
-
-    Both separators, not `os.sep`: this repo is developed on Windows and runs on
-    Databricks Linux, and Windows `os.path` accepts `/` and `\\` alike -- so a
-    backslash that looks inert where it is written is a real separator where it
-    runs. Ordered BEFORE the reserved-name check, which is what makes that check's
-    exact-string comparison total rather than partial."""
-    for spec in REGISTRY.values():
-        reason = _malformed_subdir_reason(spec.subdir)
-        if reason is not None:
-            raise ValueError(
-                f"{spec.name} declares subdir {spec.subdir!r}, which {reason}. A landing "
-                "subdir names ONE directory directly under cnpj/<month>; it is not a path. "
-                "A nested value puts this table's stream INSIDE a directory that already "
-                "belongs to something else -- the layout's own (zips/...) or another "
-                "table's -- and cloudFiles walks a source dir RECURSIVELY, so the files "
-                "would be ingested by both tables, or the whole month root by this one. "
-                "Use a single directory name."
-            )
-
-
-def _assert_no_table_claims_a_reserved_subdir() -> None:
-    """Fail at import if a spec's `subdir` names a directory the layout owns.
-
-    Beside the other two and for the same reason: a value that is wrong is refused
-    where it is DECLARED. This one has to be here and cannot be left to a consumer,
-    because the consumer would not fail -- `bronze_stream` would load
-    `cnpj/<month>/zips` perfectly happily and ingest tens of gigabytes of another
-    table's files into this table's staging, which is a successful run.
-
-    Not covered by `test_no_two_tables_share_a_landing_subdir`: that test compares
-    tables against EACH OTHER, and a reserved name collides with no table at all.
-
-    Compares EXACT strings, which is total only because
-    `_assert_subdirs_are_single_path_components` runs first and has already refused
-    everything that is not one directory name. Reorder them and this check goes
-    partial again: `zips/estabelecimentos` would sail past it."""
-    for spec in REGISTRY.values():
-        if spec.subdir in RESERVED_SUBDIRS:
-            raise ValueError(
-                f"{spec.name} claims landing subdir {spec.subdir!r}, which is reserved by "
-                f"the Volume layout ({', '.join(sorted(RESERVED_SUBDIRS))}). Its stream "
-                "would read that directory, and cloudFiles walks a source dir RECURSIVELY "
-                "-- so it would ingest every other table's files underneath it, the raw "
-                "ZIPs and the multi-gigabyte .ESTABELE extracts included, without erroring. "
-                "Give the table a landing subdir of its own."
-            )
-
-
-def _assert_no_two_tables_share_a_landing_subdir() -> None:
-    """Fail at import if two specs land in the same directory.
-
-    AT IMPORT and not only in a test, because the consumer does not fail: two tables
-    on one subdir means each one's stream reads the other's files, and cloudFiles
-    walks a source dir RECURSIVELY -- so both ingest both, and both runs report
-    SUCCESS. This is the exact paste F1.4b makes (copy the estabelecimentos entry,
-    rename everything but `subdir`), and it was verified by probe to import CLEAN
-    before this guard existed, caught only by a CI test. A CI test protects a merge.
-    It does not protect an ad-hoc run, or a branch whose tests have not been run,
-    which is exactly how these jobs get launched while a phase is in flight.
-
-    `subdir` is the field that survives a CAREFUL rename, which is what makes it the
-    dangerous one: it is the only member of the copy-paste trio that does not contain
-    the table's own bronze name, so a find/replace over `bronze_cnpj_*` fixes every
-    other field and leaves this one pointing at the source table's landing dir.
-
-    Not a duplicate of the two subdir checks above. That pair compares each subdir
-    against the LAYOUT's own names and against the shape of a directory name, and
-    neither can see two tables colliding with EACH OTHER -- `estabelecimentos` twice
-    is unreserved, well-formed, and wrong. Three checks, three disjoint holes.
-
-    `prefix` needs no twin of this: `_assert_prefixes_match_their_file_groups`
-    already cross-checks it against FILE_GROUPS, which is strictly stronger than
-    uniqueness -- it catches `Estabelecimento` (singular), which is unique and
-    under-ingests silently."""
-    seen: dict[str, str] = {}
-    for spec in REGISTRY.values():
-        if spec.subdir in seen:
-            raise ValueError(
-                f"{spec.name} and {seen[spec.subdir]} both claim landing subdir "
-                f"{spec.subdir!r}. Each table's stream reads its own subdir and "
-                "cloudFiles walks it RECURSIVELY, so two tables sharing one means "
-                "each ingests the other's files and both runs report SUCCESS. Give "
-                "each table a landing subdir of its own."
-            )
-        seen[spec.subdir] = spec.name
 
 
 _assert_contracts_exist()
@@ -675,27 +582,41 @@ _assert_no_two_tables_share_a_contract()
 # exempted from both. Ordered this way, a bad mode is refused before any guard has to
 # ask what it means.
 _assert_landing_modes_known(REGISTRY)
+# AND THE MODE'S CLASSIFICATION BEFORE THE GUARDS THAT BRANCH ON IT, which is the same
+# ordering argument one line up carried one step further. `_assert_landing_modes_known`
+# refuses a mode nobody DECLARED; this refuses a declared mode nobody CLASSIFIED as
+# file-fed or not. Unclassified, its tables are skipped by the cross-check below and
+# ACCEPTED by the mirror, so the "no FILE_GROUPS producer -> raise" branch is lost rather
+# than moved -- and that branch's own message says the ingest "would report SUCCESS having
+# read an empty source dir". It takes no registry because it is a claim about the
+# declaration, which must hold before any table names the mode.
+_assert_every_landing_mode_is_classified()
 _assert_prefixes_match_their_file_groups(REGISTRY)
-# The mirror of the line above, and it must stay beside it: the prefix cross-check
-# SKIPS generated tables, so this is the only thing that says anything about them.
-# Split rather than folded in, for the reason the subdir trio is three functions --
-# each refusal is a different sentence about a different mistake.
-_assert_no_generated_table_claims_a_downloader(REGISTRY)
+# The COMPLEMENT of the line above, and it must stay beside it: the prefix cross-check
+# skips every table no downloader feeds, and this is the only thing that says anything
+# about those. The two skips are exact complements since F-API Task 2, so between them
+# they are total over the registry for any set of landing modes -- which is what stops a
+# fifth mode falling into neither, the way `api` fell into neither when both were scoped
+# positively. Total EXAMINATION and not a total verdict: which of the two questions a
+# table is asked still turns on the classification the guard above now refuses to leave
+# unstated. Split rather than folded in, for the reason the subdir trio is three
+# functions -- each refusal is a different sentence about a different mistake.
+_assert_no_table_nothing_downloads_claims_a_downloader(REGISTRY)
 # Also keyed on the contract, so it belongs in this group: `MASKED_COLUMNS` is
 # keyed by contract, not by table name, and asking whether THIS table is masked is
 # meaningless until its contract is known to exist and to name one table only.
 _assert_no_masked_contract_declares_a_check_constraint()
 # Shape before content: the reserved-name check compares exact strings, so it is
 # total only over values already known to be a single directory name.
-_assert_subdirs_are_single_path_components()
-_assert_no_table_claims_a_reserved_subdir()
+_assert_subdirs_are_single_path_components(REGISTRY)
+_assert_no_table_claims_a_reserved_subdir(REGISTRY)
 # Individually-wrong before collectively-wrong, so the operator is never told the
 # wrong fix. Two tables both declaring subdir="zips" -- or both "" -- are a duplicate
 # AND two reserved/malformed values, and uniqueness would report it first as "give
 # each table a subdir of its own", which is advice to rename one of them to something
 # else reserved. Ordered last, the operator is told the real problem: neither value
 # may be used at all.
-_assert_no_two_tables_share_a_landing_subdir()
+_assert_no_two_tables_share_a_landing_subdir(REGISTRY)
 # The last three live in `opl.bronze.registry_collisions` -- see that module for why the
 # seam is there and why they take REGISTRY as an argument. They are called HERE, in this
 # one ordered block, because this is the module every consumer imports and because the

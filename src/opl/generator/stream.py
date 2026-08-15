@@ -51,12 +51,20 @@ THE POOL IS AN ARGUMENT. `StreamSpec.cnpj_pool` is handed in, already canonical,
 counterparty in the output is a member of that pool, so the resolution rate against
 `hub_empresa` is 100% exactly when the pool came from `hub_empresa` -- one boundary,
 one claim, one measurement.
+
+AND SO IS THE CURRENCY DOMAIN, WHICH IS F-API's ONE CHANGE HERE. `StreamSpec.currencies`
+is the tuple a stream draws its currency from, defaulted to `DEFAULT_CURRENCIES`; the
+contract's `CURRENCIES` is the DOMAIN `dim_currency` takes its members from, and this
+module reads it only to refuse a spec that leaves it. The two were one object until a
+second currency was needed, and separating them is what makes the widening a value change
+rather than a re-derivation of every stream ever generated -- see `DEFAULT_CURRENCIES`
+for the modulo argument that makes "byte-identical" a mechanism rather than a hope.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-from opl.contracts.payments import CURRENCIES, PAYMENT_METHODS
+from opl.contracts.payments import CURRENCIES, PAYMENT_METHODS, REPORTING_CURRENCY
 from opl.generator.cnpj_pool import validated_pool
 from opl.generator.derivation import digest, draw_below, pick, require_whole
 from opl.generator.events import PaymentEvent, record_of
@@ -69,11 +77,24 @@ from opl.generator.instants import from_text
 MIN_AMOUNT_CENTS = 100
 MAX_AMOUNT_CENTS = 5_000_000
 
+# The currencies a stream draws from unless its profile declares otherwise, and the
+# ENTIRE byte-identity mechanism of the currency domain's widening is that this is a
+# ONE-tuple. `pick` is `items[draw_below(..., bound=len(items))]` and `draw_below`
+# reduces modulo the bound, so `bound = 1` gives index 0 for every seed, purpose and
+# position: a one-tuple yields its single member and cannot do anything else. That is why
+# `opl.contracts.payments.CURRENCIES` can gain a member -- it is the value DOMAIN, read by
+# `dim_currency` -- while every stream declared before F-API keeps drawing BRL, byte for
+# byte. Derived from the contract's `REPORTING_CURRENCY` rather than spelled `("BRL",)`,
+# so the two cannot drift into disagreeing about which currency needs no FX rate.
+DEFAULT_CURRENCIES = (REPORTING_CURRENCY,)
+
 # How many times a base event's attributes may be re-derived before the generator
-# gives up. The attribute space is |pool| * (|pool| - 1) * |amounts| * |currencies| *
-# |methods|, which for the smallest legal pool is already 2 * 1 * 4,999,901 * 1 * 5 --
-# so exhausting 64 salts means the caller asked for more distinct events than the
-# space holds, and the honest answer is a refusal naming that.
+# gives up. The attribute space is |pool| * (|pool| - 1) * |amounts| * |spec.currencies|
+# * |methods|, which for the smallest legal pool and the narrowest legal currency tuple
+# is already 2 * 1 * 4,999,901 * 1 * 5 -- so exhausting 64 salts means the caller asked
+# for more distinct events than the space holds, and the honest answer is a refusal
+# naming that. A profile declaring two currencies makes the space WIDER, never narrower,
+# so this bound is unaffected by the currency draw becoming per-spec.
 MAX_ATTRIBUTE_ATTEMPTS = 64
 
 # THE DERIVATION PURPOSES. Every drawn value names the field it is for, so adding a
@@ -166,7 +187,15 @@ class StreamSpec:
     had to normalise rather than normalising it silently, because the pool's ORDER
     decides which company gets which payment: a spec that quietly sorted its input
     would generate a different stream from the one its literal argument describes, and
-    the argument is what a reader would reconstruct the run from."""
+    the argument is what a reader would reconstruct the run from.
+
+    `currencies` IS THE ONE FIELD WITH A DEFAULT, AND THE DEFAULT IS LOAD-BEARING RATHER
+    THAN CONVENIENT. It is `DEFAULT_CURRENCIES` -- a one-tuple -- so every spec written
+    before F-API constructs to exactly the same object it always did and derives exactly
+    the same stream. Widening the contract's `CURRENCIES` domain moves nothing, because
+    nothing in this module reads that tuple to draw from; see `DEFAULT_CURRENCIES` above.
+    It sits beside `cnpj_pool` because the two are the same kind of thing: the value
+    domains one particular stream draws its attributes out of."""
 
     seed: int
     stream_id: str
@@ -176,6 +205,7 @@ class StreamSpec:
     event_interval_ms: int
     emission_lag_ms: int
     cnpj_pool: tuple[str, ...]
+    currencies: tuple[str, ...] = DEFAULT_CURRENCIES
 
     def __post_init__(self) -> None:
         require_whole(self.seed, name="seed")
@@ -186,6 +216,7 @@ class StreamSpec:
         _require_positive(self.event_interval_ms, name="event_interval_ms")
         _require_room_for_repeats(self.event_count, self.repeat_count)
         _require_canonical_pool(self.cnpj_pool)
+        _require_currencies(self.currencies)
         from_text(self.window_start)  # refuses any spelling `to_text` would not emit
 
     @property
@@ -238,6 +269,56 @@ def _require_room_for_repeats(event_count: int, repeat_count: int) -> None:
             f"repeat_count={repeat_count} leaves no room in event_count={event_count}: "
             "a legitimate repeat copies an EARLIER event's attributes, so position 0 "
             "is always a base event and at most event_count - 1 positions can repeat"
+        )
+
+
+def _require_currencies(currencies: tuple[str, ...]) -> None:
+    """The currencies a stream may draw from, or refuse. THREE DISTINCT FAILURES.
+
+    THIS IS THE GUARD T1 ASKS FOR, AND IT IS HERE RATHER THAN IN `opl.generator.profiles`
+    ON PURPOSE. Every declared profile is turned into a `StreamSpec` at import by
+    `profiles._assert_every_profile_describes_a_stream_that_can_exist`, so every profile's
+    currency tuple reaches this function before anything can be generated -- and a second
+    copy over `PROFILES` would be a second spelling of one rule, which is the defect class
+    this repository polices hardest.
+
+    OUTSIDE THE DOMAIN is the first. `dim_currency`'s members are
+    `opl.contracts.payments.CURRENCIES`, so a currency this contract does not declare
+    lands rows the dimension has no member for: they resolve to the ghost key, and a
+    ghost-resolving population is exactly what `dim_currency`'s own tests assert cannot
+    exist.
+
+    OUT OF DOMAIN ORDER is the second, and it is the one that moves landed bytes. `pick`
+    is positional, so a drawn index only means a currency against ONE declared order.
+    Requiring a subsequence of the domain in the domain's order makes that declaration the
+    single authority -- and it is what stops a profile from being quietly re-spelled
+    `("USD", "BRL")`, which would flip the currency of every row in its stream with no
+    number anywhere in the repository changing.
+
+    A REPEATED MEMBER is the third. `("BRL", "BRL", "USD")` draws BRL two-thirds of the
+    time while reading as a tuple that mentions each currency, so a published mix would be
+    wrong and nothing would fail. An empty tuple and a bare `str` are refused here too,
+    rather than three frames down inside `pick`, because the caller's mistake is the
+    declaration and that is what the message should name."""
+    if isinstance(currencies, str) or not isinstance(currencies, tuple) or not currencies:
+        raise TypeError(
+            f"currencies must be a non-empty tuple of currency codes, got {currencies!r}. "
+            "A bare str is a Sequence, so `pick` would choose one CHARACTER of it."
+        )
+    unknown = [code for code in currencies if code not in CURRENCIES]
+    if unknown:
+        raise ValueError(
+            f"currencies {tuple(currencies)} is not a subset of the payments contract's "
+            f"domain {CURRENCIES}: {unknown} are undeclared. `dim_currency`'s members are "
+            "that domain, so rows carrying an undeclared currency resolve to the ghost key."
+        )
+    ranks = [CURRENCIES.index(code) for code in currencies]
+    if sorted(set(ranks)) != ranks:
+        raise ValueError(
+            f"currencies {tuple(currencies)} repeats a member or reorders the contract's "
+            f"domain {CURRENCIES}. `pick` draws BY INDEX, so a repeat silently doubles one "
+            "currency's share and a reordering redraws the currency of every row in this "
+            "stream -- declare a subsequence of the domain, in the domain's own order."
         )
 
 
@@ -308,8 +389,11 @@ def _attributes(spec: StreamSpec, *, index: int, salt: int) -> _Attributes:
         payer_cnpj_basico=payer,
         payee_cnpj_basico=payee,
         amount_cents=cents,
+        # FROM THE SPEC AND NOT FROM THE CONTRACT'S DOMAIN, which is T1's whole mechanism:
+        # the purpose, the index and the salt are unchanged, so a one-tuple spec draws the
+        # byte-identical value it always drew while the domain the dimension reads grows.
         currency=pick(
-            CURRENCIES, seed=spec.seed, purpose=purpose_for(spec, PURPOSE_CURRENCY),
+            spec.currencies, seed=spec.seed, purpose=purpose_for(spec, PURPOSE_CURRENCY),
             index=index, salt=salt,
         ),
         payment_method=pick(

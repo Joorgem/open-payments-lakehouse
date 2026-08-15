@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -77,15 +77,20 @@ _GHOST_PRINTING_ENTRY_POINTS = ("gold_load_dimension", "gold_load_conformed_dime
 # satellites -- the last of those in ONE call inside a comprehension over the declared
 # list, which is why the number is three and not four.
 #
-# THE FACT TASK QUALIFIES FOUR, and the fourth is the point of the count: it is the only
-# task in this repository that reads OTHER GOLD TABLES. The fact, the bronze payments it
-# is grained on, `dim_company`, and the three conformed dimensions -- the last again in
-# ONE call inside a comprehension, which is why it is four and not six.
+# THE FACT TASK QUALIFIES FIVE, and the fourth and fifth are the point of the count: it is
+# the only task in this repository that reads OTHER GOLD TABLES, and since F-API the only one
+# that reads ANOTHER LAYER'S. The fact, the bronze payments it is grained on, `bronze_ptax`,
+# `dim_company`, and the three conformed dimensions -- the last again in ONE call inside a
+# comprehension, which is why it is five and not seven.
+#
+# IT READ FOUR UNTIL THE FX COLUMNS LANDED, and the number is enumerated rather than derived
+# for exactly that reason: a task that gained an input without gaining a line here would be a
+# task reading a table nothing in this file knows it reads.
 _QUALIFIED_NAMES = {
     "gold_load_dimension": 3,
     "gold_load_conformed_dimension": 3,
     "gold_load_pit": 3,
-    "gold_load_fact": 4,
+    "gold_load_fact": 5,
 }
 
 # The two `opl.config` names every session pin is written from. Spelled as the IDENTIFIER
@@ -433,18 +438,33 @@ def _fact_result(**overrides):
     Hand-built in `_dimension_result`'s shape and for its reason: the notes are pure
     functions of a frozen dataclass, and driving them through a real load to read one
     sentence would test the loader instead. The defaults are the job YAML's own
-    predictions against today's bronze, so this fixture also pins them."""
+    predictions against today's bronze, so this fixture also pins them.
+
+    THE NUMBERS MOVED WITH THE FOURTH AND FIFTH STREAMS, and the YAML moved with them: it
+    read 20,150 / 20,000 / 18,400 / 1,600 for two promoted streams. `orphaned` is now keyed
+    per FACT KEY and not per dimension, because `dim_date` answers two of them since F-API
+    T4b -- an event day outside the calendar and an FX quote date outside it are different
+    defects with different repairs."""
     fields = {
         "table": "workspace.default.fact_payment",
-        "appended": 20_000,
+        "appended": 40_000,
         "already_present": 0,
-        "source_rows": 20_150,
-        "source_identities": 20_000,
-        "source_tuples": 18_400,
-        "retained_tuples": 18_400,
-        "legitimate_repeats": 1_600,
+        "source_rows": 40_150,
+        "source_identities": 40_000,
+        "source_tuples": 36_800,
+        "retained_tuples": 36_800,
+        "legitimate_repeats": 3_200,
         "unresolved": (("payer_company_sk", 0), ("payee_company_sk", 0)),
-        "orphaned": (("dim_date", 0), ("dim_channel", 0), ("dim_currency", 0)),
+        "orphaned": (
+            ("event_date_key", 0), ("fx_rate_date_key", 0), ("channel_key", 0),
+            ("currency_key", 0),
+        ),
+        "fx_quotes": 42,
+        "fx_first_published": datetime(2026, 6, 3, 16, 3, tzinfo=UTC),
+        "fx_last_published": datetime(2026, 7, 31, 16, 10, 31, 61_071, tzinfo=UTC),
+        "fx_beyond_series": 0,
+        "fx_widest_fallback_days": 3,
+        "fx_rates_used": 3,
     }
     fields.update(overrides)
     return FactLoadResult(**fields)
@@ -456,12 +476,12 @@ def test_the_resolution_note_reports_zero_as_unexercised_and_not_as_success():
     counterparties resolve to `hub_empresa` and `dim_company` covers every hub key -- so
     the number will be 0 and the run log must not let that read as a proven path.
 
-    AND THE DENOMINATOR IS (ROW, ROLE) AND NOT ROW. Two roles over 20,000 rows is 40,000
+    AND THE DENOMINATOR IS (ROW, ROLE) AND NOT ROW. Two roles over 40,000 rows is 80,000
     references, which is the grain the acceptance has to be measured at: a fact resolving
     payers and not payees would otherwise report a 50% rate that reads as a data problem."""
     task = _load("gold_load_fact")
     unexercised = task._resolution_note(_fact_result(), 2)
-    assert "40000 (row, role) references" in unexercised
+    assert "80000 (row, role) references" in unexercised
     assert "UNEXERCISED" in unexercised
     exercised = task._resolution_note(
         _fact_result(unresolved=(("payer_company_sk", 3), ("payee_company_sk", 0))), 2
@@ -477,31 +497,93 @@ def test_the_repeat_note_says_zero_legitimate_repeats_is_a_deletion_and_not_a_cl
     """THE ONE NUMBER IN THIS TASK THAT IS NOT A TAUTOLOGY. `COUNT(*) - COUNT(DISTINCT
     transaction_id)` re-measures bronze's own arithmetic and comes out at 150 whichever
     column the deduplication was taken over; the legitimate repeats do not. A fact
-    deduplicated on the business attributes reports 0 here and 18,400 rows, and every other
+    deduplicated on the business attributes reports 0 here and 36,800 rows, and every other
     number it prints still looks plausible."""
     task = _load("gold_load_fact")
     survived = task._repeat_note(_fact_result())
-    assert "1600 legitimate repeats survived" in survived
+    assert "3200 legitimate repeats survived" in survived
     deleted = task._repeat_note(
-        _fact_result(appended=18_400, legitimate_repeats=0)
+        _fact_result(appended=36_800, legitimate_repeats=0)
     )
     assert "NOT a clean stream" in deleted and "deleted real payments" in deleted
 
 
 def test_the_integrity_note_tells_a_clean_star_from_a_stale_conformed_dimension():
-    """THE PRICE OF DERIVING THE THREE CONFORMED KEYS WITHOUT A JOIN, and the two states
+    """THE PRICE OF DERIVING THE FOUR CONFORMED KEYS WITHOUT A JOIN, and the two states
     must not read alike. There is no ghost to fall back on for a derived key, so a payment
     whose day `dim_date` does not hold joins to nothing and vanishes from every report
     grouped by date -- which a row count cannot see. It is reported rather than refused
-    because the repair is upstream and additive."""
+    because the repair is upstream and additive.
+
+    NAMED PER FACT KEY, WHICH IS WHAT THE SECOND DATE ROLE FORCED. A note labelled `dim_date`
+    would be true of both an event day and an FX quote date falling outside the calendar, and
+    those have the same repair but not the same cause -- the second one means the extraction
+    window reached back further than the calendar does."""
     task = _load("gold_load_fact")
     clean = task._integrity_note(_fact_result())
     assert "names a member that exists" in clean
     stale = task._integrity_note(
-        _fact_result(orphaned=(("dim_date", 10_000), ("dim_channel", 0), ("dim_currency", 0)))
+        _fact_result(
+            orphaned=(
+                ("event_date_key", 0), ("fx_rate_date_key", 10_000), ("channel_key", 0),
+                ("currency_key", 0),
+            )
+        )
     )
-    assert "dim_date: 10000 rows" in stale and "Re-run the conformed build" in stale
-    assert "dim_channel" not in stale, "a dimension with no orphan is named as if it had one"
+    assert "fx_rate_date_key: 10000 rows" in stale and "Re-run the conformed build" in stale
+    assert "event_date_key" not in stale, "a key with no orphan is named as if it had one"
+
+
+def test_the_fx_note_reports_one_rate_as_the_state_the_phase_exists_to_end():
+    """`fx_rates_used` IS THE NUMBER THIS SENTENCE EXISTS FOR. With a single-currency domain
+    the rate was 1.00000 on every row, `amount_brl` equalled `amount` everywhere, and no test
+    over either column could fail -- so ONE is reported as the state F-API set out to leave
+    behind rather than as a clean conversion, exactly as zero unresolved references are
+    reported as an unexercised path.
+
+    THE SERIES' THREE NUMBERS RIDE ALONG BECAUSE GAPLESSNESS IS NOT REFUSED. `opl.gold.fx`
+    declines to assert it -- any bound is either a Brazilian holiday calendar, which T3
+    refuses, or a number drawn from one extraction window -- so a bounded extraction has to be
+    visible in the log instead, as a quote count and a last publication instant that do not
+    reach the days the fact needed.
+
+    AND THE PUBLICATION INSTANTS RENDER IN UTC ON EVERY DRIVER, which is asserted here because
+    it is the one number a reader compares against the payment window: they are aware
+    `datetime`s, so the text carries `+00:00` rather than whatever zone the printing machine
+    is on."""
+    task = _load("gold_load_fact")
+    spec = GOLD_REGISTRY["fact_payment"]
+    mixed = task._fx_note(_fact_result(), spec)
+    assert "3 distinct amount_brl conversion rates" in mixed
+    assert "42 reduced (currency, quote_date) quotes" in mixed
+    assert "2026-07-31 16:10:31.061071+00:00" in mixed
+    assert "does NOT equal SUM(amount) x rate to the cent" in mixed
+    single = task._fx_note(_fact_result(fx_rates_used=1), spec)
+    assert "ONE rate" in single
+    assert "the state a mixed-currency stream exists to end" in single
+
+
+def test_the_fx_note_says_whether_the_series_reached_past_the_payments():
+    """THE OTHER SIDE OF THE PUBLICATION SPAN, and the state that must not read as clean. A
+    truncated extraction leaves every other number in this log right -- the rows, the grain,
+    the resolution, the orphans, the rate count -- while up to 10,000 rows convert at whatever
+    quote the series happened to stop at, because a payment past the last quote matches THAT
+    quote rather than nothing.
+
+    ZERO IS THE PREDICTION AND IS SAID AS COVERAGE RATHER THAN AS SILENCE; a non-zero count is
+    said as what it is, since a payment after the most recent bulletin is normal and no number
+    available here can tell it from a window that stopped early."""
+    task = _load("gold_load_fact")
+    spec = GOLD_REGISTRY["fact_payment"]
+    covered = task._fx_note(_fact_result(), spec)
+    assert "no conversion past the last quote" in covered
+    assert "widest fallback taken 3 day(s)" in covered
+    truncated = task._fx_note(
+        _fact_result(fx_beyond_series=4_905, fx_widest_fallback_days=43), spec
+    )
+    assert "4905 conversions PAST the last landed quote" in truncated
+    assert "cannot tell a stale rate from a current one" in truncated
+    assert "widest fallback taken 43 day(s)" in truncated
 
 
 @pytest.mark.parametrize(

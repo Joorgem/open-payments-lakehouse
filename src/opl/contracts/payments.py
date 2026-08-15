@@ -196,11 +196,48 @@ REQUIRED_COLUMNS = COLUMNS
 
 # --- the value domains -----------------------------------------------------------
 
-# One currency, and it is a column rather than an assumption. BRL is the only money
-# this stream carries today; the column exists so that the amount's two decimal places
-# are a stated consequence of BRL's minor unit rather than a convention nobody wrote
-# down, and so that a second currency is a value change instead of a schema change.
-CURRENCIES = ("BRL",)
+# THE VALUE DOMAIN, AND IT IS NOT THE TUPLE THE GENERATOR DRAWS FROM. Those were one
+# object until F-API, and separating them is the whole of T1: it is what lets
+# `dim_currency` gain a member without re-drawing a single row of a stream that has
+# already landed.
+#
+# WHY IT GAINED A SECOND MEMBER. `opl.gold.registry.DIM_CURRENCY` declares
+# `members=payments.CURRENCIES`, so this tuple IS the dimension's member set -- and with
+# one member `dim_currency` is a constant column wearing a dimension's name, `fx_rate` is
+# 1.0 on every row, and `amount_brl` equals `amount` everywhere. An FX layer built on that
+# cannot be wrong, which is the same thing as saying nothing about it can be tested. This
+# is the only place the dimension gains a member, so the addition happens here.
+#
+# WHY APPENDING HERE DOES NOT MOVE ONE BYTE OF THE FOUR STREAMS ALREADY LANDED, as a
+# mechanism rather than a hope. The generator does NOT read this tuple: it draws from
+# `StreamSpec.currencies`, a per-profile tuple defaulted to `stream.DEFAULT_CURRENCIES`
+# (`(REPORTING_CURRENCY,)`). `derivation.pick` is `items[draw_below(..., bound=len(items))]`
+# and `draw_below` reduces modulo the bound, so with `bound = 1` the index is 0 for every
+# seed, every purpose and every position -- a one-tuple draws its single member and always
+# will. The DOMAIN's length never enters a draw at all. Appending to what the generator
+# drew from would have re-drawn roughly half the rows of every stream ever generated.
+#
+# ORDER IS AUTHORITATIVE HERE FOR A SECOND REASON, on top of the one `PAYMENT_METHODS`
+# gives. A profile's `currencies` must be a subsequence of this tuple IN THIS ORDER
+# (`stream._require_currencies`), so this declaration is the single authority on what a
+# drawn index means. Reordering it would force the mixed-currency profile to be re-declared
+# in the new order, which would re-draw its stream -- so the order is refused from moving
+# rather than left to a comment.
+#
+# A TUPLE PER PROFILE AND NEVER A SCALAR, which is the decision that matters. A currency
+# constant per stream is functionally determined by the delivery -- perfectly correlated
+# with `_batch_id` -- so `dim_currency` would reach cardinality 2 because two STREAMS
+# exist, not because payments vary, and any `GROUP BY currency` would be a `GROUP BY batch`
+# under another name. `BUSINESS_ATTRIBUTE_COLUMNS` below is "what the payment WAS, as
+# opposed to which delivery of it this row is"; a per-delivery currency violates that
+# sentence while passing every guard in this repository.
+CURRENCIES = ("BRL", "USD")
+
+# The currency this lakehouse reports in, and the one every stream declared before F-API
+# draws from exclusively. It is `CURRENCIES[0]`, asserted below rather than assumed: the
+# gold layer's `amount_brl` is denominated in it, `fx_rate` is 1.0 for it BY DEFINITION
+# rather than by a lookup, and `stream.DEFAULT_CURRENCIES` is `(REPORTING_CURRENCY,)`.
+REPORTING_CURRENCY = "BRL"
 
 # The real Brazilian rails, in the RFB's own alphabet: no accents, upper case, no
 # spaces. PIX is the instant-payment system, TED the same-day wire, BOLETO the printed
@@ -218,6 +255,13 @@ PAYMENT_METHODS = (
 # because a fixed scale is what lets the amount be rendered from an INTEGER number of
 # cents with no float anywhere in the path. A float would break byte-identity from a
 # seed (repr rounding) long before it broke arithmetic.
+#
+# ONE SCALE FOR THE WHOLE DOMAIN, AND THE SECOND CURRENCY DID NOT MOVE IT -- which is
+# luck rather than design, and is said here so nobody reads the sentence above as still
+# describing a one-currency world. USD's minor unit is also 1/100, so `format_amount`
+# renders both correctly from the same constant. A currency whose minor unit is not
+# hundredths (JPY has none, KWD has thousandths) would make this a PER-CURRENCY fact, and
+# adding one is therefore a contract change here rather than a value added to `CURRENCIES`.
 AMOUNT_SCALE = 2
 
 # --- schema drift: the column v1 deliberately does NOT declare -------------------------
@@ -384,5 +428,45 @@ def _assert_no_drifting_column_is_declared_by_v1() -> None:
         )
 
 
+def _assert_the_currency_domain_leads_with_the_reporting_currency() -> None:
+    """Fail at import if `CURRENCIES` no longer declares a usable value domain.
+
+    THREE CHECKS FOR THREE THINGS THAT MOVE LANDED BYTES OR A DIMENSION'S MEMBERS, and
+    none of them fails at run time.
+
+    A DUPLICATED MEMBER is silent twice over. `dim_currency` would append two rows on one
+    natural key, and any profile drawing from a tuple containing the repeat would give
+    that currency twice its declared share while the declaration still read as one
+    member -- so a published mix would be wrong with every count clean.
+
+    A REORDERED DOMAIN re-draws a stream. `derivation.pick` is positional and
+    `stream._require_currencies` requires a profile's tuple to be a subsequence of this
+    one IN ORDER, so moving `REPORTING_CURRENCY` off the front would force the
+    mixed-currency profile to be re-declared as `("USD", "BRL")` -- at which point index
+    0 means USD and every currency in that stream flips. Refusing the reorder is what
+    makes the byte-identity argument survive an edit here.
+
+    A REPORTING CURRENCY THAT IS NOT A MEMBER is the third: `stream.DEFAULT_CURRENCIES`
+    is `(REPORTING_CURRENCY,)`, so it would be a one-tuple drawing a value
+    `dim_currency` has no member for, and every fact row of every existing stream would
+    resolve to the ghost."""
+    if len(set(CURRENCIES)) != len(CURRENCIES):
+        raise ValueError(
+            f"CURRENCIES repeats a member: {CURRENCIES}. `dim_currency` reads this tuple "
+            "as its member set, so a repeat appends two rows on one natural key -- and "
+            "the generator picks BY INDEX, so a profile drawing from a tuple carrying the "
+            "repeat gives that currency twice its declared share, silently."
+        )
+    if not CURRENCIES or CURRENCIES[0] != REPORTING_CURRENCY:
+        raise ValueError(
+            f"CURRENCIES is {CURRENCIES} and REPORTING_CURRENCY is {REPORTING_CURRENCY!r}, "
+            "which must be its FIRST member. `pick` is positional and a profile's "
+            "currencies must be a subsequence of the domain in the domain's own order, so "
+            "moving the reporting currency off the front re-declares the mixed-currency "
+            "profile in a new order and re-draws every row of its stream."
+        )
+
+
 _assert_the_columns_partition_cleanly()
 _assert_no_drifting_column_is_declared_by_v1()
+_assert_the_currency_domain_leads_with_the_reporting_currency()

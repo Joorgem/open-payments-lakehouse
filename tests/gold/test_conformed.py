@@ -1,15 +1,26 @@
 """The three conformed dimensions -- `dim_date`, `dim_channel`, `dim_currency` -- and
 the measurement that stops the evidence describing them with an adjective.
 
-WHAT THIS FILE IS ACTUALLY FOR. Two of the three are constant columns wearing a
-dimension's name: `dim_currency` has exactly ONE member and every payment carries it,
-and `dim_date` spans about fifty days that the whole payment population reaches on ONE
-of. A dimension whose fact-side cardinality is 1 cannot be wrong and no test over it can
-fail -- so the tests below are not attempts to make it look tested. They pin the two
-things that are genuinely checkable: that the member set is what the payment CONTRACT
-declares (never what the data happens to contain, which would make the two numbers equal
-by construction), and that `fact_side_cardinality` is COUNTED from a fact frame rather
-than declared anywhere.
+WHAT THIS FILE IS ACTUALLY FOR. Two of the three were constant columns wearing a
+dimension's name when it was written: `dim_currency` had exactly ONE member and every
+payment carried it, and `dim_date` spans about fifty days that the whole payment
+population reaches on ONE of. A dimension whose fact-side cardinality is 1 cannot be wrong
+and no test over it can fail -- so the tests below are not attempts to make it look
+tested. They pin the two things that are genuinely checkable: that the member set is what
+the payment CONTRACT declares (never what the data happens to contain, which would make
+the two numbers equal by construction), and that `fact_side_cardinality` is COUNTED from a
+fact frame rather than declared anywhere.
+
+`dim_currency` HAS LEFT THAT DESCRIPTION, IN TWO COMMITS THAT MOVED DIFFERENT HALVES.
+F-API's T1 split the contract's `CURRENCIES` -- the value DOMAIN, which is the dimension's
+member set -- from the per-profile tuple the generator draws from, so the member count went
+to two while every declared stream still drew BRL alone; then the `cross-currency` profile
+made a payment's currency vary within one stream, and the fact-side cardinality followed to
+two. `reachable_currencies` below is that second number, derived from what the profiles
+declare rather than from the domain. That the two are *two numbers* is the whole point --
+see `test_the_member_count_and_the_fact_side_cardinality_are_independent_numbers` -- and
+they disagreed for exactly one commit, which is the clearest demonstration this file holds
+of why they are not one.
 
 THE FACT FRAME IS BUILT FROM `opl.generator.profiles.PROFILES` AND NOT FROM A LITERAL.
 Every profile publishes `window_start` and `last_event_time` before any stream is
@@ -51,7 +62,17 @@ _FILLER = ("10000001", "10000002", "100,00")
 
 
 def _payment(event_time: str, *, method: str = "PIX", currency: str = "BRL") -> tuple:
-    return (f"tx-{event_time}-{method}", event_time, event_time, *_FILLER, currency, method)
+    # The currency is in the id because it is one of the three things that vary here: two
+    # rows on one instant and one rail differing only in currency are two payments, and an
+    # id built from the other two would make them one delivered twice.
+    return (
+        f"tx-{event_time}-{method}-{currency}",
+        event_time,
+        event_time,
+        *_FILLER,
+        currency,
+        method,
+    )
 
 
 def reachable_instants(profiles=PROFILES) -> tuple[str, ...]:
@@ -77,14 +98,28 @@ def reachable_days(profiles=PROFILES) -> set[date]:
     return {date.fromisoformat(instant[:10]) for instant in reachable_instants(profiles)}
 
 
+def reachable_currencies(profiles=PROFILES) -> set[str]:
+    """The currencies a payment in any declared stream can carry.
+
+    NOT `payments.CURRENCIES`, AND THE DIFFERENCE IS F-API's T1. That tuple is the value
+    DOMAIN `dim_currency` takes its members from; what a payment can actually HOLD is the
+    union of what the profiles declare they draw from. The two are allowed to differ --
+    that is exactly what lets the dimension gain a member without re-deriving a landed
+    stream -- so a fixture built from the domain would put currencies in a fact frame that
+    no generator can produce, and the fact-side cardinality it measured would be a
+    property of this file rather than of the streams."""
+    return {code for profile in profiles.values() for code in profile.currencies}
+
+
 @pytest.fixture(scope="module")
 def payments_bronze(spark, empresas_bronze):
     """A bronze-payments-shaped table holding the extremes of every declared profile."""
     table = f"{empresas_bronze.db}.bronze_payments_fixture"
     rows = [
-        _payment(instant, method=method, currency=currency)
-        for instant in reachable_instants()
-        for method, currency in [(payments.PAYMENT_METHODS[0], payments.CURRENCIES[0])]
+        _payment(instant, method=payments.PAYMENT_METHODS[0], currency=currency)
+        for profile in PROFILES.values()
+        for instant in (profile.window_start, profile.last_event_time)
+        for currency in profile.currencies
     ]
     # One row per declared payment method, so `dim_channel`'s fact-side cardinality is a
     # measurement with something to measure rather than a restatement of the fixture.
@@ -262,19 +297,34 @@ def test_the_fact_side_cardinality_is_counted_from_the_fact_it_is_handed(
     numbers -- which no declared constant can produce.
 
     WHY THIS IS THE MEASUREMENT THAT MATTERS. `dim_date` spans about fifty days and the
-    entire payment population reaches ONE of them (`docs/f3-run-evidence.md` §0.5: every
-    `event_time` on 2026-08-01), rising to two when the `between-snapshots` profile
-    lands. Task 5 has to publish those numbers rather than the word "thin", and a
-    cardinality that was declared anywhere would publish the declaration."""
+    entire payment population reached ONE of them (`docs/f3-run-evidence.md` §0.5: every
+    `event_time` on 2026-08-01), then two with `between-snapshots` and THREE with F-API's
+    `cross-currency`. Task 5 has to publish those numbers rather than the word "thin", and
+    a cardinality that was declared anywhere would publish the declaration.
+
+    THE MEMBER COUNT DOES NOT MOVE WITH IT, which is the property the two numbers exist to
+    separate. `covered_span` is a min/max over the fact's days AND the vault's
+    `applied_date`s, so it stays 2026-06-13 .. 2026-08-01 -- fifty days -- while the fact
+    reaches a third of them. A window outside that span would move both."""
     fact = spark.read.table(payments_bronze)
     f1b_only = {name: PROFILES[name] for name in ("clean", "promotable", "drifting")}
     before = fact.where(
         F.col(payments.EVENT_TIME_COLUMN).isin(list(reachable_instants(f1b_only)))
     )
     assert fact_side_cardinality(before, DIM_DATE) == len(reachable_days(f1b_only)) == 1
-    assert fact_side_cardinality(fact, DIM_DATE) == len(reachable_days()) == 2
+    # THREE, and the third is 2026-06-22 -- the `cross-currency` window. It is ONE day and
+    # not two because that window sits inside a single calendar day in both UTC and BRT,
+    # which is what its 08:00Z opening buys.
+    assert fact_side_cardinality(fact, DIM_DATE) == len(reachable_days()) == 3
     assert fact_side_cardinality(fact, DIM_CHANNEL) == len(payments.PAYMENT_METHODS)
-    assert fact_side_cardinality(fact, DIM_CURRENCY) == len(payments.CURRENCIES) == 1
+    # THE CURRENCY ASSERTION USED TO READ `== len(payments.CURRENCIES) == 1` AND THAT
+    # CONFLATED THE TWO NUMBERS F-API's T1 SEPARATES. The domain is the dimension's member
+    # set; what the fact can HOLD is what the profiles declare they draw from. The two
+    # agree at 2 now that a profile declares a mix, and they are still two numbers: they
+    # disagreed for exactly as long as the domain carried USD and no stream drew it, which
+    # is the state the mechanism commit left the tree in.
+    assert fact_side_cardinality(fact, DIM_CURRENCY) == len(reachable_currencies()) == 2
+    assert len(payments.CURRENCIES) == 2
 
 
 def test_the_member_count_and_the_fact_side_cardinality_are_independent_numbers(
@@ -335,8 +385,18 @@ def test_every_conformed_dimension_carries_one_ghost_no_fact_row_can_join_to(
     domain by the generator, and `dim_date`'s span is derived from the fact itself, so no
     payment in `bronze_payments` can fail to resolve. `dim_date`'s ghost is the only one
     reachable even in principle: a batch landing outside the span the dimension was built
-    over would reach it. The other two are structurally unreachable while `CURRENCIES` and
-    `PAYMENT_METHODS` are the domains the generator picks from."""
+    over would reach it.
+
+    THE OTHER TWO ARE STRUCTURALLY UNREACHABLE, AND THE CURRENCY HALF OF THAT SENTENCE HAD
+    TO BE RESTATED RATHER THAN LEFT. It read "while `CURRENCIES` and `PAYMENT_METHODS` are
+    the domains the generator picks from", and after F-API's T1 the generator does NOT pick
+    from `CURRENCIES` -- it picks from a per-profile tuple. The unreachability now rests on
+    a containment instead of an identity: `stream._require_currencies` refuses any profile
+    whose tuple leaves the contract's domain, so every currency a payment can carry is a
+    declared member and the ghost stays unreachable. That is a weaker-looking statement
+    resting on a guard, which is why the guard exists. It went stale SILENTLY -- a docstring
+    asserting a ghost is unreachable does not turn red -- which is the outcome this
+    repository treats as worse than a failing test."""
     vault = vault_loaded.sat if dimension is DIM_DATE else None
     build(spark, dimension, fact_table=payments_bronze, target=gold_target.dim, vault=vault)
     ghosts = spark.read.table(gold_target.dim).where(

@@ -16,11 +16,15 @@
 #
 # WHAT MUST HAVE RUN FIRST, AND IT IS NOT EXPRESSIBLE IN THIS FILE. `dim_company` and the
 # three conformed dimensions are inputs: this build reads `dim_company`'s version chain and
-# checks its own derived keys against the three conformed tables. Databricks Asset Bundles
-# have no cross-JOB dependency, so the order is operational and is written here rather than
-# implied:
+# checks its own derived keys against the three conformed tables. SINCE F-API SO IS
+# `bronze_ptax`, which is a fourth input and the first one from another LAYER: the fact's
+# `fx_rate` is the most recent quote whose publication instant precedes the payment's own, so
+# a fact built before the PTAX window is landed refuses rather than resolving. Databricks
+# Asset Bundles have no cross-JOB dependency, so the order is operational and is written here
+# rather than implied:
 #
-#     opl_gold_dim_company  ->  opl_gold_conformed_dimensions  ->  opl_gold_fact_payment
+#     opl_bronze_payments  ->  opl_bronze_ptax  ->  opl_gold_dim_company
+#                          ->  opl_gold_conformed_dimensions  ->  opl_gold_fact_payment
 #
 # Running it early does not corrupt anything -- a missing table fails the read BEFORE THE
 # FIRST WRITE, and stale conformed dimensions are REPORTED as orphaned keys rather than
@@ -32,8 +36,15 @@
 # append: launched before the conformed job, this task wrote `fact_payment` in full and
 # THEN failed table-not-found, so an operator saw FAILED against a correct table and the
 # obvious repair -- drop it -- was the wrong one. `opl.gold.facts._conformed_members` now
-# resolves all three up front (three catalog lookups, no scan) so the failure lands where
-# this sentence claims. The old order was harmless only because the conformed job had run.
+# resolves all of them up front (four catalog lookups, no scan -- `dim_date` twice, once per
+# role) so the failure lands where this sentence claims. The old order was harmless only
+# because the conformed job had run.
+#
+# `bronze_ptax` IS ALSO READ BEFORE THE FIRST WRITE, and its own refusal is stronger than a
+# missing table: `opl.gold.fx.rate_intervals` reduces the series to one row per
+# (currency, quote_date) and REFUSES two landed rows that disagree on a rate, before
+# `fact_rows` builds anything. That ordering is the whole of the phase's T4c -- the fan-out an
+# unreduced FX join would cause is visible only to the post-write row-count check.
 #
 # NAMED `gold_*` AND NOT `vault_*`, for all three other gold jobs' reason:
 # `tests/test_vault_job_wiring.py` globs `vault_*.yml`, asserts the result equals its own
@@ -53,40 +64,96 @@
 # already published in `docs/f3-run-evidence.md` section 0.5; none of them needed a
 # session. Two states are given because bronze is about to gain a stream.
 #
-# --- (A) AGAINST TODAY'S BRONZE: two promoted streams, `clean` and `promotable` ------
+# --- (A) AGAINST TODAY'S BRONZE: FOUR promoted streams, 40,150 rows --------------------
 #
-#   bronze rows                                   20,150   f3-run-evidence.md 0.5, P5
-#   DISTINCT transaction_id                       20,000   20,150 - 150 redeliveries
+# THE TWO STATES THIS BLOCK USED TO CARRY ARE GONE, AND SAYING SO IS THE POINT. It published
+# an (A) for two promoted streams (20,150 bronze rows, 20,000 fact rows, 18,400 tuples, 1
+# `event_date_key`) and a (B) for `between-snapshots` landing (30,150 / 30,000 / 27,600 / 2).
+# Both have HAPPENED, and F-API adds a fifth profile, so a third pair of columns would be two
+# stale states above one live one. What is published below is the state after all four
+# batches, which is the only one the next run can be marked against.
+#
+#   bronze rows                                   40,150   30,150 + the fifth stream's 10,000
+#   DISTINCT transaction_id                       40,000   150 injected redeliveries, unchanged
 #   COUNT(*) - COUNT(DISTINCT transaction_id)        150   `promotable`'s duplicate_count
-#   DISTINCT business-attribute tuples            18,400   2 x (10,000 - 800), below
+#   DISTINCT business-attribute tuples            36,800   4 x (10,000 - 800), below
 #
-#   fact_payment rows                             20,000   one per distinct identity
-#   COUNT(*) - DISTINCT tuples, IN THE FACT         1,600   the LEGITIMATE REPEATS
-#   (row, role) references                        40,000   2 roles x 20,000 rows
-#   references resolving to the ghost, per role         0   T-E, and see below
-#   rows orphaned in dim_date/channel/currency          0   see below
-#   DISTINCT event_date_key reached                     1   every payment on 2026-08-01
+#   fact_payment rows                             40,000   one per distinct identity
+#   COUNT(*) - DISTINCT tuples, IN THE FACT         3,200   the LEGITIMATE REPEATS, 4 x 800
+#   (row, role) references                        80,000   2 roles x 40,000 rows
+#   references resolving to the ghost, per role         0   unchanged, and still UNEXERCISED
+#   rows orphaned per fact key, all four                0   see below
+#   DISTINCT event_date_key reached                     3   20260620, 20260622, 20260801
+#   DISTINCT fx_rate_date_key reached                   4   20260619 and 20260622 from the USD
+#                                                          rows, plus the BRL rows' own days
+#                                                          (20260620, 20260622, 20260801) --
+#                                                          so the two date roles AGREE on the
+#                                                          35,095 BRL rows and DIFFER on 2,864
+#                                                          of the 4,905 USD ones.
+#                                                          NOT 20260731: that quote is only
+#                                                          reachable by a USD payment on
+#                                                          2026-08-01 and there are none. The
+#                                                          extraction reaches it because the
+#                                                          series must be gapless past what
+#                                                          the fact needs, which is a
+#                                                          different statement
+#   DISTINCT fx_rate values                             3   1.00000, 5.14420, 5.13950
+#   rows with fx_rate = 1.00000 exactly            35,095   every BRL row, by definition and
+#                                                          not by lookup
+#   conversions past the last landed quote              0   every USD payment falls on
+#                                                          2026-06-22 and the series runs to
+#                                                          2026-07-31, so nothing converted at
+#                                                          the open end of it. A NON-ZERO count
+#                                                          is not a failure -- it is the only
+#                                                          number in this log that can show a
+#                                                          TRUNCATED extraction, which every
+#                                                          other one reports as clean
+#   widest fallback any conversion took            3 days   Monday 2026-06-22 back to Friday
+#                                                          2026-06-19 for 2,864 rows, 0 for the
+#                                                          2,041 same-day ones. A weekend is 3,
+#                                                          a holiday weekend 4, Carnival 5 --
+#                                                          none of which this layer may assert
+#                                                          as a bound (opl.gold.fx), so a hole
+#                                                          in the series shows up here
 #
-# WHERE 18,400 COMES FROM AND WHY IT IS A DEDUCTION RATHER THAN AN ESTIMATE.
+# WHERE 36,800 COMES FROM AND WHY IT IS A DEDUCTION RATHER THAN AN ESTIMATE.
 # `opl.generator.stream` states `DISTINCT business-attribute tuple == event_count -
-# repeat_count` as a property it BUILDS -- a base event whose tuple has already been
-# emitted is re-derived under an incremented salt, and the generator refuses rather than
-# emitting a collision. `_EVENT_COUNT = 10,000` and `_REPEAT_COUNT = 800` are shared by
-# every profile, so each stream carries exactly 9,200. Across two streams the only way the
-# total is below 18,400 is a CROSS-stream collision, which the guard does not cover: the
-# tuple space is 1024 x 1023 ordered counterparty pairs x 4,999,901 amounts x 1 currency x
-# 5 methods = 2.62e13, so the expected number of collisions between two 9,200-member draws
-# is 9,200^2 / 2.62e13 = 3.2e-6. 18,400 is therefore a prediction that can fail, and its
-# failure would be a finding about the generator's independence rather than about gold.
+# repeat_count` as a property it BUILDS -- a base event whose tuple has already been emitted
+# is re-derived under an incremented salt, and the generator refuses rather than emitting a
+# collision. `_EVENT_COUNT = 10,000` and `_REPEAT_COUNT = 800` are shared by every profile, so
+# each stream carries exactly 9,200. Across four streams the only way the total is below
+# 36,800 is a CROSS-stream collision, which the guard does not cover: the tuple space is
+# 1024 x 1023 ordered counterparty pairs x 4,999,901 amounts x <currencies> x 5 methods, and
+# BOTH POPULATIONS IN THIS COMPARISON ARE BRL -- the existing 27,600 because no earlier
+# stream draws USD, the fifth stream's 4,675 because that is the BRL half of its base events
+# -- so the currency factor is ONE and the space is 2.6e13. A collision between them has
+# probability 4,675 x 27,600 / 2.6e13 = about 5e-6. THIS BLOCK USED TO STATE THE SPACE AS
+# "x 2 currencies = 5.2e13" AND THEN PRINT 5e-6, which does not follow from it: over 5.2e13
+# the answer is 2.5e-6. The printed figure was right and its stated derivation was not --
+# the same "argued about a population wider than the one it counted" defect the paragraph
+# above this one already records once. Either way 36,800 is a prediction that can fail, and
+# its failure would be a finding about the generator's independence rather than about gold.
 #
-# WHY 1,600 IS THE ONLY ONE OF THESE THAT CAN FALSIFY THE DESIGN. "The build removed 150
-# duplicates" is `COUNT(*) - COUNT(DISTINCT transaction_id)` BY DEFINITION OF THE
-# OPERATION: it re-measures bronze's own arithmetic and comes out right whichever column
-# the deduplication was taken over, so it is published above as bronze's number and is
-# never used as an acceptance. A fact deduplicated on the business attributes -- or on a
-# "natural key" built from (payer, payee, amount, currency, payment_method), which is the
-# obvious thing to reach for -- returns 18,400 rows, 0 legitimate repeats, and a duplicate
-# count that still reads 150. The loader refuses the row count and prints the repeat count.
+# THE FX SPLIT, WHICH IS THE PHASE'S HEADLINE NUMBER AND IS DERIVED RATHER THAN ESTIMATED. The
+# `cross-currency` window opens 2026-06-22T08:00:00.000Z and steps 5,000 ms per event; the
+# 2026-06-22 quote publishes `dataHoraCotacao 2026-06-22 13:06:19.750415` READ AS BRT, i.e.
+# 29,179,750.415 ms after the window opens, so the first index whose own instant FOLLOWS
+# publication is ceil(29,179,750.415 / 5,000) = 5,836. Of those rows the ones that resolve a
+# quote are the USD ones -- a BRL row consults no series at all:
+#
+#   USD rows falling back to 2026-06-19, venda 5.14420     2,864
+#   USD rows resolving same-day 2026-06-22, venda 5.13950  2,041
+#                                                          -----
+#   USD rows in the fifth stream                           4,905
+#
+# TWO PAYMENTS ON ONE CALENDAR DAY WITH TWO DIFFERENT RATES is the property no calendar-day
+# implementation can produce, and it is what the phase's closing test asserts. Both
+# populations are non-empty under the fail-open UTC reading too (1,801 / 3,104), so the test
+# does not rest on the timezone ruling being right -- only the counts move.
+#
+# `SUM(amount_brl)` IS NOT `SUM(amount) * rate` TO THE CENT, and that is arithmetic rather
+# than a defect. `amount_brl` is rounded HALF-UP to two decimals AT THE ROW, so the two differ
+# by up to half a centavo per row -- 4,905 rows' worth of rounding on this data.
 #
 # WHY THE GHOST IS PREDICTED AT ZERO AND WHY THAT IS NOT A SUCCESS (section 4.6). F1b
 # measured 1,024 of 1,024 counterparties resolving to `hub_empresa`, `dim_company` carries
@@ -95,68 +162,75 @@
 # GHOST)` CANNOT FIRE on this data. It is reported as an UNEXERCISED path; no unresolvable
 # payment is manufactured to make the number non-zero.
 #
-# WHY THE ORPHAN COUNTS ARE PREDICTED AT ZERO. The three conformed keys are DERIVED from
-# the payment's own columns rather than looked up, so there is no ghost to fall back on.
-# `dim_channel` and `dim_currency` hold the contract's declared domains and the generator
-# picks from those same tuples by index, so an unheld value is not expressible;
+# WHY THE ORPHAN COUNTS ARE PREDICTED AT ZERO, FOR FOUR KEYS AND NOT THREE. The conformed
+# keys are DERIVED from the fact's own columns rather than looked up, so there is no ghost to
+# fall back on. `dim_channel` and `dim_currency` hold the contract's declared domains and
+# every profile's `currencies` is refused unless it is a subsequence of that domain
+# (`opl.generator.stream._require_currencies`), so an unheld value is not expressible.
 # `dim_date`'s span is measured from `bronze_payments`' own days AND from
-# `sat_empresa_dados`' `applied_date`s (2026-06-13 .. 2026-08-01, 50 days), so it covers
-# every payment day the fact can carry.
+# `sat_empresa_dados`' `applied_date`s (2026-06-13 .. 2026-08-01, 50 days), which covers
+# every payment day AND every quote date the fallback can reach -- the earliest being
+# 2026-06-19.
+#
+# "THE GENERATOR PICKS FROM THOSE SAME TUPLES BY INDEX" WAS THE OLD WORDING AND IT WENT STALE
+# SILENTLY. F-API T1 split the declared DOMAIN from the tuple each profile DRAWS from, so the
+# generator picks from `StreamSpec.currencies` and NOT from `payments.CURRENCIES`. What holds
+# now is CONTAINMENT rather than identity, enforced by `_require_currencies` at import. The
+# `tests/gold/test_conformed.py` copy of this sentence was corrected when the split landed and
+# THIS copy, in a live job resource, was not -- which is why the zero-orphan prediction above
+# spells the mechanism out instead of citing an identity that no longer holds.
 #
 # NOT "FROM THIS VERY TABLE", WHICH IS WHAT THIS LINE USED TO SAY. `covered_span` takes
 # TWO sources and `gold_load_conformed_dimension.py` states the reason in capitals: the
 # fact source is `bronze_payments`, because `fact_payment` DOES NOT EXIST when the calendar
 # is built. The fact alone could not produce the low end either -- before the fourth stream
-# every payment was 2026-08-01, so 2026-06-13 comes entirely from the satellite. The
-# conformed job's own header had this right and these two published predictions disagreed
-# about the derivation of one number.
+# every payment was 2026-08-01, so 2026-06-13 comes entirely from the satellite.
 #
-# --- (B) AFTER THE `between-snapshots` STREAM LANDS ----------------------------------
+# --- THE FX SERIES THIS BUILD READS, AND THE ORDER THE REBUILD TAKES -------------------
 #
-# It has NOT been run. It carries no defect, delivers 10,000 rows, and must be launched
-# with `month=2026-08` -- its event window is June and the ingest reads the month
-# directory, so any other month leaves it out of `bronze_payments` entirely.
+#   bronze_ptax rows, reduced           42 quotes   2026-06-03 .. 2026-08-01, one row per
+#                                                   (currency, quote_date) after the reduce
+#   first / last publication instant                2026-06-03 and 2026-07-31, both ~13:0x BRT
 #
-#   bronze rows                                   30,150   20,150 + 10,000
-#   DISTINCT transaction_id                       30,000   the stream carries no duplicate
-#   COUNT(*) - COUNT(DISTINCT transaction_id)        150   UNCHANGED: no new redeliveries
-#   DISTINCT business-attribute tuples            27,600   18,400 + 9,200
+# THE REDUCE IS NOT OPTIONAL AND ITS ABSENCE IS SILENT UNTIL IT IS NOT. `bronze_ptax` is
+# written `mode("append")`, so a second fetch over the same window lands a second row per
+# quote date and every USD fact row would be joined twice -- caught only by the post-write
+# row-count refusal, whose message begins "THE TABLE ON DISK IS ALREADY WRITTEN".
 #
-#   fact_payment rows                             30,000
-#   COUNT(*) - DISTINCT tuples, IN THE FACT         2,400   1,600 + 800
-#   (row, role) references                        60,000
-#   references resolving to the ghost, per role         0   unchanged, and still unexercised
-#   rows orphaned in dim_date/channel/currency          0   2026-06-20 is ALREADY inside
-#                                                          dim_date's 50-day span, so the
-#                                                          calendar needs no rebuild
-#   DISTINCT event_date_key reached                     2   20260620 and 20260801
+# GAPLESSNESS IN BUSINESS DAYS IS REPORTED AND NOT REFUSED. Asserting it needs either a
+# Brazilian holiday calendar -- the second spelling of "is there a quote" that this phase's
+# T3 refuses, with a witness in the series itself -- or a gap bound drawn from this one
+# window. So the three numbers above are printed instead, and a bounded extraction is visible
+# rather than hidden behind a rate that resolved.
 #
-# AND THIS IS THE STATE IN WHICH THE AS-OF JOIN CHANGES ITS ANSWER. Task 0 measured THREE
-# pool companies carrying two `sat_empresa_dados` versions (P6, predicted 2, falsified at
-# 3). Each role reference draws a company uniformly from the 1,024-key pool, so the
-# 20,000 references of the June stream are EXPECTED to hit a two-version company
-# 20,000 x 3/1024 = 58.6 times and the 40,000 references of the August streams
-# 117.2 times. Those two are EXPECTATIONS OF A RANDOM DRAW and not deductions -- but
-# P(zero hits) = (1 - 3/1024)^20000 = 3e-26, so the demonstration itself is not in doubt.
-# The headline company is `47070968` (`natureza_juridica` 2062, a sociedade empresaria
-# limitada rather than a natural person), whose `capital_social` moved 50000,00 ->
-# 370000,00 between the two snapshots; `44822028` is the control at 5000,00 -> 15000,00.
-# `30115555` changes ONLY its razao social and MUST NOT be quoted -- it is an empresario
-# individual, and that field is a private individual's name.
-#
-# THE FIXTURE PROOF EXISTS NOW AND IS LABELLED AS A FIXTURE.
-# `tests/gold/test_fact_payment.py` builds one company with three versions and two payments
-# straddling a boundary, and asserts they resolve to two DIFFERENT `company_sk` values
-# carrying two different `capital_social` values. That is a local Delta fixture; the
-# workspace proof is the run above, and neither is offered as the other.
+# >>> THIS TABLE MUST BE DROPPED BEFORE THIS JOB IS RE-RUN, AND THAT IS OPERATIONAL RATHER
+# >>> THAN OPTIONAL. `opl.gold.facts._appended` writes `mode("append")` with no
+# >>> `mergeSchema`, so the three new columns make the append FAIL -- which is the safe half.
+# >>> WITH `mergeSchema` it would be worse: `_new_rows` anti-joins on `transaction_id`, so the
+# >>> 30,000 rows already written would keep NULL FX FOREVER while every counter in the run log
+# >>> reported clean. ADR 0015 already accepts a drop-and-rebuild at 69.2M rows and 120 s; this
+# >>> table is 40,000 rows.
+# >>>
+# >>> THE ORDER, WHICH DABS CANNOT EXPRESS:
+# >>>   1. land + ingest the fifth payment batch  (opl_bronze_payments, month=2026-06)
+# >>>   2. fetch + ingest the PTAX window         (opl_bronze_ptax)
+# >>>   3. re-run opl_gold_conformed_dimensions   (APPEND-safe: dim_currency gains USD,
+# >>>                                              dim_date appends zero rows)
+# >>>   4. DROP TABLE fact_payment
+# >>>   5. re-run this job                        -> 40,000 rows
+# >>>
+# >>> Step 3 before step 5 and not after: the orphan counts are measured against the conformed
+# >>> tables as they stand, so a fact built first would REPORT 4,905 orphaned currency keys --
+# >>> correctly, and about a state whose repair is to re-run step 3 and then read the numbers
+# >>> again.
 #
 # --- COST: AN EXTRAPOLATION AND NOT A MEASUREMENT ------------------------------------
 #
 # Labelled as such because nothing of this shape has been run on this platform. The build
 # scans `dim_company` (~69.2M rows) ONCE PER ROLE, projected to four columns and filtered
 # by a BROADCAST semi-join against at most 1,024 counterparty keys, so the dimension is
-# never shuffled; everything else is 20,150 rows through one window, three broadcast joins
-# and a ~20,000-row write.
+# never shuffled; everything else is 40,150 rows through one window, SEVEN broadcast joins
+# (two roles, the FX intervals, and the four orphan anti-joins) and a ~40,000-row write.
 #
 #     wall clock   5-40 min, central ~15 min
 #     storage      < 5 MB

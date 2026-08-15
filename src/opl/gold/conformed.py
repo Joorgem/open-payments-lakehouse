@@ -2,17 +2,20 @@
 """Build and load the star's conformed dimensions -- `dim_date`, `dim_channel`,
 `dim_currency` -- and MEASURE how much of each one the fact actually reaches.
 
-THE NUMBER THIS MODULE EXISTS TO PRODUCE. Two of these three dimensions are constant
-columns wearing a dimension's name, and saying so with the word "thin" is not saying it.
-`CURRENCIES = ("BRL",)`, so `dim_currency` has ONE member and every fact row points at
-it. Every payment measured at Task 0 sits on 2026-08-01 (`docs/f3-run-evidence.md` §0.5,
-P1-P3) and the `between-snapshots` profile adds 2026-06-20, so `dim_date`'s FACT-SIDE
-cardinality is 1 today and 2 once that profile lands -- against a span of about fifty
-days. A dimension whose fact-side cardinality is 1 cannot be wrong, and no test over it
-can fail. `fact_side_cardinality` therefore counts it from the fact on every load and
-`ConformedLoadResult` carries it beside the member count, so the phase's evidence
-publishes two numbers instead of an adjective. `dim_channel` is the one of the three
-that is not constant: five declared rails, five reached.
+THE NUMBER THIS MODULE EXISTS TO PRODUCE, AND F-API RETIRED THE WORST CASE OF IT. This
+paragraph read "Two of these three dimensions are constant columns wearing a dimension's
+name ... `CURRENCIES = ("BRL",)`, so `dim_currency` has ONE member and every fact row
+points at it ... A dimension whose fact-side cardinality is 1 cannot be wrong, and no test
+over it can fail." Both halves have moved. `payments.CURRENCIES` is `("BRL", "USD")` since
+F-API T1, so `dim_currency` has TWO members and the fact reaches both -- 4,905 USD rows
+against 35,095 BRL ones. And `dim_date` reaches THREE days, not one and not two:
+2026-08-01 for the two August streams (`docs/f3-run-evidence.md` §0.5, P1-P3),
+2026-06-20 for `between-snapshots` and 2026-06-22 for `cross-currency`, against a span of
+fifty days. `fact_side_cardinality` counts every one of these FROM THE FACT on every load
+and `ConformedLoadResult` carries it beside the member count, so the evidence publishes two
+numbers instead of an adjective -- which is exactly what made the retraction above
+checkable rather than a matter of opinion. `dim_channel` is five declared rails, five
+reached.
 
 THE MEMBERS ARE THE CONTRACT'S DECLARED DOMAIN AND NEVER `SELECT DISTINCT`. The tempting
 build for an enumerated dimension is to read its members out of the fact. It is refused
@@ -88,7 +91,13 @@ from opl.gold.members import (
     enumerated_members,
     enumerated_schema,
 )
-from opl.gold.specs import CalendarDimension, ConformedDimension, EnumeratedDimension
+from opl.gold.spec_fields import READS_ISO_TEXT, FactRole
+from opl.gold.specs import (
+    CalendarDimension,
+    ConformedDimension,
+    EnumeratedDimension,
+    contract_role,
+)
 from opl.vault.columns import APPLIED_DATE
 from opl.vault.loading import rows_in
 
@@ -147,12 +156,21 @@ def day_of(column: str) -> Column:
     return F.to_date(F.substring(F.col(column), 1, _ISO_DAY_WIDTH))
 
 
-def _fact_member(dimension: ConformedDimension) -> Column:
-    """The value a fact row resolves to a member of `dimension` -- its natural key as the
-    FACT spells it, which is not always as the dimension spells it."""
-    if isinstance(dimension, CalendarDimension):
-        return day_of(dimension.fact_column)
-    return F.col(dimension.fact_column)
+def _fact_member(role: FactRole) -> Column:
+    """The value a fact row resolves to a member of a dimension -- its natural key as the
+    FACT spells it, which is not always as the dimension spells it.
+
+    IT BRANCHES ON THE ROLE'S DECLARED READER AND NOT ON THE DIMENSION'S KIND, which is
+    F-API T4b's one behavioural change in this file. `dim_date` now has two roles reading two
+    representations of a day: `event_time` is bronze's all-string ISO instant, whose day is
+    ten characters (`day_of`, and never a CAST -- see the module docstring), and
+    `fx_rate_date` is a `date` the FX join produced, where reading ten characters would be a
+    cast in the other direction. An `isinstance` check cannot tell those apart, because they
+    are the same kind of dimension; `reads` can, and `opl.gold.spec_fields` refuses any value
+    of it outside the closed set, so a misspelling cannot fall through to this last line."""
+    if role.reads == READS_ISO_TEXT:
+        return day_of(role.fact_column)
+    return F.col(role.fact_column)
 
 
 def fact_side_cardinality(fact: DataFrame, dimension: ConformedDimension) -> int:
@@ -166,8 +184,16 @@ def fact_side_cardinality(fact: DataFrame, dimension: ConformedDimension) -> int
     ONE COLUMN IN THE DISTINCT AND NOT A TUPLE, per master protocol §4.8: `COUNT(DISTINCT
     a, b, c)` drops NULL-bearing rows and cost this project 8,761 of them once. A single
     column's distinct count includes NULL as a value, so a fact row whose member cannot be
-    read is counted here rather than quietly excluded."""
-    return fact.select(_fact_member(dimension).alias("_member")).distinct().count()
+    read is counted here rather than quietly excluded.
+
+    THE CONTRACT-SOURCED ROLE AND NOT EVERY ROLE, WHICH IS A LIMIT AND NOT AN OVERSIGHT. The
+    `fact` handed here is the fact SOURCE -- `bronze_payments`, because `fact_payment` does
+    not exist when the calendar is built -- so a DERIVED role's column is not in it at all.
+    What this number therefore answers for `dim_date` is "how many days do the PAYMENTS fall
+    on", which is 3, and not "how many members does the star reach through either role". The
+    second question is answered after the fact is built, per role, by
+    `opl.gold.facts._orphaned_per_fact_key` measuring the complement."""
+    return fact.select(_fact_member(contract_role(dimension)).alias("_member")).distinct().count()
 
 
 def covered_span(
@@ -269,9 +295,15 @@ def _surrogate_key(dimension: ConformedDimension) -> Column:
     return _member_key(dimension, F.col(dimension.natural_key))
 
 
-def fact_surrogate_key(dimension: ConformedDimension) -> Column:
-    """The key a FACT row derives for `dimension`, from the fact's OWN column and with no
-    join at all.
+def fact_surrogate_key(dimension: ConformedDimension, role: FactRole) -> Column:
+    """The key a FACT row derives for one ROLE into `dimension`, from the fact's OWN column
+    and with no join at all.
+
+    IT TAKES THE ROLE AS AN ARGUMENT SINCE F-API T4b, because a dimension no longer answers
+    exactly one of the fact's columns: `dim_date` answers `event_date_key` from `event_time`
+    and `fx_rate_date_key` from `fx_rate_date`. Both go through `_member_key` below with the
+    dimension's own mechanism, so the two roles cannot key the same day differently and
+    neither can drift from the dimension side.
 
     NO JOIN, WHICH IS A PRE-DECISION OF THIS MODULE RATHER THAN A SHORTCUT TAKEN BY THE
     FACT. The module docstring above states it as the reason the two key mechanisms are
@@ -306,7 +338,7 @@ def fact_surrogate_key(dimension: ConformedDimension) -> Column:
     and says so in a number. `tests/gold/test_conformed.py` pins that 42 is held by no
     declared member of either enumerated dimension, which is what makes "reported" and not
     "silently attributed" true."""
-    return _member_key(dimension, _fact_member(dimension))
+    return _member_key(dimension, _fact_member(role))
 
 
 def _keyed(

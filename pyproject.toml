@@ -27,6 +27,15 @@ requires-python = ">=3.12,<3.13"
 # package" error, reproducible on repeat runs -- Free Edition's governed
 # egress/serverless install budget can't complete that download). Local
 # dev/CI installs it via the 'spark' extra below.
+#
+# NARROWED 2026-08-14 BY MEASUREMENT: it is the INSTALL BUDGET, not governed
+# egress. The "egress/install budget" above is a disjunction this note could
+# not separate at the time, and F-API Task 0 separated it -- a serverless task
+# under {"environment_version": "3"} reached olinda.bcb.gov.br (HTTP 200, real
+# body) AND an unrelated host for 192,973 bytes, on run 1112844532335593.
+# Outbound HTTP is not governed off on this workspace, and databricks/src/
+# fetch_ptax.py now depends on that in production. See
+# docs/f-api-run-evidence.md section 0.8.
 dependencies = [
     # Floor: 0.42.0 fixed databricks-sdk-py#878 (<=0.41.0 rewound the request
     # body only inside `_perform`'s `if error is not None` branch, so a raised
