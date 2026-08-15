@@ -1804,8 +1804,8 @@ survives — **strengthened by the measurement that falsified the enumeration it
 So any single pattern rejects real rows — `1984-12-03 11:29:00.0`, `2026-06-03 13:06:26.54`
 and `2026-07-23 13:11:15.6614` among them.
 
-> **AND ONE STAMP IN THE TABLE ABOVE THIS PARAGRAPH IS NOT A SERIES ROW.** The retraction's
-> own `to_timestamp` table gives `2025-04-23 13:02:31.416` as a real row; **the API returns
+> **AND ONE STAMP IN THIS SECTION'S `to_timestamp` TABLE IS NOT A SERIES ROW.** The bare-time
+> retraction's table gives `2025-04-23 13:02:31.416` as a real row; **the API returns
 > `13:06:30.416`** for that date — the earlier of §0.7's duplicate pair, which §0.7 spells
 > correctly. The *measurement* stands (`13:02:31.416` parses to `2025-04-23 10:02:31.416000`,
 > which is what the row demonstrates); only its billing as a series row was wrong.
