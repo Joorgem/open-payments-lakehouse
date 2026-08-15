@@ -343,3 +343,51 @@ explicit `::float8`, and any implementer writing T4's version needs the same cas
 **No claim is made about `psycopg[binary]` on serverless** (plan §7 keeps it an open
 measurement) and **none about Databricks egress toward a laptop behind NAT** — both remain
 **argued**, and nothing in this probe can be read as testing either.
+
+---
+
+## 3. What ships UNEXERCISED
+
+**Standing decision §4.6: a path that ran zero rows through it is not a path that works.**
+Accumulated as the phase runs rather than reconstructed at its end.
+
+### Added by Task 2, as the snapshot axis landed
+
+- **`INSTANT_SNAPSHOT` has no production reference at all.**
+  `grep -rn INSTANT_SNAPSHOT src/ databricks/` returns only its own definition in
+  `src/opl/bronze/snapshot_axis.py`. Every registered source is monthly, so the axis this
+  phase exists to enable is declared and unused until Task 4 registers `bronze_merchant`.
+- **THE `axis=` PARAMETER HAS NEVER BEEN PASSED A NON-DEFAULT VALUE OUTSIDE THE LEDGER.**
+  `read_snapshot_window`, `earliest_record_source`, `hub_candidates`, `load_hub`,
+  `link_candidates`, `load_link`, `satellite_candidates`, `_collapsed_duplicates`,
+  `_diagnostics`, `effectivity._observed` and `required_months` all now *accept* an axis and
+  have all run **zero rows** on a non-monthly one. The only non-default execution anywhere is
+  `observation_ledger`, in `tests/vault/test_observation_axis.py`.
+  **Commit `917f6ae`'s title says "the ledger, the loaders and the job window read the
+  source's axis"; one of the three is exercised.** The other two are wired and untested by
+  data — which is exactly what this ledger is for, and is not a reason to withhold the wiring.
+- **The four entry points fixed in `76c61e5` pass `axis=source.snapshot_axis`, and that
+  expression evaluates to the DEFAULT for all six registered sources.** So the fix is
+  verified by a sweep over the scripts' text and by no run. The sweep was checked to
+  discriminate — run against the four pre-fix scripts it fails on all four — but discriminating
+  on source text is a weaker claim than a row passing through, and it is the claim being made.
+- **`effectivity`'s axis-aware path cannot run on a non-monthly source today, for a reason
+  outside itself.** `_observed` and `_reference_dates` both require `_snapshot_ref_date`, and
+  T8 records that `bronze_merchant` cannot produce it from the RFB mainframe filename regex
+  that derives it. Until Task 4's third audit-column path exists, the effectivity half of the
+  axis work is unreachable rather than merely unexercised.
+
+### A constraint Task 2's generalisation stops short of, recorded before it bites
+
+**`effectivity._statements`' carry-forward window still orders by `APPLIED_DATE`, which is a
+DATE.** `_observed` now groups by `(link.hash_key, axis.column, APPLIED_DATE)`, so the grouping
+generalised and the ordering did not. Two observations on one calendar day therefore **tie**,
+and `F.last(...)` over a tie is non-deterministic.
+
+**Nothing is wrong today and the reason is T8, not `effectivity.py`.** T8 rules that the two
+Postgres snapshots are taken on two genuinely different calendar days — a scheduling decision
+made for the satellite's `groupBy(hash_key, applied_date)` fold — and that same decision is
+what keeps this window unambiguous. **It is recorded here because the two are now coupled and
+nothing says so in either file:** a future phase that relaxes T8 to two same-day snapshots
+would silently reintroduce a non-deterministic tie in the effectivity close, one layer away
+from where it changed the rule.
