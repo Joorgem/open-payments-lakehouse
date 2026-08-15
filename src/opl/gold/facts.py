@@ -704,6 +704,14 @@ def _appended(
     return before
 
 
+# `load_date` IS AN ARGUMENT WITH NO DEFAULT below, for `opl.vault.hubs.load_hub`'s reason: a
+# loader that stamps its own clock cannot be asserted against. Idempotent by `grain_key` -- a
+# re-run over an unchanged source appends nothing, one that GAINED a batch appends that batch
+# alone, and the grain check holds in every one of them. `fx_source_table` IS `bronze_ptax`,
+# and `rate_intervals` REDUCES AND REFUSES IT BEFORE `fact_rows` BUILDS ANYTHING -- the fan-out
+# an unreduced FX join causes is visible only to a check whose own message begins "THE TABLE ON
+# DISK IS ALREADY WRITTEN". (Here rather than in the docstring: the function sat at exactly 50
+# of a cap read as `< 50`, and moving prose out is line-neutral for a file at 799 of 800.)
 def load_fact(
     spark: SparkSession,
     fact: PaymentFact,
@@ -720,15 +728,7 @@ def load_fact(
 ) -> FactLoadResult:
     """Build `fact_payment` from `source_table`'s payments and append it -- one row per
     payment event, both counterparties resolved as of that payment's own `event_time`.
-
-    `load_date` is an argument with no default, for `opl.vault.hubs.load_hub`'s reason: a
-    loader that stamps its own clock cannot be asserted against. Idempotent by `grain_key`: a
-    re-run over an unchanged source appends nothing, a source that GAINED a payment batch
-    appends that batch alone, and the grain check holds in every one of those states.
-
-    `fx_source_table` IS `bronze_ptax`, AND `rate_intervals` REDUCES AND REFUSES IT BEFORE
-    `fact_rows` BUILDS ANYTHING -- the fan-out an unreduced FX join causes is visible only to
-    a check whose own message begins "THE TABLE ON DISK IS ALREADY WRITTEN"."""
+    See the comment block above for `load_date`, idempotence and the FX reduce."""
     _refuse_a_mismatched_source(fact, dimension, hub, conformed)
     _refuse_a_fact_whose_measures_this_loader_cannot_derive(fact)
     _refuse_a_derived_role_this_loader_cannot_produce(fact, conformed)

@@ -162,29 +162,35 @@ def test_the_window_is_declared_rather_than_launched_and_nothing_can_omit_it():
 # --- the fetch's own pieces ----------------------------------------------------------
 
 
+# WHAT THE TEST BELOW SAYS THAT THE PIECES CANNOT SAY SEPARATELY is which value reaches
+# which consumer. The WINDOW decides what is requested and what the file is called; the
+# MONTH decides which directory it lands in, and the ingest task that follows resolves its
+# own source dir from the same job parameter. A task that swapped them would pass every
+# unit test above and land June's quotes where nothing reads them.
+#
+# THREE REQUESTS FOR A THREE-DAY WINDOW, INCLUSIVE -- one per CALENDAR day, because a range
+# answers with rows carrying no attributable quote date and a caller cannot know which days
+# carry one without asking. Only 2026-06-19 has a quote in this double, so a task that had
+# made ONE wide request would also produce one record; the URL list is what tells the two
+# apart, and it is also the shape that makes the real window 60 calls rather than 42.
+#
+# THE WINDOW IS NARROWED HERE RATHER THAN TAKEN FROM THE DECLARATION, and the narrowing is
+# what makes the URL list a readable assertion instead of sixty lines. The declared window
+# is pinned by `test_the_window_is_declared_rather_than_launched_...`; what this test is
+# about is that whatever the module declares is what reaches the request, the filename and
+# the directory -- so it patches the module's own constants and asserts all three followed.
+#
+# THE PROSE IS A COMMENT BLOCK AND NOT A DOCSTRING because the function reached 58 of the
+# project's 50-line cap with it inside -- the same remedy `opl.gold.fx` applies twice, and
+# the same one this file's own header block exists for.
+
+
 def test_the_whole_task_wires_the_window_the_month_and_the_record_together(
     monkeypatch, fetcher
 ):
     """`main` END TO END, hermetically: the real `fetch_series`, the real record builder
-    and the real filename, with only the transport and the file write replaced.
-
-    WHAT THIS SAYS THAT THE PIECES CANNOT SAY SEPARATELY is which value reaches which
-    consumer. The WINDOW decides what is requested and what the file is called; the MONTH
-    decides which directory it lands in, and the ingest task that follows resolves its own
-    source dir from the same job parameter. A task that swapped them would pass every
-    unit test above and land June's quotes where nothing reads them.
-
-    Three requests for a three-day window, inclusive -- one per quote date, because a
-    range answers with rows carrying no attributable quote date. Only 2026-06-19 has one
-    in this double, so a task that had made ONE wide request would also produce one
-    record; the URL list is what tells the two apart.
-
-    THE WINDOW IS NARROWED HERE RATHER THAN TAKEN FROM THE DECLARATION, and the narrowing
-    is what makes the URL list a readable assertion instead of sixty lines. The declared
-    window is pinned by `test_the_window_is_declared_rather_than_launched_...`; what this
-    test is about is that whatever the module declares is what reaches the request, the
-    filename and the directory -- so it patches the module's own constants and asserts
-    all three followed."""
+    and the real filename, with only the transport and the file write replaced. See the
+    comment block above for what each of the three wired values decides."""
     module = _load("fetch_ptax")
     monkeypatch.setattr(module, "WINDOW_FIRST", date(2026, 6, 18))
     monkeypatch.setattr(module, "WINDOW_LAST", date(2026, 6, 20))

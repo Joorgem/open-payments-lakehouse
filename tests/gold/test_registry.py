@@ -69,8 +69,24 @@ _GOLD = Path(__file__).resolve().parents[2] / "src" / "opl" / "gold"
 # whether the registry is built at import. `registry.py` now defines NO guard -- they moved to
 # `registry_guards.py` -- so it drops off this list entirely and the at-import question became
 # its own test. Enumerated rather than globbed off `_GOLD`, deliberately: a module that
-# defines no guard must not silently satisfy a sweep about guards, and the empty-set assertion
-# below is what makes an omission from this list red rather than invisible.
+# defines no guard must not silently satisfy a sweep about guards.
+#
+# WHAT AN OMISSION FROM THIS LIST COSTS, STATED PRECISELY, BECAUSE THIS COMMENT USED TO
+# OVERSTATE IT. It said "the empty-set assertion below is what makes an omission from this
+# list red rather than invisible". That assertion (`assert not uncalled`) is parametrised over
+# `_GUARD_MODULES`, so it cannot see a module that is not in it at all. The omission is caught
+# only by `test_every_guard_the_gold_layer_calls_is_one_the_gold_layer_defines`, whose left
+# side globs the whole package while its right side is confined to this list -- and therefore
+# only when the omitted module's guards are actually CALLED somewhere under `opl/gold`.
+#
+# SO ONE SHAPE IS INVISIBLE TO BOTH TESTS: a new gold module that DEFINES an `_assert_*` guard
+# and never calls it, while nothing else calls it either. It moves neither side of the
+# equality and is not parametrised over. That is exactly the guard-defined-but-never-called
+# state this file exists to refuse, and the defence against it is adding the module here --
+# which is a habit, not a lock. Recorded rather than closed: closing it means globbing `_GOLD`
+# for definitions, which re-admits the "a module with no guard satisfies a sweep about guards"
+# hole this enumeration was chosen to avoid, and trading one silent gap for another is not an
+# improvement worth making in a consolidation pass.
 #
 # THE PREFIX IS `_assert_` AND THAT IS A SCOPE, NOT AN OVERSIGHT. Gold's other refusal family
 # is named `_refuse_*` and reads a MEASUREMENT rather than a declaration -- it lives in the

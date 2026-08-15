@@ -243,12 +243,13 @@ def _report(
     )
 
 
+# TABLE FIRST, AND RESOLVED BEFORE ANYTHING ELSE in `main` below: a mistyped table name is
+# refused by `table_spec` naming the valid ones, and neither of the first two refusals needs
+# the network. An operator should not wait for 60 round trips to be told which argument is
+# wrong. (Here rather than inside the function, which sat at exactly 50 of a cap read as
+# `< 50` -- the same remedy `opl.gold.fx` and `opl.gold.facts` apply.)
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
-    # Table first, and resolved BEFORE anything else: a mistyped table name is refused by
-    # `table_spec` naming the valid ones, and neither of these two refusals needs the
-    # network. An operator should not wait for 60 round trips to be told which argument
-    # is wrong.
     spec = table_spec(args[0] if args else "")
     _refuse_a_table_this_does_not_fetch(spec)
     # NO DEFAULT, for `generate_payments`' reason: this local picks the directory the

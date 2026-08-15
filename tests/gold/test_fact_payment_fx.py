@@ -503,28 +503,35 @@ def test_a_payment_below_the_series_first_publication_is_refused_and_not_nulled(
     )
 
 
+# THE TRUNCATED EXTRACTION, WHICH IS THE ONE FAILURE EVERY OTHER NUMBER IN THE BUILD BELOW
+# CALLS CLEAN. `_FX_TO` coalesces the last quote's bound to `VALID_TO_CEILING`, so a payment
+# after the last landed publication does not fail to resolve -- it matches THAT quote and
+# converts at it. Here the series holds one quote, 2026-06-19, and the USD payment is on
+# 2026-08-01: it converts at a rate FORTY-THREE DAYS old, the grain is enforced, no key is
+# orphaned, no reference is unresolved, and `fx_rates_used` is the 2 a mixed star should have.
+# Nothing in that list moves.
+#
+# SO THE RUN'S OWN NUMBERS ARE WHAT MAKE IT VISIBLE, and they are the two the fix pass added
+# because the publication span alone was one side of a comparison. `fx_beyond_series` counts
+# the conversions that took the last landed quote and `fx_widest_fallback_days` says how far
+# back any conversion reached -- 1 and 43 here, 0 and 3 on the real rebuild. Both are REPORTED
+# and neither is refused: a payment after the most recent bulletin is the normal case (20,000
+# fact rows fall on Saturday 2026-08-01), and telling that from a window that stopped early
+# needs the holiday calendar T3 refuses on the record.
+#
+# IT WOULD ALSO HAVE PASSED AGAINST THE PREVIOUS IMPLEMENTATION -- the fact builds, correctly,
+# from a truncated series -- which is exactly why the assertions are on the REPORT and not on
+# a refusal. Against that implementation `FactLoadResult` carried neither field.
+#
+# THE PROSE IS A COMMENT BLOCK AND NOT A DOCSTRING because the function reached 52 of the
+# project's 50-line cap with it inside, which is the remedy `opl.gold.fx` applies twice.
+
+
 def test_a_series_that_stops_short_of_the_payments_is_REPORTED_by_the_run_it_cannot_refuse(
     spark, empresas_bronze, dim_loaded, conformed_tables, fact_target
 ):
-    """THE TRUNCATED EXTRACTION, WHICH IS THE ONE FAILURE EVERY OTHER NUMBER IN THIS BUILD
-    CALLS CLEAN. `_FX_TO` coalesces the last quote's bound to `VALID_TO_CEILING`, so a payment
-    after the last landed publication does not fail to resolve -- it matches THAT quote and
-    converts at it. Here the series holds one quote, 2026-06-19, and the USD payment is on
-    2026-08-01: it converts at a rate FORTY-THREE DAYS old, the grain is enforced, no key is
-    orphaned, no reference is unresolved, and `fx_rates_used` is the 2 a mixed star should have.
-    Nothing in that list moves.
-
-    SO THE RUN'S OWN NUMBERS ARE WHAT MAKE IT VISIBLE, and they are the two this fix pass added
-    because the publication span alone was one side of a comparison. `fx_beyond_series` counts
-    the conversions that took the last landed quote and `fx_widest_fallback_days` says how far
-    back any conversion reached -- 1 and 43 here, 0 and 3 on the real rebuild. Both are REPORTED
-    and neither is refused: a payment after the most recent bulletin is the normal case (20,000
-    fact rows fall on Saturday 2026-08-01), and telling that from a window that stopped early
-    needs the holiday calendar T3 refuses on the record.
-
-    IT WOULD ALSO HAVE PASSED AGAINST THE PREVIOUS IMPLEMENTATION -- the fact builds, correctly,
-    from a truncated series -- which is exactly why the assertions are on the REPORT and not on
-    a refusal. Against that implementation `FactLoadResult` carried neither field."""
+    """A one-quote series against payments 43 days later: everything reads clean except the
+    two coverage numbers. See the comment block above."""
     short_series = ptax_table(
         spark,
         empresas_bronze.db,
