@@ -239,3 +239,48 @@ def test_an_entry_point_handed_a_table_of_the_wrong_kind_refuses_before_spark(sc
     task = _load(script)
     with pytest.raises(ValueError, match="was handed vault table"):
         task.main([table, "empresas", "2026-06+2026-07", _A_GOOD_LOAD_DATE])
+
+
+# --------------------------------------------------------------------------------
+# The snapshot axis reaches the window validator, or the source is refused
+# --------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("script", _ENTRY_POINTS)
+def test_every_entry_point_resolving_a_source_honours_that_sources_axis(script):
+    """Resolve a `BronzeTable` and you owe its axis to `required_months`, or a refusal.
+
+    THE HOLE THIS CLOSES WAS FOUND BY REVIEW, NOT BY A TEST, WHICH IS WHY IT IS HERE.
+    F-DB Task 2 made the snapshot axis a per-source declaration and wired it into two of
+    the six entry points; the other four resolved the source two lines earlier and then
+    called `required_months` without it. The consequence is not a mistyped argument -- it
+    is that `hub_merchant` and `link_merchant_empresa`, which Task 5 loads through
+    `vault_load_hub` and `vault_load_link`, were refused before Spark by the very refusal
+    the axis exists to lift.
+
+    AND THE SILENT HALF IS WORSE THAN THE LOUD ONE. Every bronze row carries
+    `_snapshot_month` whatever its source declares, because
+    `autoloader.add_common_audit_columns` stamps it unconditionally. So a month-shaped
+    window handed to a non-monthly source is not refused at all: it validates, and
+    `read_snapshot_window` then folds on a column the source does not key on. A test that
+    only checked the loud direction would have passed on that.
+
+    TWO WAYS TO SATISFY THIS, because two loaders cannot honour an axis at all.
+    `load_partner_link` and `load_reference_table` take no `axis` and fold on
+    `_snapshot_month` throughout, so their entry points REFUSE a non-monthly source
+    instead -- `fetch_ptax._refuse_a_table_this_does_not_fetch`'s discipline, applied to
+    the axis. Either discharges the obligation; neither may be silently absent."""
+    source = (_SRC / f"{script}.py").read_text(encoding="utf-8")
+    assert "bronze_table_spec(" in source, (
+        f"{script} no longer resolves a bronze source, so this sweep's premise moved. "
+        "Re-read the script before deleting the case."
+    )
+    carries_axis = "axis=axis" in source or "axis=source.snapshot_axis" in source
+    refuses_non_monthly = "snapshot_axis != MONTHLY_SNAPSHOT" in source
+    assert carries_axis or refuses_non_monthly, (
+        f"{script} resolves a BronzeTable and then drops its snapshot axis. Pass "
+        "`axis=source.snapshot_axis` into `required_months` (and into the loader, if it "
+        "takes one), or refuse a source whose axis this loader cannot honour. Defaulting "
+        "is the worst of the three: every bronze row carries `_snapshot_month` whatever "
+        "its source declares, so the window validates and the fold reads the wrong column."
+    )
