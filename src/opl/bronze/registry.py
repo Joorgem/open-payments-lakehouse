@@ -71,6 +71,7 @@ from opl.bronze.registry_subdirs import (  # noqa: F401  (re-exported for consum
     _assert_subdirs_are_single_path_components,
     _malformed_subdir_reason,
 )
+from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT, SnapshotAxis
 from opl.contracts import payments, ptax
 from opl.contracts.catalogue import CONTRACT_COLUMNS, is_known
 
@@ -118,6 +119,20 @@ class BronzeTable:
     # bronze name by the caller. A tuple, not a list: the spec is frozen and its
     # fields have to be too, or `constraints.append(...)` would mutate shared state.
     constraints: tuple[str, ...]
+    # WHICH COLUMN SAYS WHEN THIS SOURCE WAS OBSERVED, and what its values look like.
+    # `opl.bronze.snapshot_axis` carries the argument in full; the short version is that
+    # the observation ledger derives at the grain of (business key, THIS column), so a
+    # source observed twice inside one calendar month needs an axis finer than a month
+    # or both observations fold into one and a departure reads as `observed`.
+    #
+    # DEFAULTED, AND THE DEFAULT IS WHAT EVERY ENTRY BELOW ALREADY WAS. Six of the seven
+    # tables are monthly by construction -- four RFB file drops, the generated payment
+    # stream and the PTAX fetch, each stamped with the month parameter its job ran with
+    # -- so declaring it on each would be six copies of one fact. A source that is NOT
+    # monthly has to say so, which is the direction that matters: the failure this field
+    # exists to prevent is silent, and an omitted declaration should land on the shape
+    # this repository has actually run rather than on an unstated one.
+    snapshot_axis: SnapshotAxis = MONTHLY_SNAPSHOT
 
 
 REGISTRY: dict[str, BronzeTable] = {
