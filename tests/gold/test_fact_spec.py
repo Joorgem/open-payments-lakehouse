@@ -86,10 +86,14 @@ def test_a_fact_that_does_not_resolve_every_counterparty_is_refused(roles):
 def test_a_fact_grained_on_a_business_attribute_is_refused(attribute):
     """T-D AT DECLARATION, over every business attribute rather than over the one somebody
     would reach for first. A legitimate repeat is a DIFFERENT `transaction_id` under an
-    IDENTICAL attribute tuple, so a grain taken from that tuple deletes 1,600 real payments
-    on today's bronze and returns a plausible 18,400 -- with the duplicate count still
+    IDENTICAL attribute tuple, so a grain taken from that tuple deletes 3,200 real payments
+    on today's bronze and returns a plausible 36,800 -- with the duplicate count still
     reporting 150, because that number is `COUNT(*) - COUNT(DISTINCT <grain>)` by
-    definition of the operation and cannot fail."""
+    definition of the operation and cannot fail.
+
+    *(These read 1,600 / 18,400 until the consolidation pass -- the two-promoted-stream
+    figures, two streams out of date. `gold_fact_payment_job.yml` predicts 3,200 / 36,800
+    and the run of 2026-08-14 measured both.)*"""
     with pytest.raises(ValueError, match="BUSINESS ATTRIBUTE"):
         _fact(grain_key=attribute)
 
