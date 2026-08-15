@@ -1776,16 +1776,20 @@ survives — **strengthened by the measurement that falsified the enumeration it
 > the id a reader can still fetch. Checking that a published id resolves costs one API call and
 > is the cheapest guard this project has.)*
 >
-> | `length(data_hora_cotacao)` | fractional digits | rows | a real example |
+> | `length(data_hora_cotacao)` | fractional digits | rows | `min(data_hora_cotacao)`, verbatim |
 > |---|---|---|---|
 > | 22 | **2** | 2 | `2026-06-03 13:06:26.54` |
 > | 23 | 3 | 2 | `2026-06-05 13:03:38.306` |
 > | 24 | **4** | 1 | `2026-07-23 13:11:15.6614` |
 > | 25 | **5** | 2 | `2026-06-09 13:12:05.30888` |
-> | 26 | 6 | 35 | `2026-06-19 13:03:25.555497` |
+> | 26 | 6 | 35 | `2026-06-10 13:12:50.036827` |
 >
-> Over the whole 2023-01-01 .. 2026-08-05 walk the counts are 1:11, 2:66, 3:785, 4:1, 5:2,
-> 6:38, and the 1984 rows are all width 1. **The conclusion survives and is worth more:** a
+> *(The fourth column is the statement's own `min()` per group, so the table is reproducible
+> from the id above rather than illustrated by hand-picked rows.)*
+>
+> Over the whole 2023-01-01 .. 2026-08-05 walk (903 rows) the counts are 1:11, 2:66, 3:785,
+> 4:1, 5:2, 6:38; the 22 rows of 1984-11-28 .. 1984-12-31 are all width 1. **The conclusion
+> survives and is worth more:** a
 > fixed-width slice does not merely break "on the series", it breaks on **7 of this phase's
 > own 42 landed quotes**, and the retired enumeration would have licensed a `.SSSSSS` pattern
 > that this window itself falsifies. `{1,6}` in the shape regex is `%f`'s range and not a
