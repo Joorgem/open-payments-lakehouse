@@ -80,10 +80,28 @@ Three consequences, none of which any version of the phase plan predicted:
    returns makes the phase's instant-comparison rule degrade silently into the calendar-day
    comparison it exists to forbid — correctly for every 2026 row, and wrongly in 1984.
 2. **The single-day request shape is FORCED, not chosen.** A *range* request returns rows
-   with no attributable quote date, so the extraction is **42 requests of ~220 bytes**, not
-   one wide call.
-3. **The fractional-second width is not stable**: 1 digit in 1984, 3 in 2025, 6 in 2026. Any
-   fixed-width slice works on this phase's range and breaks on the series.
+   with no attributable quote date, so the extraction is **~~42~~ 60 requests of ~220 bytes**,
+   not one wide call.
+3. **The fractional-second width is not stable**: ~~1 digit in 1984, 3 in 2025, 6 in 2026~~
+   — **2 to 6 digits inside this phase's own extraction window**, see below. Any fixed-width
+   slice works on some of this phase's range and breaks on the rest of it.
+
+> **BOTH NUMBERED CLAIMS ABOVE ARE MARKED FALSE HERE, WHERE THEY LIVE.** §2.8 said the two
+> non-§1 falsifications were "corrected where they live rather than marked here" and named
+> this section; nothing marked it, so a reader arriving at §0.4 — the section a reader
+> consults *about the request shape* — met the false number unqualified. That is this phase's
+> signature defect committed about its own correction, and the marker is the repair.
+>
+> - **The request count is 60, not 42** (§2.5, run log). `quote_dates` walks every CALENDAR
+>   day of the span: 2026-06-03 .. 2026-08-01 is **60 calendar days**, of which **43 are
+>   weekdays**, **42 answer a quote** and **18 answer HTTP 200 with `"value":[]`** (17
+>   weekend days plus Corpus Christi 2026-06-04). 42 was a count of *quotes* published as a
+>   count of *calls*, in the sentence that justified the cost. The single-day shape is
+>   unaffected: the argument is attribution, not volume.
+> - **The fractional-second enumeration `{1, 3, 6}` is false** — §3.1's closing note carries
+>   the measurement. Its *conclusion* survives and is strengthened.
+>
+> §0.9's decision table carried the same "42 single-day calls" and is corrected there too.
 
 ### 0.5 A weekend and a failed request are indistinguishable
 
@@ -162,7 +180,7 @@ removed afterwards.
 | Can a serverless task reach the API? | **Yes** | the fetch is a job task; the file inventory stands |
 | Are the two published rates right? | **Yes**, to the trailing zero | they now have a request behind them |
 | Are there unpredicted gaps in the series? | **No**, in 903 rows | the only weekday absence is 2026-06-04 |
-| Does the API return the quote date? | **No** | it is carried from the request, and the extraction is 42 single-day calls |
+| Does the API return the quote date? | **No** | it is carried from the request, and the extraction is ~~42~~ **60** single-day calls — one per CALENDAR day, of which 42 answer a quote (§0.4, §2.5) |
 | How far back must the extraction reach? | **2026-06-03** | earlier leaves the holiday case unresolvable |
 
 ---

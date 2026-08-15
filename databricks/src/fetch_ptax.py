@@ -26,9 +26,19 @@ three reasons is fatal on its own:
     five contract columns means a NEW BCB field is a change this repository can adopt
     deliberately, rather than an outage.
 
-ONE REQUEST PER QUOTE DATE, WHICH IS FORCED RATHER THAN CHOSEN. A range request answers
+ONE REQUEST PER CALENDAR DAY, WHICH IS FORCED RATHER THAN CHOSEN. A range request answers
 with rows carrying no attributable quote date at all, so `ptax_source.fetch_series` loops
-over days. It is cheap: ~220 bytes a response, 42 business days in this phase's window.
+over days -- and it must loop over EVERY day, because a caller cannot know which ones carry
+a quote without asking. It is cheap: ~220 bytes a response, 60 calendar days in this
+phase's window (2026-06-03 .. 2026-08-01), of which 42 answer a quote and 18 answer HTTP
+200 with an empty row list.
+
+THIS DOCSTRING SAID "42 BUSINESS DAYS", AND IT WAS WRONG TWICE. The window holds 43
+weekdays, not 42 -- 42 is the QUOTE count, one lower because Corpus Christi 2026-06-04 has
+none -- and the loop is over calendar days regardless, so neither number was ever the call
+count. `ptax_source.fetch_series`' own docstring was corrected when the run measured 60
+(`docs/f-api-run-evidence.md` §2.5) and this caller was not. Measured 60 / 42 / 18 by the
+run's own log; 60 / 43 / 17 / 1 by the calendar.
 
 NO SPARK, AND NO SESSION IS CREATED. Nothing here reads a table: the request is HTTP and
 the write is a file in the Volume. It stays a `spark_python_task` because that is how the
@@ -92,7 +102,7 @@ from opl.extraction.ptax_window import WINDOW_FIRST, WINDOW_LAST
 # refuse, and an anonymous one makes a 403 impossible to attribute. Named for the project
 # so BCB's own logs can identify the caller, matching `scripts/probe_ptax.py`.
 HEADERS = {"User-Agent": "open-payments-lakehouse-f-api/1.0"}
-# Per request, not for the whole window. 42 sequential calls at ~220 bytes each; a bound
+# Per request, not for the whole window. 60 sequential calls at ~220 bytes each; a bound
 # this generous only fires when the endpoint is genuinely not answering, which is a
 # failure this task must not paper over by continuing with fewer quotes.
 TIMEOUT_SECONDS = 60
@@ -237,7 +247,7 @@ def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     # Table first, and resolved BEFORE anything else: a mistyped table name is refused by
     # `table_spec` naming the valid ones, and neither of these two refusals needs the
-    # network. An operator should not wait for 42 round trips to be told which argument
+    # network. An operator should not wait for 60 round trips to be told which argument
     # is wrong.
     spec = table_spec(args[0] if args else "")
     _refuse_a_table_this_does_not_fetch(spec)
