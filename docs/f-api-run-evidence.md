@@ -1214,7 +1214,11 @@ precisely why `amount_brl` is the declared measure.
 *(The only falsified **§1 prediction**. Two other published claims were falsified in this
 pass and are not §1 predictions, so they are corrected where they live rather than marked
 here: **§0.4's "42 requests"**, measured at **60** (§2.5), and **§2.8's own "3 rows short"**,
-which is 2 in the column it was written against (above).)*
+which is 2 in the column it was written against (above). **This sentence was true of the
+second and false of the first for the whole of the branch's life**: §0.4 carried no marker
+of any kind until the consolidation pass put one there, so the claim that it had been
+"corrected where it lives" was itself the surviving stale claim. It is true now, and it is
+checkable by opening §0.4.)*
 
 > **§1.3 predicted 35,095 rows "where the two date keys AGREE", derived as "the BRL
 > population — an identity conversion is dated to its own day". The measurement is 37,136.**
