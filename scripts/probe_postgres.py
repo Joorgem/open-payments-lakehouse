@@ -28,6 +28,7 @@ import os
 import sys
 import time
 from collections.abc import Sequence
+from typing import Any
 
 import psycopg
 from probe_postgres_container import measure_1_persistence
@@ -39,9 +40,9 @@ from probe_postgres_session import (
     clean_env,
     commit_after,
     connect,
-    dsn,
     heading,
     one,
+    redacted_dsn,
     row,
     rows,
     setup_schema,
@@ -290,21 +291,27 @@ def measure_5_stamp_gap() -> None:
                 stamp = row(reader, stamp_sql)
             visible = one(reader, "SELECT count(*) FROM gap")
             reader.execute("COMMIT")
-        txn_ts, clock_ts, snapshot, lsn = stamp
-        print(f"  transaction_timestamp() (fixed at BEGIN):  {txn_ts.isoformat()}")
-        print(f"  clock_timestamp() at the snapshot stmt:    {clock_ts.isoformat()}")
-        gap_seconds = (clock_ts - txn_ts).total_seconds()
-        print(f"  GAP BEGIN -> SNAPSHOT:                     {gap_seconds:.3f}s")
-        print(f"  pg_current_snapshot():                     {snapshot}")
-        print(f"  pg_current_wal_lsn():                      {lsn}")
-        print(f"  rows committed inside the gap that ARE in the snapshot: {visible}")
-        if visible and not stamp_first:
-            with clean_env(), connect() as check:
-                committed_at = one(check, "SELECT committed_at FROM gap ORDER BY id LIMIT 1")
-            print(f"  the row's own commit clock: {committed_at.isoformat()}")
-            print(f"  committed AFTER the stamp:  {committed_at > txn_ts}")
-            print("  => the stamp claims to predate a row it can see. That is the smear the")
-            print("     ruling exists to prevent, and it is in the PROVENANCE, not the data.")
+        _report_stamp_gap(stamp, visible, stamp_first=stamp_first)
+
+
+def _report_stamp_gap(stamp: tuple[Any, ...], visible: int, *, stamp_first: bool) -> None:
+    """Print one arm of the gap measurement, and the row that falls inside it."""
+    txn_ts, clock_ts, snapshot, lsn = stamp
+    print(f"  transaction_timestamp() (fixed at BEGIN):  {txn_ts.isoformat()}")
+    print(f"  clock_timestamp() at the snapshot stmt:    {clock_ts.isoformat()}")
+    gap = (clock_ts - txn_ts).total_seconds()
+    print(f"  GAP BEGIN -> SNAPSHOT:                     {gap:.3f}s")
+    print(f"  pg_current_snapshot():                     {snapshot}")
+    print(f"  pg_current_wal_lsn():                      {lsn}")
+    print(f"  rows committed inside the gap that ARE in the snapshot: {visible}")
+    if not (visible and not stamp_first):
+        return
+    with clean_env(), connect() as check:
+        committed_at = one(check, "SELECT committed_at FROM gap ORDER BY id LIMIT 1")
+    print(f"  the row's own commit clock: {committed_at.isoformat()}")
+    print(f"  committed AFTER the stamp:  {committed_at > txn_ts}")
+    print("  => the stamp claims to predate a row it can see. That is the smear the")
+    print("     ruling exists to prevent, and it is in the PROVENANCE, not the data.")
 
 
 # --------------------------------------------------------------------------------
@@ -335,6 +342,26 @@ def build_watermark_table(conn: psycopg.Connection) -> None:
     conn.execute("INSERT INTO wm SELECT g, 'v0' FROM generate_series(1, 5) AS g")
 
 
+def _snapshot_and_watermark(conn: Any, label: str) -> tuple[list[Any], Any]:
+    """One `REPEATABLE READ READ ONLY` transaction reading the table AND its watermark.
+
+    Both come out of ONE transaction on purpose: T2 rules that the watermark query runs
+    inside the same transaction that reads its snapshot, so the two are one observation of
+    one MVCC state and the miss set is a genuine complement rather than a definitional one.
+    """
+    conn.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+    snapshot = rows(conn, "SELECT id, val FROM wm ORDER BY id")
+    watermark = one(conn, "SELECT max(updated_at) FROM wm")
+    conn.execute("COMMIT")
+    print(f"  {label}:               {snapshot}")
+    return snapshot, watermark
+
+
+def _watermark_run(conn: Any, watermark: Any) -> list[Any]:
+    """What an incremental extract would return for this watermark, right now."""
+    return rows(conn, "SELECT id, val, updated_at FROM wm WHERE updated_at > %s", (watermark,))
+
+
 def measure_6_out_of_order_commit() -> None:
     heading("6. THE OUT-OF-ORDER COMMIT -- the row no watermark run will ever return")
     with clean_env(), connect() as setup:
@@ -358,30 +385,19 @@ def measure_6_out_of_order_commit() -> None:
         print(f"  fast txn stamped id=2 at t2 = {t2.isoformat()} and COMMITTED")
         print(f"  t2 > t1: {t2 > t1}   (the stamps order by transaction START)")
 
-        extractor.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        snapshot_1 = rows(extractor, "SELECT id, val FROM wm ORDER BY id")
-        watermark = one(extractor, "SELECT max(updated_at) FROM wm")
-        extractor.execute("COMMIT")
-        print(f"  snapshot 1:               {snapshot_1}")
+        snapshot_1, watermark = _snapshot_and_watermark(extractor, "snapshot 1")
         print(f"  watermark recorded:       {watermark.isoformat()}  (== t2: {watermark == t2})")
 
         slow.execute("COMMIT")
         print("  slow txn COMMITS -- after the extract, carrying a stamp older than the watermark")
 
-        missed = rows(
-            extractor, "SELECT id, val, updated_at FROM wm WHERE updated_at > %s", (watermark,)
-        )
+        missed = _watermark_run(extractor, watermark)
         print(f"  WHERE updated_at > watermark: {missed}")
         time.sleep(1.0)
-        again = rows(
-            extractor, "SELECT id, val, updated_at FROM wm WHERE updated_at > %s", (watermark,)
-        )
+        again = _watermark_run(extractor, watermark)
         print(f"  the same query one second later: {again}   <- and forever")
 
-        extractor.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        snapshot_2 = rows(extractor, "SELECT id, val FROM wm ORDER BY id")
-        extractor.execute("COMMIT")
-        print(f"  snapshot 2:               {snapshot_2}")
+        snapshot_2, _ = _snapshot_and_watermark(extractor, "snapshot 2")
         changed = [a[0] for a, b in zip(snapshot_1, snapshot_2, strict=True) if a != b]
         print(f"  ids the SNAPSHOT DIFF catches: {changed}")
         print(f"  ids the WATERMARK catches:     {[r[0] for r in again]}")
@@ -553,7 +569,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     print("F-DB Task 0 probe -- local throwaway Postgres container, no secret involved.")
-    print(f"dsn: {dsn().replace('password=opl', 'password=***')}")
+    print(f"dsn: {redacted_dsn()}")
     measure_0_environment()
     if args.persistence:
         measure_1_persistence()

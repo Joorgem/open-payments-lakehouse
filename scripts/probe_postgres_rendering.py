@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import sys
 import time
+from typing import Any
 
 import psycopg
 from probe_postgres_session import (
@@ -98,6 +99,66 @@ def render_under(label: str, **env: str | None) -> tuple[str, ...]:
     return rendered
 
 
+def _which_float8_renderings_round_trip() -> None:
+    """The efd claim, closed by parsing the rendering back rather than by reading digits.
+
+    Two different strings prove nothing on their own -- the claim is that one of them LOSES
+    information, so the test casts the text back to float8 and compares it to the value.
+    """
+    heading("7b. WHICH float8 RENDERINGS ACTUALLY ROUND-TRIP")
+    with clean_env(), connect() as conn:
+        for efd in ("3", "1", "0", "-3"):
+            conn.execute("SELECT set_config('extra_float_digits', %s, false)", (efd,))
+            text = one(conn, "SELECT (0.1::float8 + 0.2::float8)::text")
+            back = one(conn, "SELECT (%s::float8) = (0.1::float8 + 0.2::float8)", (text,))
+            print(f"  extra_float_digits={efd:<3} ::text -> {text!r:<22} round-trips: {back}")
+
+
+def _the_date_misparse_is_silent(written: str) -> None:
+    """A writer's DMY rendering read back by an ISO reader: a different date, no error."""
+    heading("7c. THE DATE MISPARSE IS SILENT AND ASYMMETRIC")
+    with clean_env(), connect() as reader:
+        reparsed = one(reader, "SELECT (%s::timestamptz)::date::text", (written,))
+        original = one(reader, "SELECT (ts)::date::text FROM guc")
+    print(f"  a writer at DateStyle='SQL, DMY' renders: {written}")
+    print(f"  a reader at DateStyle='ISO, MDY' parses:  {reparsed}")
+    print(f"  the value actually stored is:             {original}")
+    print(f"  ROUND-TRIP: {'ok' if reparsed == original else 'BROKEN, and nothing raised'}")
+
+
+def _a_read_back_pin_defeats_pgoptions(baseline: tuple[str, ...]) -> None:
+    """T4's pin, applied inside the hostile environment and READ BACK.
+
+    ONLY THREE OF THE SEVEN PINS ARE UNDER ATTACK HERE, and the printout says which.
+    `bytea_output` and `client_encoding` are already correct at startup, so their `ok=True`
+    would be identical if `set_config` were a no-op -- they are not evidence that the pin
+    works. The Task 0 review caught the evidence document claiming otherwise.
+    """
+    heading("7d. A `SET` + READ-BACK PIN DEFEATS PGOPTIONS")
+    with libpq_env(**dict.fromkeys(LIBPQ_RENDERING_ENV, None)), libpq_env(**HOSTILE_ENV):
+        with connect() as conn:
+            before = {name: one(conn, f"SHOW {name}") for name in PINS}
+            # set_config(), not `SET`: `SET` is a utility statement and takes no parameter,
+            # so a literal-interpolated pin would be the one place in the extractor where a
+            # GUC value is concatenated into SQL.
+            for name, value in PINS.items():
+                conn.execute("SELECT set_config(%s, %s, false)", (name, value))
+            after = {name: one(conn, f"SHOW {name}") for name in PINS}
+            pinned = row(conn, RENDER_SQL)
+    attacked = {"TimeZone", "DateStyle", "extra_float_digits"}
+    for name, wanted in PINS.items():
+        got = after[name]
+        mark = "ATTACKED" if name in attacked else "not attacked"
+        print(
+            f"  {name:<18} startup={before[name]!r:<28} pinned={got!r:<20} "
+            f"ok={got == wanted}  ({mark})"
+        )
+    print(f"  rendered under the pin, inside the hostile environment: {pinned[:4]}")
+    print(f"  identical to the clean baseline: {pinned[:4] == baseline[:4]}")
+    print("  NOTE: `search_path` deviates from T4's 'pg_catalog, public' only because the")
+    print("  probe's tables live in their own schema. Every other pin is the ruling verbatim.")
+
+
 def measure_7_guc_matrix() -> None:
     heading("7. THE GUC MATRIX -- `col::text` is session-dependent, set from the SHELL")
     with clean_env(), connect() as setup:
@@ -112,46 +173,9 @@ def measure_7_guc_matrix() -> None:
     render_under("PGOPTIONS='-c extra_float_digits=0'", PGOPTIONS="-c extra_float_digits=0")
     hostile = render_under("ALL THREE HOSTILE AT ONCE", **HOSTILE_ENV)
     print(f"  baseline and hostile render the SAME bytes: {baseline[:4] == hostile[:4]}")
-
-    heading("7b. WHICH float8 RENDERINGS ACTUALLY ROUND-TRIP")
-    # The plan says efd=0 "DOES NOT round-trip". Two different strings prove nothing on
-    # their own -- the claim is that one of them loses information, so it is closed by
-    # parsing the rendering back and comparing to the value, not by reading the digits.
-    with clean_env(), connect() as conn:
-        for efd in ("3", "1", "0", "-3"):
-            conn.execute("SELECT set_config('extra_float_digits', %s, false)", (efd,))
-            text = one(conn, "SELECT (0.1::float8 + 0.2::float8)::text")
-            back = one(conn, "SELECT (%s::float8) = (0.1::float8 + 0.2::float8)", (text,))
-            print(f"  extra_float_digits={efd:<3} ::text -> {text!r:<22} round-trips: {back}")
-
-    heading("7c. THE DATE MISPARSE IS SILENT AND ASYMMETRIC")
-    written = dmy[0]
-    with clean_env(), connect() as reader:
-        reparsed = one(reader, "SELECT (%s::timestamptz)::date::text", (written,))
-        original = one(reader, "SELECT (ts)::date::text FROM guc")
-    print(f"  a writer at DateStyle='SQL, DMY' renders: {written}")
-    print(f"  a reader at DateStyle='ISO, MDY' parses:  {reparsed}")
-    print(f"  the value actually stored is:             {original}")
-    print(f"  ROUND-TRIP: {'ok' if reparsed == original else 'BROKEN, and nothing raised'}")
-
-    heading("7d. A `SET` + READ-BACK PIN DEFEATS PGOPTIONS")
-    with libpq_env(**dict.fromkeys(LIBPQ_RENDERING_ENV, None)), libpq_env(**HOSTILE_ENV):
-        with connect() as conn:
-            before = {name: one(conn, f"SHOW {name}") for name in PINS}
-            # set_config(), not `SET`: `SET` is a utility statement and takes no
-            # parameter, so a literal-interpolated pin would be the one place in the
-            # extractor where a GUC value is concatenated into SQL.
-            for name, value in PINS.items():
-                conn.execute("SELECT set_config(%s, %s, false)", (name, value))
-            after = {name: one(conn, f"SHOW {name}") for name in PINS}
-            pinned = row(conn, RENDER_SQL)
-    for name, wanted in PINS.items():
-        got = after[name]
-        print(f"  {name:<18} startup={before[name]!r:<28} pinned={got!r:<20} ok={got == wanted}")
-    print(f"  rendered under the pin, inside the hostile environment: {pinned[:4]}")
-    print(f"  identical to the clean baseline: {pinned[:4] == baseline[:4]}")
-    print("  NOTE: `search_path` deviates from T4's 'pg_catalog, public' only because the")
-    print("  probe's tables live in their own schema. Every other pin is the ruling verbatim.")
+    _which_float8_renderings_round_trip()
+    _the_date_misparse_is_silent(dmy[0])
+    _a_read_back_pin_defeats_pgoptions(baseline)
 
 
 # --------------------------------------------------------------------------------
@@ -192,6 +216,61 @@ def measure_8_cast_versus_output_function() -> None:
 # --------------------------------------------------------------------------------
 
 
+def _a_default_does_not_fire_on_update(conn: Any, watermark: Any) -> None:
+    """An UPDATE that does not touch `updated_at`, and what a watermark run then sees."""
+    before = one(conn, "SELECT updated_at FROM blind WHERE id = 1")
+    time.sleep(1.0)
+    conn.execute("UPDATE blind SET val = 'v1' WHERE id = 1")
+    after = one(conn, "SELECT updated_at FROM blind WHERE id = 1")
+    print(f"  updated_at before UPDATE: {before.isoformat()}")
+    print(f"  updated_at after  UPDATE: {after.isoformat()}")
+    print(f"  the DEFAULT fired on UPDATE: {after != before}   <- a DEFAULT is INSERT-time only")
+    moved = rows(conn, "SELECT id FROM blind WHERE updated_at > %s", (watermark,))
+    print(f"  rows a watermark run sees after that UPDATE: {moved}")
+
+
+def _a_delete_leaves_nothing(conn: Any, watermark: Any) -> None:
+    """A hard DELETE against a watermark run -- WITH THE POSITIVE CONTROL.
+
+    The control is the whole point and the Task 0 review is why it is here. The five rows
+    are written by one `INSERT ... generate_series`, so every one of them carries EXACTLY
+    `max(updated_at)`; `WHERE updated_at > watermark` is therefore empty at every moment of
+    this function, and the empty list after the DELETE would print identically if the DELETE
+    were removed. A zero that the path could not have made non-zero is not evidence about
+    the path -- standing decision §4.6 read in the direction that catches a false negative
+    rather than a false positive.
+
+    So the last two lines insert a row whose `updated_at` DOES clear the watermark and show
+    the same query returning it. Only after that does the empty list above mean "the DELETE
+    is invisible" rather than "this query never returns anything".
+    """
+    count_before = one(conn, "SELECT count(*) FROM blind")
+    conn.execute("DELETE FROM blind WHERE id = 5")
+    count_after = one(conn, "SELECT count(*) FROM blind")
+    after_delete = rows(conn, "SELECT id FROM blind WHERE updated_at > %s", (watermark,))
+    print(f"  rows: {count_before} -> {count_after} after a hard DELETE")
+    print(f"  a watermark run after the DELETE sees: {after_delete}  <- a DELETE leaves NOTHING")
+
+    conn.execute("INSERT INTO blind (id, val) VALUES (6, 'control')")
+    control = [r[0] for r in rows(conn, "SELECT id FROM blind WHERE updated_at > %s", (watermark,))]
+    print(f"  CONTROL -- after an INSERT that DOES clear the watermark: {control}")
+    print(f"  so the empty list above is a finding and not a dead query: {control == [6]}")
+
+
+def _the_four_time_functions(conn: Any) -> None:
+    """Which of the four are frozen for the whole transaction, and which move."""
+    stamps = "SELECT now(), transaction_timestamp(), statement_timestamp(), clock_timestamp()"
+    conn.execute("BEGIN")
+    first = row(conn, stamps)
+    time.sleep(0.5)
+    second = row(conn, stamps)
+    conn.execute("COMMIT")
+    names = ("now()", "transaction_timestamp()", "statement_timestamp()", "clock_timestamp()")
+    for name, a, b in zip(names, first, second, strict=True):
+        print(f"  {name:<26} stmt1={a.isoformat()}  moved by stmt2: {b != a}")
+    print(f"  now() IS transaction_timestamp(): {first[0] == first[1] and second[0] == second[1]}")
+
+
 def measure_9_watermark_blind_spots() -> None:
     heading("9. `DEFAULT now()` ON UPDATE, A HARD DELETE, AND THE FOUR TIME FUNCTIONS")
     with clean_env(), connect() as conn:
@@ -202,44 +281,9 @@ def measure_9_watermark_blind_spots() -> None:
         )
         conn.execute("INSERT INTO blind SELECT g, 'v0' FROM generate_series(1, 5) AS g")
         watermark = one(conn, "SELECT max(updated_at) FROM blind")
-        before = one(conn, "SELECT updated_at FROM blind WHERE id = 1")
-        time.sleep(1.0)
-        conn.execute("UPDATE blind SET val = 'v1' WHERE id = 1")
-        after = one(conn, "SELECT updated_at FROM blind WHERE id = 1")
-        print(f"  updated_at before UPDATE: {before.isoformat()}")
-        print(f"  updated_at after  UPDATE: {after.isoformat()}")
-        print(
-            f"  the DEFAULT fired on UPDATE: {after != before}   <- a DEFAULT is INSERT-time only"
-        )
-        moved = rows(conn, "SELECT id FROM blind WHERE updated_at > %s", (watermark,))
-        print(f"  rows a watermark run sees after that UPDATE: {moved}")
-
-        count_before = one(conn, "SELECT count(*) FROM blind")
-        conn.execute("DELETE FROM blind WHERE id = 5")
-        count_after = one(conn, "SELECT count(*) FROM blind")
-        after_delete = rows(conn, "SELECT id FROM blind WHERE updated_at > %s", (watermark,))
-        print(f"  rows: {count_before} -> {count_after} after a hard DELETE")
-        print(
-            f"  a watermark run after the DELETE sees: {after_delete}  <- a DELETE leaves NOTHING"
-        )
-
-        conn.execute("BEGIN")
-        first = row(
-            conn,
-            "SELECT now(), transaction_timestamp(), statement_timestamp(), clock_timestamp()",
-        )
-        time.sleep(0.5)
-        second = row(
-            conn,
-            "SELECT now(), transaction_timestamp(), statement_timestamp(), clock_timestamp()",
-        )
-        conn.execute("COMMIT")
-        names = ("now()", "transaction_timestamp()", "statement_timestamp()", "clock_timestamp()")
-        for name, a, b in zip(names, first, second, strict=True):
-            print(f"  {name:<26} stmt1={a.isoformat()}  moved by stmt2: {b != a}")
-        print(
-            f"  now() IS transaction_timestamp(): {first[0] == first[1] and second[0] == second[1]}"
-        )
+        _a_default_does_not_fire_on_update(conn, watermark)
+        _a_delete_leaves_nothing(conn, watermark)
+        _the_four_time_functions(conn)
 
     heading("9b. NUMERIC THROUGH `::text`")
     with clean_env(), connect() as conn:

@@ -16,8 +16,8 @@ first written down after the run that produced it is not a prediction.
 
 ## 0. Task 0 — measured before a table existed
 
-The plan's Task 0 asked for eight measurements. F0 owed five of them: `docs/f0-validation-report.md`
-carries five premises — the egress claim, UC Volume upload, `bundle validate`, CNPJ snapshot
+The plan's Task 0 asked for eight measurements. **Five of them are ones F0 should have taken
+and did not:** `docs/f0-validation-report.md` carries five premises of its own — the egress claim, UC Volume upload, `bundle validate`, CNPJ snapshot
 availability, PTAX reachability — and **not one is about a database** (`grep -i postgres` → 0
 hits), while master spec §9 lists F0 as standing up "Docker Redpanda/**Postgres**/Spark".
 
@@ -38,16 +38,35 @@ workspace, four ids of three vintages, run 2026-08-15:
 | `01f19831-a0bf-17d9-a6ce-815a9b45ce74` | F-API (ADR 0016) | 2026-08-14 | `state: CLOSED` |
 | `01f19844-283f-1218-b6e5-73a3b1a3f342` | F-API §3.1 | 2026-08-14 | `state: CLOSED` |
 
-**The boundary is age, not the id.** Both F-API ids resolve; both older ids do not, across two
-different phases and two different authors. So this is Databricks' statement-history retention
-expiring somewhere between one and two days, **not** the "resolves to nothing" species this
-repository has struck twice.
+> **THE BOUND THIS SECTION FIRST PUBLISHED WAS TIGHTER THAN THE MEASUREMENT AND IS
+> RETRACTED.** It read *"retention expiring somewhere between one and two days"* and
+> *"the boundary is age, not the id"*. Neither is supported by four ids.
+>
+> **What the four actually bound.** The checks ran ≈05:42 UTC on 2026-08-15. The newest
+> failing id was published by F3, which ran **2026-08-13**; the oldest resolving id was
+> published by F-API, which ran **2026-08-14**. So the boundary lies somewhere between
+> roughly **8 and 35 hours** — a band that includes 24 h but is not bounded by it, and whose
+> lower half is the dangerous one. **No published id exists inside that band**, so no number
+> of extra checks against this repository's ~78 published ids can close it; only a statement
+> run deliberately and re-checked at intervals could.
+>
+> **And "age, not the id" claims a mechanism the data cannot isolate.** Every resolving id
+> comes from a single cluster of runs on one warehouse session. Age is confounded with
+> warehouse restart, with a fixed-size history buffer, and with per-day partitioning of the
+> statement store. **Retention is the most likely explanation and it is not the only one
+> consistent with the evidence**, which is a weaker sentence than the one first published
+> here and is the one the four ids earn.
+
+**What is not in doubt** is the direction and its consequence: two ids from two different
+phases and two different authors, both older, both gone; two newer, both present. This is not
+the "resolves to nothing" species this repository has struck twice — those ids never named a
+real execution, and these demonstrably did.
 
 **What follows, and it is a fact about every evidence document in this repository:** the
 statement ids published in `docs/f2-wave-1-*.md` and `docs/f3-*.md` — the ids that are the
 stated provenance for the vault's and the star's headline numbers — **can no longer be
 fetched by anyone.** F-API §3.1 already recorded that a `CLOSED` statement's rows cannot be
-read; what is new here is that after ~two days the statement cannot be found at all.
+read; what is new here is that past the boundary above the statement cannot be found at all.
 
 **This does not retract a single one of those numbers.** It retires the *mechanism* that was
 supposed to let a reader check them, and it means the guard has to be exercised **while a
@@ -62,7 +81,32 @@ that a hard DELETE produces **the first end-dating in this lakehouse**, and it r
 RFB retains baixadas"*, whose statement id is the first row of §0.1 and no longer resolves.
 
 So it was re-measured, today, over `bronze_cnpj_empresas`. Statement
-**`01f1986b-af6c-1eb4-8585-f5edb3e11638`**, `from_cache: None`:
+**`01f1986b-af6c-1eb4-8585-f5edb3e11638`**, `from_cache: None`.
+
+**The query is quoted in full, and §0.1 is why.** A statement id is the only handle a reader
+has on a published measurement, the API does not return statement text, and §0.1 has just
+established that the handle dies somewhere inside a day and a half. A number published against an
+id alone is therefore unverifiable almost immediately — so the method goes in the document:
+
+```sql
+SELECT COUNT(*)                                                     AS keys_total,
+       SUM(CASE WHEN in_jun=1 THEN 1 ELSE 0 END)                    AS jun_keys,
+       SUM(CASE WHEN in_jul=1 THEN 1 ELSE 0 END)                    AS jul_keys,
+       SUM(CASE WHEN in_jun=1 AND in_jul=0 THEN 1 ELSE 0 END)       AS departed,
+       SUM(CASE WHEN in_jun=0 AND in_jul=1 THEN 1 ELSE 0 END)       AS arrived,
+       SUM(CASE WHEN k IS NULL THEN 1 ELSE 0 END)                   AS null_keys
+FROM (SELECT cnpj_basico AS k,
+             MAX(CASE WHEN _snapshot_month='2026-06' THEN 1 ELSE 0 END) AS in_jun,
+             MAX(CASE WHEN _snapshot_month='2026-07' THEN 1 ELSE 0 END) AS in_jul
+      FROM workspace.default.bronze_cnpj_empresas
+      WHERE _snapshot_month IN ('2026-06','2026-07')
+      GROUP BY cnpj_basico)
+```
+
+`GROUP BY cnpj_basico` rather than `COUNT(DISTINCT …)` is standing decision §4.8 — a
+`COUNT(DISTINCT a,b,c)` drops NULL-bearing rows and cost this repository 8,761 once. `GROUP BY`
+keeps NULL as its own group, which is what makes `null_keys` a real check rather than a
+tautology.
 
 | | value |
 |---|---|
@@ -77,16 +121,35 @@ So it was re-measured, today, over `bronze_cnpj_empresas`. Statement
 so empresas end-dating is still unexercised, and this phase's "first" is not inherited from a
 citation but re-derived from the table.
 
-**Two cross-checks that were not asked for and are worth more than the number:**
+**One cross-check that is real, and two this section first published that were not:**
 
-- **69,062,849 is exactly the published `hub_empresa` count**, so the bronze-side distinct key
-  count and the vault-side hub count agree without either being derived from the other.
-- **433,702 is not a new number.** `docs/f1.4b-pr-b-run-evidence.md:2324` already published it
-  as the empresas month-over-month delta. This measurement reproduces it from a different
-  decomposition — a `GROUP BY` over bronze rather than F1.4b's row-count table — and
-  68,629,147 + 433,702 = 69,062,849 closes exactly. **It was very nearly published here as a
-  discovery**; the grep that caught it is the same one this project's retraction rule is built
-  on, run before writing rather than after.
+- **EACH MONTH IS UNIQUE ON `cnpj_basico`, and that is the new fact.**
+  `docs/f1.4b-pr-b-run-evidence.md` §21.2 is headed *"Row counts"* and gives empresas as
+  68,629,147 and 69,062,849. The query above counts **distinct keys** and returns the same two
+  numbers. Distinct keys equal rows in both months, so neither month carries a duplicate
+  `cnpj_basico` — which is the fact that makes a row-count table and a key-count query
+  comparable at all, and which nothing in this repository had stated.
+
+> **TWO CROSS-CHECKS PUBLISHED HERE FIRST WERE CIRCULAR, AND THEY ARE RETRACTED RATHER THAN
+> QUIETLY REPLACED** — the section was about not inheriting an unverified claim, and it
+> shipped two of its own.
+>
+> - *"69,062,849 is exactly the published `hub_empresa` count, so the bronze-side distinct key
+>   count and the vault-side hub count agree **without either being derived from the other**."*
+>   **False.** `hub_empresa` is loaded **from** `bronze_cnpj_empresas`
+>   (`src/opl/vault/domains/cnpj.py` records estabelecimentos as the *second* feed, so empresas
+>   is the first). It is one source through two paths. That is still a genuine check — it says
+>   the hub loader neither dropped nor invented a key over 69 million of them — but it is not
+>   two independent sources, and the sentence claimed it was.
+> - *"68,629,147 + 433,702 = 69,062,849 closes exactly."* **An identity, not a check.** The
+>   same statement reports `departed = 0`, under which `jul = jun + arrived` cannot fail unless
+>   the query contradicts itself. And `f1.4b`'s `delta` column *is*
+>   69,062,849 − 68,629,147, so this was the same subtraction of the same two figures — not,
+>   as claimed, "a different decomposition".
+>
+> **433,702 is still not a new number**, and that half stands: `f1.4b` §21.2 published it. It
+> was very nearly written up here as a discovery, and the grep that caught it ran before
+> writing rather than after.
 
 **Method note, because it cost a statement.** The first attempt expressed the anti-join as a
 correlated `NOT EXISTS` with a null-safe `<=>`, chosen to avoid the phantom-departure defect
@@ -101,7 +164,7 @@ repair and what standing decision §4.8 prescribes anyway, and it yields arrival
 **Controller-verified.** The pool is not an artefact anywhere in this repository:
 `POOL_SIZE = 1024` and `POOL_SEED = 20260812` are module constants
 (`src/opl/generator/profiles.py:118,124`) and the draw runs **inside the Databricks job**,
-because `src/opl/generator/cnpj_pool.py:22` deliberately imports no pyspark and no SDK.
+because `src/opl/generator/cnpj_pool.py:20-21` deliberately imports no pyspark and no SDK.
 
 Extracted once with the generator's own query, statement
 **`01f1986b-c653-17e7-8c1d-807a684b8f45`**, `from_cache: None`:
@@ -116,7 +179,7 @@ ORDER BY sha2(concat(cnpj_basico, '20260812'), 256) LIMIT 1024
 | rows returned | 1,024 |
 | distinct | 1,024 |
 | accepted by `cnpj_pool.validated_pool` | 1,024, and sorted |
-| sha256 of the sorted key body | `82e6a447c28befd565eaedf0556bba1752da7b3ba7bdc8b87474cf2eba8aff18` |
+| sha256 of the sorted key body, `grep -v '^#' <file> \| sha256sum` | `82e6a447c28befd565eaedf0556bba1752da7b3ba7bdc8b87474cf2eba8aff18` |
 | min / max | `00057343` / `98418478` |
 | **keys carrying a LEADING ZERO** | **142 of 1,024** |
 
@@ -133,11 +196,14 @@ and the plan's §4 now says so with this number behind it.
 
 **Reported** by the Task 0 implementer unless marked otherwise. The artefact is
 **`scripts/probe_postgres.py`** plus three siblings (`_session`, `_container`, `_rendering`),
-re-runnable as one command and each standalone. **PostgreSQL 16.14, psycopg 3.2.3.**
+re-runnable as one command. *(Two of the three also run standalone; `_session` is a helper
+module with no `main()`, and this document first said all three did.)* **PostgreSQL 16.14, psycopg 3.2.3.**
 
 The persistence matrix sits behind `--persistence` because it runs `down -v`: an unguarded
 default would delete Task 3's seed. The probe also **broke this repository's own 800-line
-ceiling at 1,032 lines** — the largest file in the tree — in the artefact whose entire argument
+ceiling at 1,032 lines** — the largest **Python** file in the tree, though not the largest file: three evidence
+documents and `scripts/merchant_cnpj_pool.txt`, committed three commits earlier on this same
+branch at 1,046 lines, were already bigger — in the artefact whose entire argument
 is measuring rather than assuming, and was split on seams already visible in its own output.
 
 #### The container does NOT forget, and revision 1 of the plan said it did
@@ -183,9 +249,21 @@ phase's headline that the mutation script does not author: no amount of care on 
 removes it, because `updated_at` orders by transaction **start** and visibility orders by
 transaction **commit**.
 
-The other two classes confirmed: **`DEFAULT now()` does not fire on `UPDATE`** (`…673055`
-before and after — a default is an INSERT-time default), and a hard **DELETE** takes 5 rows to
-4 with the watermark returning `[]`.
+The other two classes confirmed, and **they are not equally well measured**:
+
+- **`DEFAULT now()` does not fire on `UPDATE`** — `…673055` before and after. That is a
+  direct before/after comparison of the value itself, so it is a real control: it would have
+  shown a different number had the default fired.
+- **A hard DELETE takes 5 rows to 4 and the watermark returns `[]`.** The row count proves the
+  DELETE ran. **The `[]` proves less than it looks.** The watermark is `max(updated_at)` over
+  five rows written by one `INSERT … generate_series`, so every row carries *exactly* that
+  value and `WHERE updated_at > watermark` is empty at every point in the function — before
+  the DELETE as well as after. **The `[]` would print identically if the DELETE were removed.**
+  Standing decision §4.6 in its symmetric form: a zero that a path could not have made
+  non-zero is not evidence about that path. The class is real — a deleted row leaves nothing
+  to carry a timestamp, which needs no experiment — but this particular `[]` does not
+  demonstrate it, and §6's out-of-order measurement does it properly by printing
+  `SNAPSHOT DIFF catches [1]` beside `WATERMARK catches []`.
 
 #### The GUC matrix, and the silently wrong date
 
@@ -197,15 +275,34 @@ code change at all**:
 |---|---|
 | `PGTZ=America/Sao_Paulo` | `2026-08-03 14:23:01.123456-03` |
 | `PGDATESTYLE='SQL, DMY'` | `03/08/2026 17:23:01.123456 UTC` |
-| both, plus `PGOPTIONS='-c extra_float_digits=0'` | `03/08/2026 14:23:01.123456 -03`, and `0.3` |
+| `PGOPTIONS='-c extra_float_digits=0'` | baseline timestamp; `float8` renders `0.3` |
+| all three together (`PGOPTIONS='-c extra_float_digits=-3'`) | `03/08/2026 14:23:01.123456 -03`, and `0.3` |
+
+> **THE FOURTH ROW FIRST PUBLISHED HERE NAMED AN ENVIRONMENT THE PROBE NEVER RAN.** It read
+> *"both, plus `PGOPTIONS='-c extra_float_digits=0'`"* — but `probe_postgres_rendering.py`'s
+> `HOSTILE_ENV` sets **`-3`**, and the `0` row sets `PGOPTIONS` **alone**. The published row
+> was two real runs spliced and attributed to a third. **It is the species this document's own
+> §0.1 is about**, committed one section later: a number correct about one population, printed
+> as the answer about another. Both real rows are now given separately, and neither claim
+> weakens — `0` and `-3` both fail the float8 round-trip, which is the point.
 
 **The misparse, end to end:** a writer at `SQL, DMY` renders `03/08/2026`; a reader at
 `ISO, MDY` parses it as **2026-03-08**; the stored value was **2026-08-03**. Nothing raised.
 
-**The pin defeats it** — all seven GUCs read back correct inside that hostile environment, and
-the rendering is byte-identical to the clean baseline. And `col::text` is confirmed **not** the
-type's output function: `boolean` `'true'` vs `'t'`, `char(5)` `'ab'` vs `'ab   '` — the cast
-strips padding, which is why `char(n)` is excluded from the schema.
+**The pin defeats it** — every pinned GUC reads back correct inside that hostile environment,
+and the rendering is byte-identical to the clean baseline.
+
+**Stated precisely, because "all seven" overstates the test:** the hostile environment attacks
+**three** of the seven — `TimeZone`, `DateStyle`, `extra_float_digits`. `bytea_output` and
+`client_encoding` were already correct at startup, so their `ok` results would be identical if
+the pin were a no-op and **they are not evidence that it works**; `IntervalStyle` differs from
+the server default but was not attacked. And the probe pins `search_path` to
+`pg_catalog, probe_f_db`, **not** T4's `pg_catalog, public`, because it works in its own
+schema — the probe prints that deviation and this document did not carry it.
+
+`col::text` is confirmed **not** the type's output function: `boolean` `'true'` vs `'t'`,
+`char(5)` `'ab'` vs `'ab   '` — the cast strips padding, which is why `char(n)` is excluded
+from the schema.
 
 #### What Task 0 REFUSED, and it was right three times
 
@@ -214,6 +311,10 @@ strips padding, which is why `char(n)` is excluded from the schema.
    snapshot; it never escapes the *transaction* snapshot. **Controller-verified independently**:
    `SELECT peek(), pg_sleep(3), peek()` with a writer committing during the sleep gives
    **`READ COMMITTED` 3 → 13 (escapes)** and **`REPEATABLE READ READ ONLY` 3 → 3 (frozen)**.
+   *(Those two figures come from an ad-hoc `SELECT peek(), pg_sleep(3), peek()` against a
+   3-row table and are not reproducible from anything committed. The committed probe measures
+   the same claim over a 10-row table and prints **`0 → 10`** and **`0 → 0`** — same verdicts,
+   different fixture. A reader running the probe to check this line should expect the latter.)*
    The `READ COMMITTED` control is what makes the second reading evidence rather than a probe
    that missed. **The claim came into the plan from its own audit and would have shipped into
    ADR 0017.**

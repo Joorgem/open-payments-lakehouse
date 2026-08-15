@@ -46,6 +46,32 @@ def dsn() -> str:
     return os.environ.get(DSN_ENV_VAR, DEFAULT_DSN)
 
 
+def redacted_dsn(value: str | None = None) -> str:
+    """`value` with every `password=` token blanked, whatever the password is.
+
+    NOT a replace of the compose literal. This printed
+    `dsn().replace("password=opl", "password=***")` until the Task 0 review, which is a
+    redaction keyed to ONE password while `dsn()` reads `OPL_POSTGRES_DSN` by design -- so
+    any DSN whose password was not `opl` printed it in clear, onto stdout and from there
+    into whatever evidence document the output was pasted into. Master protocol §4.9 forbids
+    a secret in a source file; a redaction that only works on the throwaway one is the same
+    hole with a lid on it.
+
+    Splitting on whitespace is enough for libpq keyword/value form, which is what
+    `DEFAULT_DSN` is and what the compose stack hands out. A URI DSN
+    (`postgresql://user:pw@host/db`) does NOT have this shape, so it is refused rather than
+    passed through half-redacted -- returning a string this function cannot promise it
+    cleaned is the failure it exists to prevent.
+    """
+    raw = dsn() if value is None else value
+    if "://" in raw:
+        return f"<URI DSN, not rendered: {DSN_ENV_VAR} is set to a URI>"
+    return " ".join(
+        "password=***" if token.lower().startswith("password=") else token
+        for token in raw.split()
+    )
+
+
 def heading(text: str) -> None:
     print(f"\n=== {text} ===")
 
