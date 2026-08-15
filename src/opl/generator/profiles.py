@@ -368,9 +368,15 @@ _VAULT_APPLIED_DATES = ("2026-06-13T00:00:00.000Z", "2026-07-11T00:00:00.000Z")
 #   - The 2026-06-22 quote publishes at `dataHoraCotacao 2026-06-22 13:06:19.750415`, read
 #     as BRT, i.e. 2026-06-22T16:06:19.750415Z -- 29,179,750.415 ms after this window
 #     opens. Events land on whole 5,000 ms steps, so indices 0..5,835 precede publication
-#     and fall back to Friday 2026-06-19 (venda 5.14420) while 5,836..9,999 resolve
-#     same-day (venda 5.13950). The 415 us remainder puts the boundary strictly between two
-#     events, so no row sits on it and the `<=`-versus-`<` question decides nothing.
+#     and the USD rows among them fall back to Friday 2026-06-19 (venda 5.14420) while the
+#     USD rows in 5,836..9,999 resolve same-day (venda 5.13950) -- 2,864 and 2,041 of them.
+#     The BRL rows in both ranges convert at exactly 1 and consult no quote, which is why
+#     the rates attach to those two counts and never to the 5,836 / 4,164 ROW split.
+#     29,179,750 mod 5,000 = 4,750, so publication sits 249.585 ms BEFORE index 5,836: no
+#     row is on the boundary and the `<=`-versus-`<` question decides nothing. (It is the
+#     .750 SECOND that does that, not the "415 us remainder" this comment used to name --
+#     drop the microseconds and the clearance is still 250 ms. Retracted in
+#     `docs/f-api-run-evidence.md` §1.1 and in `opl.gold.fx`; this was a surviving copy.)
 #   - THE WEEKEND CROSSING IS NOT LOST. Those 5,836 rows reach back past Sunday 2026-06-21
 #     and Saturday 2026-06-20 to Friday 2026-06-19: a fallback across a whole weekend AND
 #     across the unquoted part of a business day, on real fact rows.

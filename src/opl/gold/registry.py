@@ -406,9 +406,11 @@ FACT_PAYMENT = PaymentFact(
     # producing a NULL column.
     derived=(
         # `fx_rate` IS NOT `AMOUNT_TYPE`, AND THAT IS THE WHOLE OF ITS TYPE ARGUMENT.
-        # `decimal(18, 2)` would round 5.14420 to 5.14 and put `amount_brl` about 0.08%
-        # wrong on every USD row -- plausibly, in a column nobody would re-derive. It
-        # carries the series' own five digits (`opl.gold.fx.FX_RATE_TYPE`).
+        # `decimal(18, 2)` would round 5.14420 to 5.14 and put `amount_brl` 0.0816% wrong
+        # on the 2,864 rows carrying that rate -- plausibly, in a column nobody would
+        # re-derive. NOT "every USD row": 5.13950 also rounds to 5.14 and is 0.0097% off
+        # the other way, which ADR 0016 records. It carries the series' own five digits
+        # (`opl.gold.fx.FX_RATE_TYPE`).
         #
         # NON-ADDITIVE, AND THE MEAN IS WRONG TOO. A ratio's sum is nonsense, and an
         # UNWEIGHTED mean over fact rows answers a question nobody asked: the rate a

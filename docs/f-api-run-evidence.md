@@ -61,8 +61,8 @@ on a *correct* extraction. `parse_float=Decimal` from the raw text preserves `5.
   neither a weekend nor a national holiday.** No unpredicted fallback case exists.
 - **Series floor: 1984-11-28** (compra 2814.00000, venda 2828.00000).
 
-**Extraction range: 2026-06-03 → 2026-08-01 inclusive — 60 calendar days, 43 weekdays, **42
-quotes**, gapless in business days *except 2026-06-04*.** The qualifier is not pedantry: the
+**Extraction range: 2026-06-03 → 2026-08-01 inclusive — 60 calendar days, 43 weekdays, 42
+quotes, gapless in business days *except 2026-06-04*.** The qualifier is not pedantry: the
 bullet two lines above this one names 2026-06-04 as the single weekday absence, and
 "**42 quotes, gapless in business days**" unqualified — the spelling this line, `ptax_window.py`
 and `bronze_ptax_job.yml` all carried — contradicts it inside six lines. The holiday IS the
@@ -283,6 +283,16 @@ publication is `ceil(29,179,750.415 / 5,000)` = **5,836**. Nothing lands on the 
 > 5,836 before the microseconds are considered. The conclusion holds and the mechanism was
 > misattributed — found by Task 3's reviewer, and corrected here rather than in the three source
 > comments alone, because this is the copy a reader quotes.
+>
+> > **AND TWO OF THOSE SOURCE COMMENTS STILL CARRIED THE RETRACTED MECHANISM UNTIL THE
+> > CONSOLIDATION PASS** — `src/opl/generator/profiles.py` ("The 415 us remainder puts the
+> > boundary strictly between two events") and `tests/test_payment_profiles.py` ("the
+> > publication carries a 415 us remainder"). Only `opl.gold.fx` was moved to 249.585 ms.
+> > Correcting "the copy a reader quotes" and leaving the copies a reader *runs* is this
+> > phase's signature defect in its purest form, and neither whole-branch reviewer named it.
+> > Re-derived: 29,179,750 mod 5,000 = 4,750, so publication is **249.585 ms before index
+> > 5,836** and **4,750.415 ms after index 5,835** — drop the microseconds entirely and the
+> > clearance is still **250 ms**. The 415 µs cannot be what separates them.
 
 | | rows | of which USD (these resolve a quote) | of which BRL (`fx_rate = 1.0`, no quote consulted) |
 |---|---|---|---|
@@ -444,6 +454,15 @@ plausible in magnitude, in a column nobody re-derives. Five is the scale the ser
 publishes at every magnitude it has ever carried: 5.14420 in 2026, 2828.00000 at the 1984
 floor, 0.82900 at the 1994 low, 71153.00000 at the 1993 high (§0.3 and `ptax_source`'s own
 measurements).
+
+> **MARKED, NOT EDITED — "every USD row" IS FALSE AND ADR 0016 CARRIES THE CORRECTION.**
+> 5.14420 → 5.14 is **0.0816%**, on the **2,864** rows carrying that rate. The other 2,041
+> USD rows carry **5.13950**, which rounds to 5.14 as well and is **0.0097%** off in the
+> *opposite* direction — an order of magnitude smaller. The argument survives on the worse
+> half and the type is unchanged. **Four source and test sites carried the wider phrasing
+> after ADR 0016 retracted it** (`bronze/rules.py`, `gold/fx.py`, `gold/registry.py`,
+> `tests/gold/test_fact_payment_fx.py`); all four now carry the split, which is the point of
+> marking a prediction rather than quietly editing one.
 
 **`SUM(amount_brl)` IS NOT `SUM(amount) × rate` TO THE CENT, and that is arithmetic rather
 than a defect.** `amount_brl` is `amount * fx_rate` rounded **HALF-UP to two decimals AT THE
@@ -1400,6 +1419,24 @@ which is wrong on the first two rows: `fc8dd8d` introduced both the 37,136 and t
 from the statement that tested the prediction and one from the run log, and the audit
 (`ac379c9`) came afterwards and found the third. **None of the six was found by the author of
 the sentence carrying it.**
+
+### 2.11.1 A CORRECTION THAT LANDS IN THE DOCUMENT AND NOT IN THE SOURCE IS HALF A CORRECTION
+
+**Two of this phase's own retractions were published here and left standing in code**, found
+by the consolidation pass sweeping for the shape rather than for the sentences the reviewers
+named. Both are the phase's signature defect turned on its own repairs: the copy a reader
+*quotes* was fixed and the copies a reader *runs* were not.
+
+| retracted in | the claim | still live in, until the sweep |
+|---|---|---|
+| §1.1, and `opl.gold.fx` | "the **415 µs** remainder puts the boundary strictly between two events" — it is the **.750 s**; 29,179,750 mod 5,000 = 4,750, so publication sits **249.585 ms** before index 5,836 and **250 ms** before it with the microseconds dropped entirely | `src/opl/generator/profiles.py`, `tests/test_payment_profiles.py` |
+| ADR 0016 Decision 4 | "`amount_brl` **0.08% wrong on every USD row**" — it is **0.0816%** on the 2,864 rows at 5.14420, and **0.0097%** the other way on the 2,041 at 5.13950 | `src/opl/bronze/rules.py`, `src/opl/gold/fx.py`, `src/opl/gold/registry.py`, `tests/gold/test_fact_payment_fx.py` |
+
+§1.1's own retraction says it was corrected "here rather than in the three source comments
+alone, because this is the copy a reader quotes" — and then two of the three were not
+corrected at all. **Neither whole-branch reviewer named either family**, which is the useful
+part: a review reads what it is pointed at, and a retraction is only closed by a `grep` for
+the retracted string across every tree that ships.
 
 ---
 

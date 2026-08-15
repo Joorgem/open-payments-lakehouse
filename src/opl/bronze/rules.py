@@ -278,8 +278,10 @@ def _unparseable_rate(column: str) -> Callable[[], Column]:
     a total by an amount nobody can name.
 
     `decimal(18,5)` is the series' own scale -- five digits, which `5.14420` needs and
-    which `decimal(18,2)` would round to `5.14`, putting `amount_brl` ~0.08% wrong on
-    every row while looking deliberate."""
+    which `decimal(18,2)` would round to `5.14`, putting `amount_brl` 0.0816% wrong on
+    every row carrying THAT rate while looking deliberate. (Not "every row": 5.13950
+    rounds to 5.14 too and is 0.0097% off the other way -- ADR 0016 retracts the wider
+    phrasing, and the argument stands on the worse half.)"""
     return lambda: F.col(column).cast(_RATE_TYPE).isNull()
 
 

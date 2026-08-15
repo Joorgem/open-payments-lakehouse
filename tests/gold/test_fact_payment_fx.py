@@ -255,8 +255,10 @@ def test_a_reporting_currency_row_converts_at_exactly_one_and_consults_no_quote(
 
 def test_the_rate_keeps_five_decimals_and_the_converted_amount_rounds_half_up(spark):
     """`fx_rate` IS NOT `AMOUNT_TYPE`, AND THE ARITHMETIC IS THE ARGUMENT. At
-    `decimal(18, 2)` the rate 5.14420 becomes 5.14 and `amount_brl` is about 0.08% wrong on
-    every USD row -- plausible in magnitude, in a column nobody re-derives.
+    `decimal(18, 2)` the rate 5.14420 becomes 5.14 and `amount_brl` is 0.0816% wrong on the
+    2,864 rows carrying that rate -- plausible in magnitude, in a column nobody re-derives.
+    NOT "every USD row", which is the phrasing ADR 0016 retracts: 5.13950 rounds to 5.14 as
+    well and is 0.0097% off in the other direction, an order of magnitude smaller.
 
     AND THE ROUNDING IS HALF-UP AT THE ROW, WHICH IS WHY `SUM(amount_brl)` IS NOT
     `SUM(amount) * rate` TO THE CENT. 1.23 x 1.50000 is 1.845 exactly: half-up gives 1.85 and

@@ -451,9 +451,14 @@ def test_the_fifth_profiles_window_straddles_the_bulletin_it_was_placed_for():
 
       1. The publication instant falls strictly INSIDE the window, so both populations are
          non-empty. It is 29,179,750.415 ms after the window opens.
-      2. NO EVENT LANDS ON THE BOUNDARY. Events are on whole 5,000 ms steps and the
-         publication carries a 415 us remainder, so `<=` and `<` cannot disagree about a
-         row -- which is the one way a boundary bug would be invisible.
+      2. NO EVENT LANDS ON THE BOUNDARY. Events are on whole 5,000 ms steps and
+         29,179,750 mod 5,000 = 4,750, so publication sits 249.585 ms BEFORE index 5,836 and
+         4,750.415 ms after index 5,835. `<=` and `<` cannot disagree about a row -- which
+         is the one way a boundary bug would be invisible. *(This said "the publication
+         carries a 415 us remainder", which is the retracted mechanism: drop the
+         microseconds entirely and the clearance is still 250 ms. It is the .750 SECOND that
+         does the work, not the 415 microseconds. `docs/f-api-run-evidence.md` §1.1 was
+         corrected for this and the two source comments carrying it were not; `fx.py` was.)*
       3. THE WHOLE WINDOW SITS INSIDE ONE CALENDAR DAY IN BOTH ZONES, so this profile adds
          exactly one `event_date_key` and its calendar day does not depend on a convention.
       4. It is strictly inside the vault's applied_date interval, which is the placement

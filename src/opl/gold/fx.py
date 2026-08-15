@@ -159,8 +159,11 @@ FX_RATE_DATE = "fx_rate_date"
 AMOUNT_BRL = "amount_brl"
 
 # `fx_rate` IS NOT `opl.gold.facts.AMOUNT_TYPE`, AND THE ARITHMETIC IS THE ARGUMENT.
-# `decimal(18, 2)` would round 5.14420 to 5.14 and put `amount_brl` about 0.08% wrong on
-# every USD row -- plausible in magnitude, in a column nobody re-derives. FIVE is the scale
+# `decimal(18, 2)` would round 5.14420 to 5.14 and put `amount_brl` 0.0816% wrong on the
+# 2,864 rows carrying that rate -- plausible in magnitude, in a column nobody re-derives.
+# NOT "0.08% on every USD row", which is the inherited phrasing ADR 0016 retracts: the other
+# 2,041 USD rows carry 5.13950, which rounds to 5.14 and is 0.0097% off in the OTHER
+# direction, an order of magnitude smaller. The argument stands on the worse half. FIVE is the scale
 # the series itself publishes, at every magnitude it has ever carried: 5.14420 in 2026,
 # 2828.00000 at the 1984 floor, 0.82900 at the 1994 low, 71153.00000 at the 1993 high. The
 # precision is 18 for `AMOUNT_TYPE`'s reason -- five integer digits are needed and a DECIMAL
