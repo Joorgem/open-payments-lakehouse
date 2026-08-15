@@ -552,6 +552,15 @@ visible as three numbers rather than hidden behind a rate that resolved.
 > got the empty interval `[t, t)` — no fan-out either way, so every count stayed right while the
 > surviving rate was arbitrary. Its test drives the same two landed rows in both orders and was
 > confirmed to FAIL against the old `orderBy`.
+>
+> > **MARKED, NOT EDITED — BOTH WITNESSES IN THAT SENTENCE ARE MISREAD, AND §3 CARRIES THE
+> > MEASUREMENT.** 2001-12-21 is ONE quote date with two rows; 1984-12-03/04/05 publish on one
+> > DATE at three different instants (11:31 / 12:40 / 18:50). No two distinct quote dates share
+> > a publication instant anywhere in 1984-11-28 .. 2026-08-13. The guard and its test are
+> > unchanged and correct; only the claim that the series witnesses the case is false. The
+> > sentence is left standing because §1 is not edited after the run — §0.4's remedy applies
+> > here too: **mark it where it lives**, and put the correction where a reader of §3 will find
+> > it against the ledger it belongs on.
 
 #### THE ZONE INVARIANT `opl.gold.fx` ASSERTED ABOUT ITSELF IS FALSE — measured in the fix pass
 
@@ -1326,11 +1335,47 @@ Accumulated as the phase runs rather than reconstructed at its end.
 
 - **The duplicate-quote disagreement branch.** One duplicate pair in 3.6 years, and it agrees
   (§0.7). The refusal has no witness. *(Task 5 note: `src/opl/gold/fx.py:51-52` calls
-  2001-12-21 "a second [pair], identical stamps" while `fx.py:416` and §1.3 describe that same
-  date as **two quote dates sharing one publication instant** — the `orderBy` tie-break case,
-  a different phenomenon — and it falls 22 years outside the 903-row window this count is
-  taken over. **The measured count stays ONE**; the repository does not agree with itself
-  about a second and neither reading is quoted here as settled.)*
+  2001-12-21 "a second [pair], identical stamps" while `fx.py`'s `rate_intervals` and §1.3
+  describe that same date as **two quote dates sharing one publication instant** — the
+  `orderBy` tie-break case, a different phenomenon — and it falls 22 years outside the 903-row
+  window this count is taken over. **The measured count stays ONE**; the repository does not
+  agree with itself about a second and neither reading is quoted here as settled.)*
+
+  > **SETTLED IN THE CONSOLIDATION PASS, AND `fx.py:51-52` IS RIGHT.** Single-day requests
+  > through `scripts/probe_ptax.py`'s own `fetch_window`: **2001-12-21 returns TWO rows for
+  > THAT ONE quote date**, both stamped `2001-12-21 23:55:00.0`, both `2.33030 / 2.33110`. It
+  > is a duplicate pair, it agrees, and it is outside the walked window — so the measured count
+  > inside the walk stays ONE and the disagreement refusal still has no witness either way.
+
+- **THE `orderBy` TIE-BREAK, WHICH HAS NO MEASURED WITNESS AT ALL.** `fx.rate_intervals`
+  orders by publication instant **and then** by quote date, and §1.3 and the source justified
+  the second key with two witnesses. **Neither is that phenomenon**: 2001-12-21 is one quote
+  date with two rows (above), and 1984-12-03 / 04 / 05 publish on 1984-12-05 at **11:31**,
+  **12:40** and **18:50** — one publication DATE, three distinct INSTANTS.
+
+  **Controller-verified**, one range request over the whole series through
+  `scripts/probe_ptax.py`'s `fetch_window`:
+
+  | | |
+  |---|---|
+  | series walked | 1984-11-28 .. 2026-08-13 |
+  | rows | **10,447** |
+  | distinct publication stamps | **10,446** |
+  | stamps carried by more than one row | **1** — `2001-12-21 23:55:00.0`, both rows one quote date |
+  | tightest gap between two DISTINCT instants | 27 ms — 2025-04-23, **within** one quote date |
+  | tightest gap between two distinct QUOTE DATES | **6 minutes** — 1996-04-10 published `1996-04-11 18:36`, 1996-04-11 published `18:30`, the later quote date first |
+
+  **One repeated stamp, and it is within a single quote date, is a complete answer**: two
+  distinct quote dates sharing an instant would necessarily produce a second repeated stamp,
+  and there is none in 42 years. `ptax_source.MAX_PUBLICATION_SPREAD`'s own walk had recorded
+  the six minutes and was never quoted against the tie-break's claim.
+
+  **The second key stays** and is not removed by this finding. `bronze_ptax` is written
+  `mode("append")`, so two quote dates under one stamp is reachable from a hand-repaired file,
+  a revised window or a second fetch — a landing, not a publication — and without the key the
+  surviving rate is arbitrary while every count stays right. It is exercised by
+  `test_two_quote_dates_sharing_one_publication_instant_do_not_depend_on_the_row_order` and by
+  nothing else, which is what this ledger is for.
 - **The holiday crossing, on fact rows.** No Brazilian national holiday falls in this phase's
   payment range (§0.6), so it is exercised over the series in the unit suite only.
 - **The below-the-series refusal.** Nothing in this phase's range sits below 2026-06-03.

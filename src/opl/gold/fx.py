@@ -49,7 +49,8 @@ would deny a payment between the two a rate that had already been published.
 
 THE DISAGREEMENT BRANCH SHIPS UNEXERCISED and must not be reported as working. Task 0 walked
 903 rows over 3.6 years and found one duplicate pair (2025-04-23, 27 ms apart); the fix pass
-found a second (2001-12-21, identical stamps). Both AGREE.
+found a second (2001-12-21, identical stamps). Both AGREE. `ptax_source` carries the walk over
+the whole series that bounds how far apart two publications of one quote can sit.
 
 --- WHY THE JOIN IS A HALF-OPEN INTERVAL AND CANNOT FAN OUT --------------------------
 
@@ -404,6 +405,34 @@ def _refuse_a_quote_date_that_does_not_reduce_to_one_rate(measured: Row) -> None
         )
 
 
+# THE `orderBy`'s SECOND KEY BELOW, AND THE TWO WITNESSES THIS MODULE CITED FOR IT THAT DO NOT
+# EXIST. The docstring said "two quote dates CAN share one publication instant -- 2001-12-21's
+# duplicate pair carrying identical stamps, and 1984-12-03/04/05 all published on 1984-12-05".
+# BOTH ARE MISREAD. 2001-12-21's two rows are ONE quote date, so `_reduced` collapses them to a
+# single row before this window is ever built (that is the duplicate-pair case, and line 51's
+# reading of it is the right one); and the 1984 three publish at 11:31, 12:40 and 18:50 -- one
+# publication DATE, three different INSTANTS.
+#
+# MEASURED, over 1984-11-28 .. 2026-08-13: 10,447 rows and 10,446 distinct publication stamps,
+# so exactly ONE stamp is carried by more than one row -- `2001-12-21 23:55:00.0`, and
+# single-day requests put both of its rows on the one quote date. The tightest gap between two
+# distinct instants belonging to two distinct QUOTE DATES is SIX MINUTES, in 42 years:
+# 1996-04-10 published 18:36 and 1996-04-11 published 18:30, the later quote date first.
+# `ptax_source.MAX_PUBLICATION_SPREAD` carries the same walk and was already right about it.
+#
+# SO THE SECOND KEY GUARDS AN EDIT AND A LANDING, NOT A PHENOMENON, and it stays for that
+# reason rather than for the one it was written with. `bronze_ptax` appends, so nothing stops
+# two rows for two quote dates arriving under one stamp from a hand-repaired file, a revised
+# window or a second fetch; and with `orderBy(_FX_FROM)` alone, WHICH of them gets the empty
+# interval `[t, t)` and which gets the range to the next bound is undetermined. No fan-out is
+# possible either way (the intervals still partition the timeline), so the row count and every
+# count taken off it stay right while the surviving rate is arbitrary. It ships UNEXERCISED and
+# `docs/f-api-run-evidence.md` §3 says so -- which is where a guard with no witness belongs.
+#
+# THE PROSE IS HERE RATHER THAN IN THE DOCSTRING for the reason the two blocks below state:
+# the function reached 55 of the project's 50-line cap with it inside.
+
+
 def rate_intervals(quotes: DataFrame) -> FxSeries:
     """The landed PTAX series as a HALF-OPEN INTERVAL TABLE: one row per `(currency,
     quote_date)`, in force from its own publication instant until the next quote's.
@@ -417,13 +446,8 @@ def rate_intervals(quotes: DataFrame) -> FxSeries:
     one lakehouse should not have two answers to "when does the open interval end", and
     `opl.gold.columns` argues why it is 2999-12-31 and not 9999-12-31 on this stack.
 
-    THE ORDER IS BY PUBLICATION AND THEN BY QUOTE DATE, AND THE TIE-BREAK IS NOT DECORATION.
-    Two quote dates CAN share one publication instant -- the fix pass found 2001-12-21's
-    duplicate pair carrying identical stamps, and 1984-12-03/04/05 all published on
-    1984-12-05 -- and with `orderBy(_FX_FROM)` alone, WHICH of those rows gets the empty
-    interval `[t, t)` and which gets the range to the next bound is undetermined. No fan-out
-    is possible either way (the intervals still partition the timeline), so the row count and
-    every count taken off it stay right while the surviving rate is arbitrary.
+    THE ORDER IS BY PUBLICATION AND THEN BY QUOTE DATE -- see the comment block above for
+    what that second key does, what it does NOT have a witness for, and why it stays.
     """
     reduced = _reduced(quotes)
     measured = _measured(reduced)

@@ -165,7 +165,12 @@ Three clauses, each of which does work:
   `REQUEST_COLUMNS` from `RESPONSE_COLUMNS`, and the extraction is **one single-day request
   per calendar day of the window** rather than one range call — a range response is
   unattributable many-to-one — **1984-12-03, 1984-12-04 and 1984-12-05 all publish on
-  1984-12-05**, three quote dates behind one stamp (`docs/f-api-run-evidence.md` §1.3). **The
+  1984-12-05**, three quote dates behind one publication *date*. *(This read "behind one
+  **stamp**", which is false and mattered elsewhere: the three publish at **11:31**, **12:40**
+  and **18:50** — three distinct instants. The many-to-one unattributability of a range
+  response is a property of the DATE and needs nothing stronger, so this clause is unaffected;
+  what the misreading did break is the `orderBy` tie-break's witness — see "What ships
+  UNEXERCISED" below.)* **The
   measured cost of this window is 60 requests of ~220 bytes in 52 s** — 42 quotes and 18
   empty envelopes, *not* the "42 requests" every document in the phase published until the
   run said otherwise (`docs/f-api-run-evidence.md` §2.5).
@@ -412,15 +417,30 @@ responsible for:
   refusal has no witness. It is two unexercised refusals and not one counted twice — bronze
   appends, so `ptax_source.sole_quote` and `fx.rate_intervals` see different populations.
 
-  > **AND THE REPOSITORY DOES NOT AGREE WITH ITSELF ABOUT A SECOND ONE, which is recorded
-  > rather than resolved by picking.** `fx.py:51-52` calls 2001-12-21 "a second [duplicate
-  > pair], identical stamps"; `fx.py:416` and `docs/f-api-run-evidence.md` §1.3 describe the
-  > same date as **two quote dates sharing one publication instant** — the `orderBy`
-  > tie-break case, which is a different phenomenon from two rows for one quote date. It is
-  > also **22 years outside** the 3.6-year window the "one pair in 903 rows" figure is taken
-  > over, so it cannot be added to that count in any case. **The measured count of duplicate
-  > pairs in the walked series is ONE**; whether 2001-12-21 is a second is unmeasured here
-  > and neither document should be quoted as if it were settled.
+  > **THE REPOSITORY DID NOT AGREE WITH ITSELF ABOUT A SECOND ONE. IT IS NOW MEASURED, AND
+  > `fx.py:51-52` IS THE READING THAT SURVIVES.** That line called 2001-12-21 "a second
+  > [duplicate pair], identical stamps"; `fx.py`'s `rate_intervals`,
+  > `tests/gold/test_fact_payment_fx.py` and `docs/f-api-run-evidence.md` §1.3 described the
+  > same date as **two quote dates sharing one publication instant** — the `orderBy` tie-break
+  > case, a different phenomenon. **Single-day requests settle it: 2001-12-21 returns TWO rows
+  > for THAT ONE quote date, both stamped `2001-12-21 23:55:00.0`, both `2.33030 / 2.33110`.**
+  > A duplicate pair, and an agreeing one. It is still **22 years outside** the 3.6-year window
+  > the "one pair in 903 rows" figure is taken over, so **the measured count of duplicate pairs
+  > in the walked series stays ONE** and 2001-12-21 is a second pair outside it. Either way the
+  > disagreement refusal keeps no witness.
+- **THE `orderBy` TIE-BREAK, WHICH HAS NO WITNESS AT ALL — ADDED HERE, HAVING BEEN PUBLISHED
+  WITH TWO.** `fx.rate_intervals` orders by publication instant *and then* quote date, and the
+  second key was justified by "two quote dates CAN share one publication instant", citing
+  2001-12-21 and 1984-12-03/04/05. Neither is that case (above, and the 1984 three publish at
+  11:31 / 12:40 / 18:50). **Measured over 1984-11-28 .. 2026-08-13 — 10,447 rows over 10,446
+  distinct publication stamps — exactly one stamp repeats, and both its rows belong to one
+  quote date. So no two distinct quote dates share a publication instant anywhere in 42 years
+  of series**, and the tightest gap between two that do differ is six minutes (1996-04-10
+  published 18:36, 1996-04-11 published 18:30 — the later quote date first, which
+  `ptax_source.MAX_PUBLICATION_SPREAD` already recorded). The key **stays**: `bronze_ptax`
+  appends, so the shape is reachable from a hand-repaired file or a revised window even though
+  BCB has never published it, and without the key the surviving rate is arbitrary. It is a
+  guard against an edit and a landing, exercised by a fixture and by nothing else.
 - **The holiday crossing, on fact rows.** No Brazilian national holiday falls between
   2026-06-13 and 2026-08-01 (Corpus Christi 2026 is 2026-06-04; the next is 2026-09-07), so
   **no payment in this lakehouse can cross one.** The holiday case is exercised over the

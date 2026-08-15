@@ -408,12 +408,23 @@ def test_a_rate_that_cannot_be_read_is_refused_and_the_distinct_count_cannot_see
 def test_two_quote_dates_sharing_one_publication_instant_do_not_depend_on_the_row_order(
     spark, empresas_bronze
 ):
-    """THE TIE-BREAK. `Window.partitionBy(currency).orderBy(publication)` had no second key,
-    and two quote dates CAN share one publication instant -- 2001-12-21's duplicate pair carries
-    identical stamps, and 1984-12-03/04/05 all published on 1984-12-05. One of the tied rows
-    gets the empty interval `[t, t)` and the other the range to the ceiling, and WHICH is
-    undetermined: no fan-out is possible either way, so the row count and every count taken off
-    it stay right while the surviving rate is arbitrary.
+    """THE TIE-BREAK, WHOSE FIXTURE IS ITS ONLY WITNESS -- and this docstring used to claim two
+    real ones that it does not have. `Window.partitionBy(currency).orderBy(publication)` had no
+    second key. It said "two quote dates CAN share one publication instant -- 2001-12-21's
+    duplicate pair carries identical stamps, and 1984-12-03/04/05 all published on 1984-12-05".
+    **Neither is that phenomenon.** 2001-12-21's two rows are ONE quote date, so `_reduced`
+    collapses them before this window exists; the 1984 three publish at 11:31, 12:40 and 18:50
+    -- one publication DATE, three instants. Measured over 1984-11-28 .. 2026-08-13: 10,447
+    rows over **10,446 distinct publication stamps**, so exactly one stamp repeats and both its
+    rows are one quote date. **No two distinct quote dates share a publication instant anywhere
+    in 42 years of series**, which is what that arithmetic settles rather than samples.
+
+    IT IS STILL DRIVEN, AND THE ROWS BELOW ARE WHY IT MAY BE. `bronze_ptax` appends, so two
+    quote dates under one stamp is reachable from a hand-repaired file or a revised window even
+    though BCB has never published one. One of the tied rows gets the empty interval `[t, t)`
+    and the other the range to the ceiling, and WHICH is undetermined: no fan-out is possible
+    either way, so the row count and every count taken off it stay right while the surviving
+    rate is arbitrary. `docs/f-api-run-evidence.md` §3 carries it as unexercised.
 
     ASSERTED AS ORDER-INDEPENDENCE RATHER THAN AS A CHOSEN WINNER, because that is the property:
     the same two landed rows in the other order must produce the same intervals. The later quote
