@@ -118,6 +118,20 @@ WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
 # because it starts no Spark session at all -- that is the "one module import" claim,
 # measured rather than argued.
 #
+# AND THE SEVENTH FILE ARRIVED IN F-DB TASK 2, AND IT WENT TO `vault-cnpj-hashing`
+# BECAUSE IT DOES PAY THE COST THE SIXTH DID NOT. `test_observation_axis.py` runs the
+# ledger over a synthetic two-observation merchant registry, so it requests `spark` and
+# pays one module setup -- which is exactly the condition the paragraph above says loads
+# the other candidate, and which `test_observation_grain.py` escaped by starting no
+# session. So the sixth file's placement is not a precedent for this one. Of the three
+# chunks that could take it, `vault-estab` and `vault-socios` are the pair under the
+# standing split warning (519, 555, 454, 632, 1,197 s on unchanged code) and
+# `vault-ledger-registry` carries the suite's single largest vault module at 785 s
+# alone; `test_satellite_diagnostics.py` is already here on that same "which chunk can
+# afford it" argument. It writes NO Delta table -- temp views only -- so what it adds is
+# a Spark module setup and no I/O. MEASURED ALONE ON THE BOX:
+#   tests/vault/test_observation_axis.py    3 passed in 79.97s (0:01:19)
+#
 # AND THE PARENTHESIS ABOVE IS WRONG, MEASURED RATHER THAN INHERITED. It says "five
 # files, including the two at 800 lines". At `dedee79`, the commit that wrote it, this
 # chunk's five were 234 / 800 / 758 / 378 / 218 -- ONE file at 800, not two, and the
@@ -127,7 +141,7 @@ WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
 # and its count is now six files at 467 / 747 / 96 / 758 / 378 / 218.
 CHUNKS=(
   "non-vault|--ignore=tests/vault"
-  "vault-cnpj-hashing|tests/vault/test_cnpj_vault.py tests/vault/test_hashing.py tests/vault/test_hashing_spark.py tests/vault/test_satellite_diagnostics.py"
+  "vault-cnpj-hashing|tests/vault/test_cnpj_vault.py tests/vault/test_hashing.py tests/vault/test_hashing_spark.py tests/vault/test_satellite_diagnostics.py tests/vault/test_observation_axis.py"
   "vault-estab|tests/vault/test_estabelecimento_vault.py"
   "vault-socios|tests/vault/test_socios_vault.py"
   "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_observation_grain.py tests/vault/test_registry.py tests/vault/test_reference_vault.py tests/vault/test_effectivity_window.py"
