@@ -220,7 +220,7 @@ def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: st
     string handed to `checkpoint_location` gave `.../_checkpoints//<table_key>`. That is
     the substituted-pinned-month pair this guard exists for, arriving in the one form
     the rebuild could not see it in. Not reachable from either entry point today -- both
-    bind `require_month`, and `test_task_wiring.py` locks that -- so this is
+    bind `require_month`, and `test_month_wiring.py` locks that -- so this is
     defence-in-depth; but the docstring above says this function refuses the pair rather
     than trusting it, and until now that was not true of every spelling of it."""
     require_month(month, action="read")
@@ -302,7 +302,7 @@ def add_audit_columns(
     own filename. The stamp every CNPJ ingest applies.
 
     Its signature is unchanged -- positional, with the RFB record source defaulted --
-    because two live entry points call it that way and `tests/test_task_wiring.py`
+    because two live entry points call it that way and `tests/test_month_wiring.py`
     pins `add_audit_columns(..., snapshot_month=<the one month local>)` as one of four
     consumers that must read the same local. What changed is that the four columns it
     shares with every other source now live in `add_common_audit_columns`, so a
