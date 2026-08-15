@@ -17,8 +17,10 @@ row escapes anyway.
 THREE SQL STATEMENTS FOR SIX CLASSES. `_apply` dispatches on the presence verb -- one
 INSERT, one UPDATE, one DELETE -- and every other difference between the classes is a
 boolean read off `ChangeClass`: whether the trigger is armed for the write, whether the
-transaction is held open, whether the payload changes. There is no branch per class, and
-adding a seventh would add no code.
+transaction is held open across snapshot 1's read, whether it commits before that read,
+whether the payload changes. `_phases` derives the run order from those booleans rather
+than from a list of names, so there is no branch per class anywhere and adding a seventh
+would add no code.
 
 IDEMPOTENT AGAINST A POPULATED DATABASE. `postgres:16` declares an anonymous volume;
 measured (evidence §0.4), `restart` and `stop`+`start` preserve it and only `down`+`up`
@@ -53,7 +55,6 @@ from typing import Any
 import psycopg
 from merchant_population import (
     CHANGE_CLASSES,
-    CLASSES_BY_NAME,
     SEED_UPDATED_CEILING,
     SNAPSHOT_1_ROWS,
     ChangeClass,
@@ -412,14 +413,34 @@ def _refuse_unless_seeded(conn: psycopg.Connection, schema: str) -> None:
     )
 
 
-def _hold_open(conn: psycopg.Connection, plan: Plan, schema: str) -> tuple[datetime, dict]:
-    """Stamp the out-of-order rows inside a transaction that is NOT committed here."""
-    klass = CLASSES_BY_NAME["out_of_order_commit"]
-    conn.execute("BEGIN")
-    applied = _apply(conn, klass, plan, schema)
-    ids = [row.merchant_id for row in plan.rows_for(klass.name)]
-    t1 = max(_updated_at(conn, schema, ids).values())
-    return t1, applied
+def _batch(
+    conn: psycopg.Connection, classes: Sequence[ChangeClass], plan: Plan, schema: str,
+    applied: dict[str, dict],
+) -> datetime | None:
+    """Apply `classes` on `conn` and return the latest stamp they left, if any."""
+    ids: list[str] = []
+    for klass in classes:
+        applied[klass.name] = _apply(conn, klass, plan, schema)
+        ids += [row.merchant_id for row in plan.rows_for(klass.name)]
+    stamps = _updated_at(conn, schema, ids).values()
+    return max(stamps) if stamps else None
+
+
+def _phases(plan: Plan) -> tuple[list[ChangeClass], list[ChangeClass], list[ChangeClass]]:
+    """The three phases, DERIVED from the class booleans rather than from a list of names.
+
+    Held open, committed before snapshot 1, everything else. A class is placed by what it
+    declares, so the ordering cannot drift out of step with the published table -- and the
+    two refusals below are the ones that would make the headline a fabrication if either
+    phase were empty.
+    """
+    held = [klass for klass in CHANGE_CLASSES if klass.held_open]
+    early = [klass for klass in CHANGE_CLASSES if klass.before_snapshot_1]
+    rest = [klass for klass in CHANGE_CLASSES if not (klass.held_open or klass.before_snapshot_1)]
+    _refuse_unless(bool(held), "no class is held open, so there is no out-of-order commit")
+    _refuse_unless(bool(early), "no class commits before snapshot 1, so the watermark stays t1")
+    _refuse_unless(bool(plan.seed), "the plan carries no rows")
+    return held, early, rest
 
 
 def mutate(conn: psycopg.Connection, plan: Plan, schema: str, release: Callable[[], None]) -> dict:
@@ -432,26 +453,23 @@ def mutate(conn: psycopg.Connection, plan: Plan, schema: str, release: Callable[
     rows -- not now, not ever.
     """
     _refuse_unless_seeded(conn, schema)
+    held, early, rest = _phases(plan)
     applied: dict[str, dict] = {}
     slow = connect()
     try:
-        t1, applied["out_of_order_commit"] = _hold_open(slow, plan, schema)
-        advance = CLASSES_BY_NAME["watermark_advance"]
-        applied[advance.name] = _apply(conn, advance, plan, schema)
-        touched = [row.merchant_id for row in plan.rows_for("watermark_advance")]
-        t2 = max(_updated_at(conn, schema, touched).values())
+        slow.execute("BEGIN")
+        t1 = _batch(slow, held, plan, schema, applied)
+        t2 = _batch(conn, early, plan, schema, applied)
         _refuse_unless(
             t2 > t1,
-            f"the watermark-advancing touch stamped {t2}, not after the held-open {t1}. "
+            f"the watermark-advancing write stamped {t2}, not after the held-open {t1}. "
             "Without t2 > t1 the out-of-order miss would be a fabrication.",
         )
         release()
         slow.execute("COMMIT")
     finally:
         slow.close()
-    for name in ("insert", "update_moving_updated_at",
-                 "update_not_moving_updated_at", "hard_delete"):
-        applied[name] = _apply(conn, CLASSES_BY_NAME[name], plan, schema)
+    _batch(conn, rest, plan, schema, applied)
     return {"t1": t1, "t2": t2, "classes": applied, **census(conn, schema)}
 
 
@@ -494,7 +512,9 @@ def _predictions() -> None:
         print(
             f"  {klass.name:<30} {klass.count:>5}  {klass.presence.value:<7}"
             f" moves_updated_at={klass.moves_updated_at!s:<6}"
-            f" held_open={klass.held_open!s:<6} payload_changed={klass.payload_changed}"
+            f" held_open={klass.held_open!s:<6}"
+            f" before_snapshot_1={klass.before_snapshot_1!s:<6}"
+            f" payload_changed={klass.payload_changed}"
         )
 
 

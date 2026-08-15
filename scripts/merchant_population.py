@@ -10,8 +10,10 @@ Task 4 hands `postgres_source.py` ("no I/O, the connection injected"), one task 
 
 THE CLASSES ARE A PROJECTION, NOT SIX CODE PATHS. T2 rules that an implementer who writes
 a branch per change class has produced the tautology. So a class here is a row in
-`CHANGE_CLASSES` carrying three independent booleans -- does the write arm the trigger,
-does it commit after snapshot 1, does it change the payload -- plus one presence verb.
+`CHANGE_CLASSES` carrying four independent booleans -- does the write arm the trigger, is
+it held open across snapshot 1's read, does it commit before that read, does it change the
+payload -- plus one presence verb. `seed_merchant_db._phases` reads those booleans to
+order the run, so no code anywhere names a class to decide what to do with it.
 `mutated()` is the ONE payload derivation and every UPDATE class runs exactly it; the
 seeder turns a class into SQL with three statements (one INSERT, one UPDATE, one DELETE)
 for all six. Adding a seventh class is a row in a table, not a branch.
@@ -288,10 +290,16 @@ class ChangeClass:
     presence: Presence
     #: does the write let the BEFORE UPDATE trigger stamp `updated_at`?
     moves_updated_at: bool
-    #: does the write commit AFTER snapshot 1 has been read?
+    #: is the write stamped BEFORE snapshot 1 and committed AFTER it?
     held_open: bool
     #: does the write change any column other than `updated_at`?
     payload_changed: bool
+    #: is the write stamped AND committed before snapshot 1 is read?
+    before_snapshot_1: bool = False
+
+    def __post_init__(self) -> None:
+        if self.held_open and self.before_snapshot_1:
+            raise ValueError(f"{self.name} cannot both be held open and commit before snapshot 1")
 
 
 CHANGE_CLASSES = (
@@ -306,7 +314,8 @@ CHANGE_CLASSES = (
     # -- the class would be a fabrication. This is that write: a touch that fires the trigger
     # and changes no other column, so it moves the watermark and is invisible to the payload
     # diff (it commits before snapshot 1 and never changes again). Reported as a finding.
-    ChangeClass("watermark_advance", 8, Presence.UPDATE, True, False, False),
+    ChangeClass("watermark_advance", 8, Presence.UPDATE, True, False, False,
+                before_snapshot_1=True),
     ChangeClass("insert", 32, Presence.INSERT, True, False, True),
     ChangeClass("update_moving_updated_at", 48, Presence.UPDATE, True, False, True),
     # The default-shaped trap: a write path with no trigger armed. `DEFAULT now()` is an

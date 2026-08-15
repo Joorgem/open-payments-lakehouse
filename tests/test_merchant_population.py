@@ -157,8 +157,25 @@ def test_the_watermark_advance_class_is_the_one_the_arithmetic_needs():
     diff as a class nobody published.
     """
     advance = population.CLASSES_BY_NAME["watermark_advance"]
-    assert advance.moves_updated_at and not advance.payload_changed and not advance.held_open
+    assert advance.moves_updated_at and not advance.payload_changed
+    assert advance.before_snapshot_1 and not advance.held_open
     assert advance.count == population.CLASSES_BY_NAME["out_of_order_commit"].count
+
+
+def test_exactly_one_class_is_held_open_and_no_class_claims_both_orderings():
+    """The ordering is DERIVED from these booleans, so an empty phase is a broken headline.
+
+    `seed_merchant_db._phases` reads them rather than naming classes, which is what keeps
+    the run order from drifting out of step with the published table.
+    """
+    assert [k.name for k in population.CHANGE_CLASSES if k.held_open] == ["out_of_order_commit"]
+    assert [k.name for k in population.CHANGE_CLASSES if k.before_snapshot_1] == [
+        "watermark_advance"
+    ]
+    with pytest.raises(ValueError, match="cannot both be held open"):
+        population.ChangeClass(
+            "impossible", 1, population.Presence.UPDATE, True, True, True, before_snapshot_1=True
+        )
 
 
 # --------------------------------------------------------------------------------
