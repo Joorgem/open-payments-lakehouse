@@ -103,7 +103,7 @@ _TABLE_TASKS = [
     # reads the THIRD landing root; the fetch is the first entry point that makes an
     # outbound HTTP call, so a literal subdir in it would write a landed file into a
     # directory no registered table's stream reads -- an ingest that drains nothing and
-    # reports SUCCESS, after 42 requests have already been made.
+    # reports SUCCESS, after 60 requests have already been made.
     "bronze_ptax_ingest",
     "fetch_ptax",
 ]
