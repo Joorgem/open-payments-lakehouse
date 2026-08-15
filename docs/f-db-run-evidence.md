@@ -129,7 +129,116 @@ counterparty CNPJ resolution" check exists to catch (*"a cast to numeric eating 
 is the failure it actually catches"*). It is why the Postgres `merchant.cnpj` column is `text`,
 and the plan's §4 now says so with this number behind it.
 
-### 0.4 The Postgres side
+### 0.4 The Postgres side — the artefact, and what it refused
 
-*(Task 0's container, isolation, GUC, stamp-gap and out-of-order-commit measurements, and the
-`scripts/probe_postgres.py` artefact. Written when they land.)*
+**Reported** by the Task 0 implementer unless marked otherwise. The artefact is
+**`scripts/probe_postgres.py`** plus three siblings (`_session`, `_container`, `_rendering`),
+re-runnable as one command and each standalone. **PostgreSQL 16.14, psycopg 3.2.3.**
+
+The persistence matrix sits behind `--persistence` because it runs `down -v`: an unguarded
+default would delete Task 3's seed. The probe also **broke this repository's own 800-line
+ceiling at 1,032 lines** — the largest file in the tree — in the artefact whose entire argument
+is measuring rather than assuming, and was split on seams already visible in its own output.
+
+#### The container does NOT forget, and revision 1 of the plan said it did
+
+| operation | data |
+|---|---|
+| fresh volume | `opl` holds **0 user tables** |
+| `docker compose restart postgres` | **survives**, same volume id |
+| `stop` + `start` | **survives**, same volume id |
+| `down` (no `-v`) + `up -d` | **DESTROYED**, new volume id, dangling volumes 5 → 6 |
+
+`postgres:16` declares an anonymous volume at `/var/lib/postgresql/data`. **So the seeder meets
+a populated database on the common path and must be idempotent** (T6) — the opposite of the
+risk revision 1 stated. **Exactly one orphaned PGDATA per `down`**, so `down -v`.
+
+#### The isolation rulings, with the controls that make them mean something
+
+- **One `SELECT` under `READ COMMITTED` is atomic.** 4.0 s scan, writer committing
+  `UPDATE`+`DELETE`+`INSERT` at t=2.0 s: all 10 rows `old`, the deleted row still returned, the
+  inserted row absent. **So the single-statement test revision 1 demanded cannot fail**, and
+  T3's justification was re-derived from "the extraction is more than one statement".
+- **Batched keyset read under `READ COMMITTED` smears**: `[(1,old),(2,old),(3,old),(4,new)…]`
+  — **9 rows read from a 10-row table**, one deleted mid-read and one inserted behind the
+  cursor. No instant contains that answer.
+- **`REPEATABLE READ` holds** across two statements *and* across the same batched read.
+  `READ ONLY` refuses a write outright — which matters, because **`opl` is a SUPERUSER**
+  (`usesuper = True`), so nothing else stops the extractor writing to the database it observes.
+- **The stamp gap is real and the fix is ordering.** `BEGIN` then 2.5 s of work:
+  `transaction_timestamp()` **06:07:32.765107**, snapshot actually acquired at
+  **06:07:35.268244** — **gap 2.503 s** — and a row committed at 06:07:33.994255, *after* the
+  stamp, **is in the snapshot**. With the stamp as the transaction's **first statement**:
+  **gap 0.001 s, 0 rows in it.**
+
+#### The out-of-order commit — reproduced, and it is the phase's headline mechanism
+
+t1 = 06:07:38.093608 (slow transaction, held open); t2 = 06:07:38.601781 (fast, committed);
+extract records `watermark = t2`; the slow transaction then commits. `WHERE updated_at > t2`
+returns **`[]`**, and **`[]` again a second later**. The snapshot diff sees the row.
+
+**It was measured with a `BEFORE UPDATE` trigger in place** — i.e. with the *correct* fix for
+the other two watermark classes already applied. That is what makes it the one number in this
+phase's headline that the mutation script does not author: no amount of care on the source side
+removes it, because `updated_at` orders by transaction **start** and visibility orders by
+transaction **commit**.
+
+The other two classes confirmed: **`DEFAULT now()` does not fire on `UPDATE`** (`…673055`
+before and after — a default is an INSERT-time default), and a hard **DELETE** takes 5 rows to
+4 with the watermark returning `[]`.
+
+#### The GUC matrix, and the silently wrong date
+
+Baseline `TimeZone=Etc/UTC, DateStyle=ISO, MDY, extra_float_digits=1` →
+`2026-08-03 17:23:01.123456+00` / `1234.50` / `0.30000000000000004` / `true`. Then, **with no
+code change at all**:
+
+| environment | `timestamptz::text` |
+|---|---|
+| `PGTZ=America/Sao_Paulo` | `2026-08-03 14:23:01.123456-03` |
+| `PGDATESTYLE='SQL, DMY'` | `03/08/2026 17:23:01.123456 UTC` |
+| both, plus `PGOPTIONS='-c extra_float_digits=0'` | `03/08/2026 14:23:01.123456 -03`, and `0.3` |
+
+**The misparse, end to end:** a writer at `SQL, DMY` renders `03/08/2026`; a reader at
+`ISO, MDY` parses it as **2026-03-08**; the stored value was **2026-08-03**. Nothing raised.
+
+**The pin defeats it** — all seven GUCs read back correct inside that hostile environment, and
+the rendering is byte-identical to the clean baseline. And `col::text` is confirmed **not** the
+type's output function: `boolean` `'true'` vs `'t'`, `char(5)` `'ab'` vs `'ab   '` — the cast
+strips padding, which is why `char(n)` is excluded from the schema.
+
+#### What Task 0 REFUSED, and it was right three times
+
+1. **A plan row was FALSIFIED and is deleted.** T3 claimed a VOLATILE function "escapes the
+   statement snapshot **even under `REPEATABLE READ`**". Volatility escapes the *statement*
+   snapshot; it never escapes the *transaction* snapshot. **Controller-verified independently**:
+   `SELECT peek(), pg_sleep(3), peek()` with a writer committing during the sleep gives
+   **`READ COMMITTED` 3 → 13 (escapes)** and **`REPEATABLE READ READ ONLY` 3 → 3 (frozen)**.
+   The `READ COMMITTED` control is what makes the second reading evidence rather than a probe
+   that missed. **The claim came into the plan from its own audit and would have shipped into
+   ADR 0017.**
+2. **"rows silently duplicated or dropped" was over-claimed.** `WHERE id > :last` is strictly
+   increasing, so against an immutable primary key duplication is impossible *by construction*
+   — a guard against it would guard a state the mechanism cannot reach. Dropping is real. The
+   duplication belongs to **OFFSET** paging (`[1,2,3,3,4,…]`), now measured separately.
+3. **`extra_float_digits=3` buys nothing over the server default of 1** — both round-trip since
+   PG12 — and everything over an environment that sets 0. The pin stands; the reason was wrong.
+
+**And a fourth, which arrived from a bug.** The probe deadlocked itself, and the cause is a
+finding: a `READ ONLY` transaction that has merely *read* a table **blocks every `ALTER TABLE`
+on it** until it commits. So an extractor holding its snapshot across a multi-minute upload
+stops the operational database from being migrated — a sharper argument for committing before
+the upload than the xmin horizon this plan had.
+
+**Two hygiene notes the implementer recorded against itself:** the first persistence run used
+an unscoped `docker compose up -d`, which started Redpanda and moved the dangling-volume count
+while measuring it (re-run scoped; verdicts unchanged, box restored to the state it was found
+in). And its first GUC table **measured nothing about `float8`**, because `0.1 + 0.2` in SQL is
+*numeric* arithmetic and lands on exactly `0.3` under every setting — the test needs an
+explicit `::float8`, and any implementer writing T4's version needs the same cast.
+
+#### What Task 0 did not touch
+
+**No claim is made about `psycopg[binary]` on serverless** (plan §7 keeps it an open
+measurement) and **none about Databricks egress toward a laptop behind NAT** — both remain
+**argued**, and nothing in this probe can be read as testing either.
