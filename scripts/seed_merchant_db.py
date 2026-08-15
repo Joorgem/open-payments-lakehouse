@@ -443,7 +443,13 @@ def _phases(plan: Plan) -> tuple[list[ChangeClass], list[ChangeClass], list[Chan
     return held, early, rest
 
 
-def mutate(conn: psycopg.Connection, plan: Plan, schema: str, release: Callable[[], None]) -> dict:
+def mutate(
+    conn: psycopg.Connection,
+    plan: Plan,
+    schema: str,
+    release: Callable[[], None],
+    ready: Path | None = None,
+) -> dict:
     """The whole between-snapshots mutation, with `release()` standing in for snapshot 1.
 
     ORDER IS THE MECHANISM. The slow transaction stamps t1 and stays open; a touch that
@@ -451,6 +457,15 @@ def mutate(conn: psycopg.Connection, plan: Plan, schema: str, release: Callable[
     snapshot 1 records is t2 rather than t1; `release()` is where snapshot 1 is read; and
     only then does the slow transaction commit. `WHERE updated_at > t2` cannot return those
     rows -- not now, not ever.
+
+    `ready` EXISTS BECAUSE THE HAND-OFF IS A RACE, AND IT WAS MEASURED AS ONE. An extractor
+    that starts snapshot 1 as soon as it sees an `idle in transaction` session catches this
+    function BETWEEN t1 and t2 -- verified, watermark came back as the seed's own maximum --
+    and a snapshot 1 taken there records a watermark BELOW t1, which makes the out-of-order
+    rows perfectly visible to `WHERE updated_at > watermark` and deletes the headline while
+    every other count stays correct. So the readiness signal is written by the one function
+    that knows the invariant holds, carries t1 and t2 so the caller can check its own
+    watermark against t2, and nothing downstream has to infer readiness from the catalog.
     """
     _refuse_unless_seeded(conn, schema)
     held, early, rest = _phases(plan)
@@ -465,6 +480,8 @@ def mutate(conn: psycopg.Connection, plan: Plan, schema: str, release: Callable[
             f"the watermark-advancing write stamped {t2}, not after the held-open {t1}. "
             "Without t2 > t1 the out-of-order miss would be a fabrication.",
         )
+        if ready is not None:
+            ready.write_text(f"t1={t1.isoformat()}\nt2={t2.isoformat()}\n", encoding="utf-8")
         release()
         slow.execute("COMMIT")
     finally:
@@ -525,6 +542,11 @@ def _parse(argv: Sequence[str] | None) -> argparse.Namespace:
     release = parser.add_mutually_exclusive_group()
     release.add_argument("--release-on", type=Path, help="wait for this file, then commit")
     release.add_argument("--release-after", type=float, help="wait this many seconds, then commit")
+    parser.add_argument(
+        "--ready-on",
+        type=Path,
+        help="write this file once snapshot 1 may safely be taken; it carries t1 and t2",
+    )
     return parser.parse_args(argv)
 
 
@@ -553,7 +575,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             _predictions()
             _report("seeded", seed(conn, plan, args.schema))
             return 0
-        _report("mutated", mutate(conn, plan, args.schema, _release_from(args)))
+        measured = mutate(conn, plan, args.schema, _release_from(args), ready=args.ready_on)
+        _report("mutated", measured)
     return 0
 
 

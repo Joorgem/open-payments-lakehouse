@@ -1,0 +1,16 @@
+
+opl test suite, run as a reconciled partition of 5 chunks
+logs: .run-suite-logs/20260815-152347-109608
+
+COLLECTING (no tests run yet)
+  non-vault                1913 selected
+  vault-cnpj-hashing         68 selected
+  vault-estab                27 selected
+  vault-socios               27 selected
+  vault-ledger-registry     125 selected
+  (bare suite)             2160 selected, 20 deselected
+
+PARTITION
+  partition vs suite      0 in no chunk, 0 in no suite run, 0 in two chunks
+
+RUNNING

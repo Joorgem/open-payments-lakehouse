@@ -346,3 +346,44 @@ def test_the_landed_numeric_keeps_its_declared_scale_and_the_cnpj_keeps_its_zero
         f"count(*) FILTER (WHERE left(cnpj, 1) = '0'), count(*) FROM {SCHEMA}.merchant"
     ).fetchone()
     assert rendered == (1088, 151, 1088)
+
+
+# --------------------------------------------------------------------------------
+# The hand-off to Task 4/6, which is a race until something signals readiness
+# --------------------------------------------------------------------------------
+
+
+def test_the_readiness_file_appears_only_once_the_watermark_is_above_t1(conn, plan, tmp_path):
+    """MEASURED AS A RACE, not anticipated as one.
+
+    An extractor that starts snapshot 1 the moment it sees an `idle in transaction`
+    session catches `mutate` BETWEEN t1 and t2 -- verified against this container, the
+    watermark came back as the seed's own maximum. A snapshot 1 taken there records a
+    watermark BELOW t1, `WHERE updated_at > watermark` then returns the out-of-order rows
+    perfectly well, and the phase's one non-authored number disappears while every other
+    count stays correct.
+
+    So `mutate` writes the readiness file itself, after the `t2 > t1` refusal has passed,
+    and carries both stamps so a caller can check its own watermark against t2.
+    """
+    seeder.seed(conn, plan, SCHEMA)
+    ready = tmp_path / "ready"
+    seen: dict = {}
+
+    def release():
+        seen["exists"] = ready.exists()
+        seen["text"] = ready.read_text(encoding="utf-8")
+        seen["watermark"] = _snapshot(conn)[1]
+
+    measured = seeder.mutate(conn, plan, SCHEMA, release, ready=ready)
+    assert seen["exists"]
+    assert seen["text"] == f"t1={measured['t1'].isoformat()}\nt2={measured['t2'].isoformat()}\n"
+    assert seen["watermark"] == measured["t2"]
+    assert measured["t2"] > measured["t1"]
+
+
+def test_mutate_writes_no_readiness_file_when_it_is_not_asked_to(conn, plan, tmp_path):
+    """The signal is opt-in, and its absence must not be mistaken for readiness."""
+    seeder.seed(conn, plan, SCHEMA)
+    seeder.mutate(conn, plan, SCHEMA, release=lambda: None)
+    assert list(tmp_path.iterdir()) == []
