@@ -112,6 +112,7 @@ from opl.vault.hashing_spark import hash_key_column, refuse_non_string_columns
 from opl.vault.loading import (
     BRONZE_RECORD_SOURCE,
     SNAPSHOT_REF_DATE_COLUMN,
+    SnapshotAxis,
     changed_rows,
     hash_key_expression,
     read_snapshot_window,
@@ -287,6 +288,7 @@ def satellite_candidates(
     *,
     source_table: str,
     months: Sequence[str] | None,
+    axis: SnapshotAxis,
 ) -> DataFrame:
     """One row per (hash key, applied_date) in the window, carrying the payload, its
     `hash_diff` and the source row's `record_source`.
@@ -296,7 +298,7 @@ def satellite_candidates(
     operational identity of the run, the ref date is the date the RFB itself declares
     in its filename, and it is not month-end -- 2026-06 carries the 13th and 2026-07
     the 11th. Deriving a date from the month would invent a day."""
-    source = read_snapshot_window(spark, source_table, months)
+    source = read_snapshot_window(spark, source_table, months, axis=axis)
     payload = tuple(satellite.payload_columns)
     refuse_non_string_columns(source, (*hub.business_key_columns, *payload))
     keyed = source.select(
@@ -319,6 +321,7 @@ def _collapsed_duplicates(
     hub: Hub,
     source_table: str,
     months: Sequence[str] | None,
+    axis: SnapshotAxis,
 ) -> int:
     """Source rows in the window, minus distinct (hash key, `applied_date`) pairs.
 
@@ -339,7 +342,7 @@ def _collapsed_duplicates(
     values can share a hash key. Counting the raw columns would report fewer duplicates
     than the fold actually performs, which is the wrong direction for a number whose
     whole job is to make the fold visible."""
-    source = read_snapshot_window(spark, source_table, months)
+    source = read_snapshot_window(spark, source_table, months, axis=axis)
     keyed = source.select(
         hash_key_expression(hub).alias(hub.hash_key),
         F.col(SNAPSHOT_REF_DATE_COLUMN).alias(APPLIED_DATE),
@@ -379,6 +382,7 @@ def _diagnostics(
     source_table: str,
     months: Sequence[str] | None,
     ledger: DataFrame,
+    axis: SnapshotAxis,
     *,
     report: bool,
 ) -> tuple[int | None, int | None]:
@@ -393,7 +397,7 @@ def _diagnostics(
     if not report:
         return None, None
     return (
-        _collapsed_duplicates(spark, satellite, hub, source_table, months),
+        _collapsed_duplicates(spark, satellite, hub, source_table, months, axis),
         _candidate_departures(ledger),
     )
 
@@ -478,15 +482,22 @@ def load_satellite(
     rows."""
     _refuse_a_mismatched_hub(satellite, hub)
     _refuse_a_mismatched_grain(hub, grain, source_table)
+    # THE AXIS COMES OFF THE GRAIN AND IS NOT A SECOND PARAMETER. The grain was already
+    # required, `_refuse_a_mismatched_grain` has already pinned it to this source table,
+    # and its axis is the source's own declaration -- so an `axis=` argument here would
+    # be a second spelling of one decision whose disagreement would land as a window
+    # that silently selected nothing.
+    axis = grain.snapshot_axis
     candidates = satellite_candidates(
-        spark, satellite, hub, source_table=source_table, months=months
+        spark, satellite, hub, source_table=source_table, months=months, axis=axis
     )
     # DERIVED ON EVERY LOAD, INCLUDING ONE THAT REPORTS NOTHING FROM IT: this is the only
     # route by which `months` reaches `observation._window`'s refusal of a month with no
     # row on either side. Lazy past that refusal -- see `_candidate_departures`.
     ledger = observation_ledger(spark, grain, months=months)
     collapsed, departures = _diagnostics(
-        spark, satellite, hub, source_table, months, ledger, report=report_diagnostics
+        spark, satellite, hub, source_table, months, ledger, axis,
+        report=report_diagnostics,
     )
     before = rows_in(spark, target_table)
     _append_changed(spark, candidates, satellite, hub, target_table, load_date, before)

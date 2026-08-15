@@ -70,7 +70,8 @@ from opl.vault.columns import LOAD_DATE, RECORD_SOURCE
 from opl.vault.hashing_spark import refuse_non_string_columns
 from opl.vault.loading import (
     BRONZE_RECORD_SOURCE,
-    SNAPSHOT_MONTH_COLUMN,
+    MONTHLY_SNAPSHOT,
+    SnapshotAxis,
     earliest_record_source,
     hash_key_expression,
     link_hash_key_expression,
@@ -240,6 +241,7 @@ def link_candidates(
     *,
     source_table: str,
     months: Sequence[str] | None,
+    axis: SnapshotAxis = MONTHLY_SNAPSHOT,
 ) -> DataFrame:
     """One row per relationship in the window: the link's hash key, one hash-key
     reference per participating hub, and the `record_source` of the earliest month the
@@ -264,7 +266,7 @@ def link_candidates(
     under `hub.hash_key`, which ignores it. A link with two roled ends on one hub was
     therefore validated as two distinct columns and written as one -- the exact
     collision the registry guard exists to prevent, reached by passing it."""
-    source = read_snapshot_window(spark, source_table, months)
+    source = read_snapshot_window(spark, source_table, months, axis=axis)
     components = [name for hub in hubs for name in hub.business_key_columns]
     refuse_non_string_columns(source, components)
     keyed = source.select(
@@ -273,10 +275,10 @@ def link_candidates(
             hash_key_expression(hub).alias(end.reference_column(hub))
             for end, hub in zip(link.ends, hubs, strict=True)
         ),
-        F.col(SNAPSHOT_MONTH_COLUMN),
+        F.col(axis.column),
         F.col(BRONZE_RECORD_SOURCE),
     )
-    return earliest_record_source(keyed, reference_columns(link, hubs))
+    return earliest_record_source(keyed, reference_columns(link, hubs), axis=axis)
 
 
 def load_link(
@@ -289,6 +291,7 @@ def load_link(
     target_table: str,
     load_date: datetime,
     months: Sequence[str] | None = None,
+    axis: SnapshotAxis = MONTHLY_SNAPSHOT,
 ) -> LinkLoadResult:
     """Append every relationship of `source_table` that `target_table` does not already
     hold, stamped with `load_date`.
@@ -305,7 +308,7 @@ def load_link(
     refuse_unloaded_hubs(spark, link, hubs, hub_tables)
     before = rows_in(spark, target_table)
     candidates = link_candidates(
-        spark, link, hubs, source_table=source_table, months=months
+        spark, link, hubs, source_table=source_table, months=months, axis=axis
     )
     if before:
         candidates = candidates.join(

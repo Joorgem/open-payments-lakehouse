@@ -39,7 +39,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TypeVar
 
-from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN
+from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT, SnapshotAxis
 from opl.config import SENTINEL_MONTH
 from opl.vault import domains
 from opl.vault.months import validated_months
@@ -72,8 +72,26 @@ LOAD_DATE_REFERENCE = "{{job.start_time.iso_datetime}}"
 _FLAG_VALUES = {"true": True, "false": False}
 
 
-def required_months(value: str | None, *, action: str) -> tuple[str, ...]:
+def required_months(
+    value: str | None, *, action: str, axis: SnapshotAxis = MONTHLY_SNAPSHOT
+) -> tuple[str, ...]:
     """The window `action` will load, or refuse. Never `None`, never empty.
+
+    `axis` IS WHAT DECIDES WHETHER A WINDOW VALUE IS WELL-FORMED, AND IT RUNS BEFORE
+    SPARK. That placement is the whole value of this function and it is also what made
+    the hardcoded month rule blocking rather than cosmetic: a source whose snapshot axis
+    is an instant would have had every value of its window rejected here as "not
+    YYYY-MM", at the one refusal that fires before a serverless session is paid for, and
+    no amount of correctness further in would have been reached. The entry points take
+    it off the `BronzeTable` they have already resolved from `args[1]`, so it is the
+    source's own declaration rather than a third place the shape is decided.
+
+    THE PARAMETER IS STILL CALLED `months`, and that is deliberate rather than
+    overlooked: it is the name in every vault job YAML, in the documented launch
+    command, and in `MONTH_SEPARATOR`'s own worked example. Renaming a live job
+    parameter to generalise a validator would break every YAML for a vocabulary change;
+    what a non-monthly source needs is for its values to be ACCEPTED, which is what this
+    now does.
 
     ABSENCE IS REFUSED, NOT DEFAULTED, for `opl.config.require_month`'s reason and not
     for its consequence. A vault loader handed no window would read the whole of
@@ -106,7 +124,7 @@ def required_months(value: str | None, *, action: str) -> tuple[str, ...]:
     # is `tuple(months)`, which is `window` itself, so nothing usable is discarded here.
     validated_months(
         window,
-        column=SNAPSHOT_MONTH_COLUMN,
+        axis=axis,
         consequence=(
             "An empty or unmatched window makes this load write nothing and report "
             "success, and a vault table that gained no rows looks exactly like a vault "

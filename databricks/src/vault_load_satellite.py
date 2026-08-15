@@ -87,6 +87,16 @@ def grain_for(hub: Hub, source: BronzeTable) -> ObservationGrain:
         bronze=source.bronze,
         quarantine=source.quarantine,
         key_columns=hub.business_key_columns,
+        # THE AXIS IS THE SOURCE'S OWN DECLARATION, CARRIED RATHER THAN CHOSEN. This is
+        # the derivation T7 put the field on `BronzeTable` for: the ledger reads
+        # (business key, snapshot axis), the axis is a property of what was observed and
+        # not of the grain a caller happens to want, and every grain this repository has
+        # is built right here from a `(spec, BronzeTable)` pair. Declaring it on the
+        # grain instead would mean deciding it at each of these two call sites, where a
+        # source observed twice in one month could be paired with a monthly axis and
+        # produce a ledger that folds both observations into one and reports the
+        # departure as `observed`.
+        snapshot_axis=source.snapshot_axis,
     )
 
 
@@ -129,7 +139,11 @@ def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     spec = required_spec(args[0] if args else "", Satellite, loader="vault_load_satellite")
     source = bronze_table_spec(args[1] if len(args) > 1 else "")
-    months = required_months(args[2] if len(args) > 2 else "", action=f"load {spec.name}")
+    months = required_months(
+        args[2] if len(args) > 2 else "",
+        action=f"load {spec.name}",
+        axis=source.snapshot_axis,
+    )
     load_date = required_load_date(args[3] if len(args) > 3 else "")
     diagnostics = optional_flag(
         args[4] if len(args) > 4 else "", parameter=DIAGNOSTICS_PARAMETER

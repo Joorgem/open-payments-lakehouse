@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import pytest
 
+from opl.bronze.snapshot_axis import INSTANT_SNAPSHOT, MONTHLY_SNAPSHOT
 from opl.config import DEFAULT
 from opl.vault.observation import MONTH_COLUMN, ObservationGrain
 
@@ -94,3 +95,60 @@ def test_a_grain_can_be_built_against_the_configured_catalog_and_schema():
 
     assert grain.bronze_table == DEFAULT.table("bronze_cnpj_empresas")
     assert grain.quarantine_table == DEFAULT.table("bronze_cnpj_empresas_quarantine")
+
+
+def test_a_grain_defaults_to_the_monthly_axis():
+    """The field F-DB Task 2 added, and the reason nothing that existed had to change.
+
+    Every grain in `opl/vault/domains/cnpj.py` is constructed without naming an axis, so
+    this default is what keeps those three declarations byte-identical across the change
+    that made the axis a source's to declare."""
+    grain = ObservationGrain(
+        name="x", bronze_table="b", quarantine_table="q", key_columns=("cnpj_basico",)
+    )
+
+    assert grain.snapshot_axis == MONTHLY_SNAPSHOT
+    assert grain.snapshot_column == MONTH_COLUMN
+
+
+def test_the_axis_refusal_reads_THIS_GRAINS_AXIS_AND_NOT_THE_DEFAULT_ONE():
+    """THE GUARD THAT WOULD OTHERWISE HAVE STOPPED GUARDING IN SILENCE.
+
+    `observation.py`'s refusal of an axis-in-the-business-key compared against a MODULE
+    CONSTANT. Once the axis became the source's, that comparison keeps passing its own
+    test -- the CNPJ grains are monthly, so `_snapshot_month` is still refused -- while
+    admitting the one thing it exists to refuse for every other source: a grain keyed on
+    its OWN axis. The result is the failure the message names, a complete ledger of
+    nonsense with no error, reached through the guard rather than around it.
+
+    Both directions are asserted, because only the pair distinguishes "reads the grain's
+    axis" from "refuses both columns": the instant grain must REFUSE `_snapshot_at` and
+    ACCEPT `_snapshot_month`, which is an ordinary payload column to a Postgres source
+    and not an axis at all."""
+    with pytest.raises(ValueError, match=INSTANT_SNAPSHOT.column):
+        ObservationGrain(
+            name="x", bronze_table="b", quarantine_table="q",
+            key_columns=("merchant_id", INSTANT_SNAPSHOT.column),
+            snapshot_axis=INSTANT_SNAPSHOT,
+        )
+
+    permitted = ObservationGrain(
+        name="x", bronze_table="b", quarantine_table="q",
+        key_columns=("merchant_id", MONTH_COLUMN),
+        snapshot_axis=INSTANT_SNAPSHOT,
+    )
+    assert permitted.snapshot_column == INSTANT_SNAPSHOT.column
+
+
+def test_an_axis_named_at_the_configured_schema_entry_point_reaches_the_grain():
+    """`in_default_schema` is what both `grain_for` functions call, so an axis that did
+    not survive that constructor would be declared on `BronzeTable`, dropped here, and
+    default silently back to months -- with the ledger folding two same-month
+    observations into one and reporting a departure as `observed`."""
+    grain = ObservationGrain.in_default_schema(
+        name="hub_merchant", bronze="bronze_merchant", quarantine="bronze_merchant_quarantine",
+        key_columns=("merchant_id",), snapshot_axis=INSTANT_SNAPSHOT,
+    )
+
+    assert grain.snapshot_axis == INSTANT_SNAPSHOT
+    assert grain.snapshot_column == "_snapshot_at"

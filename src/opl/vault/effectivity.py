@@ -89,15 +89,14 @@ from opl.vault.hashing_spark import refuse_non_string_columns
 from opl.vault.links import refuse_mismatched_hubs
 from opl.vault.loading import (
     BRONZE_RECORD_SOURCE,
-    SNAPSHOT_MONTH_COLUMN,
     SNAPSHOT_REF_DATE_COLUMN,
+    SnapshotAxis,
     changed_rows,
     link_hash_key_expression,
     read_snapshot_window,
     rows_in,
 )
 from opl.vault.observation import (
-    MONTH_COLUMN,
     STATE_COLUMN,
     ObservationGrain,
     ObservationState,
@@ -224,49 +223,57 @@ def _refuse_a_mismatched_link_grain(
 
 def _observed(
     spark: SparkSession, satellite: EffectivitySatellite, link: Link, hubs: Sequence[Hub],
-    source_table: str, months: Sequence[str] | None,
+    source_table: str, months: Sequence[str] | None, axis: SnapshotAxis,
 ) -> DataFrame:
-    """One row per (link hash key, month) bronze shows, carrying the DELIVERED open.
+    """One row per (link hash key, snapshot) bronze shows, carrying the DELIVERED open.
 
     Deduplicated by the earliest `data_entrada_sociedade`, with `_ROWS` carrying how
     many source rows were folded into each -- see the module docstring for the rule and
-    for why this table's fold is the one that costs something."""
-    source = read_snapshot_window(spark, source_table, months)
+    for why this table's fold is the one that costs something.
+
+    `axis` IS THE GRAIN'S, AND THIS IS THE ONE MODULE WHERE THAT MATTERED SILENTLY.
+    Until F-DB it read `loading.SNAPSHOT_MONTH_COLUMN` here and
+    `observation.MONTH_COLUMN` in `_departures` -- two constants, two modules, one
+    value -- and `_statements` `unionByName`s the two frames together. They agreed only
+    because both spelled `_snapshot_month`. Taken off the grain, the observed side and
+    the closing side cannot name different columns, which is what that union needs and
+    what nothing was asserting."""
+    source = read_snapshot_window(spark, source_table, months, axis=axis)
     refuse_non_string_columns(
         source,
         [*identity_columns_of(link, hubs), satellite.entry_column],
     )
     keyed = source.select(
         link_hash_key_expression(link, identifying_hubs(link, hubs)).alias(link.hash_key),
-        F.col(SNAPSHOT_MONTH_COLUMN),
+        F.col(axis.column),
         F.col(SNAPSHOT_REF_DATE_COLUMN).alias(APPLIED_DATE),
         F.col(satellite.entry_column),
         F.col(BRONZE_RECORD_SOURCE).alias(RECORD_SOURCE),
     )
     return (
-        keyed.groupBy(link.hash_key, SNAPSHOT_MONTH_COLUMN, APPLIED_DATE)
+        keyed.groupBy(link.hash_key, axis.column, APPLIED_DATE)
         .agg(
             F.min(F.struct(satellite.entry_column, RECORD_SOURCE)).alias(_CHOSEN),
             F.count(F.lit(1)).alias(_ROWS),
         )
-        .select(link.hash_key, SNAPSHOT_MONTH_COLUMN, APPLIED_DATE, f"{_CHOSEN}.*", _ROWS)
+        .select(link.hash_key, axis.column, APPLIED_DATE, f"{_CHOSEN}.*", _ROWS)
     )
 
 
 def _reference_dates(spark: SparkSession, grain: ObservationGrain) -> DataFrame:
-    """`_snapshot_month` -> the RFB's own ref date, from BOTH sides of the ledger.
+    """The grain's snapshot axis -> the RFB's own ref date, from BOTH sides of the ledger.
 
     Quarantine as well as bronze, because the ledger reports on months where a key
     appears on either side and a closing row needs an `applied_date` for its month. A
     map built from bronze alone would drop a departure in a month whose bronze rows all
     failed the gate, which is a small population and exactly the wrong one to lose."""
     frames = [
-        spark.read.table(table).select(MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN)
+        spark.read.table(table).select(grain.snapshot_column, SNAPSHOT_REF_DATE_COLUMN)
         for table in (grain.bronze_table, grain.quarantine_table)
     ]
     return (
         frames[0].unionByName(frames[1])
-        .groupBy(MONTH_COLUMN)
+        .groupBy(grain.snapshot_column)
         .agg(F.min(SNAPSHOT_REF_DATE_COLUMN).alias(APPLIED_DATE))
     )
 
@@ -296,9 +303,9 @@ def _departures(
     return (
         closing.select(
             link_hash_key_expression(link, identifying_hubs(link, hubs)).alias(link.hash_key),
-            F.col(MONTH_COLUMN),
+            F.col(grain.snapshot_column),
         )
-        .join(_reference_dates(spark, grain), on=MONTH_COLUMN)
+        .join(_reference_dates(spark, grain), on=grain.snapshot_column)
     )
 
 
@@ -431,7 +438,9 @@ def load_effectivity_satellite(
     re-run finds every (key, applied_date) persisted, drops them before the window, and
     appends nothing."""
     _refuse_a_mismatched_link_grain(satellite, link, hubs, grain, source_table)
-    observed = _observed(spark, satellite, link, hubs, source_table, months)
+    observed = _observed(
+        spark, satellite, link, hubs, source_table, months, grain.snapshot_axis
+    )
     collapsed = observed.select(F.coalesce(F.sum(F.col(_ROWS) - 1), F.lit(0))).first()[0]
     departures = _departures(spark, link, hubs, grain, months)
     candidates = _statements(observed, departures, satellite, link)

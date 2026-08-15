@@ -32,6 +32,7 @@ from uuid import uuid4
 
 import pytest
 
+from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT
 from opl.vault import domains
 from opl.vault.hashing import hash_key
 from opl.vault.hubs import load_hub
@@ -122,7 +123,7 @@ def test_the_month_consequence_reaches_the_message():
     window does not tell an operator about an empty LEDGER. Asserted directly, because
     both callers pass a literal and nothing else would notice a swap."""
     with pytest.raises(ValueError, match="probe consequence"):
-        validated_months([], column="_snapshot_month", consequence="probe consequence")
+        validated_months([], axis=MONTHLY_SNAPSHOT, consequence="probe consequence")
 
 
 def test_a_count_of_a_table_that_does_not_exist_is_zero(spark):

@@ -47,7 +47,8 @@ from opl.vault.columns import LOAD_DATE, RECORD_SOURCE
 from opl.vault.hashing_spark import refuse_non_string_columns, zero_padded_column
 from opl.vault.loading import (
     BRONZE_RECORD_SOURCE,
-    SNAPSHOT_MONTH_COLUMN,
+    MONTHLY_SNAPSHOT,
+    SnapshotAxis,
     earliest_record_source,
     hash_key_expression,
     read_snapshot_window,
@@ -73,7 +74,8 @@ class HubLoadResult:
 
 
 def hub_candidates(
-    spark: SparkSession, hub: Hub, *, source_table: str, months: Sequence[str] | None
+    spark: SparkSession, hub: Hub, *, source_table: str, months: Sequence[str] | None,
+    axis: SnapshotAxis = MONTHLY_SNAPSHOT,
 ) -> DataFrame:
     """One row per business key in the window: the hash key, the padded business key,
     and the `record_source` of the EARLIEST month that key appeared in.
@@ -82,7 +84,7 @@ def hub_candidates(
     `opl.vault.loading.earliest_record_source` -- shared with `load_link`, which is
     insert-only for the same reason and would otherwise carry a second spelling of it.
     See that function for why `min` and not `first`."""
-    source = read_snapshot_window(spark, source_table, months)
+    source = read_snapshot_window(spark, source_table, months, axis=axis)
     refuse_non_string_columns(source, hub.business_key_columns)
     keyed = source.select(
         hash_key_expression(hub).alias(hub.hash_key),
@@ -96,10 +98,12 @@ def hub_candidates(
             else zero_padded_column(F.col(key.name), width=key.width).alias(key.name)
             for key in hub.business_keys
         ),
-        F.col(SNAPSHOT_MONTH_COLUMN),
+        F.col(axis.column),
         F.col(BRONZE_RECORD_SOURCE),
     )
-    return earliest_record_source(keyed, [hub.hash_key, *hub.business_key_columns])
+    return earliest_record_source(
+        keyed, [hub.hash_key, *hub.business_key_columns], axis=axis
+    )
 
 
 def load_hub(
@@ -110,6 +114,7 @@ def load_hub(
     target_table: str,
     load_date: datetime,
     months: Sequence[str] | None = None,
+    axis: SnapshotAxis = MONTHLY_SNAPSHOT,
 ) -> HubLoadResult:
     """Append every business key of `source_table` that `target_table` does not
     already hold, stamped with `load_date`.
@@ -124,7 +129,9 @@ def load_hub(
     a discrepancy nothing would fail on, and which a human reconciling a digest by hand
     would hit first."""
     before = rows_in(spark, target_table)
-    candidates = hub_candidates(spark, hub, source_table=source_table, months=months)
+    candidates = hub_candidates(
+        spark, hub, source_table=source_table, months=months, axis=axis
+    )
     if before:
         candidates = candidates.join(
             spark.read.table(target_table).select(hub.hash_key), on=hub.hash_key, how="left_anti"
