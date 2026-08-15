@@ -97,8 +97,8 @@ WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
 # over a small empresas fixture, which is `test_cnpj_vault.py`'s table and this chunk's
 # subject; and the two chunks under the standing split warning are `vault-estab` and
 # `vault-socios`, whose one file each was split off precisely because that pair crossed
-# the cap. Adding a sixth file to `vault-ledger-registry` (five files, including the two
-# at 800 lines) would load the other candidate. This chunk's third member is a fixture
+# the cap. Adding a sixth file to `vault-ledger-registry` (five files, ~~including the two
+# at 800 lines~~ -- ONE was at 800; corrected below) would load the other candidate. This chunk's third member is a fixture
 # the file builds itself, so what it costs is one more Spark module setup.
 #
 # AND THE SIXTH FILE ARRIVED, IN F-DB TASK 1, AND IS IN `vault-ledger-registry` ANYWAY --

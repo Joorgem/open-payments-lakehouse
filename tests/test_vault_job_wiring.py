@@ -639,8 +639,9 @@ def test_the_source_lock_catches_a_satellite_left_reading_the_table_it_was_copie
 def test_the_months_default_lock_catches_a_real_window_nobody_would_have_chosen(tmp_path):
     """Proves the default lock can fail, in the shape that is silent HERE and was not in
     bronze. A `months: "2026-07"` default makes every un-parameterised run of the partner
-    job close zero windows and report success -- the whole failure this file's last
-    section exists for, reached through a YAML default rather than through a launch."""
+    job close zero windows and report success -- the whole failure the window section of
+    `tests/test_vault_entry_points.py` exists for, reached through a YAML default rather
+    than through a launch."""
     root = _mutated(
         "vault_partner_job.yml", tmp_path, f'default: "{SENTINEL_MONTH}"', 'default: "2026-07"'
     )

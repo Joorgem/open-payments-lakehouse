@@ -30,7 +30,7 @@ file that does not use it is a declaration nobody maintains.
 THE `importlib` LOADER IS NOT HERE EITHER, and that is a different judgement rather
 than an oversight: neither half of this split executes a job script. Eighteen test
 modules load one by path, each with its own five-line `_load`, and hoisting that
-idiom is a change to eighteen files rather than a consequence of this split."""
+idiom is a change to twelve files rather than a consequence of this split."""
 from __future__ import annotations
 
 import ast

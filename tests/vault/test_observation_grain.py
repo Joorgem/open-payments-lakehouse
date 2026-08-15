@@ -4,10 +4,17 @@ named and before Spark is asked anything.
 SPLIT OUT OF `tests/vault/test_observation.py` BY F-DB TASK 1, at exactly 800 of this
 project's 800-line cap, with F-DB Task 2 (T7) still to give the grain a snapshot axis
 of its own. The seam is the one the two halves already had and nobody had drawn: this
-is the ONLY part of that module with no `tables` fixture and no `spark` in any
-signature. Everything left there reads four real Delta tables through
-`observation_ledger`; nothing here touches a table at all, so this file starts no
-Spark session and costs its `run_suite.sh` chunk one import.
+is the only part of that module that REFUSES AT CONSTRUCTION TIME -- before a session,
+a table or a row exists. Nothing here touches a table, so this file starts no Spark
+session and costs its `run_suite.sh` chunk one import.
+
+THE FIRST DRAFT OF THIS PARAGRAPH SAID "the ONLY part with no `tables` fixture and no
+`spark` in any signature", AND THAT WAS FALSE. Seven test functions in the pre-split
+module took no arguments, not six: `test_the_five_state_values_are_pinned` also takes
+none and reads no table, and it stayed -- it pins the ledger's state VOCABULARY, which
+is the ledger's and not the grain's. So "everything left there reads four real Delta
+tables" was false of it too. The seam is right; the sentence that described it was
+measured wrong, and `run_suite.sh` leans on this paragraph to justify a chunk.
 
 WHICH SIDE A TEST LANDS ON IS DECIDED BY WHAT MAKES IT CHANGE. `ObservationGrain` is a
 frozen dataclass with a validating `__post_init__`, and these six pin what that

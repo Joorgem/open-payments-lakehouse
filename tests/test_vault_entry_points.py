@@ -18,12 +18,15 @@ entry point, so the growth pressure is entirely on the other file, which is the 
 reason this one moved out rather than that one.
 
 WHAT IS SHARED, STATED RATHER THAN LEFT TO BE DISCOVERED. `_load` is the five-line
-`importlib` idiom eighteen test modules in this suite each carry privately --
+`importlib` idiom twelve test modules in this suite each carry privately --
 `test_gold_entry_points.py` among them -- so a copy here is this repository's existing
 practice and not a new second spelling. It is deliberately NOT hoisted into a plain
 module the way `tests/job_yaml.py` and `tests/task_ast.py` were: those hold readers
-that had drifted or would, and hoisting an idiom that is already eighteen-way
-duplicated is a change to eighteen files rather than a consequence of this split.
+that had drifted or would, and hoisting an idiom that is already twelve-way
+duplicated is a change to twelve files rather than a consequence of this split.
+MEASURED, because the first spelling of this said "eighteen" and reconciled under no
+reading: 19 test modules reference `spec_from_file_location`, 12 wrap it in a helper,
+10 of those call it `_load`, and the helpers run 5 to 12 lines rather than five.
 `_DIAGNOSTICS_SCRIPT` is the other shared name and it is one string: the YAML half
 reads it to check a task's arity, this half reads it to learn the parameter name the
 loader itself declares.
@@ -139,7 +142,7 @@ def test_no_vault_entry_point_raises_system_exit(script):
 
 # --- the window that cannot close a window -------------------------------------------
 #
-# The tension F2 wave 2 names, and the guard that closes it. `observation_ledger`
+# The tension F2 wave 1's workspace run names, and the guard that closes it. `observation_ledger`
 # derives its key universe from the same window it reports on, so over ONE month every
 # key it knows about is present in the only month it is asked about and no key can reach
 # `absent_after_observation` -- the one state that closes an effectivity window. A

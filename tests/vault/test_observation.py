@@ -132,7 +132,8 @@ def tables(spark, tmp_path_factory):
     DELTA FOR ALL FOUR, AND THAT WAS MEASURED RATHER THAN ASSUMED -- twice, in both
     directions. A Delta `saveAsTable` costs ~22 s on this box against ~0 for a temp
     view, so the EIGHT of them here put ~137 s of setup in front of tests that only ever
-    read (25 of them when this was measured at Task 2, 28 now; the counts read "ten" and
+    read (25 of them when this was measured at Task 2, 22 now that the grain refusals
+    live in `test_observation_grain.py`; the counts read "ten" and
     "25" until Task 7's pass, and every TIMING below is a Task-2 measurement rather than
     a current one). Converting the two property fixtures (`empresas`, `returning`) to temp
     views did cut setup to 92 s exactly as predicted. It also made every test that
