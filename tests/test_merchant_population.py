@@ -299,3 +299,26 @@ def test_the_mutation_is_deterministic_and_stamps_nothing():
     assert population.mutated(row) == population.mutated(row)
     assert population.mutated(row).updated_at == row.updated_at
     assert isinstance(row.updated_at, datetime)
+
+
+# --------------------------------------------------------------------------------
+# The one seeder guard that needs no container, and guards the headline
+# --------------------------------------------------------------------------------
+
+
+def test_mutate_refuses_to_run_without_being_told_when_to_release():
+    """`--release-on PATH` or `--release-after SECONDS`, and there is no default.
+
+    A default of "commit immediately" would let the held-open transaction close BEFORE
+    snapshot 1 is read, at which point the out-of-order class stops existing -- silently,
+    with every other count still correct. That is the one number in this phase's headline
+    the script does not author, so its absence must be loud. Asserted here rather than in
+    the container file because nothing about it needs a database, and a guard CI never
+    runs is a guard nobody has.
+    """
+    import seed_merchant_db as seeder
+
+    empty = seeder.argparse.Namespace(release_on=None, release_after=None)
+    with pytest.raises(seeder.Refusal, match="--release-on PATH or --release-after SECONDS"):
+        seeder._release_from(empty)
+    assert callable(seeder._release_from(seeder._parse(["mutate", "--release-after", "0"])))
