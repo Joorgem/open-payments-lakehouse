@@ -294,11 +294,14 @@ def report_survival(label: str, expected: str) -> None:
 
 def measure_1_persistence() -> None:
     heading("1. THE CONTAINER PERSISTENCE MATRIX (destructive -- runs `down -v`)")
+    print("  every command below is SCOPED to the `postgres` service. An unscoped")
+    print("  `docker compose up -d` starts redpanda too, which is a state change on the")
+    print("  operator's box that this measurement has no business making.")
     print(f"  dangling volumes before:  {dangling_volume_count()}")
-    print("  docker compose down -v ...")
-    compose("down", "-v")
-    print("  docker compose up -d ...")
-    compose("up", "-d")
+    print("  docker compose down -v postgres ...")
+    compose("down", "-v", "postgres")
+    print("  docker compose up -d postgres ...")
+    compose("up", "-d", "postgres")
     wait_until_reachable()
     print(f"  volume after fresh up:    {postgres_volume()}")
     with clean_env(), connect(search_path=False) as conn:
@@ -312,17 +315,17 @@ def measure_1_persistence() -> None:
     marker = persistence_marker_written()
     print(f"  probe marker written:     {marker!r}")
 
-    compose("restart")
-    report_survival("docker compose restart:", marker)
+    compose("restart", "postgres")
+    report_survival("restart:", marker)
 
-    compose("stop")
-    compose("start")
+    compose("stop", "postgres")
+    compose("start", "postgres")
     report_survival("stop + start:", marker)
 
     before = postgres_volume()
-    compose("down")
-    compose("up", "-d")
-    report_survival("down + up -d:", marker)
+    compose("down", "postgres")
+    compose("up", "-d", "postgres")
+    report_survival("down (no -v) + up -d:", marker)
     print(f"    PGDATA volume before down: {before}")
     print(f"    PGDATA volume after up:    {postgres_volume()}")
     print(f"    dangling volumes now:      {dangling_volume_count()}  (T6: an orphaned PGDATA)")
