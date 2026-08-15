@@ -254,8 +254,10 @@ def _published_instant() -> Column:
     """`data_hora_cotacao` as an INSTANT, its wall clock read as Brasília time.
 
     THE PARSE IS FORMAT-AGNOSTIC AND THE GATE IS WHAT MAKES THAT SAFE, which is a dependency
-    worth naming rather than assuming. The series' fractional-second width is 1 digit in
-    1984, 3 in 2025 and 6 in 2026, so any single `to_timestamp` pattern refuses real rows --
+    worth naming rather than assuming. The series' fractional-second width VARIES ROW BY ROW
+    -- 1 digit in 1984, and **2, 3, 4, 5 and 6** across this phase's own 42 landed quotes
+    (2/2/1/2/35 rows; `docs/f-api-run-evidence.md` §3.1) -- so any single pattern refuses real
+    rows --
     and `opl.bronze.rules.unparseable_data_hora_cotacao` is two checks where a pinned pattern
     would be one: a SHAPE regex that refuses every spelling whose instant its own text does
     not determine (a bare time, which resolves to TODAY'S DATE and is therefore
@@ -279,9 +281,12 @@ def _published_instant() -> Column:
     APPENDING `-03:00` MAKES THE ZONE PART OF THE VALUE, which is `opl.gold.fact_guards
     .event_instant`'s discipline applied to the other side of the same join: that one requires a
     zone designator in the payment's text, this one supplies the one BCB omits. Measured
-    identical under all three session zones above and at all three fractional widths the series
-    carries (1, 3 and 6 digits), and identical to the old value under the pin -- so no landed
-    number moves. NOT an interval addition either, for the reason that spelling was always
+    identical under all three session zones above and at three of the fractional widths the
+    series carries (1, 3 and 6 digits -- the enumeration this comment used to present as the
+    whole set), and identical to the old value under the pin -- so no landed number moves. The
+    parse is format-agnostic, so it is indifferent to the width in any case; the widths are
+    named to show which spellings were exercised, not to bound the set.
+    NOT an interval addition either, for the reason that spelling was always
     refused: adding three hours to a parsed wall clock is correct only while the session is
     UTC, which is where this one started."""
     stamped = F.concat(F.col(ptax.PUBLISHED_AT_COLUMN), F.lit(_BRASILIA_OFFSET))

@@ -123,6 +123,11 @@ Three clauses, each of which does work:
    > 13:03:25.555497, 2026-06-22 at 13:06:19.750415, 2026-06-03 at 13:06:26.540000 and
    > 2026-07-31 at 13:10:31.061071, so the observed band is **13:03–13:10** and any wider
    > claim would be quantifying over rows nobody printed. Under
+   > *(`13:06:26.540000` is a RENDERING. BCB publishes that stamp as `13:06:26.54`, two
+   > fractional digits; the run this figure was read off printed it through Python's `%f`,
+   > which pads to six. It is the only one of the four that is not the source's own text, and
+   > it is the row that falsified this ADR's fractional-width enumeration — see Decision 3.)*
+   > Under
    > the retracted model a payment at 21:00 BRT on Friday 2026-07-31 would have been
    > **denied** the 07-31 quote published at 13:10 that same afternoon. The rule stands; its
    > model is now the one the source ships, per row.
@@ -235,8 +240,19 @@ own prose says the only defence that has ever worked here is not depending on on
 '-03:00'))`, the offset rendered from `ptax_source.BRASILIA`. That is
 `opl.gold.fact_guards.event_instant`'s discipline — which *requires* a zone designator in the
 payment's text — applied to the side BCB leaves zoneless. Measured identical under all three
-zones above, at all three fractional-second widths the series carries (1 digit in 1984, 3 in
-2025, 6 in 2026), and identical to the old value under the pin, so nothing landed moves.
+zones above, at three of the fractional-second widths the series carries, and identical to the
+old value under the pin, so nothing landed moves.
+
+> **THIS SENTENCE READ "at all three fractional-second widths the series carries (1 digit in
+> 1984, 3 in 2025, 6 in 2026)", AND THE SET IS NOT THREE.** The series uses **every width from
+> 1 to 6**, and five of the six are inside this phase's own 42-quote window — widths 2/3/4/5/6
+> across 2/2/1/2/35 rows, e.g. `2026-06-03 13:06:26.54`. Measured twice, over the landed table
+> and over the live endpoint (`docs/f-api-run-evidence.md` §3.1). **Nothing about Decision 3
+> moves**: the parse is format-agnostic and therefore indifferent to the width, and the gate's
+> shape regex uses `{1,6}` because that is `%f`'s range rather than a tally of observed widths.
+> What moves is the confidence an enumeration was lending to a claim that never needed it — and
+> the reason nobody noticed is the hazard this ADR names elsewhere: the run log printed the
+> width-2 stamp as `.540000`, because Python's `%f` pads.
 
 **Why nothing caught it, which is the transferable half.** The zone *fix* was pinned and the
 zone *invariance* was not: the only non-UTC session test had a **BRL-only** fixture, so the FX

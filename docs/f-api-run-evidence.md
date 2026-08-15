@@ -565,8 +565,9 @@ module docstring, the function docstring and two commit messages as one in which
 session zone (`convertTz(micros, from=tz, to=UTC)` reads `getLocalDateTime(micros, UTC)`),
 while `to_timestamp` over text carrying no offset parses **in the session zone** — so only one
 of the two varied. Measured through `opl.spark.local_session` (pyspark 3.5.9), `unix_micros` of
-one landed stamp under three session zones and at all three fractional widths the series
-carries:
+one landed stamp under three session zones (and at three of the fractional widths the series
+carries — the parse is format-agnostic, so it is indifferent to the width; "all three" was
+this sentence's own version of the enumeration §3.1 retires):
 
 | session zone | `2026-06-19 13:03:25.555497` shipped | offset appended to the text |
 |---|---|---|
@@ -1593,6 +1594,48 @@ this rule weak. The accurate scope is *closed for records this repository's fetc
 builds*; the residual is the landing directory as a re-ingestible surface.
 
 **A pinned format pattern is still the wrong fix**, and that part of the original reasoning
-survives: the fractional-second width is 1, 3 or 6 digits across the series (§0.4), so any
-single pattern rejects real rows — `1984-12-03 11:29:00.0` and `2025-04-23 13:02:31.416`
-among them.
+survives — **strengthened by the measurement that falsified the enumeration it rested on.**
+
+> **RETRACTED: "1, 3 or 6 digits".** §0.4 published the fractional-second width as `{1, 3, 6}`
+> — one digit in 1984, three in 2025, six in 2026 — and so did ADR 0016, `fx.py`,
+> `ptax_source.py` and `tests/bronze/test_ptax_rules.py`. **The series uses every width from 1
+> to 6, and five of the six are inside this phase's own extraction window.**
+>
+> **Controller-verified** over the 42 quotes of 2026-06-03 .. 2026-08-01 **as landed in
+> `bronze_ptax`** — `length(data_hora_cotacao)` grouped, statement
+> `01f19839-6c59-1be2-bf65-485856e3bdb8` — and **independently re-derived from the LIVE
+> endpoint**, one range request through `scripts/probe_ptax.py`'s own `fetch_window`, which
+> agreed row for row. Two routes sharing no layer: one reads the table this repository wrote,
+> the other reads BCB.
+>
+> | `length(data_hora_cotacao)` | fractional digits | rows | a real example |
+> |---|---|---|---|
+> | 22 | **2** | 2 | `2026-06-03 13:06:26.54` |
+> | 23 | 3 | 2 | `2026-06-05 13:03:38.306` |
+> | 24 | **4** | 1 | `2026-07-23 13:11:15.6614` |
+> | 25 | **5** | 2 | `2026-06-09 13:12:05.30888` |
+> | 26 | 6 | 35 | `2026-06-19 13:03:25.555497` |
+>
+> Over the whole 2023-01-01 .. 2026-08-05 walk the counts are 1:11, 2:66, 3:785, 4:1, 5:2,
+> 6:38, and the 1984 rows are all width 1. **The conclusion survives and is worth more:** a
+> fixed-width slice does not merely break "on the series", it breaks on **7 of this phase's
+> own 42 landed quotes**, and the retired enumeration would have licensed a `.SSSSSS` pattern
+> that this window itself falsifies. `{1,6}` in the shape regex is `%f`'s range and not a
+> tally of observed widths, which is why it was never at risk.
+>
+> **AND THE RENDERING HAZARD THIS DOCUMENT NAMES TWICE ELSEWHERE IS WHY NOBODY SAW IT.** The
+> Task 0 run log printed 2026-06-03's stamp as `13:06:26.540000`, because Python's `%f` pads
+> to six — so the width-2 row was read off a rendering that had already normalised the one
+> property being enumerated. Same species as `str(5.0773)` dropping the trailing zero (§0.2)
+> and `to_date()` rendering an instant in the session zone (§1.3).
+
+So any single pattern rejects real rows — `1984-12-03 11:29:00.0`, `2026-06-03 13:06:26.54`
+and `2026-07-23 13:11:15.6614` among them.
+
+> **AND ONE STAMP IN THE TABLE ABOVE THIS PARAGRAPH IS NOT A SERIES ROW.** The retraction's
+> own `to_timestamp` table gives `2025-04-23 13:02:31.416` as a real row; **the API returns
+> `13:06:30.416`** for that date — the earlier of §0.7's duplicate pair, which §0.7 spells
+> correctly. The *measurement* stands (`13:02:31.416` parses to `2025-04-23 10:02:31.416000`,
+> which is what the row demonstrates); only its billing as a series row was wrong.
+> `tests/bronze/test_ptax_rules.py` carried the same transposition and now carries the real
+> stamp.

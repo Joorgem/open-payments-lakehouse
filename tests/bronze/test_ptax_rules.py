@@ -343,28 +343,35 @@ def test_a_shaped_stamp_that_names_no_instant_is_still_refused_by_the_parse(spar
 @pytest.mark.parametrize(
     "published",
     [
-        # The series' fractional-second width is NOT stable: 1 digit in 1984, 3 in 2025,
-        # 6 in 2026. A pinned pattern works on this phase's range and rejects the series,
+        # THE SERIES USES EVERY WIDTH FROM 1 TO 6, AND THIS LIST USED TO NAME THREE. Each
+        # value below is a REAL published stamp, re-read from the live endpoint through
+        # `scripts/probe_ptax.py`'s own request layer -- not a width invented to fill a
+        # gap. This phase's own 42 landed quotes carry widths 2/3/4/5/6 across 2/2/1/2/35
+        # rows, so the retired enumeration "1 in 1984, 3 in 2025, 6 in 2026" was falsified
+        # by the extraction window it was written for. A pinned pattern rejects real rows,
         # which is why the rule is format-agnostic.
-        "1984-12-03 11:29:00.0",
-        "2025-04-23 13:02:31.416",
-        "2026-06-19 13:03:25.555497",
-        "2026-06-19 13:03:25",
+        "1984-12-03 11:29:00.0",  # 1 digit -- quote date 1984-11-28, published 5 days on
+        "2026-06-03 13:06:26.54",  # 2 -- and the run log rendered it `.540000`, %f padding
+        "2025-04-23 13:06:30.416",  # 3 -- the earlier of the duplicate pair (sec 0.7)
+        "2026-07-23 13:11:15.6614",  # 4
+        "2026-06-09 13:12:05.30888",  # 5
+        "2026-06-19 13:03:25.555497",  # 6
+        "2026-06-19 13:03:25",  # none -- no observed row, so an absence is not a refusal
     ],
 )
 def test_every_fractional_second_width_the_series_uses_is_accepted(spark, published):
     """GUARDS THE GUARD, against the version of this rule that would look tighter.
 
-    A rule pinned to `yyyy-MM-dd HH:mm:ss.SSSSSS` accepts every 2026 row and rejects
-    1984-12-03 and 2025-04-23 -- both of which are real rows this endpoint returns. It
-    would pass every test written from this phase's own window and reject the series.
+    A rule pinned to `yyyy-MM-dd HH:mm:ss.SSSSSS` accepts most 2026 rows and rejects
+    1984-12-03, 2025-04-23 and FIVE of this phase's own landed quotes -- every one of them
+    a real row this endpoint returns. It would pass every test written from a sample of
+    the phase's window and reject the series.
 
     THIS IS THE HALF THE TIGHTENING HAD TO KEEP, and it is why the fix is a shape whose
-    fractional group is `{1,6}`-or-absent rather than a `to_timestamp` format string. The
-    four values here are the three widths the series is known to use plus no fraction at
-    all, which no observed row has -- present so an absence is not a refusal, exactly as
-    `ptax_source.PUBLICATION_FORMATS` carries the same second spelling for the same
-    reason."""
+    fractional group is `{1,6}`-or-absent rather than a `to_timestamp` format string. `{1,6}`
+    is not an enumeration of observed widths -- it is `%f`'s own range, which is what makes
+    it survive a width nobody has seen yet, and `ptax_source.PUBLICATION_FORMATS` carries the
+    no-fraction spelling for the same reason: an absence must not be a refusal."""
     assert _reasons(spark, [_row(data_hora_cotacao=published)]) == [None]
 
 

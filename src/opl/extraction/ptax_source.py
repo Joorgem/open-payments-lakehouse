@@ -107,9 +107,14 @@ PUBLISHED_FIELD = "dataHoraCotacao"
 RESPONSE_FIELDS = (COMPRA_FIELD, VENDA_FIELD, PUBLISHED_FIELD)
 ENVELOPE_ROWS = "value"
 
-# The API's fractional seconds are 1 digit in 1984 (`.0`), 3 in 2025 (`.416`) and 6 in
-# 2026 (`.555497`), and `%f` takes 1 to 6. The second spelling is for a stamp with no
-# fraction at all, which no observed row has: it is here so an absence is not a refusal.
+# The API's fractional seconds run to EVERY width from 1 to 6, and `%f` takes 1 to 6 --
+# which is the whole reason this is a format list and not a pinned pattern. Measured: 1
+# digit in 1984 (`.0`), and 2 / 3 / 4 / 5 / 6 inside this phase's own 42-quote window
+# (`.54`, `.416`, `.6614`, `.30888`, `.555497`), across 2/2/1/2/35 rows. This comment named
+# three widths as though they were the set; the extraction window it was written for
+# carries five. `%f`'s range is what covers them, not the enumeration. The second spelling
+# is for a stamp with no fraction at all, which no observed row has: it is here so an
+# absence is not a refusal.
 PUBLICATION_FORMATS = ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S")
 
 # TWO ROWS FOR ONE QUOTE DATE ARE TWO PUBLICATIONS OF ONE QUOTE, AND THIS IS THE BOUND
