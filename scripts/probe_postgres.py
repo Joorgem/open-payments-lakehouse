@@ -12,151 +12,41 @@ MEASURES ONLY. No contract, no registry entry, no extractor, no seeder. The tabl
 below live in their own schema (`probe_f_db`) and the schema is dropped on the way
 out, in a `finally`, so a re-run meets the same database it met the first time.
 
-THE DSN COMES FROM THE ENVIRONMENT, with the docker-compose defaults as the fallback
-(plan §7). Nothing here reads a secret and nothing here should ever grow one -- the
-credentials in the fallback are the throwaway container's, already committed in
-`docker-compose.yml` and `tests/integration/test_postgres.py`.
-
-THE PERSISTENCE MATRIX IS OPT-IN (`--persistence`) BECAUSE IT DESTROYS THE DATABASE.
-It runs `docker compose down -v`, which is the only honest way to measure "empty on a
-fresh volume". Once Task 3 seeds `merchant`, an unguarded default would delete it.
-
-HOSTILE ENVIRONMENTS ARE SET, NOT DESCRIBED. §7 connects with `PGTZ`, `PGDATESTYLE`
-and `PGOPTIONS` actually exported into the process environment, because that is the
-delivery mechanism the ruling is about: libpq reads them at connect time and no code
-change is required to be wrong.
+RUN IT WITH `uv run python scripts/probe_postgres.py`. This module is the entry point
+and carries the snapshot-and-visibility measurements (T2, T3). Two siblings carry the
+rest and each runs standalone as well:
+  * `probe_postgres_container.py` -- the persistence matrix (T6), opt-in below with
+    `--persistence`, because measuring "empty on a fresh volume" needs `down -v`.
+  * `probe_postgres_rendering.py` -- the GUC matrix and the `::text` divergences (T4).
+`probe_postgres_session.py` holds the connection helpers all three share.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
-import threading
 import time
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
-from pathlib import Path
-from typing import Any
+from collections.abc import Sequence
 
 import psycopg
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
-DSN_ENV_VAR = "OPL_POSTGRES_DSN"
-# The compose defaults. `docker-compose.yml:5-8` and `tests/integration/test_postgres.py:9`
-# already carry these for a throwaway local container; this is the third and last copy.
-DEFAULT_DSN = "host=localhost port=5433 dbname=opl user=opl password=opl"
-
-PROBE_SCHEMA = "probe_f_db"
-
-# The environment variables libpq turns into startup options with no code change.
-LIBPQ_RENDERING_ENV = ("PGTZ", "PGDATESTYLE", "PGCLIENTENCODING", "PGOPTIONS")
-
-# T4's pin set, verbatim from the ruling. `search_path` is the one deviation and it is
-# printed as such: the probe's own tables have to be reachable, so the probe schema
-# stands in for `public`.
-PINS: dict[str, str] = {
-    "TimeZone": "UTC",
-    "DateStyle": "ISO, MDY",
-    "IntervalStyle": "iso_8601",
-    "bytea_output": "hex",
-    "extra_float_digits": "3",
-    "client_encoding": "UTF8",
-    "search_path": f"pg_catalog, {PROBE_SCHEMA}",
-}
-
-HOSTILE_ENV = {
-    "PGTZ": "America/Sao_Paulo",
-    "PGDATESTYLE": "SQL, DMY",
-    "PGOPTIONS": "-c extra_float_digits=-3",
-}
-
-
-def dsn() -> str:
-    """The DSN, from the environment, with the compose default as the fallback."""
-    return os.environ.get(DSN_ENV_VAR, DEFAULT_DSN)
-
-
-def heading(text: str) -> None:
-    print(f"\n=== {text} ===")
-
-
-@contextmanager
-def libpq_env(**overrides: str | None) -> Iterator[None]:
-    """Set (or, with None, remove) libpq environment variables for the block.
-
-    Used both to build a hostile environment and to guarantee a CLEAN one: if the
-    operator already exports `PGTZ`, an unguarded baseline would silently measure
-    their shell instead of the server's defaults.
-    """
-    saved = {name: os.environ.get(name) for name in overrides}
-    try:
-        for name, value in overrides.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
-        yield
-    finally:
-        for name, value in saved.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
-
-
-@contextmanager
-def clean_env() -> Iterator[None]:
-    """No rendering GUC arrives from the process environment."""
-    with libpq_env(**dict.fromkeys(LIBPQ_RENDERING_ENV, None)):
-        yield
-
-
-def connect(*, search_path: bool = True) -> psycopg.Connection:
-    """A connection in autocommit mode.
-
-    Autocommit, because every transaction below is opened with the exact `BEGIN` the
-    plan pins -- `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY` -- rather than with
-    a driver abstraction over it. What is measured is the SQL, not psycopg's opinion.
-    """
-    conn = psycopg.connect(dsn(), autocommit=True)
-    if search_path:
-        conn.execute(f"SET search_path TO {PROBE_SCHEMA}, pg_catalog")
-    return conn
-
-
-def one(conn: psycopg.Connection, sql: str, params: Sequence[Any] | None = None) -> Any:
-    """The first column of the first row."""
-    return conn.execute(sql, params).fetchone()[0]
-
-
-def row(conn: psycopg.Connection, sql: str, params: Sequence[Any] | None = None) -> tuple:
-    return conn.execute(sql, params).fetchone()
-
-
-def rows(conn: psycopg.Connection, sql: str, params: Sequence[Any] | None = None) -> list[tuple]:
-    return conn.execute(sql, params).fetchall()
-
-
-def commit_after(delay: float, statements: Sequence[str]) -> threading.Thread:
-    """Run `statements` on their own connection after `delay` seconds, and commit.
-
-    A separate connection, because a second session is the whole point: every hazard
-    below is about what one session sees while another one writes.
-    """
-
-    def run() -> None:
-        time.sleep(delay)
-        with clean_env(), connect() as writer:
-            for statement in statements:
-                writer.execute(statement)
-
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
-    return thread
-
+from probe_postgres_container import measure_1_persistence
+from probe_postgres_rendering import measure_all as measure_rendering
+from probe_postgres_session import (
+    DSN_ENV_VAR,
+    LIBPQ_RENDERING_ENV,
+    PROBE_SCHEMA,
+    clean_env,
+    commit_after,
+    connect,
+    dsn,
+    heading,
+    one,
+    row,
+    rows,
+    setup_schema,
+    teardown_schema,
+)
 
 # --------------------------------------------------------------------------------
 # 0. The container, the driver, the role, the encoding, the collation
@@ -200,138 +90,6 @@ def measure_0_environment() -> None:
             "WHERE table_schema NOT IN ('pg_catalog', 'information_schema')",
         )
         print(f"  user tables in `opl` now: {user_tables}")
-
-
-# --------------------------------------------------------------------------------
-# 1. The container persistence matrix (opt-in: it destroys the database)
-# --------------------------------------------------------------------------------
-
-
-def compose(*args: str) -> str:
-    """Run `docker compose ...` at the repo root and return its combined output."""
-    result = subprocess.run(
-        ["docker", "compose", *args],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return (result.stdout + result.stderr).strip()
-
-
-MOUNT_FORMAT = (
-    '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}'
-)
-
-
-def postgres_volume() -> str:
-    """The name of the volume backing PGDATA right now, or '' if the container is gone."""
-    result = subprocess.run(
-        [
-            "docker",
-            "inspect",
-            "--format",
-            MOUNT_FORMAT,
-            "open-payments-lakehouse-postgres-1",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.stdout.strip()
-
-
-def dangling_volume_count() -> int:
-    result = subprocess.run(
-        ["docker", "volume", "ls", "-qf", "dangling=true"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return len([line for line in result.stdout.splitlines() if line.strip()])
-
-
-def wait_until_reachable(timeout: float = 90.0) -> float:
-    """Seconds until a connection succeeds. Raises if it never does."""
-    started = time.monotonic()
-    while time.monotonic() - started < timeout:
-        try:
-            with clean_env(), connect(search_path=False) as conn:
-                one(conn, "SELECT 1")
-            return time.monotonic() - started
-        except psycopg.OperationalError:
-            time.sleep(1.0)
-    raise RuntimeError("Postgres never became reachable")
-
-
-def persistence_marker_written() -> str:
-    """Write the marker table and return the marker."""
-    with clean_env(), connect(search_path=False) as conn:
-        conn.execute("DROP TABLE IF EXISTS public.probe_persistence")
-        conn.execute("CREATE TABLE public.probe_persistence (marker text NOT NULL)")
-        conn.execute(
-            "INSERT INTO public.probe_persistence VALUES (%s)", (f"written-at-{time.time():.3f}",)
-        )
-        return one(conn, "SELECT marker FROM public.probe_persistence")
-
-
-def persistence_marker_read() -> str | None:
-    """The marker, or None if the table does not exist."""
-    with clean_env(), connect(search_path=False) as conn:
-        exists = one(conn, "SELECT to_regclass('public.probe_persistence') IS NOT NULL")
-        return one(conn, "SELECT marker FROM public.probe_persistence") if exists else None
-
-
-def report_survival(label: str, expected: str) -> None:
-    seconds = wait_until_reachable()
-    found = persistence_marker_read()
-    verdict = "SURVIVES" if found == expected else "DESTROYED"
-    volume = postgres_volume() or "(none)"
-    print(f"  {label:<28} {verdict:<10} (up after {seconds:.1f}s, volume {volume})")
-    if found is not None and found != expected:
-        print(f"    marker changed: {expected!r} -> {found!r}")
-
-
-def measure_1_persistence() -> None:
-    heading("1. THE CONTAINER PERSISTENCE MATRIX (destructive -- runs `down -v`)")
-    print("  every command below is SCOPED to the `postgres` service. An unscoped")
-    print("  `docker compose up -d` starts redpanda too, which is a state change on the")
-    print("  operator's box that this measurement has no business making.")
-    print(f"  dangling volumes before:  {dangling_volume_count()}")
-    print("  docker compose down -v postgres ...")
-    compose("down", "-v", "postgres")
-    print("  docker compose up -d postgres ...")
-    compose("up", "-d", "postgres")
-    wait_until_reachable()
-    print(f"  volume after fresh up:    {postgres_volume()}")
-    with clean_env(), connect(search_path=False) as conn:
-        fresh_tables = rows(
-            conn,
-            "SELECT table_schema, table_name FROM information_schema.tables "
-            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema')",
-        )
-    print(f"  `opl` on a fresh volume:  {len(fresh_tables)} user table(s) {fresh_tables}")
-
-    marker = persistence_marker_written()
-    print(f"  probe marker written:     {marker!r}")
-
-    compose("restart", "postgres")
-    report_survival("restart:", marker)
-
-    compose("stop", "postgres")
-    compose("start", "postgres")
-    report_survival("stop + start:", marker)
-
-    before = postgres_volume()
-    compose("down", "postgres")
-    compose("up", "-d", "postgres")
-    report_survival("down (no -v) + up -d:", marker)
-    print(f"    PGDATA volume before down: {before}")
-    print(f"    PGDATA volume after up:    {postgres_volume()}")
-    print(f"    dangling volumes now:      {dangling_volume_count()}  (T6: an orphaned PGDATA)")
-
-    with clean_env(), connect(search_path=False) as conn:
-        conn.execute("DROP TABLE IF EXISTS public.probe_persistence")
 
 
 # --------------------------------------------------------------------------------
@@ -634,192 +392,6 @@ def measure_6_out_of_order_commit() -> None:
 
 
 # --------------------------------------------------------------------------------
-# 7. The GUC matrix
-# --------------------------------------------------------------------------------
-
-RENDER_SQL = (
-    "SELECT ts::text, num::text, f::text, b::text, "
-    "current_setting('TimeZone'), current_setting('DateStyle'), "
-    "current_setting('extra_float_digits') FROM guc"
-)
-
-
-def build_guc_table(conn: psycopg.Connection) -> None:
-    conn.execute("DROP TABLE IF EXISTS guc")
-    conn.execute(
-        "CREATE TABLE guc (ts timestamptz NOT NULL, num numeric(14,2) NOT NULL, "
-        "trailing_zeros numeric NOT NULL, f float8 NOT NULL, b boolean NOT NULL, "
-        "c char(5) NOT NULL)"
-    )
-    # `0.1 + 0.2` in SQL is NUMERIC arithmetic and lands on exactly 0.3 -- the float8
-    # hazard needs the casts, or the measurement quietly stops being about float8.
-    conn.execute(
-        "INSERT INTO guc VALUES "
-        "(timestamptz '2026-08-03 17:23:01.123456+00', 1234.50, 10.500, "
-        "0.1::float8 + 0.2::float8, true, 'ab')"
-    )
-
-
-def render_under(label: str, **env: str | None) -> tuple[str, ...]:
-    with libpq_env(**dict.fromkeys(LIBPQ_RENDERING_ENV, None)), libpq_env(**env):
-        with connect() as conn:
-            rendered = row(conn, RENDER_SQL)
-    ts, num, f, b, tz, ds, efd = rendered
-    print(f"  {label}")
-    print(
-        f"      GUCs seen by the session: TimeZone={tz}  DateStyle={ds}  extra_float_digits={efd}"
-    )
-    print(f"      timestamptz::text = {ts}")
-    print(f"      numeric::text     = {num}      float8::text = {f}      boolean::text = {b}")
-    return rendered
-
-
-def measure_7_guc_matrix() -> None:
-    heading("7. THE GUC MATRIX -- `col::text` is session-dependent, set from the SHELL")
-    with clean_env(), connect() as setup:
-        build_guc_table(setup)
-    print(
-        "  one row: ts=2026-08-03 17:23:01.123456+00, numeric(14,2)=1234.50, "
-        "float8=0.1::float8+0.2::float8, bool=true"
-    )
-    baseline = render_under("baseline (no PG* variables exported)")
-    render_under("PGTZ=America/Sao_Paulo", PGTZ="America/Sao_Paulo")
-    dmy = render_under("PGDATESTYLE='SQL, DMY'", PGDATESTYLE="SQL, DMY")
-    render_under("PGOPTIONS='-c extra_float_digits=0'", PGOPTIONS="-c extra_float_digits=0")
-    hostile = render_under("ALL THREE HOSTILE AT ONCE", **HOSTILE_ENV)
-    print(f"  baseline and hostile render the SAME bytes: {baseline[:4] == hostile[:4]}")
-
-    heading("7b. THE MISPARSE IS SILENT AND ASYMMETRIC")
-    written = dmy[0]
-    with clean_env(), connect() as reader:
-        reparsed = one(reader, "SELECT (%s::timestamptz)::date::text", (written,))
-        original = one(reader, "SELECT (ts)::date::text FROM guc")
-    print(f"  a writer at DateStyle='SQL, DMY' renders: {written}")
-    print(f"  a reader at DateStyle='ISO, MDY' parses:  {reparsed}")
-    print(f"  the value actually stored is:             {original}")
-    print(f"  ROUND-TRIP: {'ok' if reparsed == original else 'BROKEN, and nothing raised'}")
-
-    heading("7c. A `SET` + READ-BACK PIN DEFEATS PGOPTIONS")
-    with libpq_env(**dict.fromkeys(LIBPQ_RENDERING_ENV, None)), libpq_env(**HOSTILE_ENV):
-        with connect() as conn:
-            before = {name: one(conn, f"SHOW {name}") for name in PINS}
-            # set_config(), not `SET`: `SET` is a utility statement and takes no
-            # parameter, so a literal-interpolated pin would be the one place in the
-            # extractor where a GUC value is concatenated into SQL.
-            for name, value in PINS.items():
-                conn.execute("SELECT set_config(%s, %s, false)", (name, value))
-            after = {name: one(conn, f"SHOW {name}") for name in PINS}
-            pinned = row(conn, RENDER_SQL)
-    for name, wanted in PINS.items():
-        got = after[name]
-        print(f"  {name:<18} startup={before[name]!r:<28} pinned={got!r:<20} ok={got == wanted}")
-    print(f"  rendered under the pin, inside the hostile environment: {pinned[:4]}")
-    print(f"  identical to the clean baseline: {pinned[:4] == baseline[:4]}")
-    print("  NOTE: `search_path` deviates from T4's 'pg_catalog, public' only because the")
-    print("  probe's tables live in their own schema. Every other pin is the ruling verbatim.")
-
-
-# --------------------------------------------------------------------------------
-# 8. `::text` is the CAST, not the type's output function
-# --------------------------------------------------------------------------------
-
-
-def copy_out(conn: psycopg.Connection, sql: str) -> str:
-    """`COPY ... TO STDOUT` -- the type's OUTPUT FUNCTION, which is what a dump writes."""
-    chunks: list[bytes] = []
-    with conn.cursor().copy(sql) as copy:
-        for chunk in copy:
-            chunks.append(bytes(chunk))
-    return b"".join(chunks).decode("utf-8").rstrip("\n")
-
-
-def measure_8_cast_versus_output_function() -> None:
-    heading("8. `col::text` IS THE CAST, NOT THE OUTPUT FUNCTION")
-    with clean_env(), connect() as conn:
-        cast_b, cast_c, cast_ts = row(conn, "SELECT b::text, c::text, ts::text FROM guc")
-        copied = copy_out(conn, "COPY (SELECT b, c, ts FROM guc) TO STDOUT")
-        out_b, out_c, out_ts = copied.split("\t")
-        typoutput = rows(
-            conn,
-            "SELECT t.typname, p.proname FROM pg_type t JOIN pg_proc p ON p.oid = t.typoutput "
-            "WHERE t.typname IN ('bool', 'bpchar')",
-        )
-    print(f"  boolean   cast={cast_b!r:<10} output function={out_b!r}")
-    print(f"  char(5)   cast={cast_c!r:<10} output function={out_c!r}   <- the CAST STRIPS PADDING")
-    print(f"  timestamptz cast={cast_ts!r}  output function={out_ts!r}  agree={cast_ts == out_ts}")
-    print(f"  the output functions themselves: {typoutput}")
-    print("  => 'canonical representation' is false for bool and char(n). char(n) is excluded")
-    print("     from the seeded schema and the boolean spelling is pinned in the contract (T4).")
-
-
-# --------------------------------------------------------------------------------
-# 9. The watermark's other two blind spots, and the four time functions
-# --------------------------------------------------------------------------------
-
-
-def measure_9_watermark_blind_spots() -> None:
-    heading("9. `DEFAULT now()` ON UPDATE, A HARD DELETE, AND THE FOUR TIME FUNCTIONS")
-    with clean_env(), connect() as conn:
-        conn.execute("DROP TABLE IF EXISTS blind")
-        conn.execute(
-            "CREATE TABLE blind (id int PRIMARY KEY, val text NOT NULL, "
-            "updated_at timestamptz NOT NULL DEFAULT now())"
-        )
-        conn.execute("INSERT INTO blind SELECT g, 'v0' FROM generate_series(1, 5) AS g")
-        watermark = one(conn, "SELECT max(updated_at) FROM blind")
-        before = one(conn, "SELECT updated_at FROM blind WHERE id = 1")
-        time.sleep(1.0)
-        conn.execute("UPDATE blind SET val = 'v1' WHERE id = 1")
-        after = one(conn, "SELECT updated_at FROM blind WHERE id = 1")
-        print(f"  updated_at before UPDATE: {before.isoformat()}")
-        print(f"  updated_at after  UPDATE: {after.isoformat()}")
-        print(
-            f"  the DEFAULT fired on UPDATE: {after != before}   <- a DEFAULT is INSERT-time only"
-        )
-        moved = rows(conn, "SELECT id FROM blind WHERE updated_at > %s", (watermark,))
-        print(f"  rows a watermark run sees after that UPDATE: {moved}")
-
-        count_before = one(conn, "SELECT count(*) FROM blind")
-        conn.execute("DELETE FROM blind WHERE id = 5")
-        count_after = one(conn, "SELECT count(*) FROM blind")
-        after_delete = rows(conn, "SELECT id FROM blind WHERE updated_at > %s", (watermark,))
-        print(f"  rows: {count_before} -> {count_after} after a hard DELETE")
-        print(
-            f"  a watermark run after the DELETE sees: {after_delete}  <- a DELETE leaves NOTHING"
-        )
-
-        conn.execute("BEGIN")
-        first = row(
-            conn,
-            "SELECT now(), transaction_timestamp(), statement_timestamp(), clock_timestamp()",
-        )
-        time.sleep(0.5)
-        second = row(
-            conn,
-            "SELECT now(), transaction_timestamp(), statement_timestamp(), clock_timestamp()",
-        )
-        conn.execute("COMMIT")
-        names = ("now()", "transaction_timestamp()", "statement_timestamp()", "clock_timestamp()")
-        for name, a, b in zip(names, first, second, strict=True):
-            print(f"  {name:<26} stmt1={a.isoformat()}  moved by stmt2: {b != a}")
-        print(
-            f"  now() IS transaction_timestamp(): {first[0] == first[1] and second[0] == second[1]}"
-        )
-
-    heading("9b. NUMERIC THROUGH `::text`")
-    with clean_env(), connect() as conn:
-        for expression in (
-            "10.500::numeric",
-            "(SELECT trailing_zeros FROM guc)",
-            "(SELECT num FROM guc)",
-            "(1.0 * 1.0)::numeric",
-            "'1e3'::numeric",
-            "1234.5::numeric(14,2)",
-        ):
-            print(f"  {expression:<28} ::text -> {one(conn, f'SELECT ({expression})::text')!r}")
-
-
-# --------------------------------------------------------------------------------
 # 10. Three more claims T3's table makes, checked rather than quoted
 # --------------------------------------------------------------------------------
 
@@ -969,27 +541,6 @@ def measure_11b_the_reader_blocks_ddl() -> None:
 # --------------------------------------------------------------------------------
 
 
-def setup_schema() -> None:
-    with clean_env(), connect(search_path=False) as conn:
-        conn.execute(f"DROP SCHEMA IF EXISTS {PROBE_SCHEMA} CASCADE")
-        conn.execute(f"CREATE SCHEMA {PROBE_SCHEMA}")
-
-
-def teardown_schema() -> None:
-    heading("CLEANUP -- the probe leaves nothing behind")
-    with clean_env(), connect(search_path=False) as conn:
-        conn.execute(f"DROP SCHEMA IF EXISTS {PROBE_SCHEMA} CASCADE")
-        conn.execute("DROP TABLE IF EXISTS public.probe_persistence")
-        left = rows(
-            conn,
-            "SELECT table_schema, table_name FROM information_schema.tables "
-            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema')",
-        )
-        schemas = rows(conn, "SELECT nspname FROM pg_namespace WHERE nspname = %s", (PROBE_SCHEMA,))
-    print(f"  probe schema still present: {bool(schemas)}")
-    print(f"  user tables left in `opl`:  {len(left)} {left}")
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="F-DB Task 0 Postgres probe. See the module docstring."
@@ -997,7 +548,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--persistence",
         action="store_true",
-        help="run the container persistence matrix. DESTRUCTIVE: it runs `docker compose down -v`.",
+        help="also run the container persistence matrix. DESTRUCTIVE: it runs `down -v`.",
     )
     args = parser.parse_args(argv)
 
@@ -1017,9 +568,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         measure_4_repeatable_read_across_statements()
         measure_5_stamp_gap()
         measure_6_out_of_order_commit()
-        measure_7_guc_matrix()
-        measure_8_cast_versus_output_function()
-        measure_9_watermark_blind_spots()
+        measure_rendering()
         measure_10_further_t3_claims()
         measure_11_catalog_read_inside_the_transaction()
         measure_11b_the_reader_blocks_ddl()
