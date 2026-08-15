@@ -1762,12 +1762,19 @@ survives — **strengthened by the measurement that falsified the enumeration it
 > `ptax_source.py` and `tests/bronze/test_ptax_rules.py`. **The series uses every width from 1
 > to 6, and five of the six are inside this phase's own extraction window.**
 >
-> **Controller-verified** over the 42 quotes of 2026-06-03 .. 2026-08-01 **as landed in
-> `bronze_ptax`** — `length(data_hora_cotacao)` grouped, statement
-> `01f19839-6c59-1be2-bf65-485856e3bdb8` — and **independently re-derived from the LIVE
-> endpoint**, one range request through `scripts/probe_ptax.py`'s own `fetch_window`, which
-> agreed row for row. Two routes sharing no layer: one reads the table this repository wrote,
-> the other reads BCB.
+> **Controller-verified over the 42 quotes of 2026-06-03 .. 2026-08-01 as landed in
+> `bronze_ptax`** — `SELECT length(data_hora_cotacao), count(*), min(...) GROUP BY 1`,
+> statement **`01f19844-283f-1218-b6e5-73a3b1a3f342`**, `from_cache: None` — and
+> **independently re-derived from the LIVE endpoint**, one range request through
+> `scripts/probe_ptax.py`'s own `fetch_window`. The two agree row for row, and they share no
+> layer: one reads the table this repository wrote, the other reads BCB.
+>
+> *(An earlier statement id for the same measurement, `01f19839-6c59-1be2-bf65-485856e3bdb8`,
+> **resolves** — `GET /api/2.0/sql/statements/…` returns it in state `CLOSED` — so it is a real
+> execution and not the "resolves to nothing" species this repository has struck twice. But a
+> `CLOSED` statement's rows can no longer be read, so the numbers above are published against
+> the id a reader can still fetch. Checking that a published id resolves costs one API call and
+> is the cheapest guard this project has.)*
 >
 > | `length(data_hora_cotacao)` | fractional digits | rows | a real example |
 > |---|---|---|---|
