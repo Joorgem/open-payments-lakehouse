@@ -119,5 +119,12 @@ markers = [
   # being tested. Deselect it explicitly (`-m 'not integration and not slow'`) when
   # that is what you want.
   "slow: dominated by build or download time, not by the assertion",
+  # A DESELECTION IN ITS OWN RIGHT, and that is the whole point. `-m integration` selects
+  # Redpanda and two live-WebDAV modules as well, so a CI job with only a Postgres
+  # `services:` block turns red on five of six tests -- which is why a Postgres-only job
+  # cannot use it (plan T2b). Tests carrying this marker also carry `integration`, but the
+  # `not postgres` term below is what makes the marker load-bearing on its own: a future
+  # container test that forgets `integration` is still deselected by default.
+  "postgres: requires only the local Postgres container",
 ]
-addopts = "-m 'not integration'"
+addopts = "-m 'not integration and not postgres'"
