@@ -229,7 +229,7 @@
 # Labelled as such because nothing of this shape has been run on this platform. The build
 # scans `dim_company` (~69.2M rows) ONCE PER ROLE, projected to four columns and filtered
 # by a BROADCAST semi-join against at most 1,024 counterparty keys, so the dimension is
-# never shuffled; everything else is 40,150 rows through one window, FOUR broadcast joins
+# never shuffled; everything else is 40,150 rows through one window, SEVEN broadcast joins
 # (two roles, the FX intervals, and the four orphan anti-joins) and a ~40,000-row write.
 #
 #     wall clock   5-40 min, central ~15 min

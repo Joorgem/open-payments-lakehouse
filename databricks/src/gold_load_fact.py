@@ -36,7 +36,7 @@ invisible until the day there is a second one.
 
 `bronze_ptax` IS RESOLVED THROUGH `opl.bronze.registry` AND NEVER SPELLED HERE, exactly as
 `bronze_payments` is: the registry lifts every Delta name out of `opl.contracts.ptax`, and
-`tests/test_job_yaml_launch_guards.py`'s anti-hardcode sweep exists because a literal
+`tests/test_task_wiring.py`'s anti-hardcode sweep exists because a literal
 `"bronze_ptax"` in an entry point is a name that outlives a rename.
 
 WHAT THE RUN LOG PUBLISHES, AND WHY IT IS FIVE SENTENCES RATHER THAN A ROW COUNT. The row
