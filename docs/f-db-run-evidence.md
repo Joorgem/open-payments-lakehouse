@@ -346,6 +346,72 @@ measurement) and **none about Databricks egress toward a laptop behind NAT** —
 
 ---
 
+## 1. Predictions — published before the run that tests them
+
+**Written before `scripts/seed_merchant_db.py` existed and before any row was seeded**
+(master protocol §4.5; a number first written down after the run that produced it is not a
+prediction). The tree was clean at `16522ef` when this section was committed.
+
+### 1.1 The populations
+
+| | predicted |
+|---|---|
+| snapshot 1 — merchants | **1,088** |
+| snapshot 1 — distinct CNPJs | **1,024** (64 of them carrying two merchants) |
+| INSERT between the snapshots | 32 |
+| UPDATE that moves `updated_at` | 48 |
+| UPDATE that does **not** move it | 24 |
+| hard DELETE | 16 |
+| snapshot 2 — merchants | **1,104** |
+| rows committed out of timestamp order | 8 |
+| **rows a watermark extract MISSES** | **48** = 16 deletes + 24 silent updates + 8 out-of-order |
+
+1,088 + 32 − 16 = 1,104, so the two snapshot counts and the three mutating classes close on
+each other. The 1,024 is not a choice: it is the size of the pinned counterparty pool
+(`scripts/merchant_cnpj_pool.txt`, sha256 `82e6a44…`), and the 64 second merchants exist so
+`link_merchant_empresa` is not degenerate — two open link rows on one company is the normal
+case the partner link already demonstrates, not an error.
+
+### 1.2 THE TAUTOLOGY, DECLARED BEFORE THE NUMBER RATHER THAN AFTER IT
+
+**Six of the seven rows above are authored by the mutation script.** The deletes and the
+silent updates are *chosen*, not discovered, and an evidence sentence that reports "the
+watermark missed 40 rows" as a finding would be the defect F3's audit caught in its own
+150-duplicate acceptance — a count that could not have come out any other way.
+
+**The eighth row is different, and it is why the headline is worth publishing.** The
+out-of-order commit is a property of MVCC, not of the script: `updated_at` orders by
+transaction **start** and visibility orders by transaction **commit**, so a row stamped
+before the watermark can become visible after it. Task 0 reproduced it **with a
+`BEFORE UPDATE` trigger already in place** (§0.4) — i.e. with the correct fix for the other
+two classes applied — so no amount of care on the source side removes it. Its *count* is
+arranged; its *existence* is not.
+
+**What else is not chosen, and is the actual claim:**
+
+- the differ finds presence changes from the observation ledger and payload changes from
+  `hash_diff` — **one derivation per axis**, with the `updated_at` split a projection of the
+  payload-changed set rather than a third mechanism (T2, as corrected: the ledger has no
+  `changed` state, so revision 1's "one derivation, not four branches" was unachievable);
+- the watermark query is the real one an engineer would write, it is committed, and it runs
+  **inside the same `REPEATABLE READ` transaction that reads its snapshot**, so the miss set
+  is a genuine complement rather than a definitional one;
+- **snapshot 1's watermark is what snapshot 2's incremental query uses** — one extra
+  statement per transaction, and the only arrangement under which the out-of-order case is
+  reachable at all.
+
+### 1.3 What would falsify these
+
+- **Any count that lands where predicted while the derivation is per-class.** Four branches
+  reproducing four authored numbers is the tautology wearing the right answer.
+- **A watermark miss of 40 rather than 48**, which would mean the out-of-order rows were not
+  produced and the one non-authored class is absent.
+- **A `departed` count other than 16 in the ledger**, which would mean the snapshot axis is
+  not distinguishing the two observations — the failure T7 and T8 exist to prevent, and the
+  one that F-DB's headline dies on.
+
+---
+
 ## 3. What ships UNEXERCISED
 
 **Standing decision §4.6: a path that ran zero rows through it is not a path that works.**
