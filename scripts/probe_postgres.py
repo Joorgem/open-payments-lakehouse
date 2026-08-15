@@ -899,6 +899,73 @@ def measure_10_further_t3_claims() -> None:
             print(f"  pg_current_xact_id() REFUSED in a READ ONLY txn: {str(exc).splitlines()[0]}")
 
 
+COLUMN_LIST_SQL = (
+    "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) "
+    "FROM information_schema.columns WHERE table_schema = %s AND table_name = 'smear'"
+)
+
+
+def measure_11_catalog_read_inside_the_transaction() -> None:
+    """T3's ruling lists "the column-list catalog read" among the statements the
+    REPEATABLE READ transaction protects. That is a claim about whether a catalog
+    read is snapshot-stable, and it decides whether the landed column list belongs
+    to the same observation as the landed rows. Nobody had run it.
+
+    The ALTER happens BEFORE the reader touches the table, and that ordering is
+    forced: see 11b, where the reverse order deadlocks the probe.
+    """
+    heading("11. IS THE COLUMN-LIST CATALOG READ PART OF THE SAME SNAPSHOT?")
+    with clean_env(), connect() as reader:
+        reset_smear(reader)
+        reader.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        before = one(reader, COLUMN_LIST_SQL, (PROBE_SCHEMA,))
+        with clean_env(), connect() as writer:
+            writer.execute("ALTER TABLE smear ADD COLUMN added_mid_transaction text")
+            writer.execute("INSERT INTO smear VALUES (99, 'added-mid-transaction', 'x')")
+        after = one(reader, COLUMN_LIST_SQL, (PROBE_SCHEMA,))
+        visible = one(reader, "SELECT count(*) FROM smear")
+        reader.execute("COMMIT")
+        live = one(reader, "SELECT count(*) FROM smear")
+    print(f"  column list at the snapshot statement:       {before}")
+    print(f"  column list after another session ALTERs it: {after}")
+    print(f"  the catalog read is SNAPSHOT-STABLE:         {before == after}")
+    print(f"  rows the same transaction sees: {visible}, rows actually in the table: {live}")
+    print("  The DATA is snapshot-stable either way. Whether the CATALOG is decides whether")
+    print("  a landed column list describes the rows landed beside it.")
+
+
+def measure_11b_the_reader_blocks_ddl() -> None:
+    """The hazard this probe hit by accident, so it is measured on purpose.
+
+    A `REPEATABLE READ READ ONLY` transaction that has read a table holds ACCESS
+    SHARE on it until it commits, and ACCESS EXCLUSIVE -- every form of `ALTER
+    TABLE`, and `VACUUM FULL` -- waits behind it. The first version of section 11
+    ordered the two the other way round and hung the probe with the reader `idle in
+    transaction` and the writer waiting on `Lock`. That is T3's "COMMIT before the
+    upload" ruling arriving from a second direction: the cost of an open read
+    transaction is not only the xmin horizon, it is every DDL on the tables it read.
+    """
+    heading("11b. A READ ONLY TRANSACTION BLOCKS DDL ON WHAT IT READ")
+    with clean_env(), connect() as reader:
+        reset_smear(reader)
+        reader.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        reader.execute("SELECT count(*) FROM smear")
+        with clean_env(), connect() as writer:
+            writer.execute("SET lock_timeout = '1000ms'")
+            started = time.monotonic()
+            try:
+                writer.execute("ALTER TABLE smear ADD COLUMN blocked_column text")
+                print("  the ALTER succeeded -- the reader did NOT block it")
+            except psycopg.errors.LockNotAvailable as exc:
+                waited = time.monotonic() - started
+                print(f"  ALTER TABLE waited {waited:.1f}s and then: {str(exc).splitlines()[0]}")
+        reader.execute("COMMIT")
+        with clean_env(), connect() as writer:
+            writer.execute("SET lock_timeout = '1000ms'")
+            writer.execute("ALTER TABLE smear ADD COLUMN blocked_column text")
+            print("  the same ALTER, once the reader COMMITTED: succeeded")
+
+
 # --------------------------------------------------------------------------------
 
 
@@ -954,6 +1021,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         measure_8_cast_versus_output_function()
         measure_9_watermark_blind_spots()
         measure_10_further_t3_claims()
+        measure_11_catalog_read_inside_the_transaction()
+        measure_11b_the_reader_blocks_ddl()
     finally:
         teardown_schema()
     return 0
