@@ -113,7 +113,18 @@ def measure_7_guc_matrix() -> None:
     hostile = render_under("ALL THREE HOSTILE AT ONCE", **HOSTILE_ENV)
     print(f"  baseline and hostile render the SAME bytes: {baseline[:4] == hostile[:4]}")
 
-    heading("7b. THE MISPARSE IS SILENT AND ASYMMETRIC")
+    heading("7b. WHICH float8 RENDERINGS ACTUALLY ROUND-TRIP")
+    # The plan says efd=0 "DOES NOT round-trip". Two different strings prove nothing on
+    # their own -- the claim is that one of them loses information, so it is closed by
+    # parsing the rendering back and comparing to the value, not by reading the digits.
+    with clean_env(), connect() as conn:
+        for efd in ("3", "1", "0", "-3"):
+            conn.execute("SELECT set_config('extra_float_digits', %s, false)", (efd,))
+            text = one(conn, "SELECT (0.1::float8 + 0.2::float8)::text")
+            back = one(conn, "SELECT (%s::float8) = (0.1::float8 + 0.2::float8)", (text,))
+            print(f"  extra_float_digits={efd:<3} ::text -> {text!r:<22} round-trips: {back}")
+
+    heading("7c. THE DATE MISPARSE IS SILENT AND ASYMMETRIC")
     written = dmy[0]
     with clean_env(), connect() as reader:
         reparsed = one(reader, "SELECT (%s::timestamptz)::date::text", (written,))
@@ -123,7 +134,7 @@ def measure_7_guc_matrix() -> None:
     print(f"  the value actually stored is:             {original}")
     print(f"  ROUND-TRIP: {'ok' if reparsed == original else 'BROKEN, and nothing raised'}")
 
-    heading("7c. A `SET` + READ-BACK PIN DEFEATS PGOPTIONS")
+    heading("7d. A `SET` + READ-BACK PIN DEFEATS PGOPTIONS")
     with libpq_env(**dict.fromkeys(LIBPQ_RENDERING_ENV, None)), libpq_env(**HOSTILE_ENV):
         with connect() as conn:
             before = {name: one(conn, f"SHOW {name}") for name in PINS}
