@@ -100,12 +100,37 @@ WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
 # the cap. Adding a sixth file to `vault-ledger-registry` (five files, including the two
 # at 800 lines) would load the other candidate. This chunk's third member is a fixture
 # the file builds itself, so what it costs is one more Spark module setup.
+#
+# AND THE SIXTH FILE ARRIVED, IN F-DB TASK 1, AND IS IN `vault-ledger-registry` ANYWAY --
+# because the paragraph above prices a vault file at one more Spark module setup and
+# `test_observation_grain.py` does not pay it. It is `test_observation.py`'s six
+# construction-time refusals, split off when that file stood at 800/800 with F-DB Task 2
+# still to change the ledger. It requests neither `spark` nor a fixture, so against the
+# SESSION-scoped `spark` in `tests/conftest.py` it starts no session, writes no Delta
+# table and adds no teardown; what it costs this chunk is one module import. Any other
+# chunk would have separated it from the module it was split out of in order to dodge a
+# cost it does not incur. MEASURED AFTER THE SPLIT, each alone on the box, nothing else
+# touching the JVM:
+#   tests/vault/test_observation.py        22 passed in 785.71s (13:05)
+#   tests/vault/test_observation_grain.py   6 passed in   0.20s
+# 22 + 6 = 28, which is what `test_observation.py` collected before the split, so the
+# split moved tests and invented none. The grain file is 0.03% of its parent's wall clock
+# because it starts no Spark session at all -- that is the "one module import" claim,
+# measured rather than argued.
+#
+# AND THE PARENTHESIS ABOVE IS WRONG, MEASURED RATHER THAN INHERITED. It says "five
+# files, including the two at 800 lines". At `dedee79`, the commit that wrote it, this
+# chunk's five were 234 / 800 / 758 / 378 / 218 -- ONE file at 800, not two, and the
+# nearest other was 42 lines short of it. The decision the parenthesis supports is
+# unaffected (a chunk carrying the suite's single largest vault module is still the one
+# with least room for a sixth), so the sentence is corrected here rather than deleted,
+# and its count is now six files at 467 / 747 / 96 / 758 / 378 / 218.
 CHUNKS=(
   "non-vault|--ignore=tests/vault"
   "vault-cnpj-hashing|tests/vault/test_cnpj_vault.py tests/vault/test_hashing.py tests/vault/test_hashing_spark.py tests/vault/test_satellite_diagnostics.py"
   "vault-estab|tests/vault/test_estabelecimento_vault.py"
   "vault-socios|tests/vault/test_socios_vault.py"
-  "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_registry.py tests/vault/test_reference_vault.py tests/vault/test_effectivity_window.py"
+  "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_observation_grain.py tests/vault/test_registry.py tests/vault/test_reference_vault.py tests/vault/test_effectivity_window.py"
 )
 
 chunk_name() { printf '%s' "${CHUNKS[$1]%%|*}"; }
