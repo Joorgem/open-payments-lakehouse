@@ -151,6 +151,23 @@ FILE_FED_LANDING_MODES = frozenset({LANDING_ZIPS, LANDING_LOCAL})
 NON_FILE_FED_LANDING_MODES = frozenset({LANDING_GENERATED, LANDING_API, LANDING_POSTGRES})
 
 
+# --- WHY THE `postgres` BRANCH BELOW RESOLVES A TMP DIR NOTHING EVER WRITES TO ---------
+#
+# Module level for the reason the two comment blocks further down are: this function is a
+# dispatch and two refusals, and a fifth branch's argument put it past the project's
+# 50-line limit.
+#
+# The tmp half is returned anyway rather than left to raise, because the value of ONE
+# dispatch is that a landing dir and its staging twin can never come from two different
+# roots -- and a mode that answered the first question and not the second would be exactly
+# the drift this function exists to remove, re-entered as a hole.
+#
+# `opl.config.landing_postgres_tmp` carries why nothing stages there: every other mode's
+# producer runs ON Databricks and stages inside the Volume so `os.replace` can make the
+# file appear whole (one UC Volume is one FUSE mount, which is what makes that rename
+# atomic). This source's producer runs on the extraction HOST -- it writes and verifies a
+# LOCAL file and PUTs it through the Files API -- so there is no Volume-side staging step
+# to point anywhere. It is on the standing unexercised list rather than absent.
 def _landing_and_tmp(cfg: OplConfig, spec, month: str) -> tuple[str, str]:
     """`spec`'s landing directory for `month` AND its staging twin. THE one mapping.
 
@@ -187,13 +204,6 @@ def _landing_and_tmp(cfg: OplConfig, spec, month: str) -> tuple[str, str]:
             cfg.landing_api_tmp(spec.subdir, month),
         )
     if spec.landing == LANDING_POSTGRES:
-        # THE TMP HALF IS RESOLVED AND NEVER WRITTEN TO for this mode, and it is returned
-        # anyway rather than left to raise: the value of ONE dispatch is that a landing dir
-        # and its staging twin cannot come from two roots, and a mode that answered the
-        # first question and not the second would be the drift this function removes,
-        # re-entered as a hole. `opl.config.landing_postgres_tmp` carries why nothing
-        # stages there -- the producer runs on the extraction host and PUTs a verified
-        # local file rather than renaming one inside the Volume.
         return (
             cfg.landing_postgres_table(spec.subdir, month),
             cfg.landing_postgres_tmp(spec.subdir, month),

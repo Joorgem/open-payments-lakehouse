@@ -106,49 +106,58 @@ def _refuse_a_table_this_does_not_ingest(spec: BronzeTable) -> None:
         )
 
 
+# --- WHAT `main` BELOW BINDS, AND WHY THAT PROSE IS UP HERE ----------------------------
+#
+# Module level for the reason `opl.bronze.rules` and `opl.bronze.registry_landing` state
+# above their own long functions: it is the reasoning, not the code, and inside `main` it
+# put that function past the project's 50-line limit.
+#
+# `month` HAS NO DEFAULT, and the reason `add_common_audit_columns` gives its own
+# `snapshot_month` none: the config's pinned month is how F1.2 silently tied every row to
+# 2026-06, and here it would ALSO resolve another month's Auto Loader checkpoint while
+# reading this month's directory. ONE local feeds all four consumers -- the directory read,
+# the inferred-schema store, the checkpoint that records which of that directory's files are
+# new, and the value stamped into every row.
+#
+# `landing_dir` IS THE ONE MAPPING, asked rather than re-spelled. It takes the whole spec,
+# so this table's directory cannot drift from its declared landing mode -- and a mode no
+# root serves is refused there rather than defaulting into a directory holding another
+# source's files, which cloudFiles walks RECURSIVELY.
+#
+# `_snapshot_month` IS STILL STAMPED AND IT IS STILL TRUE: it is "the month parameter the
+# job ran with", which is an operational fact about the run. What it is NOT, for this source
+# alone, is the snapshot AXIS -- both of this phase's snapshots are ingested by one job in
+# one month, so the ledger reads `_snapshot_at` instead. Plan T7 refuses the alternative of
+# labelling them two fabricated months.
+#
+# `record_source` IS NAMED AND NOT DEFAULTED: `add_audit_columns` defaults to the RFB WebDAV
+# share, and a row that cannot say whether the Receita, this lakehouse's generator, the
+# Banco Central or its own operational database produced it is a row whose provenance has to
+# be inferred from its table name.
+#
+# `instant_column` COMES FROM THE SPEC, never a literal: it is the column the vault's
+# observation ledger groups by, and `applied_date` has to be derived from that same one or
+# the satellite's fold and the ledger sit one observation apart.
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     spec = table_spec(args[0] if args else "")
     _refuse_a_table_this_does_not_ingest(spec)
     batch_id = require_batch_id(args[1] if len(args) > 1 else "", action="ingest")
-    # NO DEFAULT, and the reason `add_common_audit_columns` gives its `snapshot_month`
-    # none: the config's pinned month is how F1.2 silently tied every row to 2026-06, and
-    # here it would ALSO resolve another month's Auto Loader checkpoint while reading this
-    # month's directory.
     month = require_month(args[2] if len(args) > 2 else None, action="ingest")
     spark = SparkSession.builder.getOrCreate()
     df = bronze_stream(
         spark,
         DEFAULT,
         spec.contract,
-        # THE ONE MAPPING, asked rather than re-spelled. `landing_dir` takes the whole spec,
-        # so this table's directory cannot drift from its declared landing mode -- and a
-        # mode no root serves is refused there rather than defaulting into a directory
-        # holding another source's files, which cloudFiles walks RECURSIVELY.
         landing_dir(DEFAULT, spec, month),
         spec.table_key,
         month=month,
     )
-    # The SAME `month` local, fed to all four consumers -- the directory read, the
-    # inferred-schema store, the checkpoint that records which of that directory's files are
-    # new, and the value stamped into every row.
-    #
-    # `_snapshot_month` IS STILL STAMPED AND IT IS STILL TRUE: it is "the month parameter
-    # the job ran with", which is an operational fact about the run. What it is NOT, for
-    # this source alone, is the snapshot AXIS -- both of this phase's snapshots are ingested
-    # by one job in one month, so the ledger reads `_snapshot_at` instead. Plan T7 refuses
-    # the alternative of labelling them two fabricated months.
     audited = add_instant_audit_columns(
         df,
         batch_id=batch_id,
         snapshot_month=month,
-        # Named, not defaulted: `add_audit_columns` defaults to the RFB WebDAV share, and a
-        # row that cannot say whether the Receita, this lakehouse's generator, the Banco
-        # Central or its own operational database produced it is a row whose provenance has
-        # to be inferred from its table name.
         record_source=POSTGRES_RECORD_SOURCE,
-        # FROM THE SPEC, never a literal: this is the column the vault's observation ledger
-        # groups by, and `applied_date` has to be derived from that same one.
         instant_column=spec.snapshot_axis.column,
     )
     query = (

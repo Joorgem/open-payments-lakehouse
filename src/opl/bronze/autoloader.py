@@ -198,9 +198,25 @@ def checkpoint_location(cfg: OplConfig, table_key: str, *, month: str) -> str:
 # (`registry._assert_no_two_tables_share_a_landing_subdir`), so no legitimate path can
 # satisfy another root's rebuild, and no illegitimate one can satisfy any of them.
 #
-# THE TUPLE GREW WITH THE FOURTH LANDING MODE AND HAD TO. A root missing from it is not
-# a laxity: it is a REFUSAL of every legitimate read of that root, at the top of the
-# ingest, which is the right direction to fail in and is how this edit announces itself.
+# THE TUPLE GREW WITH THE FOURTH LANDING MODE AND HAD TO, and again with the fifth. A root
+# missing from it is not a laxity: it is a REFUSAL of every legitimate read of that root, at
+# the top of the ingest, which is the right direction to fail in and is how this edit
+# announces itself.
+#
+# IT WAS BLIND TO THE ONE VALUE IT WAS WRITTEN TO REFUSE, and that is what the guard's first
+# line fixes. The equality rebuilds through `cfg.landing_table(subdir, month)`, and
+# `opl.config.landing_cnpj_month` is `f"{...}/{month or self.month}"` -- so `month=""` or
+# `None` resolves to the config's PINNED month INSIDE the rebuild. For a `source_dir` of the
+# pinned month the comparison then PASSED, while the same empty string handed to
+# `checkpoint_location` gave `.../_checkpoints//<table_key>`. That is the
+# substituted-pinned-month pair this guard exists for, arriving in the one form the rebuild
+# could not see it in. Not reachable from either entry point today -- both bind
+# `require_month`, and `test_month_wiring.py` locks that -- so it is defence-in-depth; but
+# the docstring says this function refuses the pair rather than trusting it, and until that
+# line was added that was not true of every spelling of it.
+#
+# (This paragraph moved out of the docstring when the fifth root took the function to 51 of
+# this project's 50-line limit -- the same remedy the two blocks above it record.)
 def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: str) -> None:
     """Refuse a `source_dir` that is not one table's landing subdir for `month`.
 
@@ -223,17 +239,8 @@ def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: st
     such a table -- loudly, at the top of the ingest, which is the right direction to
     fail in, but it would be THIS function's assumption that broke, not that one's.
 
-    IT WAS BLIND TO THE ONE VALUE IT WAS WRITTEN TO REFUSE, and that is what the first
-    line fixes. The equality rebuilds through `cfg.landing_table(subdir, month)`, and
-    `opl.config.landing_cnpj_month` is `f"{...}/{month or self.month}"` -- so `month=""`
-    or `None` resolves to the config's PINNED month INSIDE the rebuild. For a
-    `source_dir` of the pinned month the comparison then PASSED, while the same empty
-    string handed to `checkpoint_location` gave `.../_checkpoints//<table_key>`. That is
-    the substituted-pinned-month pair this guard exists for, arriving in the one form
-    the rebuild could not see it in. Not reachable from either entry point today -- both
-    bind `require_month`, and `test_month_wiring.py` locks that -- so this is
-    defence-in-depth; but the docstring above says this function refuses the pair rather
-    than trusting it, and until now that was not true of every spelling of it."""
+    See the comment block above for the one value this was BLIND to until the empty-month
+    guard on its first line was added, and why that guard is defence-in-depth today."""
     require_month(month, action="read")
     subdir = source_dir.rsplit("/", 1)[-1]
     expected = (
