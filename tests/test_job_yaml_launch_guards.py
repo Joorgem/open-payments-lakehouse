@@ -89,6 +89,15 @@ _GUARDED_JOBS = (
     # would have to be written under, and the repair is deleting a file from the Volume
     # by hand.
     "bronze_ptax_job.yml",
+    # The merchant job, and this list's question has yet another answer here: its input was
+    # produced by a DIFFERENT ARTEFACT ON A DIFFERENT MACHINE. Every other job in this list
+    # either reads bytes somebody else published or writes its own with the same wheel that
+    # then reads them. Here a host-side extractor built the file, and the wheel that ingests
+    # it can be from another revision without anything in the workspace noticing -- it would
+    # read a landed snapshot against a different contract, stamp `_snapshot_ref_date` with a
+    # different derivation, and append the result to the table the vault's first end-dating
+    # is measured from.
+    "bronze_merchant_job.yml",
     # The operator job, and its inclusion is a decision rather than completeness: a
     # repromote APPENDS TO BRONZE, the system of record, re-applying whatever DQ rules
     # the deployed wheel happens to carry. Run against a stale wheel it appends rows

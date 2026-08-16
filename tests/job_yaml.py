@@ -62,6 +62,15 @@ JOB_OF = {
     # jobs and where `generate_payments.py` sits in the payments one. Same flow again,
     # and every lock is still total over it -- only the producer task changes.
     "ptax": "bronze_ptax_job.yml",
+    # F-DB Task 4, and the first entry whose job does NOT fill its own landing directory:
+    # merchant lands as `postgres`, and the producer is a host-side script that cannot run
+    # on Databricks at all (plan T1). So where the four CNPJ jobs run `unzip_table.py`, the
+    # payments one `generate_payments.py` and the PTAX one `fetch_ptax.py`, this job's first
+    # work task is the INGEST. The sentence this comment block has repeated three times --
+    # "only the producer task changes" -- stops being true here: the producer is absent.
+    # Every lock is still total over it, because every lock is about the tasks that ARE
+    # declared.
+    "merchant": "bronze_merchant_job.yml",
 }
 
 

@@ -40,9 +40,9 @@ must have run, for both snapshots, before this job is launched.
 
 `bronze_ptax_ingest` stamps four and says why: `_snapshot_ref_date` is "the date the source
 declares in its own filename", and BCB declares no such thing. This source declares no
-filename token either -- AND IT CANNOT OMIT THE COLUMN, because `bronze_merchant` is the
-first non-file-fed source ever loaded into a vault SATELLITE and `opl.vault.satellites`
-reads that column unconditionally to build `applied_date`. So `add_instant_audit_columns`
+filename token either -- AND IT CANNOT OMIT THE COLUMN, because this table is the first
+non-file-fed source ever loaded into a vault SATELLITE and `opl.vault.satellites` reads
+that column unconditionally to build `applied_date`. So `add_instant_audit_columns`
 derives it from `_snapshot_at`, the instant the EXTRACTOR's transaction stamped and carried
 in every row -- which is the same species ADR 0016 found for PTAX's quote date and the RFB's
 applied date: three sources, three times, the key you must diff on is not in the payload.

@@ -310,6 +310,25 @@ def pin_rendering_gucs(conn: Connection) -> dict[str, str]:
     return read_back
 
 
+# WHETHER ONE STAMP IS AT OR AFTER ANOTHER, ANSWERED BY POSTGRES. Both operands arrive as
+# TEXT and are parsed by the server under the pinned GUCs, which is the same rule T4 makes
+# about rendering, read the other way: `max(updated_at)::text` is Postgres' spelling and
+# `datetime.isoformat()` is Python's, and they differ (a space against a `T`, `+00` against
+# `+00:00`). Comparing them as strings is wrong, and re-parsing either in Python would put a
+# second parser on a value whose first one is the thing being pinned.
+NOT_BEFORE = "SELECT %s::timestamptz >= %s::timestamptz"
+
+
+def watermark_is_at_or_after(conn: Connection, watermark: str, stamp: str) -> bool:
+    """Is `watermark` at or after `stamp`? Asked of the server, never of Python.
+
+    THE ONE CHECK THAT SAYS THE HAND-OFF WAS NOT A RACE. Snapshot 1's watermark must be at
+    or after the mutation's `t2`; below it, the extractor read the table between t1 and t2,
+    the out-of-order rows are perfectly visible to `WHERE updated_at > watermark`, and the
+    phase's one non-authored number is gone while every other count stays correct."""
+    return bool(_one(conn, NOT_BEFORE, (watermark, stamp)))
+
+
 def _one(conn: Connection, statement: str, params: Sequence[Any] | None = None) -> Any:
     """The single scalar `statement` answers, or refuse an empty result.
 

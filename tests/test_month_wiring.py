@@ -112,6 +112,26 @@ _MONTH_CONSUMERS: dict[str, list[tuple[str, int | None, str | None]]] = {
         ("landing_dir", 2, None),
         ("landing_tmp_dir", 2, None),
     ],
+    # F-DB Task 4. Four consumers again, reached through the FOURTH landing root, and the
+    # fourth of them is a DIFFERENT function: this source stamps five audit columns rather
+    # than four, so the month reaches `add_instant_audit_columns` instead of
+    # `add_common_audit_columns`. The keyword is the same, which matters -- the month is
+    # still "the month parameter the job ran with" for this source too, and what changed is
+    # only that it is no longer this table's snapshot AXIS.
+    #
+    # THE PRODUCER IS ABSENT FROM THIS LOCK AND THAT IS NOT AN EXEMPTION.
+    # `scripts/extract_merchant_snapshot.py` takes `--month`, binds it through
+    # `require_month`, and hands that one local to `landing_dir` -- exactly as
+    # `generate_payments` and `fetch_ptax` do. It is invisible here because `task_ast.SRC`
+    # is `databricks/src` and that script is not a job task; it cannot be, because nothing
+    # in the workspace can reach the database. Recorded so the gap is a known one rather
+    # than a discovery.
+    "bronze_merchant_ingest": [
+        ("landing_dir", 2, None),
+        ("bronze_stream", None, "month"),
+        ("checkpoint_location", None, "month"),
+        ("add_instant_audit_columns", None, "snapshot_month"),
+    ],
 }
 
 

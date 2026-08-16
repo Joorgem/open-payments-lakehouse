@@ -122,6 +122,15 @@ _TABLE_TASKS = [
     # reports SUCCESS, after 60 requests have already been made.
     "bronze_ptax_ingest",
     "fetch_ptax",
+    # F-DB Task 4, and it is ONE addition where the last two phases each made two. The
+    # ingest is the fifth spelling of "read a landing dir into staging" and the one that
+    # reads the FOURTH landing root. There is no producer entry point beside it, and that
+    # absence is the source's shape rather than an omission: this table's landing dir is
+    # filled by `scripts/extract_merchant_snapshot.py`, on the extraction host, because
+    # nothing running in the workspace can reach a database bound to localhost (plan T1).
+    # That script therefore sits outside this lock -- `task_ast.SRC` is `databricks/src`
+    # only -- which is recorded rather than worked around: it is not a job task.
+    "bronze_merchant_ingest",
 ]
 
 
