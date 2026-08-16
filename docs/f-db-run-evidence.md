@@ -374,12 +374,13 @@ case the partner link already demonstrates, not an error.
 
 ### 1.2 THE TAUTOLOGY, DECLARED BEFORE THE NUMBER RATHER THAN AFTER IT
 
-**Six of the seven rows above are authored by the mutation script.** The deletes and the
+**Six of the eight mutating rows above are authored by the mutation script**
+*(this read "six of the seven" against a table that has since gained the `watermark_advance` row §2.1 records; the seven were the mutating classes plus the miss).* The deletes and the
 silent updates are *chosen*, not discovered, and an evidence sentence that reports "the
 watermark missed 40 rows" as a finding would be the defect F3's audit caught in its own
 150-duplicate acceptance — a count that could not have come out any other way.
 
-**The eighth row is different, and it is why the headline is worth publishing.** The
+**The out-of-order row is different, and it is why the headline is worth publishing.** The
 out-of-order commit is a property of MVCC, not of the script: `updated_at` orders by
 transaction **start** and visibility orders by transaction **commit**, so a row stamped
 before the watermark can become visible after it. Task 0 reproduced it **with a
@@ -433,14 +434,59 @@ its numbers as well as its files. Its five commits survived; nothing was lost.
 | hard DELETE 16 | **16** ✅ |
 | out-of-order commit 8 | **8 rows, 8 moved** ✅ |
 | snapshot 2 — merchants **1,104** | **1,104** ✅ |
+| **rows a watermark extract MISSES — 48** | **48** ✅ — decomposing **16** deletes + **24** silent + **8** out-of-order |
+| *(not predicted)* `watermark_advance` | **8 rows, 8 moved** — see below |
+
+> **THIS TABLE FIRST SHIPPED WITH EIGHT ROWS AGAINST §1.1's NINE, AND THE MISSING ONE WAS THE
+> HEADLINE.** It dropped *"rows a watermark extract MISSES — 48"* — the row §1.2 calls "why
+> the headline is worth publishing" and §1.3 names as the falsifier — while asserting
+> "every §1.1 prediction lands exactly". The number was measured by the container tests all
+> along; it never reached the table that claimed completeness. **A claim of completeness that
+> is short by exactly the load-bearing row is worse than no claim**, and it was caught by the
+> Task 3 reviewer rather than by the controller who wrote it.
+>
+> **The miss is a genuine complement, not a definitional one**, and the reviewer reproduced it
+> independently: `incremental` comes from a real `WHERE updated_at > :watermark` run **inside
+> snapshot 2's own `REPEATABLE READ READ ONLY` transaction**, and the miss is
+> `diff_caught − incremental` = 128 − 80 = **48**. Per class, as (missed, incremental, diff):
+> `out_of_order_commit (8, 0, 8)`, `update_not_moving_updated_at (24, 0, 24)`,
+> `hard_delete (16, 0, 16)`, `insert (0, 32, 32)`, `update_moving_updated_at (0, 48, 48)`,
+> `watermark_advance (0, 0, 0)`.
+
+**A SIXTH CHANGE CLASS EXISTS THAT NEITHER PLAN §4 NOR §1.1 CONTAINS, AND IT IS LOAD-BEARING.**
+`watermark_advance` — 8 rows, `payload_changed=False`, `moves_updated_at=True`, applied
+**before** snapshot 1 — was added by Task 3's implementer on a correct argument the plan had
+missed: without it `watermark_1 == t1`, and the out-of-order miss is a fabrication rather than
+a measurement. **The implementer died before reporting it and this document did not name it**,
+so two consequences rode along undisclosed:
+
+- §1.1's "UPDATE that moves `updated_at` = 48" is really **64** updates that move it — 48, plus
+  8 out-of-order, plus these 8.
+- The between-snapshot table carries 8 rows with an **unchanged payload and a moved
+  `updated_at`**, a state §4's published population has no row for.
+
+It is **authored**, like the other five, and it changes no published miss: it sits at the
+watermark rather than above it, so it is `(0, 0, 0)`.
 
 `t1 = 22:10:46.710500Z`, `t2 = 22:10:46.779989Z` — 69 ms apart, `t2 > t1`, and the readiness
 file carries both.
 
 **The two update classes are the whole watermark argument and they separate cleanly**: the
 `BEFORE UPDATE` trigger fires 48 times for one class and **0** times for the other, on the
-same derivation. That is measured rather than asserted, and it is what makes "an update a
-watermark cannot see" a mechanism rather than a claim about carelessness.
+same derivation — one `mutated()`, differing only in whether the trigger is armed.
+
+> **AND THE MECHANISM IS NOT THE ONE T2 NAMED, WHICH THIS PARAGRAPH FIRST OBSCURED.** T2 calls
+> class 2 *"a default-shaped trap"* — `DEFAULT now()` does not fire on `UPDATE`, so a schema
+> with **no trigger** loses every update to a watermark. **The seeded schema HAS the trigger**,
+> deliberately, so that trap does not exist in this table. The 24 silent rows are produced by
+> explicitly disarming it with `session_replication_role = 'replica'`.
+>
+> That is still a real operational path — it is what a **replication-apply worker** does, and
+> what `pg_restore --disable-triggers` does — but it is not "a write path that never had a
+> trigger", which is how "fires 48 times and 0 times" reads. **The default-shaped trap itself
+> was measured in Task 0's probe schema (§0.4), where there was no trigger**, and that is the
+> citation the claim rests on. Recorded because the difference is exactly the kind this
+> document exists to keep: *we turned it off* is not *they never had one*.
 
 **A number §1 did not predict, recorded because it is derived rather than contradicted:**
 distinct CNPJ roots fall **1,024 → 1,011** after the mutation. Thirteen of the sixteen
