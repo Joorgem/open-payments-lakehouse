@@ -30,6 +30,7 @@ from opl.bronze.registry import (
     LANDING_GENERATED,
     LANDING_LOCAL,
     LANDING_MODES,
+    LANDING_POSTGRES,
     LANDING_ZIPS,
     REGISTRY,
     RESERVED_SUBDIRS,
@@ -322,7 +323,7 @@ def test_no_table_nothing_downloads_claims_a_downloader():
             f"{spec.name} lands as {spec.landing!r} and declares prefix {spec.prefix!r} "
             "-- a prefix is what a DOWNLOADER builds its file list from"
         )
-    assert modes == {LANDING_GENERATED, LANDING_API}
+    assert modes == {LANDING_GENERATED, LANDING_API, LANDING_POSTGRES}
 
 
 # --- WHERE A SPEC LANDS: `registry_landing.landing_dir` --------------------------------
@@ -342,6 +343,11 @@ def test_no_table_nothing_downloads_claims_a_downloader():
         (LANDING_LOCAL, DEFAULT.landing_cnpj_root),
         (LANDING_GENERATED, DEFAULT.landing_generated_root),
         (LANDING_API, DEFAULT.landing_api_root),
+        # The fifth mode and the fourth root (F-DB Task 4). Its landing dir is resolved
+        # exactly like the other four; what is different about it is that nothing running
+        # on Databricks ever WRITES there -- a host-side extractor PUTs the file through
+        # the Files API -- which is a fact about the producer and not about the mapping.
+        (LANDING_POSTGRES, DEFAULT.landing_postgres_root),
     ],
 )
 def test_each_landing_mode_resolves_to_its_own_root(landing, root):

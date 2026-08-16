@@ -17,6 +17,7 @@ from opl.bronze.snapshot import (
     SNAPSHOT_MONTH_COLUMN,
     SNAPSHOT_REF_DATE_COLUMN,
     ref_date_column,
+    ref_date_from_instant,
 )
 from opl.config import OplConfig, require_month
 
@@ -37,6 +38,15 @@ GENERATED_RECORD_SOURCE = "opl_payment_generator"
 # be re-hosted without the provenance changing, and a column full of URLs invites a
 # second spelling of one that `opl.extraction.ptax_source` already owns.
 API_RECORD_SOURCE = "bcb_olinda_ptax"
+# WHERE A DATABASE-FED SOURCE'S BYTES CAME FROM, which for merchant is an operational
+# Postgres this project runs. Named beside the other three for their reason, and the
+# reason it is not `API_RECORD_SOURCE` is the same shape that made `GENERATED_RECORD_SOURCE`
+# unusable for PTAX, pointing the other way: `bcb_olinda_ptax` would attribute this
+# project's own database to the Banco Central. It names the ENGINE AND THE REGISTRY rather
+# than a DSN -- `rfb_cnpj_webdav` is the same principle -- because a host and port can move
+# without the provenance changing, and because a DSN is the one string in this phase that
+# must never be written into a table.
+POSTGRES_RECORD_SOURCE = "opl_merchant_postgres"
 # The one spelling of the column that records WHICH LANDED FILE a row came out of.
 # It lives here because this is where the column is created, and it is a constant
 # rather than a literal because `opl.bronze.retention` reads it back to decide which
@@ -171,8 +181,9 @@ def checkpoint_location(cfg: OplConfig, table_key: str, *, month: str) -> str:
 # project's 50-line limit.
 #
 # A file-fed table lands under `cnpj/<month>/<subdir>`, a generated one under
-# `generated/<month>/<subdir>` and an api-fed one under `api/<month>/<subdir>`
-# (`opl.config`, `opl.bronze.registry_landing`). All three are rebuilt in the guard and
+# `generated/<month>/<subdir>`, an api-fed one under `api/<month>/<subdir>` and a
+# database-fed one under `postgres/<month>/<subdir>`
+# (`opl.config`, `opl.bronze.registry_landing`). All four are rebuilt in the guard and
 # the source dir must equal ONE of them.
 #
 # STILL AN EQUALITY, NEVER A PREFIX TEST. "Starts with one of the roots" would
@@ -229,6 +240,7 @@ def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: st
         cfg.landing_table(subdir, month),
         cfg.landing_generated_table(subdir, month),
         cfg.landing_api_table(subdir, month),
+        cfg.landing_postgres_table(subdir, month),
     )
     if source_dir not in expected:
         raise ValueError(
@@ -320,6 +332,43 @@ def add_audit_columns(
         SNAPSHOT_REF_DATE_COLUMN,
         ref_date_column(F.col(SOURCE_FILE_COLUMN), snapshot_month),
     )
+
+
+def add_instant_audit_columns(
+    df: DataFrame,
+    *,
+    batch_id: str,
+    snapshot_month: str,
+    record_source: str,
+    instant_column: str,
+) -> DataFrame:
+    """The common four, plus the reference date derived from an instant the SOURCE carried.
+
+    THE THIRD AUDIT-COLUMN PATH (plan T8), and the seam is the same one that split the
+    first two: WHERE the reference date comes from. `add_audit_columns` reads the RFB's
+    mainframe filename token; `add_common_audit_columns` omits the column because a
+    generated or api-fed source declares no such thing. Neither works for a source whose
+    snapshot instant travels IN THE ROW -- and this one cannot simply omit the column
+    either, because `bronze_merchant` is the first non-file-fed source ever loaded into a
+    VAULT SATELLITE and `opl.vault.satellites` reads `_snapshot_ref_date` unconditionally
+    to build `applied_date`.
+
+    `instant_column` IS A COORDINATE AND MUST COME FROM THE RESOLVED SPEC -- in practice
+    `spec.snapshot_axis.column`, never a literal at the call site. It is the column the
+    observation ledger groups by, so a stamp derived from a DIFFERENT column than the one
+    the ledger reads would put `applied_date` and the axis one observation apart, and the
+    satellite's `groupBy(hash_key, applied_date)` fold would collapse rows the ledger had
+    kept distinct.
+
+    KEYWORD-ONLY, and the argument is `add_common_audit_columns`': `batch_id`,
+    `snapshot_month`, `record_source` and `instant_column` are four adjacent `str`s, and a
+    positional call that swapped any two type-checks and stamps a whole batch wrongly."""
+    return add_common_audit_columns(
+        df,
+        batch_id=batch_id,
+        snapshot_month=snapshot_month,
+        record_source=record_source,
+    ).withColumn(SNAPSHOT_REF_DATE_COLUMN, ref_date_from_instant(F.col(instant_column)))
 
 
 def lookup_type_column(file_path_col: Column) -> Column:

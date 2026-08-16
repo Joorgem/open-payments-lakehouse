@@ -48,6 +48,7 @@ from opl.bronze.registry_landing import (  # noqa: F401  (re-exported for consum
     LANDING_GENERATED,
     LANDING_LOCAL,
     LANDING_MODES,
+    LANDING_POSTGRES,
     LANDING_ZIPS,
     NON_FILE_FED_LANDING_MODES,
     _assert_every_landing_mode_is_classified,
@@ -71,8 +72,8 @@ from opl.bronze.registry_subdirs import (  # noqa: F401  (re-exported for consum
     _assert_subdirs_are_single_path_components,
     _malformed_subdir_reason,
 )
-from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT, SnapshotAxis
-from opl.contracts import payments, ptax
+from opl.bronze.snapshot_axis import INSTANT_SNAPSHOT, MONTHLY_SNAPSHOT, SnapshotAxis
+from opl.contracts import merchant, payments, ptax
 from opl.contracts.catalogue import CONTRACT_COLUMNS, is_known
 
 
@@ -390,6 +391,82 @@ REGISTRY: dict[str, BronzeTable] = {
             "ALTER TABLE {table} ALTER COLUMN cotacao_venda SET NOT NULL",
         ),
     ),
+    # THE FOURTH SOURCE, and the first whose bytes nothing INSIDE the workspace produces,
+    # fetches or generates. A host-side extractor reads one `REPEATABLE READ READ ONLY`
+    # transaction out of an operational Postgres and PUTs the file through the Files API
+    # (plan T1: the database is bound to localhost and egress out of Databricks creates no
+    # route into a laptop behind a home NAT). `landing=LANDING_POSTGRES` is what makes the
+    # entry legal, under the SAME two complementary guards the payments and PTAX entries
+    # name: no FILE_GROUPS producer and no prefix.
+    #
+    # IT IS ALSO THE FIRST ENTRY THAT DECLARES A `snapshot_axis`, and that is the field's
+    # whole reason for existing. Every other registered table is observed once per calendar
+    # month; this one is observed TWICE, and `opl.vault.observation` derives its ledger at
+    # the grain of (business key, axis column) -- so on the monthly default both
+    # observations fold into one row, a key present in the first and gone from the second
+    # reads as `observed` rather than `absent_after_observation`, and the vault's
+    # end-dating path has no producer. No error, no red test.
+    #
+    # Every string is lifted from `opl.contracts.merchant`; `name` is the only literal, for
+    # the reason the payments entry gives.
+    "merchant": BronzeTable(
+        name="merchant",
+        contract=merchant.CONTRACT,
+        table_key=merchant.BRONZE_TABLE_KEY,
+        staging=merchant.BRONZE_STAGING_TABLE,
+        bronze=merchant.BRONZE_TABLE,
+        quarantine=merchant.BRONZE_QUARANTINE_TABLE,
+        subdir=merchant.LANDING_SUBDIR,
+        landing=LANDING_POSTGRES,
+        # No downloader, so no prefix -- refused as a false statement by
+        # `_assert_no_table_nothing_downloads_claims_a_downloader` if one is pasted in.
+        prefix=None,
+        snapshot_axis=INSTANT_SNAPSHOT,
+        # `merchant_id`, `onboarded_on` and `_snapshot_at` ARE THE COLUMNS NO OTHER
+        # CONTRACT HAS, which is what satisfies `test_the_new_tables_carry_a_constraint_no_
+        # other_contract_could_have`: a tuple pasted from any other entry here would be
+        # missing all three, and one pasted FROM here names columns no other table carries.
+        #
+        # They are also the right columns on their own merits, and each for its own reason.
+        # `merchant_id` is `hub_merchant`'s business key -- a NULL there is a hub row keyed
+        # on nothing. `onboarded_on` is the effectivity satellite's ENTRY column, and
+        # `opl.vault.effectivity` records that a NULL entry date SORTS FIRST in Spark and
+        # beats a delivered one, so a nullable open would silently win a window it should
+        # have lost. `_snapshot_at` is the snapshot AXIS: the ledger's before/after split is
+        # a string comparison on it, so a malformed value does not fail -- it sorts wrongly.
+        #
+        # THE SHAPE CHECK IS A `regexp_like` AND A LENGTH TOGETHER, and neither half is
+        # decoration. The regex refuses `2026-08-16 19:07:23+00` -- `::text`'s own
+        # rendering, which is what a writer that skipped `to_char` would land, and which
+        # differs from the pinned one in three ways at once (a space, an offset, and
+        # trimmed trailing fractional zeros). The length refuses a value with a newline
+        # glued on, which Java's `$` accepts. Trailing zeros are exactly why the width is
+        # fixed: `_snapshot_at` is compared lexicographically as a chronology, and
+        # `...01.1` sorts after `...01.09`.
+        #
+        # NO `{n}` QUANTIFIER, and that is not a style choice -- `promote_batch.
+        # _assert_constraints` issues `statement.format(table=tbl)`, so `[0-9]{6}` raises
+        # IndexError from str.format AFTER the append has committed. Spelled out digit by
+        # digit instead, which `test_every_constraint_survives_being_formatted_with_its_
+        # table` keeps the next author from undoing.
+        #
+        # WHAT IS DELIBERATELY ABSENT: no CHECK on `status`, `mcc` or `risk_tier`. They are
+        # value domains that GAIN members, and the payments entry already records what a
+        # CHECK costs there -- an INSERT upstream becomes a MIGRATION on a live bronze
+        # table. And no CHECK on `trade_name`: it is the one nullable column of this
+        # contract, deliberately, and both NULL and `''` are values the source sends.
+        constraints=(
+            "ALTER TABLE {table} ALTER COLUMN merchant_id SET NOT NULL",
+            "ALTER TABLE {table} ALTER COLUMN onboarded_on SET NOT NULL",
+            "ALTER TABLE {table} ALTER COLUMN _snapshot_at SET NOT NULL",
+            "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS _snapshot_at_instant_shape",
+            "ALTER TABLE {table} ADD CONSTRAINT _snapshot_at_instant_shape CHECK ("
+            "length(_snapshot_at) = 27 AND regexp_like(_snapshot_at, "
+            "'^[0-9][0-9][0-9][0-9]-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
+            "T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+            "[.][0-9][0-9][0-9][0-9][0-9][0-9]Z$'))",
+        ),
+    ),
 }
 
 
@@ -476,6 +553,45 @@ def _assert_contracts_exist() -> None:
                 f"declares ({', '.join(sorted(CONTRACT_COLUMNS))}). Contracts live in "
                 "opl.contracts.cnpj_schemas (the RFB files) and opl.contracts.payments "
                 "(the generated stream), and opl.contracts.catalogue joins them."
+            )
+
+
+def _assert_a_non_monthly_axis_is_a_contract_column(registry) -> None:
+    """Fail at import if a source declares a non-default snapshot axis whose column its
+    own contract does not carry.
+
+    THE DEFAULT AXIS IS THE ONE CASE WHERE THE COLUMN IS NOT IN THE DATA, and that is why
+    this guard is scoped rather than total. `_snapshot_month` is stamped by the ingest from
+    the job's month PARAMETER (`autoloader.add_common_audit_columns`), so it is a fact
+    about the run and is correctly absent from every contract. Any other axis is a fact the
+    SOURCE has to assert -- bronze has nothing to derive it from -- so it must be a column
+    the contract declares and the landed file carries.
+
+    IT IS ALSO THE ONE PLACE TWO SPELLINGS OF `_snapshot_at` MEET.
+    `opl.contracts.merchant` imports nothing, on purpose, so it cannot ask
+    `opl.bronze.snapshot_axis` what the instant axis is called; the two literals are made a
+    CROSS-CHECK here, in the module that already sees both, exactly as `prefix` is a
+    cross-check on `FILE_GROUPS` rather than an independent claim.
+
+    WHAT IT COSTS TO GET WRONG, and it is quiet in both halves. `opl.vault.observation`
+    groups by the axis column: naming one bronze does not hold makes every loader raise
+    UNRESOLVED_COLUMN inside a vault job, several tasks past the registry -- and naming one
+    it holds by accident (an audit column, say) derives the ledger on the wrong axis and
+    returns a full set of plausible states.
+
+    A plain ValueError: nothing here is an unknown table, and no operator supplied it."""
+    for spec in registry.values():
+        if spec.snapshot_axis == MONTHLY_SNAPSHOT:
+            continue
+        if spec.snapshot_axis.column not in CONTRACT_COLUMNS[spec.contract]:
+            raise ValueError(
+                f"{spec.name} declares snapshot axis {spec.snapshot_axis.name!r} on column "
+                f"{spec.snapshot_axis.column!r}, which its contract {spec.contract!r} does "
+                f"not carry ({', '.join(CONTRACT_COLUMNS[spec.contract])}). Only the "
+                f"default {MONTHLY_SNAPSHOT.column!r} is stamped by the ingest from the "
+                "job's month parameter; every other axis is a fact the source asserts, so "
+                "it has to be a declared column that the landed file carries. The vault's "
+                "observation ledger groups by this column."
             )
 
 
@@ -590,6 +706,10 @@ _assert_contracts_exist()
 # resolve FILE_GROUPS entries by `spec.contract`, and neither is meaningful until
 # that contract is known to exist and to name one table only.
 _assert_no_two_tables_share_a_contract()
+# AND THE AXIS AFTER THE CONTRACT, because it reads the contract's column list: an axis
+# check against a contract that does not exist would raise a KeyError from inside a guard
+# instead of the prose refusal `_assert_contracts_exist` already wrote two lines up.
+_assert_a_non_monthly_axis_is_a_contract_column(REGISTRY)
 # THE LANDING MODE IS RESOLVED BEFORE ANYTHING KEYED ON IT, which is a new ordering
 # constraint in F1b Task 3 and is the reason this call moved up two lines. Both prefix
 # guards below now BRANCH on `spec.landing` -- one skips generated tables, the other

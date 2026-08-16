@@ -57,7 +57,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from opl.config import is_month
+from opl.config import MONTH_PATTERN, is_month
 
 
 @dataclass(frozen=True)
@@ -101,13 +101,27 @@ INSTANT_WIDTH = 27
 
 # Everything from the day onward. The YEAR AND MONTH ARE NOT MATCHED HERE -- `_is_instant`
 # hands those to `is_month`, so this pattern cannot become a second spelling of the month
-# rule. Anchored at both ends because it is matched against a slice rather than the whole
-# value, and an unanchored tail would accept trailing rubbish inside a correct width.
-_INSTANT_TAIL = re.compile(
-    r"^-(0[1-9]|[12][0-9]|3[01])"  # day
+# rule.
+_INSTANT_TAIL_PATTERN = (
+    r"-(0[1-9]|[12][0-9]|3[01])"  # day
     r"T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"  # hour:minute:second
-    r"\.[0-9]{6}Z$"  # microseconds, then the UTC marker
+    r"\.[0-9]{6}Z"  # microseconds, then the UTC marker
 )
+# Anchored at both ends because it is matched against a SLICE rather than the whole value,
+# and an unanchored tail would accept trailing rubbish inside a correct width.
+_INSTANT_TAIL = re.compile(f"^{_INSTANT_TAIL_PATTERN}$")
+
+# THE WHOLE VALUE, IN ONE PATTERN, for a consumer that cannot slice -- which is what a
+# Spark `rlike` is. `_is_instant` below asks `is_month` about the first seven characters
+# and this pattern about the rest; a DQ rule running inside the engine has no `is_month` to
+# ask, so it needs the month half written out. Composed from `opl.config.MONTH_PATTERN` and
+# the tail above rather than typed again, so there is exactly one spelling of each half and
+# a change to either reaches both consumers. THE ONLY THING THAT IS NOT SHARED IS THE
+# WIDTH CHECK, and it is not redundant on the Spark side even though this pattern is
+# anchored: Java's `$` matches before a trailing line terminator, so a landed value with a
+# newline glued on satisfies `rlike` and would not satisfy `_is_instant`. See
+# `opl.bronze.snapshot.ref_date_from_instant`, which asserts both.
+INSTANT_PATTERN = f"^{MONTH_PATTERN}{_INSTANT_TAIL_PATTERN}$"
 
 
 def _is_instant(value: str) -> bool:

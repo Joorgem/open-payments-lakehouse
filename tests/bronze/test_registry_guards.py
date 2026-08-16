@@ -583,7 +583,10 @@ def test_an_unmasked_contract_keeps_its_check_constraint():
         if any("CHECK" in statement for statement in spec.constraints)
     ]
     assert sorted(checked) == [
-        "empresas", "estabelecimentos", "lookup", "payments", "ptax",
+        # `merchant` is the sixth, and its CHECK is on `_snapshot_at` -- the snapshot AXIS,
+        # which the vault's observation ledger compares as a string. `socios` is still the
+        # one entry with none, and still for the masking reason.
+        "empresas", "estabelecimentos", "lookup", "merchant", "payments", "ptax",
     ], f"expected every unmasked table to keep its CHECK, got {checked}"
 
 

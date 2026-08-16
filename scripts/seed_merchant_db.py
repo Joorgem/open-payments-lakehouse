@@ -68,26 +68,26 @@ from merchant_population import (
 from probe_postgres_session import dsn, redacted_dsn
 from psycopg import sql
 
-TABLE = "merchant"
+from opl.extraction.postgres_source import RENDERING_GUCS as PINS
+from opl.extraction.postgres_source import REQUIRED_SERVER_ENCODING
+from opl.extraction.postgres_source import SOURCE_TABLE as TABLE
+
 TRIGGER_FUNCTION = "merchant_touch_updated_at"
 DEFAULT_SCHEMA = "public"
 
-# T4's pin set, verbatim. `search_path` is a pin and not a dependency: every statement
-# below names its schema, so a hostile `search_path` cannot redirect one.
-PINS: dict[str, str] = {
-    "TimeZone": "UTC",
-    "DateStyle": "ISO, MDY",
-    "IntervalStyle": "iso_8601",
-    "bytea_output": "hex",
-    "extra_float_digits": "3",
-    "client_encoding": "UTF8",
-    "search_path": "pg_catalog, public",
-}
-
-# Asserted, never assumed. A `LATIN1` database was created on this very container during
-# Task 0, and `SQL_ASCII` accepts arbitrary bytes as `text` -- "a Postgres database is
-# UTF-8" is false as a general statement and true of this one only if it is checked.
-REQUIRED_SERVER_ENCODING = "UTF8"
+# T4's PIN SET AND THE TABLE'S NAME NOW HAVE ONE DECLARATION, IN THE MODULE THE EXTRACTOR
+# READS THEM FROM (F-DB Task 4). They were declared here first, because this module existed
+# first; a second copy in `opl.extraction.postgres_source` would be the drift this
+# repository polices hardest, and it is the dangerous direction rather than a tidy one --
+# this module is the only thing in the phase that WRITES, so a writer and a reader
+# disagreeing about `DateStyle` is the silent misparse T4 measured (`03/08/2026` written,
+# 2026-03-08 read) rather than a failure either side would notice.
+#
+# THE EXECUTOR BELOW IS STILL THIS MODULE'S OWN, and that is a constraint rather than an
+# oversight: `postgres_source` may not import psycopg, so its version of the pin is written
+# in bound parameters (`set_config` / `current_setting`) while this one uses
+# `psycopg.sql.Identifier`. Two implementations of a check that reads its own answer back
+# cannot both pass wrongly; two spellings of the VALUES could.
 
 # The payload columns, in plan §4 order. `updated_at` is deliberately absent: the trigger
 # owns it, so no UPDATE this module issues ever names it.

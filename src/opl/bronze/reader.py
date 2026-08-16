@@ -32,6 +32,7 @@ from pyspark.sql import DataFrame, SparkSession
 from opl.bronze.schema import struct_for
 from opl.contracts.catalogue import CONTRACT_COLUMNS
 from opl.contracts.cnpj_schemas import CSV_DIALECT, TABLES
+from opl.contracts.merchant import CONTRACT as MERCHANT_CONTRACT
 from opl.contracts.payments import CONTRACT as PAYMENTS_CONTRACT
 from opl.contracts.ptax import CONTRACT as PTAX_CONTRACT
 
@@ -159,6 +160,13 @@ _SOURCE_FORMATS: dict[str, str] = {
     **{contract: CSV_FORMAT for contract in TABLES},
     PAYMENTS_CONTRACT: JSON_FORMAT,
     PTAX_CONTRACT: JSON_FORMAT,
+    # The Postgres merchant snapshot: one JSON object per row, and JSON Lines for a fourth
+    # reason again -- `trade_name` is the only nullable column of the contract and the
+    # source produces BOTH a NULL and an empty string for it. CSV cannot tell them apart
+    # without `nullValue`/`emptyValue` options that are a per-source dialect nobody
+    # publishes; JSON spells one `null` and the other `""`. `_FORMAT_OPTIONS` is untouched:
+    # this is a third contract on a format that already has its option set.
+    MERCHANT_CONTRACT: JSON_FORMAT,
 }
 
 

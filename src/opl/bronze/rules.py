@@ -16,7 +16,17 @@ from pyspark.sql import Column
 from pyspark.sql import functions as F
 
 from opl.bronze.snapshot import SNAPSHOT_REF_DATE_COLUMN
+from opl.bronze.snapshot_axis import INSTANT_PATTERN, INSTANT_WIDTH
 from opl.contracts.catalogue import CONTRACT_COLUMNS
+from opl.contracts.merchant import (
+    CNPJ_COLUMN,
+    CNPJ_WIDTH,
+    CREDIT_LIMIT_COLUMN,
+    ONBOARDED_ON_COLUMN,
+    SNAPSHOT_AT_COLUMN,
+)
+from opl.contracts.merchant import CONTRACT as MERCHANT_CONTRACT
+from opl.contracts.merchant import REQUIRED_COLUMNS as MERCHANT_REQUIRED_COLUMNS
 from opl.contracts.payments import CONTRACT as PAYMENTS_CONTRACT
 from opl.contracts.payments import COUNTERPARTY_COLUMNS, REQUIRED_COLUMNS
 from opl.contracts.ptax import CONTRACT as PTAX_CONTRACT
@@ -112,6 +122,16 @@ REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     # something between that validation and bronze emptied a column, which is exactly the
     # set of columns a bug in the landing writer could empty without anyone noticing.
     PTAX_CONTRACT: tuple(PTAX_REQUIRED_COLUMNS),
+    # MERCHANT IS DERIVED AND IT IS THE ONE ENTRY THAT IS A SCHEMA RATHER THAN A SAMPLE.
+    # Every CNPJ tuple above is a subset chosen by MEASURING which columns are never blank
+    # on live RFB data, because that source is one this project does not control and every
+    # entry is a new way for a live table's ingest to go red. This source's nullability is
+    # DECLARED, in `scripts/seed_merchant_db._DDL`: one `NOT NULL` per column with exactly
+    # one exception, and `opl.contracts.merchant` carries that DDL read across. So the gate
+    # asserts the schema itself, and the one nullable column -- `trade_name`, which the
+    # source emits as NULL, as `''` and as a name on purpose -- is absent by construction
+    # rather than by a decision taken here.
+    MERCHANT_CONTRACT: tuple(MERCHANT_REQUIRED_COLUMNS),
 }
 
 
@@ -265,6 +285,18 @@ def _bad_iso_date(column: str) -> Callable[[], Column]:
     ).isNull()
 
 
+def _unparseable_decimal(column: str, decimal_type: str) -> Callable[[], Column]:
+    """`column` does not read as `decimal_type`.
+
+    WHAT IT CATCHES AND WHAT IT DOES NOT, stated because the difference is not obvious and
+    two contracts now rest on it: a cast to `decimal(p,s)` ROUNDS a value with too many
+    fractional digits and returns NULL only when the value is not a number at all or
+    exceeds the declared PRECISION. So this refuses `1,234.50`, `R$ 1234.50`, `1.2e400` and
+    a value wider than `p` digits; it does not refuse a third decimal place. Scale is
+    pinned upstream instead, by the DDL the value is rendered from."""
+    return lambda: F.col(column).cast(decimal_type).isNull()
+
+
 def _unparseable_rate(column: str) -> Callable[[], Column]:
     """`column` does not read as a decimal number.
 
@@ -282,10 +314,15 @@ def _unparseable_rate(column: str) -> Callable[[], Column]:
     every row carrying THAT rate while looking deliberate. (Not "every row": 5.13950
     rounds to 5.14 too and is 0.0097% off the other way -- ADR 0016 retracts the wider
     phrasing, and the argument stands on the worse half.)"""
-    return lambda: F.col(column).cast(_RATE_TYPE).isNull()
+    return _unparseable_decimal(column, _RATE_TYPE)
 
 
 _RATE_TYPE = "decimal(18,5)"
+# The merchant registry's `credit_limit`, declared `numeric(14,2)` by the source's own DDL.
+# THE PRECISION IS EXERCISED RATHER THAN NOMINAL: `merchant_population.MAX_CREDIT_LIMIT` is
+# `999999999999.99`, which is exactly fourteen digits, so a cast narrower than the DDL
+# would NULL a value the source is entitled to send and fail the whole run.
+_CREDIT_LIMIT_TYPE = "decimal(14,2)"
 
 
 # A publication INSTANT: a date, a space, a time to the second, and 1-6 fractional
@@ -370,6 +407,59 @@ def _unparseable_publication_instant() -> Column:
     return ~F.col(PUBLISHED_AT_COLUMN).rlike(_INSTANT_SHAPE) | F.to_timestamp(
         F.col(PUBLISHED_AT_COLUMN)
     ).isNull()
+
+
+# A CNPJ as the merchant registry carries it: exactly `CNPJ_WIDTH` characters, every one a
+# digit. TWO CHECKS IN ONE PREDICATE, for `_bad_iso_date`'s reason -- each misses what the
+# other catches. The width alone accepts `1234567800011x`; the digit test alone accepts an
+# eight-character root, which is the value a writer that landed `cnpj_basico` by mistake
+# would produce and which would then join to `hub_empresa` while every count stayed green.
+#
+# NOT TRIMMED, unlike `_basico_length`. The RFB's fixed-width CSV pads its fields, so
+# trimming there is reading the source's own dialect; this value is rendered by Postgres
+# from a `text` column, where a leading space IS a different key. A rule that trimmed would
+# be looser than the CHECK constraint the promote applies afterwards, which is the one
+# direction this repository does not allow.
+_DIGITS_ONLY = r"^[0-9]*$"
+
+
+def _bad_cnpj(column: str) -> Callable[[], Column]:
+    """`column` is not exactly `CNPJ_WIDTH` digits.
+
+    A LENGTH-AND-ALPHABET check and never a numeric one. Measured (evidence §0.3): 142 of
+    the 1,024 pinned counterparty roots carry a LEADING ZERO, so any cast to numeric
+    destroys 13.9% of this pool silently -- and the failure is downstream and total, since
+    the first eight characters of this column are what `link_merchant_empresa` joins to
+    `hub_empresa` with. `int()` would also accept `1_4`, `+14` and ` 14`."""
+    return lambda: (F.length(F.col(column)) != CNPJ_WIDTH) | ~F.col(column).rlike(
+        _DIGITS_ONLY
+    )
+
+
+def _bad_snapshot_instant(column: str) -> Callable[[], Column]:
+    """`column` is not the fixed-width UTC instant the snapshot axis is spelled in.
+
+    THE AXIS, NOT A TIMESTAMP, and that is why this is not `_bad_iso_date` with a longer
+    pattern. `opl.vault.observation` splits before/after a first observation with a STRING
+    COMPARISON on this column, and `opl.vault.loading.earliest_record_source` takes a `min`
+    over it -- so a value of the wrong shape does not fail anything, it SORTS WRONGLY. Both
+    qualifiers of the rendering are load-bearing and both are checked here: fixed width,
+    because `...01.1` sorts after `...01.09` once trailing fractional zeros are trimmed, and
+    UTC, because an offset-bearing rendering orders two instants backwards across a zone
+    change.
+
+    THE LENGTH IS NOT REDUNDANT BESIDE THE ANCHORED PATTERN. Java's `$` matches before a
+    trailing line terminator, so `...Z\\n` satisfies `rlike` on this engine while failing
+    `snapshot_axis._is_instant`, which is the predicate the vault job's window PARAMETER is
+    validated by -- two answers to one question about one value.
+
+    IT IS THE GATE'S HALF OF A PAIR. The registry's `snapshot_at_instant_shape` CHECK says
+    the same thing at the promote, AFTER the append has committed; this runs before
+    anything reaches bronze, so the gate is never weaker than the constraint downstream of
+    it. Both are pinned against each other in tests/bronze/test_merchant_rules.py."""
+    return lambda: ~F.col(column).rlike(INSTANT_PATTERN) | (
+        F.length(F.col(column)) != INSTANT_WIDTH
+    )
 
 
 def _unprovable_ref_date() -> Column:
@@ -546,6 +636,72 @@ def _unprovable_ref_date() -> Column:
 #     on these rows. `_snapshot_ref_date` is the date a source declares in its own
 #     FILENAME, which is a fact about the RFB's mainframe naming convention; BCB declares
 #     no such thing, so `add_common_audit_columns` does not stamp it.
+#
+# --- AND THE MERCHANT SET, WHICH IS THE FIRST TO CARRY `unprovable_snapshot_ref_date` ---
+# --- WITHOUT A FILENAME BEHIND IT --------------------------------------------------------
+#
+# The two sets above omit that rule because the column is ABSENT from their rows. This
+# source cannot omit it and cannot derive it the RFB's way, and plan T8 is the reason:
+# `bronze_merchant` is the first non-file-fed source ever loaded into a VAULT SATELLITE,
+# and `opl.vault.satellites` reads `_snapshot_ref_date` unconditionally to build
+# `applied_date`. So a third audit-column path stamps it from the snapshot instant the
+# EXTRACTOR carried (`opl.bronze.snapshot.ref_date_from_instant`), and this rule keeps its
+# job: an instant the derivation cannot read yields NULL and the row is rejected in the
+# gate rather than reaching a satellite with no applied date.
+#
+# WHAT THIS SET CARRIES, and why each earns a place on an ALL-OR-NOTHING gate:
+#
+#   - Thirteen `null_or_empty_*`, DERIVED from `merchant.REQUIRED_COLUMNS`. This is the
+#     only contract here whose required set is a SCHEMA rather than a sample: the source's
+#     DDL is one `NOT NULL` per column with exactly one exception, so the gate asserts the
+#     declaration instead of a measurement of live rows.
+#   - NOTHING ABOUT `trade_name`, and the absence is the decision. It is the one nullable
+#     column, and the source emits NULL, `''` AND a name for it on purpose -- a column that
+#     is only ever one of them cannot demonstrate that the landing path keeps NULL and `''`
+#     apart, which is the whole reason it is nullable. `_null_or_blank` treats `''` as
+#     blank, so a rule here would reject rows the source is entitled to send.
+#   - `bad_cnpj_shape`. THE INTEGRATION CLAIM, checked at the gate rather than after the
+#     fact, and the direct twin of payments' `bad_payer_cnpj_basico_length`: the premise is
+#     that merchants join to real companies by business key, and the failure that breaks it
+#     silently is a numeric round trip eating a leading zero. 142 of the 1,024 pinned roots
+#     have one.
+#   - `bad_onboarded_on_shape`, reusing the ISO-date predicate PTAX's `quote_date` uses.
+#     NOT a near-tautology and not cosmetic: this is the effectivity satellite's ENTRY
+#     column, and `opl.vault.effectivity` records that a NULL entry date SORTS FIRST in
+#     Spark and beats a delivered one -- so an unparseable entry date does not fail, it
+#     wins a window it should have lost.
+#   - `bad_snapshot_at_shape`. The AXIS, and the rule with the least tautological reading
+#     in this file: the observation ledger's before/after split is a string comparison on
+#     this column, so a wrong shape sorts wrongly rather than raising. See the function for
+#     why the width is checked beside the anchored pattern.
+#   - `unparseable_credit_limit`. Near-tautological in the same way PTAX's rate rules are
+#     -- Postgres renders `numeric(14,2)` under pinned GUCs -- and kept because this column
+#     is in the satellite's `hash_diff`, so a value that casts to NULL makes two genuinely
+#     different payloads digest the same.
+#   - `encoding_replacement_char`, folded over all fourteen columns. LIVE HERE FOR A REASON
+#     THE OTHER TWO JSON SOURCES DO NOT HAVE: those are generated from ASCII-ish inputs,
+#     while this source's `legal_name` and `trade_name` are Portuguese and accented, and
+#     plan T10 records that a UTF-8 source is exactly the feed that reaches the forty
+#     characters JDK 17 and CPython 3.12 upper-case differently. The seeded population is
+#     bounded below U+0250 deliberately, so this rule guards the BOUNDARY rather than the
+#     seed -- a manual `psql` INSERT, a re-seed, or a mutation script are all outside it.
+#   - `unprovable_snapshot_ref_date`, LAST, for the reason the CNPJ sets put it last: it is
+#     the only rule here that describes the FILE rather than the row.
+#
+# WHAT IT DELIBERATELY DOES NOT CARRY:
+#
+#   - No value-domain rule on `status`, `mcc` or `risk_tier`. Value domains GAIN members,
+#     and the payments entry already records what that costs when a CHECK is involved.
+#   - NO RULE ABOUT `updated_at` BEYOND ITS PRESENCE, and this one is a ruling rather than
+#     a deferral. The temptation is a rule asserting it does not exceed `_snapshot_at` --
+#     which is FALSE by construction and is the phase's entire subject: a transaction
+#     stamps `updated_at` at its START and becomes visible at its COMMIT, so a row can
+#     legitimately carry a stamp on either side of the instant that observed it. A gate
+#     rule there would reject exactly the rows the headline is measured over.
+#   - NO ROW-COUNT OR COMPLETENESS RULE. "The snapshot holds every row the table had" is a
+#     statement about a row that is ABSENT, and this gate TAGS ROWS. It is asserted where
+#     it can be -- inside the extraction's own transaction, against `count(*)` -- and
+#     putting a decorative version here would report green over exactly the case it names.
 
 
 def rules_for(table: str) -> list[tuple[str, Callable[[], Column]]]:
@@ -594,6 +750,22 @@ def rules_for(table: str) -> list[tuple[str, Callable[[], Column]]]:
             ),
             (f"unparseable_{PUBLISHED_AT_COLUMN}", _unparseable_publication_instant),
             ("encoding_replacement_char", _encoding_check(PTAX_CONTRACT)),
+        ],
+        MERCHANT_CONTRACT: [
+            *_required_rules(MERCHANT_CONTRACT),
+            (f"bad_{CNPJ_COLUMN}_shape", _bad_cnpj(CNPJ_COLUMN)),
+            (f"bad_{ONBOARDED_ON_COLUMN}_shape", _bad_iso_date(ONBOARDED_ON_COLUMN)),
+            # `bad` + `_snapshot_at` + `_shape` reads as `bad_snapshot_at_shape`, which is
+            # the name a triager filters a quarantine on. Built from the column constant
+            # rather than typed, so a rename of the axis column reaches the reason string
+            # -- the underscore the column already carries is the separator.
+            (f"bad{SNAPSHOT_AT_COLUMN}_shape", _bad_snapshot_instant(SNAPSHOT_AT_COLUMN)),
+            (
+                f"unparseable_{CREDIT_LIMIT_COLUMN}",
+                _unparseable_decimal(CREDIT_LIMIT_COLUMN, _CREDIT_LIMIT_TYPE),
+            ),
+            ("encoding_replacement_char", _encoding_check(MERCHANT_CONTRACT)),
+            (_UNPROVABLE_REF_DATE, _unprovable_ref_date),
         ],
     }
     return list(tables[table])

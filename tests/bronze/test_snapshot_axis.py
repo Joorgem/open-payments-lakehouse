@@ -12,11 +12,15 @@ full table of plausible wrong answers. So the property belongs to the axis, and 
 where it is held.
 
 THE REGISTRY ASSERTION IS THE OTHER HALF OF F-DB TASK 2's ACCEPTANCE. The axis became a
-field on `BronzeTable` for a source that does not exist yet, and the thing that had to
-stay true is that the SIX tables the lakehouse has actually loaded read
-exactly the column they read before. Asserting the DEFAULT is not the same claim: a
-default is what an omitted declaration means, and this asserts that every entry really
-did omit it."""
+field on `BronzeTable` for a source that did not exist yet, and the thing that had to stay
+true is that the SIX tables the lakehouse had actually loaded read exactly the column they
+read before. Asserting the DEFAULT is not the same claim: a default is what an omitted
+declaration means, and this asserts that every one of those entries really did omit it.
+
+TASK 4 REGISTERED THE SEVENTH, so the pair of assertions below is now a PARTITION of the
+registry rather than one statement about all of it: six names on the monthly axis, one on
+the instant axis. Both halves are set equalities, so neither an eighth table nor a second
+instant source can arrive without a deliberate edit here."""
 from __future__ import annotations
 
 import pytest
@@ -34,19 +38,51 @@ from opl.config import is_month
 def test_every_registered_table_is_still_on_the_monthly_axis():
     """The whole of Task 2's behavioural claim, in one assertion.
 
-    Every source this lakehouse has ingested is a monthly snapshot, and the generalised
-    axis must not have moved one of them: the field was added with a default so that no
-    registry entry had to change, and this is what says none did. A seventh table that
-    declares a finer axis will turn this red, which is the right moment for a human to
-    read the diff -- that is a modelling decision, not a paste."""
+    Every source this lakehouse had ingested when the axis was generalised is a monthly
+    snapshot, and the generalisation must not have moved one of them: the field was added
+    with a default so that no registry entry had to change, and this is what says none did.
+
+    THE SEVENTH TABLE ARRIVED, AND THIS TEST WENT RED EXACTLY AS ITS OWN DOCSTRING SAID IT
+    WOULD -- "a seventh table that declares a finer axis will turn this red, which is the
+    right moment for a human to read the diff". The diff was read: F-DB Task 4 registers
+    `merchant`, a Postgres snapshot observed TWICE inside one calendar month, and plan T7
+    is why it cannot stay on the default. So the claim is narrowed to what it was always
+    ABOUT -- the six tables that were on the monthly axis before the field existed -- and
+    that set is named EXPLICITLY rather than computed as "the registry minus the ones that
+    disagree", which would be a test that can never fail again.
+
+    Adding an eighth table turns this red too, and that is the point: an axis is a
+    modelling decision per source, and the only wrong way to arrive at one is by paste."""
+    on_the_monthly_axis = {
+        name for name, spec in REGISTRY.items() if spec.snapshot_axis == MONTHLY_SNAPSHOT
+    }
+
+    assert on_the_monthly_axis == {
+        "lookup",
+        "estabelecimentos",
+        "empresas",
+        "socios",
+        "payments",
+        "ptax",
+    }
+    assert MONTHLY_SNAPSHOT.column == "_snapshot_month"
+
+
+def test_the_only_table_off_the_monthly_axis_is_the_postgres_snapshot():
+    """The complement, stated as a set rather than as "at least one".
+
+    `INSTANT_SNAPSHOT` had NO production reference at all when Task 2 landed it -- its own
+    unexercised-ledger entry says so. This is the line that retires that entry, and it is a
+    set equality so that a second source arriving on the instant axis has to be a
+    deliberate edit here rather than something this assertion absorbs."""
     off_axis = {
         name: spec.snapshot_axis
         for name, spec in REGISTRY.items()
         if spec.snapshot_axis != MONTHLY_SNAPSHOT
     }
 
-    assert off_axis == {}
-    assert MONTHLY_SNAPSHOT.column == "_snapshot_month"
+    assert off_axis == {"merchant": INSTANT_SNAPSHOT}
+    assert INSTANT_SNAPSHOT.column == "_snapshot_at"
 
 
 def test_the_monthly_axis_asks_the_one_spelling_of_the_month_rule():

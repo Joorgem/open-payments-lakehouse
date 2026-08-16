@@ -26,10 +26,17 @@ from __future__ import annotations
 from pyspark.sql import Column
 from pyspark.sql import functions as F
 
+from opl.bronze.snapshot_axis import INSTANT_PATTERN, INSTANT_WIDTH
 from opl.config import is_month
 
 SNAPSHOT_MONTH_COLUMN = "_snapshot_month"
 SNAPSHOT_REF_DATE_COLUMN = "_snapshot_ref_date"
+
+# The calendar date is the first ten characters of an instant -- `YYYY-MM-DD` of
+# `YYYY-MM-DDTHH:MM:SS.uuuuuuZ`. Named rather than written as a `1, 10` at the one call
+# site, because it is a fact about the axis's rendering and not about the slice.
+_INSTANT_DATE_WIDTH = 10
+_ISO_DATE_FORMAT = "yyyy-MM-dd"
 
 # `.D` then a single year digit, two month digits, two day digits, then `.`
 # Anchored on the dots so it cannot match digits elsewhere in a mainframe name
@@ -122,6 +129,61 @@ def token_month_column(source_file: Column) -> Column:
     as agreement."""
     tokens, year, month, _ = _token_parts(source_file)
     return F.when(F.size(tokens) == 1, F.concat_ws("-", year, month))
+
+
+# --- THE THIRD DERIVATION OF `_snapshot_ref_date`, AND WHY THERE IS A THIRD ------------
+#
+# Module level for the reason `opl.bronze.rules` states above `rules_for`: this is the
+# reasoning, and inside the docstring it puts the function past the project's 50-line
+# limit.
+#
+# THERE ARE NOW THREE ANSWERS TO "WHEN IS THIS ROW A SNAPSHOT OF", one per KIND of source,
+# and the third is plan T8:
+#
+#   1. A FILE-FED source declares it in its own filename. `ref_date_column` above reads the
+#      RFB's `.D<y><mm><dd>.` mainframe token -- a SINGLE year digit, which is why the
+#      decade comes from the job parameter and the two are then required to agree.
+#   2. A GENERATED or API-FED source declares NOTHING, so `add_common_audit_columns` omits
+#      the column entirely. Stamping an all-NULL one would have forced those rule sets to
+#      drop `unprovable_snapshot_ref_date` -- a control omitted so the value it refuses can
+#      be written.
+#   3. A DATABASE-FED source carries the instant IN THE ROW, put there by the transaction
+#      that read it, and the date is that instant's own calendar day.
+#
+# THE THIRD IS NOT OPTIONAL THE WAY THE SECOND IS, and that asymmetry is the whole reason
+# this function exists. `bronze_merchant` is the first non-file-fed source ever loaded into
+# a VAULT SATELLITE, and `opl.vault.satellites` reads `_snapshot_ref_date` unconditionally
+# to build `applied_date`. So this source can neither derive the column from a filename it
+# has not got nor omit it -- and the same species has now been met three times, which ADR
+# 0017 records: the RFB's applied_date comes from the filename, PTAX's quote date is
+# carried from the REQUEST because the response does not contain it, and this instant is
+# carried from the READING TRANSACTION. Three sources, three times, the key you must diff
+# on is not in the payload.
+#
+# IT REFUSES RATHER THAN PARSES LENIENTLY, which is `ref_date_column`'s rule applied to a
+# different input: a wrong `applied_date` orders the vault's history incorrectly with
+# nothing to show for it, so anything that is not the pinned rendering goes NULL and
+# `rules._unprovable_ref_date` rejects the row in the gate.
+#
+# AND IT CLOSES A GAP `_is_instant` DELIBERATELY LEAVES OPEN. That predicate checks the
+# SHAPE and not the calendar -- it runs on a job parameter before Spark exists, and
+# `2026-02-31T00:00:00.000000Z` passes it. Here the slice goes through `to_date`, which
+# returns NULL for a day that does not exist, so the impossible day that reaches bronze is
+# rejected rather than stamped.
+
+
+def ref_date_from_instant(instant: Column) -> Column:
+    """The calendar day of a snapshot instant, or NULL if `instant` is not one.
+
+    See the comment block above for why this is a third derivation rather than a parameter
+    on the first, and what it closes. THE WIDTH IS CHECKED BESIDE THE PATTERN AND IS NOT
+    REDUNDANT: `INSTANT_PATTERN` is anchored, but Java's `$` matches before a trailing line
+    terminator, so `...Z\\n` satisfies `rlike` on this engine and fails the Python
+    predicate the job parameter is validated by -- two answers to one question, which is
+    the shape this repository refuses."""
+    well_formed = instant.rlike(INSTANT_PATTERN) & (F.length(instant) == INSTANT_WIDTH)
+    day = F.to_date(F.substring(instant, 1, _INSTANT_DATE_WIDTH), _ISO_DATE_FORMAT)
+    return F.when(well_formed, day)
 
 
 def ref_date_column(source_file: Column, snapshot_month: str) -> Column:
