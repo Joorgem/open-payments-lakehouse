@@ -9,6 +9,7 @@ exactly why it refuses instead of assuming."""
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import pytest
 
@@ -18,9 +19,11 @@ from pyspark.sql import functions as F  # noqa: E402
 
 from opl.bronze.snapshot import (  # noqa: E402
     ref_date_column,
+    ref_date_from_instant,
     token_month_column,
     token_month_key,
 )
+from opl.bronze.snapshot_axis import INSTANT_PATTERN, _is_instant  # noqa: E402
 
 _ROOT = "/Volumes/workspace/default/landing/cnpj"
 ESTAB = f"{_ROOT}/2026-06/estabelecimentos/K3241.K03200Y0.D60613.ESTABELE"
@@ -244,3 +247,69 @@ def test_the_two_functions_agree_on_what_a_provable_row_is(spark):
     assert _derive(spark, ESTAB, "2026-06") is not None
     assert _token_month(spark, ESTAB) != token_month_key("2026-07")
     assert _derive(spark, ESTAB, "2026-07") is None
+
+
+# --- THE THIRD DERIVATION: a reference date from an instant the SOURCE carried ---------
+#
+# `ref_date_column` above answers a FILE-FED source, from the RFB's mainframe filename
+# token. A generated or api-fed source has no answer and `add_common_audit_columns` omits
+# the column. The third case is plan T8's: a database-fed source carries the instant IN THE
+# ROW, put there by the transaction that read it, and the date is that instant's own day.
+
+
+def _from_instant(spark, value: str | None):
+    df = spark.createDataFrame([(value,)], "src string")
+    return df.select(ref_date_from_instant(F.col("src")).alias("d")).collect()[0]["d"]
+
+
+def test_it_derives_the_day_of_a_pinned_snapshot_instant(spark):
+    """The positive case, over the exact rendering a Postgres extraction lands -- 27
+    characters, `T`, six fractional digits, `Z`."""
+    assert _from_instant(spark, "2026-08-16T23:13:13.521147Z") == dt.date(2026, 8, 16)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-08-16 23:13:13.521147+00",  # `::text`'s own rendering: space, offset, no Z
+        "2026-08-16T23:13:13.521Z",       # trailing fractional zeros TRIMMED
+        "2026-08",                        # the MONTHLY axis
+        "2026-13-16T23:13:13.521147Z",    # a month that is not one
+        "",
+        None,
+    ],
+)
+def test_anything_that_is_not_the_pinned_rendering_is_null(spark, value):
+    """NULL rather than a best guess, for `ref_date_column`'s reason: a wrong
+    `applied_date` orders the vault's history incorrectly with nothing to show for it.
+    `rules._unprovable_ref_date` is what turns each of these into a rejected row."""
+    assert _from_instant(spark, value) is None
+
+
+def test_a_trailing_newline_is_null_because_DOLLAR_ACCEPTS_ONE_IN_BOTH_ENGINES(spark):
+    """THE REASON THE WIDTH IS CHECKED BESIDE AN ALREADY-ANCHORED PATTERN.
+
+    `$` matches BEFORE A TRAILING LINE TERMINATOR, and the first version of this test said
+    that was JAVA's behaviour. It is Python's too, measured while writing it:
+    `re.match(INSTANT_PATTERN, "...Z\\n")` matches. So the pattern alone accepts this value
+    in BOTH engines, while `snapshot_axis._is_instant` -- the predicate the vault job's
+    WINDOW PARAMETER is validated by -- refuses it, because it checks the width FIRST.
+    The second assertion below is that control: without it, a green here would be
+    consistent with the pattern having refused the value on its own."""
+    assert _from_instant(spark, "2026-08-16T23:13:13.521147Z\n") is None
+    assert re.match(INSTANT_PATTERN, "2026-08-16T23:13:13.521147Z\n"), (
+        "the control: the anchored pattern ACCEPTS the trailing newline, so the NULL above "
+        "is the WIDTH check doing the work rather than the regex"
+    )
+    assert not _is_instant("2026-08-16T23:13:13.521147Z\n")
+
+
+def test_an_impossible_day_inside_a_well_formed_instant_is_null(spark):
+    """The gap `snapshot_axis._is_instant` deliberately leaves open, closed HERE.
+
+    That predicate checks the SHAPE and not the calendar -- it runs on a job parameter
+    before Spark exists, and `2026-02-31T00:00:00.000000Z` passes it. Here the slice goes
+    through `to_date`, which returns NULL for a day that does not exist, so the impossible
+    day that reaches bronze is rejected rather than stamped."""
+    assert _is_instant("2026-02-31T00:00:00.000000Z")
+    assert _from_instant(spark, "2026-02-31T00:00:00.000000Z") is None

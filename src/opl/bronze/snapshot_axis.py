@@ -117,10 +117,14 @@ _INSTANT_TAIL = re.compile(f"^{_INSTANT_TAIL_PATTERN}$")
 # ask, so it needs the month half written out. Composed from `opl.config.MONTH_PATTERN` and
 # the tail above rather than typed again, so there is exactly one spelling of each half and
 # a change to either reaches both consumers. THE ONLY THING THAT IS NOT SHARED IS THE
-# WIDTH CHECK, and it is not redundant on the Spark side even though this pattern is
-# anchored: Java's `$` matches before a trailing line terminator, so a landed value with a
-# newline glued on satisfies `rlike` and would not satisfy `_is_instant`. See
-# `opl.bronze.snapshot.ref_date_from_instant`, which asserts both.
+# WIDTH CHECK, and it is not redundant even though this pattern is anchored: `$` matches
+# BEFORE A TRAILING LINE TERMINATOR -- in Java's regex engine, which is what a Spark `rlike`
+# runs, AND in Python's `re`, measured. So a value with a newline glued on satisfies the
+# pattern in both engines and satisfies `_is_instant` in neither, because that predicate
+# checks the width FIRST.
+# THE ASYMMETRY IS WHY THE WIDTH TRAVELS WITH THE PATTERN wherever it is used: a consumer
+# that took `INSTANT_PATTERN` alone would silently accept a value the job parameter's own
+# validator refuses. See `opl.bronze.snapshot.ref_date_from_instant`, which asserts both.
 INSTANT_PATTERN = f"^{MONTH_PATTERN}{_INSTANT_TAIL_PATTERN}$"
 
 

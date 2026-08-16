@@ -569,3 +569,54 @@ what keeps this window unambiguous. **It is recorded here because the two are no
 nothing says so in either file:** a future phase that relaxes T8 to two same-day snapshots
 would silently reintroduce a non-deterministic tie in the effectivity close, one layer away
 from where it changed the rule.
+
+### Added by Task 4, as the extraction layer and bronze landed
+
+**Two of Task 2's entries are RETIRED here and the retirement is stated rather than left to
+be inferred**, because a ledger that only grows stops being read:
+
+- *"`INSTANT_SNAPSHOT` has no production reference at all"* — **retired.**
+  `REGISTRY["merchant"]` declares it (`src/opl/bronze/registry.py`), and
+  `tests/bronze/test_snapshot_axis.py` now asserts the registry as a PARTITION: six names on
+  the monthly axis, one on the instant axis, both halves set equalities.
+- *"`effectivity`'s axis-aware path cannot run on a non-monthly source today, for a reason
+  outside itself"* — **the reason is removed.** That entry named the blocker exactly:
+  `_observed` and `_reference_dates` both require `_snapshot_ref_date`, which
+  `bronze_merchant` could not produce. `opl.bronze.snapshot.ref_date_from_instant` and
+  `autoloader.add_instant_audit_columns` are the third audit path T8 called for, so the
+  column now exists for this source. **Unreachable has become merely unexercised**, which is
+  a different sentence and a weaker one.
+
+**And what Task 4 itself ships with zero rows through it:**
+
+- **NOTHING HAS BEEN INGESTED. `bronze_merchant` does not exist as a table.** The job YAML,
+  `bronze_merchant_ingest.py`, the fifth landing root, the DQ gate over the merchant rule
+  set, the promote, and the `_snapshot_at_instant_shape` CHECK have every one of them moved
+  **0 rows on Databricks**. `databricks bundle validate -t free` passes, which says the YAML
+  parses and resolves — not that a task in it has run.
+- **THE `postgres/` LANDING ROOT HAS NEVER RECEIVED A BYTE.** The extractor was run against
+  the live container with `--no-upload`: 1,088 rows, 477,163 bytes, sha256
+  `eb20b14ed46dd6073f31489e3c27e57328a5c0f0b764aba8ce9e99225363783d`, written and read back
+  as bytes on the extraction host. **The `upload_to_volume` half of that script is
+  unexercised**, and it is the half that needs a credential.
+- **`opl.config.landing_postgres_tmp` IS DECLARED AND NOTHING WILL EVER WRITE TO IT** — not
+  "has not yet". Every other mode's producer runs on Databricks and stages inside the Volume
+  so `os.replace` can make the file appear whole; this one runs on the host and PUTs a
+  verified local file. It exists because `registry_landing._landing_and_tmp` resolves both
+  directories in ONE dispatch, which is what stops a landing dir and its staging twin coming
+  from two different roots. Recorded as a permanent resident of this list rather than a
+  temporary one.
+- **THE TWO SNAPSHOTS ON TWO DIFFERENT CALENDAR DAYS (T8) HAVE NOT BEEN TAKEN.** One
+  snapshot has been read. The scheduling constraint is recorded in
+  `databricks/resources/bronze_merchant_job.yml`, which cannot enforce it.
+- **`_refuse_a_watermark_before_t2` HAS NEVER FIRED AGAINST A REAL MUTATION.** Its two
+  branches are exercised hermetically (`tests/test_extract_merchant_snapshot.py`) and the
+  comparison it makes was run against the live server, but the race it closes has not been
+  run end to end — `mutate --ready-on` and the extractor have not yet been driven in one
+  session.
+- **`ref_date_from_instant` HAS RUN ON LOCAL SPARK ONLY**, over synthesised instants. No
+  Databricks execution, and no run over the 1,088 real rows.
+- **THE INCREMENTAL QUERY'S BOUNDARY WAS EXERCISED AND ITS COMPLEMENT WAS NOT.** Against the
+  seeded (un-mutated) table, `--since <the watermark>` returns **0** rows and `--since <one
+  microsecond earlier>` returns **1** — which demonstrates the strict `>` on a populated
+  boundary and demonstrates nothing about the 48-row miss. That number is Task 6's.

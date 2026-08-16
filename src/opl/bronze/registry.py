@@ -440,7 +440,8 @@ REGISTRY: dict[str, BronzeTable] = {
         # rendering, which is what a writer that skipped `to_char` would land, and which
         # differs from the pinned one in three ways at once (a space, an offset, and
         # trimmed trailing fractional zeros). The length refuses a value with a newline
-        # glued on, which Java's `$` accepts. Trailing zeros are exactly why the width is
+        # glued on, which `$` accepts in Java's engine AND in Python's. Trailing zeros are
+        # exactly why the width is
         # fixed: `_snapshot_at` is compared lexicographically as a chronology, and
         # `...01.1` sorts after `...01.09`.
         #

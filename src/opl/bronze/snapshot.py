@@ -177,10 +177,12 @@ def ref_date_from_instant(instant: Column) -> Column:
 
     See the comment block above for why this is a third derivation rather than a parameter
     on the first, and what it closes. THE WIDTH IS CHECKED BESIDE THE PATTERN AND IS NOT
-    REDUNDANT: `INSTANT_PATTERN` is anchored, but Java's `$` matches before a trailing line
-    terminator, so `...Z\\n` satisfies `rlike` on this engine and fails the Python
-    predicate the job parameter is validated by -- two answers to one question, which is
-    the shape this repository refuses."""
+    REDUNDANT: `INSTANT_PATTERN` is anchored, but `$` matches BEFORE A TRAILING LINE
+    TERMINATOR -- measured, in Python's `re` as well as in the Java engine a Spark `rlike`
+    runs -- so `...Z\\n` satisfies the pattern in both and satisfies
+    `snapshot_axis._is_instant` in neither, because that predicate checks the width first.
+    Without the width here, the gate and the predicate the job's window PARAMETER is
+    validated by would give two answers about one string."""
     well_formed = instant.rlike(INSTANT_PATTERN) & (F.length(instant) == INSTANT_WIDTH)
     day = F.to_date(F.substring(instant, 1, _INSTANT_DATE_WIDTH), _ISO_DATE_FORMAT)
     return F.when(well_formed, day)

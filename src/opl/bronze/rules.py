@@ -448,10 +448,12 @@ def _bad_snapshot_instant(column: str) -> Callable[[], Column]:
     UTC, because an offset-bearing rendering orders two instants backwards across a zone
     change.
 
-    THE LENGTH IS NOT REDUNDANT BESIDE THE ANCHORED PATTERN. Java's `$` matches before a
-    trailing line terminator, so `...Z\\n` satisfies `rlike` on this engine while failing
-    `snapshot_axis._is_instant`, which is the predicate the vault job's window PARAMETER is
-    validated by -- two answers to one question about one value.
+    THE LENGTH IS NOT REDUNDANT BESIDE THE ANCHORED PATTERN. `$` matches BEFORE A TRAILING
+    LINE TERMINATOR -- measured, in Python's `re` as well as in the Java engine a Spark
+    `rlike` runs -- so a value with a newline glued on satisfies the pattern in both engines
+    while failing `snapshot_axis._is_instant`, which checks the width FIRST and is the
+    predicate the vault job's window PARAMETER is validated by. Two answers to one question
+    about one value.
 
     IT IS THE GATE'S HALF OF A PAIR. The registry's `snapshot_at_instant_shape` CHECK says
     the same thing at the promote, AFTER the append has committed; this runs before
