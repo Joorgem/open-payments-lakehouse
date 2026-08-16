@@ -30,3 +30,4 @@ dist/
 # which belong in a public repo whose point is the engineering.
 CLAUDE.md
 AGENTS.md
+/.run-suite-out.txt

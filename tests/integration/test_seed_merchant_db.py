@@ -19,6 +19,7 @@ the same reason.
 """
 
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import psycopg
@@ -387,3 +388,34 @@ def test_mutate_writes_no_readiness_file_when_it_is_not_asked_to(conn, plan, tmp
     seeder.seed(conn, plan, SCHEMA)
     seeder.mutate(conn, plan, SCHEMA, release=lambda: None)
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.postgres
+def test_a_seed_window_the_server_says_is_in_the_future_is_refused(conn):
+    """A future-dated seed passes every other refusal and silently inflates the headline.
+
+    THE FAILURE THIS PINS WAS MEASURED, NOT IMAGINED. `_refuse_unless_seeded` compared
+    `max(updated_at)` against `SEED_UPDATED_CEILING` -- one authored constant against
+    another -- so a seed window in the FUTURE passed it. The Task 3 review drove that case
+    end to end: every class count still reported exactly right, the `t2 > t1` refusal still
+    passed, the readiness file was still written, and the published watermark miss silently
+    became 128 instead of 48. Same shape as the readiness race, and in the direction that
+    FLATTERS the number, which is the worse one -- nothing looks wrong.
+
+    THE TRIGGER IS DISARMED TO SET THIS UP, AND THAT IS NOT INCIDENTAL. The seeded table
+    carries a `BEFORE UPDATE` trigger, so a plain `UPDATE ... + interval '1 year'` is
+    overwritten with `now()` and the fixture never reaches the state under test. The
+    controller's first attempt at this test was defeated exactly that way, and reported a
+    guard as firing when what had fired was the older literal check.
+    """
+    seeder.seed(conn, population.build_plan(), SCHEMA)
+    ceiling = seeder.SEED_UPDATED_CEILING
+    conn.execute("SET session_replication_role = 'replica'")
+    try:
+        conn.execute(f"UPDATE {SCHEMA}.merchant SET updated_at = updated_at + interval '1 year'")
+        seeder.SEED_UPDATED_CEILING = ceiling + timedelta(days=365)
+        with pytest.raises(seeder.Refusal, match="has not happened yet"):
+            seeder._refuse_unless_seeded(conn, SCHEMA)
+    finally:
+        seeder.SEED_UPDATED_CEILING = ceiling
+        conn.execute("SET session_replication_role = 'origin'")

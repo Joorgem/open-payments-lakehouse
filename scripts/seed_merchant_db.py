@@ -44,6 +44,7 @@ blanks every `password=` token rather than one literal. Reused rather than re-sp
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -398,6 +399,11 @@ def census(conn: psycopg.Connection, schema: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------------
 
 
+def _readiness_text(t1: object, t2: object) -> str:
+    """The readiness file's whole content, in one place so the reader can be tested."""
+    return "".join([f"t1={t1.isoformat()}", chr(10), f"t2={t2.isoformat()}", chr(10)])
+
+
 def _refuse_unless_seeded(conn: psycopg.Connection, schema: str) -> None:
     """`mutate` is not idempotent and says so, rather than double-mutating in silence."""
     rows = _one(conn, _statement("SELECT count(*) FROM {table}", schema))
@@ -410,6 +416,20 @@ def _refuse_unless_seeded(conn: psycopg.Connection, schema: str) -> None:
         latest <= SEED_UPDATED_CEILING,
         f"max(updated_at) is {latest}, after the seed window closes at {SEED_UPDATED_CEILING}. "
         "Something has already written to this table; re-run `seed`.",
+    )
+    # AND AGAINST THE SERVER CLOCK, NOT ONLY AGAINST OUR OWN LITERAL. The check above
+    # compares one authored constant to another, so it passes for a seed window in the
+    # FUTURE -- and the Task 3 review measured what that costs: move the window to 2027 and
+    # every class count still reports exactly right, `t2 > t1` still passes, the readiness
+    # file is still written, and the published watermark miss silently becomes 128 instead
+    # of 48. Same shape as the readiness race, and in the direction that FLATTERS the
+    # number, which is the worse direction.
+    now = _one(conn, "SELECT now()")
+    _refuse_unless(
+        latest < now,
+        f"max(updated_at) is {latest}, which the server's own clock ({now}) says has not "
+        "happened yet. The seed window must close BEFORE the mutation is stamped, or the "
+        "watermark lands below t1 and every count stays right while the headline changes.",
     )
 
 
@@ -481,7 +501,15 @@ def mutate(
             "Without t2 > t1 the out-of-order miss would be a fabrication.",
         )
         if ready is not None:
-            ready.write_text(f"t1={t1.isoformat()}\nt2={t2.isoformat()}\n", encoding="utf-8")
+            # WRITTEN THROUGH A TEMPORARY AND RENAMED, because the reader is another
+            # PROCESS polling `exists()` -- the pattern this function's contract hands
+            # the extractor. A plain `write_text` is create-then-write, so a poller can
+            # observe the path between the two and read an empty or half-written `t1=`,
+            # then proceed as though it were ready. `os.replace` is atomic in a
+            # directory: the file is either absent or complete.
+            staged = ready.with_name(f"{ready.name}.{os.getpid()}.tmp")
+            staged.write_text(_readiness_text(t1, t2), encoding="utf-8")
+            os.replace(staged, ready)
         release()
         slow.execute("COMMIT")
     finally:

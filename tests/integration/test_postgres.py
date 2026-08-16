@@ -2,7 +2,10 @@
 import psycopg
 import pytest
 
-pytestmark = pytest.mark.integration
+# BOTH MARKERS. This needs only the container, which is exactly what `postgres` means, and
+# a CI job running `-m postgres` should include the liveness check before the tests that
+# assume liveness. It carried `integration` alone until the F-DB Task 3 review.
+pytestmark = [pytest.mark.integration, pytest.mark.postgres]
 
 
 def test_postgres_reachable():
