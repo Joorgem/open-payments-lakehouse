@@ -43,14 +43,33 @@ written with a plain `write_text`, so a poller can observe it mid-write) and is 
 
 --- THE FILE IS WRITTEN LOCALLY, VERIFIED AS BYTES, AND THEN PUT ----------------------
 
-`opl.bronze.generated_landing.emit_records_file` CANNOT be reused. It `os.replace`s a
-staged file into the landing dir, which is atomic only within one UC Volume's single FUSE
-mount -- a Databricks-side rename -- and there is no Volume-side staging step for a host to
-perform. What it carries that this needs is two refusals, and both are in
+`opl.bronze.generated_landing.emit_records_file` CANNOT be reused, AND THE REASON IS
+SHARPER THAN THE ONE USUALLY GIVEN. The usual one is that it `os.replace`s a staged file
+into the landing dir, which is atomic only within one UC Volume's single FUSE mount -- true
+of what that function DOES, and not what stops this caller: `os.replace` is perfectly happy
+between two ordinary directories on one local drive.
+
+What stops it is that `directory` is a VOLUME PATH and this host has no Volume mounted at
+all. `emit_records_file(directory="/Volumes/workspace/default/landing/postgres/...")` would
+`os.makedirs` that path on the extraction host -- on Windows, `C:\\Volumes\\workspace\\...` --
+write a perfectly good file into it, verify it, and report success. Nothing raises. The
+Volume stays empty, the ingest drains an empty directory, and for THIS source an empty
+snapshot is exactly what a table whose every row was deleted looks like. So the file is
+written locally and PUT through the control plane, which is the only route a host has.
+
+WHAT THAT FUNCTION CARRIES THAT THIS NEEDS IS TWO REFUSALS, and both are in
 `postgres_source`: the `\\r` refusal on the serialised bytes, and the read-back comparison
 below. The write is BINARY and the encode is EXPLICIT UTF-8, for that module's reasons:
 Python's text mode would ship `\\r\\n` on Windows where the read side declares `\\n`, and
 `locale.getpreferredencoding()` is cp1252 on this dev box.
+
+ITS THIRD PROPERTY -- `_refuse_a_different_file`, which compares against a file ALREADY IN
+THE VOLUME -- is not reproduced, and that is a decision rather than a gap. It exists because
+a PTAX window or a payment stream can be re-derived with DIFFERENT bytes under the SAME
+name (BCB revises a quote; a seed changes). Here the name is a function of the snapshot
+INSTANT, and an instant belongs to exactly one transaction: re-landing one snapshot is the
+same bytes under the same name, and a second snapshot is a different name. The collision
+that refusal exists for cannot be constructed.
 
 THE FILENAME IS THE INSTANT AND CARRIES NO RUN ID. Auto Loader tracks files by PATH, so a
 run-scoped name would make every re-run a second ingest of the same rows under a fresh

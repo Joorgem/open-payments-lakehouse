@@ -80,16 +80,23 @@ reader that stops the operational database from being migrated.
 
 --- WHY THE LANDING WRITER IS NOT `emit_records_file` -----------------------------------
 
-That function `os.replace`s a staged file into the landing directory, which is atomic only
-within one UC Volume's single FUSE mount -- a DATABRICKS-SIDE rename. This extractor runs on
-the extraction HOST (plan T1) and PUTs its file through the Files API, so there is no
-Volume-side staging step for it to perform and no rename for it to make atomic. What it does
-need is the two REFUSALS that function carries, and those are re-derived here rather than
-imported: `serialised_bytes` refuses a carriage return in the payload, and
+That function takes a `directory` and writes into it, and the directory a bronze table lands
+in is a VOLUME PATH. This extractor runs on the extraction HOST (plan T1), which has no
+Volume mounted: handed one, `emit_records_file` would `os.makedirs` it as an ordinary local
+path -- on Windows, `C:\\Volumes\\workspace\\...` -- write the file, verify it and report
+success, while the Volume stayed empty. Nothing raises. (Its `os.replace` is a Databricks-side
+atomic rename within one FUSE mount, which is what that function is usually described by;
+that is not what rules it out here, since `os.replace` works fine between two local
+directories.)
+
+What it does need is the two REFUSALS that function carries, and those are re-derived here
+rather than imported: `serialised_bytes` refuses a carriage return in the payload, and
 `refuse_bytes_that_are_not_the_payload` is the read-back check a caller makes against the
 file it just wrote. Re-derived rather than lifted because the third property --
 `_refuse_a_different_file`, which compares against a file ALREADY IN THE VOLUME -- is one
-this module cannot express: it has no filesystem.
+this module cannot express (it has no filesystem) and, here, one that guards a state that
+cannot be reached: `filename_for` is a function of the snapshot INSTANT, and an instant
+belongs to exactly one transaction, so the same name is always the same bytes.
 """
 from __future__ import annotations
 
