@@ -412,6 +412,72 @@ arranged; its *existence* is not.
 
 ---
 
+## 2. What the runs said
+
+### 2.1 Task 3's seeder and mutation, on the local container
+
+**Controller-verified.** Task 3's implementer died with its process before reporting, so
+every number below was measured by the controller against the live container rather than
+taken from the agent — the rule this project already carries about a dead writer, applied to
+its numbers as well as its files. Its five commits survived; nothing was lost.
+
+**Every §1.1 prediction lands exactly.**
+
+| §1.1 predicted | measured |
+|---|---|
+| snapshot 1 — merchants **1,088** | **1,088** ✅ |
+| snapshot 1 — distinct CNPJs **1,024** | **1,024** ✅ |
+| INSERT 32 | **32** ✅ |
+| UPDATE moving `updated_at` 48 | **48 rows, 48 moved** ✅ |
+| UPDATE *not* moving it 24 | **24 rows, 0 moved** ✅ |
+| hard DELETE 16 | **16** ✅ |
+| out-of-order commit 8 | **8 rows, 8 moved** ✅ |
+| snapshot 2 — merchants **1,104** | **1,104** ✅ |
+
+`t1 = 22:10:46.710500Z`, `t2 = 22:10:46.779989Z` — 69 ms apart, `t2 > t1`, and the readiness
+file carries both.
+
+**The two update classes are the whole watermark argument and they separate cleanly**: the
+`BEFORE UPDATE` trigger fires 48 times for one class and **0** times for the other, on the
+same derivation. That is measured rather than asserted, and it is what makes "an update a
+watermark cannot see" a mechanism rather than a claim about carelessness.
+
+**A number §1 did not predict, recorded because it is derived rather than contradicted:**
+distinct CNPJ roots fall **1,024 → 1,011** after the mutation. Thirteen of the sixteen
+deleted merchants were the only merchant for their company; the other three sat on CNPJs
+carrying two. The departure count at the link grain is still **16 merchant keys**, which is
+the number §1.3 says the phase dies on.
+
+**Determinism, verified on the path that actually occurs.** Re-running `seed` against the
+**populated** post-mutation database (1,104 rows) returned it to 1,088 rows at digest
+`807efa4c448af66a9f402072534f297fe3769e340b81ceef630e3ab16b67fbfe` — byte-identical to the
+first seed. T6 requires idempotence against a populated database specifically, because
+`docker compose restart` preserves the volume; this is that case, not the easy one.
+
+**Tests:** 23 pure population tests green (they run in the default suite and need no
+container), and 16 container tests green under the new `postgres` marker.
+
+> **THIS IS NOT THE PHASE'S RUN.** It is a controller verification that the seeder does what
+> §1 predicted, made necessary by the implementer dying before it could report. Task 6 makes
+> the run of record, against a deployed wheel, and its numbers are the ones the phase closes
+> on.
+
+### 2.2 An operational fact that cost this phase an agent
+
+`scripts/run_suite.sh` died mid-run with
+`fork: retry: Resource temporarily unavailable` and `exit code 0xC000026B`, twice, and took
+the Claude Code process — and therefore the Task 3 implementer — down with it. The partition
+had already reconciled (`0 in no chunk, 0 in no suite run, 0 in two chunks`); it was the
+**RUNNING** phase that could not fork its chunks.
+
+**So the five-chunk runner is not safe to launch on a loaded box**, and this is a second
+mechanism beside the contention the script's own comments already record. The Postgres
+container was stopped by the same event and had to be restarted — **and the seeded data
+survived it**, which is Task 0's persistence matrix (§0.4) confirmed in the field rather than
+in a probe: a stop is not a `down`.
+
+---
+
 ## 3. What ships UNEXERCISED
 
 **Standing decision §4.6: a path that ran zero rows through it is not a path that works.**
