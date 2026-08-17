@@ -9,15 +9,31 @@ its own: every statement goes through a connection object handed in, exactly as
 needs no database. `tests/test_postgres_source.py` holds that down over the AST, as the
 twin of the sweep `tests/test_ptax_source.py` runs over the PTAX layer.
 
-THIS SOURCE NEEDS LESS THAN PTAX DOES, AND THE DIFFERENCE IS DELIBERATE. That module is
-585 lines because the BCB series forced them: a retry ladder, a publication-instant parser
-with five observed fractional widths, a spread bound derived from 42 years of rows, a
-range-attribution refusal. NONE of those failure modes exists here. There is no network, so
-there is nothing to retry and no status code to misread. There is no publication instant --
-the only instant is one this module's own transaction stamps. There is no range to
-attribute, because a snapshot is the whole table at one instant by construction. Every
+THIS SOURCE NEEDS FEWER MECHANISMS THAN PTAX DOES, AND THE DIFFERENCE IS DELIBERATE.
+`ptax_source` carries four the BCB series forced on it: a retry ladder, a publication-instant
+parser with five observed fractional widths, a spread bound derived from 42 years of rows,
+and a range-attribution refusal. NONE of those failure modes exists here. There is no
+network, so there is nothing to retry and no status code to misread. There is no publication
+instant -- the only instant is one this module's own transaction stamps. There is no range
+to attribute, because a snapshot is the whole table at one instant by construction. Every
 guard below is re-derived from a failure this source can actually produce, and a guard
 pasted from PTAX would be a control that cannot fire.
+
+THE MECHANISM COUNT IS THE CLAIM. THE LINE COUNT IS NOT, AND THIS PARAGRAPH USED TO LOSE ON
+IT. It said "this source needs LESS than PTAX does" and offered `ptax_source`'s 585 lines as
+the evidence, while THIS file was already the longer one -- so the sentence was refuted by
+the file it was written in. Measured 2026-08-17 on the text you are reading: 679 lines here
+against 585 there; stripping blank lines, comment-only lines and the module docstring leaves
+388 against 365, and stripping EVERY docstring leaves 253 against 212. The direction is the
+same under both strippings and it is not the one the old sentence claimed: the CODE is
+comparable, slightly more here, and the 94 extra lines are PROSE. Four mechanisms fewer, in a
+file that explains itself at greater length because a database source has no prior art in
+this repository to point at.
+
+(Both numbers go stale in the commit that quotes them, so the recipe is here rather than the
+conclusion alone: count `splitlines()`, subtract lines that are blank or begin with `#`, and
+subtract the line span of every `ast.Expr` wrapping a string constant -- or only the module's
+own, for the looser figure. Re-measure both files before repeating either pair.)
 
 --- WHAT THE TRANSACTION IS FOR, AND WHY IT IS NOT WHAT REVISION 1 SAID ----------------
 
