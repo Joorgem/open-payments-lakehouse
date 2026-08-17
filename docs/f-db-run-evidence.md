@@ -832,7 +832,68 @@ attributed id by id from diffed listings: 6 T10 + 1 F6 + 3 F1 + 4 sweep-tax + 4 
 
 Every file edited to prove a point was restored, with `git status --porcelain` empty after each.
 
-### 2.5 The Task 5 correction pass — the ledger's grain was FINER than the value its link keys on
+### 2.5 Task 5 — the vault, and the first end-dating this lakehouse has written
+
+**Controller-verified**: four commits `d9f42bf..8c7a659`, tree clean, no stash, `ruff` clean,
+`databricks bundle validate -t free` → **Validation OK!**, collection **2,360 → 2,447**, 32
+functions at or over the 50-line cap (unchanged — two crossings occurred during the task and
+both were repaired rather than allow-listed), largest tracked Python file 799.
+
+**`hub_merchant` keys on `merchant_id`, and the link reaches `hub_empresa` through T5b's
+declared derivation.** `sat_merchant_dados` carries 7 of the 11 Postgres columns;
+`sat_eff_merchant_empresa` hangs off the **link**, with `onboarded_on` as the delivered entry.
+
+**THE CLOSING ROWS EXIST.** On local Spark over a synthesised fixture: `is_active=false`,
+`closed_by='absent_after_observation'`, `last_observed_on` the snapshot that **saw** the
+relationship and `applied_date` the snapshot that did not — two dates that are deliberately not
+the same claim. F2 measured **zero** departures across 68,629,147 RFB keys and re-verified it
+2026-08-15, so `load_effectivity_satellite`'s closing path had never fired on any data.
+
+**And a number nothing had ever exercised: hub-grain departures 1 against link-grain 2.** A
+merchant re-pointed to another company departs at **link** grain and is plainly `observed` at
+**hub** grain — the divergence `effectivity.py` states in prose, measured. It is also the
+demonstration of why both link ends must be identifying: with `merchant_id` alone in the
+identity, that row keeps its hash key and never closes.
+
+**EVERY NUMBER IN THIS SECTION IS LOCAL SPARK OVER A SYNTHESISED FIXTURE.** `bronze_merchant`
+holds zero rows on Databricks and nothing has been ingested. **The predicted 1,088 link rows,
+the 32 arrivals and the 16 closes are Task 6's**, and nothing here is a claim about them — the
+test file's own docstring says so where a reader meets the numbers rather than only in §3.
+
+#### 2.5.1 Two review lenses, and both proved their findings rather than reading them
+
+**Wiring, guards and provenance — clean, and nothing was accepted on inspection.** The three
+`KeyPrefix` guards were each proven by **constructing the registry that breaks them** (component
+count, a width disagreeing with the hub's, a hub declaring `width=None`) and reading the refusal.
+`_DIAGNOSTICS_DEFAULT_ON` — the exception the implementer added rather than weaken a total lock,
+**refusing the controller's instruction to just set the flag** — was checked as a genuine
+biconditional in both directions and then end to end by editing the real YAML and watching the
+test go red. **`link_company_partner` is still refused by `load_link`**, proven by direct call;
+the one socios test the pass edited changes only a `pytest.raises(match=...)` string, verified
+against the diff. The four re-derived wiring locks reduce to their old spelling on the CNPJ side.
+The suite delta is **+89 / −2 renamed**, re-derived by diffing sorted id sets in a worktree at
+the base revision rather than by subtracting totals.
+
+**Modelling — one blocking finding, which §2.5 above is the repair of**, plus confirmations that
+matter: the empresa end's reference goes through the **same** `_padded` / `zero_padded_column` /
+`hash_key_column` pipeline `load_hub` uses, so byte-identity with `hub_empresa`'s digest is
+structural rather than incidental — checked by an anti-join over real Delta tables returning zero
+dangling references. `updated_at` is **out** of the satellite payload, so a moved watermark writes
+no satellite row. A **quarantined** row closes no window, which is ADR 0010's whole subject and
+the confusion ADR 0011 priced at 1,781 sócio keys per month. The monthly axis closes **zero**,
+reproducing T7's defect from the failing side.
+
+**And it checked the byte-identity test the controller flagged as the one worth distrusting.**
+`tests/vault/test_loading.py` re-implements the pre-F-DB control flow **by hand in the test
+file** rather than importing the shipped functions, so it is not a golden string the code under
+test produced. It shares the low-level primitives with the code — but those are untouched by this
+diff, which makes the comparison appropriately scoped rather than circular.
+
+**The reviewer declared what it did not run.** `tests/vault/test_socios_vault.py` was reported as
+**unrun by it**, not quoted from the commit message as though it had been — the discipline this
+project holds because quoting a verdict no process emitted is its worst failure mode.
+
+### 2.5.2 The Task 5 correction pass — the ledger's grain was FINER than the value its link keys on
 
 **One blocking defect, closed with the fix rather than the fallback the brief authorised.**
 
