@@ -743,10 +743,22 @@ spellings of one instant that a Python string comparison gets wrong on most valu
 the standard this project reached after counting how many of its guards had never been proven able
 to fail:
 
-- With the `--since` refusal patched out, the test does not merely fail to raise — it **connects
-  to the live container and completes a full unprotected incremental extract**, printing 1,088
-  rows, a watermark, 477,163 bytes and a sha256, every number correct. The species, drawn from
-  life.
+- With the `--since` refusal patched out, **a manual run against the live container completes a
+  full unprotected incremental extract** — 1,088 rows, a watermark, 477,163 bytes and a sha256,
+  every number correct. The species, drawn from life.
+
+  > **THE SENTENCE ABOVE FIRST SAID "THE TEST" DOES THIS, AND NO COMMITTED TEST DOES.**
+  > `tests/test_extract_merchant_snapshot.py` says in its own docstring *"HERMETIC: a `tmp_path`
+  > and a fake connection. Nothing here starts a container"*, and its assertion on this refusal
+  > uses a fake, never psycopg. The demonstration was **ad hoc** — patch the call site, run the
+  > script by hand — and it was described in words that promise a reproducible artefact.
+  >
+  > **The numbers are exact**: the reviewer of the correction pass reproduced them independently
+  > and got the same 1,088 rows, the same watermark and byte-for-byte the same 477,163. So this
+  > is a precision defect and not a false number — **which is the same thing §0.4 says about its
+  > own `peek()` figures**, in this document, under the label *"not reproducible from anything
+  > committed"*. **Written in the paragraph whose entire subject is guards that were never proven
+  > able to fail**, and caught by the review of the pass rather than by its author.
 - With T10's new rule patched out, a row carrying **U+A7C1** in `legal_name` comes back with
   reject reason **`[None]`** — not rejected for a neighbouring reason, **accepted**. T10's latent
   defect, live, before the guard existed.
@@ -769,6 +781,56 @@ so a mechanical split left three seams at one blank line and ruff was silent. An
 blow its own 600 s cap** on this machine: `tests/gold` alone did not finish in 570 s and
 `tests/gold/test_conformed.py` is 22 tests in 267.87 s. **Inferred from two direct measurements
 rather than measured**, because running the script is forbidden — and labelled as an inference.
+
+#### 2.4.2 The review of the correction pass — and it ran what the pass declared it had not
+
+**Zero blocking defects, and it is an earned verdict rather than a default.** The reviewer traced
+the one place a blocking regression was most likely — F1 — into `seed_merchant_db.mutate`'s actual
+sequence rather than accepting either the implementer's framing or the controller's.
+
+**THE COVERAGE ARGUMENT WAS NARROWER THAN WHAT IT HAD TO COVER, and a split is exactly what
+invalidates that shape of argument.** The pass skipped `tests/vault` and part of `tests/bronze` on
+the grounds that it had run *"every module importing `opl.bronze.rules`"*. Incomplete on its own
+terms: `opl.vault.reference` → `opl.bronze.autoloader` → `opl.bronze.dq` → `opl.bronze.rules` →
+`rule_predicates` → `unicode_case` is a **transitive** path the rationale did not account for, and
+six test files reached the changed code through it without being re-run. The reviewer ran them,
+and then ran gold in full anyway rather than resting on the import graph:
+
+| suite | result |
+|---|---|
+| `tests/vault/test_reference_vault.py` | **10 passed**, 383.84 s |
+| `tests/vault/test_cnpj_vault.py` | **28 passed**, 231.77 s |
+| `tests/bronze/test_promote.py` + `test_masking.py` | **43 passed**, 257.45 s |
+| `test_promote_batch_task.py` + `test_ptax_rules.py` + `test_payment_rules.py` + `test_dq.py` | **98 passed**, 370.70 s |
+| `tests/test_dq_gate_batch_task.py` | **10 passed**, 0.52 s |
+| `tests/gold/test_conformed.py` + `test_registry.py` | **297 passed**, 362.81 s |
+| the remaining five `tests/gold` files | **125 passed**, 1552.22 s |
+| `tests/vault/test_hashing_spark.py` equality sweep | **1 passed**, 29.38 s |
+
+**612 tests, no failures.** The gold half of the pass's argument was right — only
+`opl/gold/registry_guards.py` touches `opl.bronze`, and only `opl.bronze.registry`, which does not
+import `rules` — and the vault half was wrong. **Nothing broke, and the defect is still real**: the
+outcome was luck relative to the reasoning offered for it.
+
+**F1 traced to source, and it does not refuse a correct run.** `mutate()` begins the held
+transaction stamping `t1`, commits the `watermark_advance` transaction at `t2 > t1`, writes the
+readiness file carrying both, and **only then** is snapshot 1 read — so snapshot 1's watermark is
+**exactly `t2`**, which is what the `watermark_advance` class was added for. `watermark_is_at_or_after`
+is `>=`, so the correct run satisfies the refusal by equality, and the end-to-end test passes
+`--since` = t2 reformatted, exercising that boundary rather than an easier case.
+
+**Everything else re-derived rather than accepted.** The split's `rules_for` dispatch is
+**byte-identical** across all seven contracts in order — which matters because first-match-wins is
+the gate's contract and a reordering is a behaviour change no count would reveal — and the
+collection claim was checked by building two disposable worktrees at `cb2373a^` and `cb2373a`.
+`UNICODE_VERSION_DIVERGENCE` has exactly 40 members with U+105A2/U+105B2/U+105BA confirmed
+excluded, none cp1252-encodable, and the class uses codepoint escapes rather than literal astral
+characters, so no surrogate pair can end up in it. The cap test was broken in **three** directions
+— a stale allow-list entry, a function padded past 50, and one blank line taking
+`src/opl/gold/facts.py` from 799 to 800 — and failed correctly each time. The suite delta's +18 is
+attributed id by id from diffed listings: 6 T10 + 1 F6 + 3 F1 + 4 sweep-tax + 4 cap tests.
+
+Every file edited to prove a point was restored, with `git status --porcelain` empty after each.
 
 ## 3. What ships UNEXERCISED
 
