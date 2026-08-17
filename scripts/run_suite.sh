@@ -118,6 +118,14 @@ WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
 # because it starts no Spark session at all -- that is the "one module import" claim,
 # measured rather than argued.
 #
+# AND A SEVENTH, IN F-DB TASK 5, ON EXACTLY THAT PRECEDENT. `test_link_key_derivation.py`
+# is `LinkEnd.key_from` and the `build_registry` guard that checks a declared derivation
+# against the hub it claims to key -- specs and whole-set refusals, all of which run
+# before a session exists. It requests neither `spark` nor a fixture, so like
+# `test_observation_grain.py` it costs this chunk one module import: measured 13 passed
+# in 0.11s alone. Task 5's OTHER new file, `test_merchant_vault.py`, does build a Spark
+# fixture and is therefore its own chunk below rather than a seventh member here.
+#
 # AND THE SEVENTH FILE ARRIVED IN F-DB TASK 2, AND IT WENT TO `vault-cnpj-hashing`
 # BECAUSE IT DOES PAY THE COST THE SIXTH DID NOT. `test_observation_axis.py` runs the
 # ledger over a synthetic two-observation merchant registry, so it requests `spark` and
@@ -146,7 +154,7 @@ CHUNKS=(
   "vault-cnpj-hashing|tests/vault/test_cnpj_vault.py tests/vault/test_hashing.py tests/vault/test_hashing_spark.py tests/vault/test_satellite_diagnostics.py tests/vault/test_observation_axis.py"
   "vault-estab|tests/vault/test_estabelecimento_vault.py"
   "vault-socios|tests/vault/test_socios_vault.py"
-  "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_observation_grain.py tests/vault/test_registry.py tests/vault/test_reference_vault.py tests/vault/test_effectivity_window.py"
+  "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_observation_grain.py tests/vault/test_registry.py tests/vault/test_reference_vault.py tests/vault/test_effectivity_window.py tests/vault/test_link_key_derivation.py"
 )
 
 chunk_name() { printf '%s' "${CHUNKS[$1]%%|*}"; }

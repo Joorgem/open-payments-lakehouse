@@ -114,6 +114,7 @@ from opl.vault.specs import (
     BusinessKeyColumn,
     EffectivitySatellite,
     Hub,
+    KeyPrefix,
     Link,
     LinkEnd,
     ReferenceTable,
@@ -130,6 +131,7 @@ __all__ = [
     "BusinessKeyColumn",
     "EffectivitySatellite",
     "Hub",
+    "KeyPrefix",
     "Link",
     "LinkEnd",
     "ReferenceTable",
@@ -326,6 +328,58 @@ def _assert_every_link_joins_registered_hubs(tables: Mapping[str, VaultTable]) -
             written[reference] = f"hub {hub.name!r}'s reference under role {end.role!r}"
 
 
+def _refuse_a_derivation_that_does_not_fit(link: Link, end: LinkEnd, hub: Hub) -> None:
+    """One declared end's `key_from` must describe the hub it claims to key.
+
+    TWO CHECKS, AND BOTH FAIL SILENTLY WITHOUT THIS. A declaration with the wrong NUMBER
+    of entries is matched positionally by `opl.vault.loading._padded`, which refuses a
+    length mismatch -- but inside Spark, several tasks into a job, naming a component
+    count rather than the link. A declaration with the wrong WIDTH does not fail at all:
+    it keys on a different-length root, produces a digest `load_hub` never wrote, and the
+    link joins to nothing while reporting the right row count.
+
+    THE HUB'S WIDTH MUST BE DECLARED, which is the third refusal and the least obvious.
+    `BusinessKeyColumn(width=None)` means "take the value as it is", so there is no width
+    for a prefix to agree WITH -- and a prefix taken against it would be an independent
+    claim about a canonical form the hub deliberately declines to make."""
+    if len(end.key_from or ()) != len(hub.business_keys):
+        raise ValueError(
+            f"link {link.name!r} declares a key_from of {len(end.key_from or ())} "
+            f"component(s) for hub {hub.name!r}, which is keyed on "
+            f"{hub.business_key_columns}. They are matched POSITIONALLY, so a shorter or "
+            "longer declaration derives and hashes the wrong column"
+        )
+    for prefix, key in zip(end.key_from or (), hub.business_keys, strict=True):
+        if key.width == prefix.width:
+            continue
+        raise ValueError(
+            f"link {link.name!r} derives hub {hub.name!r}'s {key.name!r} as the first "
+            f"{prefix.width} characters of {prefix.column!r}, and that hub declares width "
+            f"{key.width!r}. The prefix must be the hub's OWN declared width: a shorter or "
+            "longer root is a different key space, so every reference would be a digest "
+            f"load_hub never wrote and {link.name!r} would join to nothing without failing"
+        )
+
+
+def _assert_every_declared_key_derivation_fits_its_hub(
+    tables: Mapping[str, VaultTable]
+) -> None:
+    """Refuse a `LinkEnd.key_from` that does not describe the hub it is declared on.
+
+    HERE AND NOT IN `LinkEnd.__post_init__` for this file's standing reason: the end
+    names its hub by STRING, so the width it must agree with is on a table only the whole
+    set can resolve. `_link_hubs` is reused rather than re-resolved, so a link whose hub
+    is missing is refused by the guard above with that message rather than by this one
+    with a worse one."""
+    for table in tables.values():
+        if not isinstance(table, Link):
+            continue
+        hubs = _link_hubs(tables, table)
+        for end, hub in zip(table.ends, hubs, strict=True):
+            if end.key_from is not None:
+                _refuse_a_derivation_that_does_not_fit(table, end, hub)
+
+
 def _assert_every_effectivity_satellite_hangs_off_a_link(
     tables: Mapping[str, VaultTable]
 ) -> None:
@@ -377,6 +431,7 @@ def build_registry(domains: Iterable[VaultDomain]) -> Mapping[str, VaultTable]:
     tables = _collected_tables(collected)
     _assert_every_satellite_hangs_off_a_hub(tables)
     _assert_every_link_joins_registered_hubs(tables)
+    _assert_every_declared_key_derivation_fits_its_hub(tables)
     _assert_every_effectivity_satellite_hangs_off_a_link(tables)
     return MappingProxyType(tables)
 
@@ -438,9 +493,21 @@ def identity_columns_of(link: Link, hubs: Sequence[Hub]) -> tuple[str, ...]:
 
     `hubs` is EVERY end's hub, in the link's declaration order -- the same list
     `linked_hubs` returns and the loaders take -- so the non-identifying ends are
-    dropped here rather than by each caller."""
+    dropped here rather than by each caller.
+
+    IT ASKS THE END, NOT THE HUB, SINCE F-DB, and that is what makes the grain right for
+    a DERIVED end. The columns this returns are read off BRONZE -- the observation
+    ledger's `_side` projects the source to exactly them -- so for
+    `link_merchant_empresa` the answer is `merchant_id` and `cnpj`, the columns the
+    source has, and not `merchant_id` and `cnpj_basico`, which would be a ledger keyed on
+    a column `bronze_merchant` does not carry. `LinkEnd.source_columns` answers `None`
+    and a declaration in one place, so the two cannot drift; for every end declared
+    before F-DB it returns the hub's own column names and this function is unchanged."""
+    identifying = [
+        (end, hub) for end, hub in zip(link.ends, hubs, strict=True) if end.identifying
+    ]
     return tuple(
-        [name for hub in identifying_hubs(link, hubs) for name in hub.business_key_columns]
+        [name for end, hub in identifying for name in end.source_columns(hub)]
         + list(link.dependent_child_key_columns)
     )
 

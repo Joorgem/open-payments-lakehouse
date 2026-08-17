@@ -188,9 +188,90 @@ class Satellite:
 
 
 @dataclass(frozen=True, kw_only=True)
+class KeyPrefix:
+    """One component of a link end's business key, DERIVED as the first `width`
+    characters of a named source column.
+
+    WHY THIS EXISTS AT ALL, and it is F-DB's whole link. `link_candidates` reads every
+    hub's business key from the columns the hub is NAMED after -- its docstring says so
+    in capitals -- and `bronze_merchant` carries `cnpj`, fourteen characters, where
+    `hub_empresa` keys on `cnpj_basico` at width 8. The empresa end is therefore DERIVED,
+    exactly like `link_company_partner`'s partner end, and the plan's original ruling that
+    `load_link` could write it was false. What changes here is that the derivation is
+    DECLARED on the end instead of hard-coded in a second loader.
+
+    A PREFIX AND NOT AN EXPRESSION, DELIBERATELY. A general escape hatch -- a lambda, a
+    SQL string, a mini-language for slicing -- is refused for the reason
+    `opl.bronze.registry`'s landing mode is a guarded declaration rather than a free
+    string: a value the registry cannot REASON about cannot be checked against the hub it
+    claims to key, and the guard in `build_registry` is the whole point of declaring it.
+    A prefix covers both derivations this repository has (`merchant.cnpj` -> 8,
+    `socios.cpf_cnpj_socio` -> 8), and the day a third shape arrives it is a deliberate
+    edit here with its own guard rather than a hole that was already open.
+
+    DATA, NOT A `Column`. This module imports no pyspark and must not start: the bronze
+    registry -- which reaches these specs through nothing today, but which shares the
+    constraint -- and the extraction scripts run on hosts where pyspark is an optional
+    extra that is usually absent. `opl.vault.loading` is where this turns into an
+    expression, through `hash_key_over`, which is the seam that already existed.
+
+    `width` IS CROSS-CHECKED AGAINST THE HUB'S OWN, in `build_registry`, and a prefix that
+    disagrees is refused naming the hub: it would key on a different-length root, produce
+    a digest `load_hub` never wrote, and join to nothing without failing."""
+
+    column: str
+    width: int
+
+    def __post_init__(self) -> None:
+        if not self.column or not self.column.strip():
+            raise ValueError("a key prefix needs a source column name")
+        if self.width <= 0:
+            raise ValueError(
+                f"key prefix on column {self.column!r} declares width {self.width!r}. It "
+                "must be a positive integer: a prefix of zero characters is the empty "
+                "string for every row, which collapses the whole end onto one hash key"
+            )
+
+
+def _validated_key_from(
+    key_from: Sequence[KeyPrefix] | None, hub: str
+) -> tuple[KeyPrefix, ...] | None:
+    """`key_from` as a frozen tuple, or None -- the three ways a declaration is malformed.
+
+    `None` AND `()` ARE KEPT APART. `None` means "this end's key is read from the columns
+    the hub is named after", which is every link this vault had before F-DB; an empty
+    tuple is a declaration that declares nothing, and reading it as `None` would turn a
+    half-written spec into the default silently."""
+    if key_from is None:
+        return None
+    if isinstance(key_from, KeyPrefix):
+        raise TypeError(
+            f"the link end on hub {hub!r} received a bare KeyPrefix as its key_from; "
+            "it is matched POSITIONALLY against the hub's business-key components, so "
+            f"pass a tuple, e.g. ({key_from!r},)"
+        )
+    frozen = tuple(key_from)
+    if not frozen:
+        raise ValueError(
+            f"the link end on hub {hub!r} declares an EMPTY key_from. Pass None for an "
+            "end whose business key is read from the columns the hub is named after; an "
+            "empty declaration is a half-written derivation that would read as that "
+            "default"
+        )
+    if any(not isinstance(prefix, KeyPrefix) for prefix in frozen):
+        raise TypeError(
+            f"the link end on hub {hub!r} must declare its key_from as KeyPrefix values "
+            "-- a bare column name cannot carry the prefix width, and the width is what "
+            "build_registry checks against the hub's own"
+        )
+    return frozen
+
+
+@dataclass(frozen=True, kw_only=True)
 class LinkEnd:
     """One end of a link: the hub it references, the ROLE it plays in the relationship,
-    and whether that reference is part of the link's identity.
+    whether that reference is part of the link's identity, and -- since F-DB -- how its
+    business key is READ from the source when the source does not name it.
 
     THE ROLE IS WHAT MAKES A SELF-REFERENCING LINK EXPRESSIBLE, and Task 4 predicted
     needing it: `link_company_partner` references `hub_empresa` at both ends -- a
@@ -207,11 +288,27 @@ class LinkEnd:
     already a dependent-child key of the link -- so the reference is a FUNCTION of the
     identity, not a part of it. Hashing it as well would make the link's own key depend
     on a value we derived where every other component is one the source delivered, and
-    would change that key the day the derivation changed."""
+    would change that key the day the derivation changed.
+
+    `identifying=False` IS NOT THE SAME QUESTION AS `key_from`, AND CONFLATING THEM IS
+    THE DEFECT F-DB CORRECTED. Until then `identifying=False` was ALSO used as the proxy
+    for "this end's key is derived", because the only derived end this vault had happened
+    to be non-identifying. They are orthogonal: `identifying` asks whether the reference
+    is part of the link's IDENTITY, and `key_from` asks where the reference's business
+    key is READ FROM. `link_merchant_empresa`'s empresa end is derived AND identifying --
+    `cnpj` enters that link's digest only through this end, and it must, or a merchant
+    re-pointed to another company keeps its link hash key, the old relationship never
+    becomes `absent_after_observation`, and no window is ever closed.
+
+    `key_from` IS `None` FOR EVERY LINK WRITTEN BEFORE F-DB, which is what makes this
+    field free to add: `None` means "read the hub's business key from the columns the hub
+    is named after", which is exactly what `link_candidates` and `link_hash_key_expression`
+    already did for every end, so both existing links keep their exact digests."""
 
     hub: str
     role: str | None = None
     identifying: bool = True
+    key_from: Sequence[KeyPrefix] | None = None
 
     def __post_init__(self) -> None:
         if not self.hub or not self.hub.strip():
@@ -222,10 +319,31 @@ class LinkEnd:
                 "the part this hub plays and prefixes its reference column; pass None "
                 "for an end that has no role rather than a blank one"
             )
+        object.__setattr__(
+            self, "key_from", _validated_key_from(self.key_from, self.hub)
+        )
 
     def reference_column(self, hub: Hub) -> str:
         """The column this end's hash-key reference is written into."""
         return hub.hash_key if self.role is None else f"{self.role}_{hub.hash_key}"
+
+    def source_columns(self, hub: Hub) -> tuple[str, ...]:
+        """The SOURCE columns this end's hub reference is read from, in hash order.
+
+        THE ONE SPELLING OF "WHICH COLUMNS DOES THIS END NEED", read by four consumers
+        that would otherwise each answer it: `links.link_candidates`' refusal of
+        non-string columns, `loading`'s expression builders, `registry.identity_columns_of`
+        (which is the observation grain an effectivity satellite on the link must be keyed
+        on), and the job-wiring lock that checks a (vault table, bronze source) pairing
+        before a deploy. A ledger keyed on a column bronze does not carry raises inside a
+        vault job several tasks past the registry; a ledger keyed on the wrong one returns
+        a full set of plausible states.
+
+        NOT A `Column` AND NOT A WIDTH -- names only. What the prefix does to the value
+        belongs to `opl.vault.loading`, which is the module that may import pyspark."""
+        if self.key_from is None:
+            return hub.business_key_columns
+        return tuple(prefix.column for prefix in self.key_from)
 
 
 @dataclass(frozen=True, kw_only=True)
