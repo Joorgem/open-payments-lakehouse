@@ -1,0 +1,174 @@
+# databricks/resources/vault_merchant_job.yml
+# THE MERCHANT DOMAIN, AND THE JOB THIS WHOLE PHASE EXISTS TO RUN. Four tables, one of
+# which -- `sat_eff_merchant_empresa` -- can produce something no vault table in this
+# lakehouse ever has: a CLOSING row. F2 measured zero departures across 68,629,147 RFB
+# keys, re-verified 2026-08-15 and still zero, so `load_effectivity_satellite`'s closing
+# path has never fired on any data anywhere in this repository.
+#
+# WHAT THIS JOB HAS TO PRODUCE, published before the run rather than after it
+# (docs/f-db-run-evidence.md section 1.1, and the link-grain figures the Task 5 dispatch
+# derives from Task 3's measured population):
+#
+#   hub_merchant                 1,088 rows over snapshot 1, +32 at snapshot 2 = 1,120
+#   link_merchant_empresa        1,088 link rows at snapshot 1 over 1,024 distinct
+#                                hub_empresa keys (64 companies carry two merchants),
+#                                1,104 at snapshot 2
+#   sat_eff_merchant_empresa     16 CLOSING rows, is_active=false,
+#                                closed_by='absent_after_observation'
+#
+# THE TRAP BESIDE THAT 16, RECORDED HERE BECAUSE THIS IS THE FILE AN OPERATOR READS WHILE
+# THE RUN IS GOING. Distinct CNPJ roots fall 1,024 -> 1,011 after the mutation, because
+# thirteen of the sixteen deleted merchants were the only merchant for their company.
+# 1,011 IS NOT THE DEPARTURE COUNT. The number at link grain is 16, and section 1.3 says
+# the phase dies on any other value.
+#
+# A LAUNCH ORDERING THIS JOB CANNOT EXPRESS, AND IT IS TWO ORDERINGS RATHER THAN ONE:
+#
+#   1. `bronze_merchant`'s INGEST AND DQ GATE MUST HAVE RUN AT LEAST ONCE.
+#      `observation_ledger` reads the quarantine table unconditionally, and
+#      `dq_gate_batch` is what creates it -- via `saveAsTable` on its `already == 0`
+#      branch, even when zero rows were rejected. Nothing needs building; what is needed
+#      is that `bronze_merchant_job.yml` has run. Launch this before that and the ledger
+#      raises on a table that was never created.
+#   2. `vault_empresa_job` MUST HAVE RUN, because `link_merchant_empresa` references
+#      `hub_empresa` and THIS JOB DOES NOT LOAD IT -- the same shape as
+#      `vault_partner_job.yml`, and here it is the point rather than an accident: the
+#      merchant end comes from Postgres and the company end from the Receita's own file
+#      feed, which is the cross-source integration claim this domain is for.
+#      `opl.vault.links.refuse_unloaded_hubs` runs inside `load_link` before anything is
+#      written and refuses a missing or empty `hub_empresa`. It is an EXISTENCE check and
+#      not referential integrity -- a populated hub short of some referenced root still
+#      passes -- so it closes "that job never ran here" completely and closes nothing
+#      else.
+#
+# THE `months` PARAMETER TAKES INSTANTS HERE, NOT MONTHS, AND IT IS THE ONLY JOB IN THIS
+# REPOSITORY THAT DOES. `bronze_merchant` declares `snapshot_axis: INSTANT_SNAPSHOT`, so
+# `opl.vault.job_params.required_months` validates each value against
+# `YYYY-MM-DDTHH:MM:SS.uuuuuuZ` at exactly 27 characters, before Spark starts. The
+# parameter keeps its name because every task of every vault job is handed the job's own
+# window in the same position, and a per-source name would be a second spelling of one
+# decision.
+#
+#     databricks bundle run opl_vault_merchant -t free \
+#       --params months=2026-08-16T22:10:46.710500Z+2026-08-17T22:11:03.884210Z,\
+#                revision=$(git rev-parse HEAD)
+#
+# TWO OF THEM, AND `vault_load_effectivity.py` REFUSES FEWER. The ledger derives its key
+# universe from the same window it reports on, so over ONE observation every key is
+# present in the only observation it is asked about and no key can reach
+# `absent_after_observation` -- the run would close 0 windows whatever bronze holds and
+# report success. Here that is the difference between 16 and 0.
+resources:
+  jobs:
+    opl_vault_merchant:
+      name: opl-vault-merchant
+      parameters:
+        - name: months
+          # The sentinel the four other vault jobs share -- one spelling, even though its
+          # wording says "MONTH" and this job's window is a pair of INSTANTS. Forking it
+          # would be two sentinels for one decision; what matters is that the default is
+          # a value the task refuses, and `_is_instant` refuses this one on width alone.
+          default: "REQUIRED-PASS-A-MONTH"
+        - name: revision
+          default: "REQUIRED-PASS-A-REVISION"
+        - name: report_diagnostics
+          # THE ONE VAULT JOB WHOSE DIAGNOSTICS DEFAULT IS ON, AND THE ARGUMENT FOR OFF
+          # DOES NOT APPLY HERE. That default exists because `sat_empresa_dados` spent
+          # most of a 5,635 s load on two extra full passes over 69M keys, both answering
+          # 0. This source is 1,088 rows.
+          #
+          # AND OFF, THE DEPARTURE FIGURE IS `None`, WHICH THE LOADER DELIBERATELY KEEPS
+          # DISTINGUISHABLE FROM A MEASURED 0. That figure is this phase's headline at hub
+          # grain -- the number that is 1 where the link grain closes 2 in the local
+          # fixture, and that separates "a merchant left this company" from "a merchant
+          # left the registry". A run whose headline depends on an override at launch is a
+          # run somebody forgets to override, which is the failure
+          # `refuse_unloaded_hubs`' own docstring describes about optional preflights.
+          #
+          # It is still a PARAMETER and never a literal in the task below, so a run that
+          # wants the cheap load can still ask for one:
+          #     --params ...,report_diagnostics=false
+          default: "true"
+      tasks:
+        # FIRST, AND NOTHING BEFORE IT (ADR 0009). Side-effect-free, which is required
+        # rather than incidental: `max_retries: 0` does not prevent a retry on
+        # INTERNAL_ERROR, so a guard that touched a table could touch it twice.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        - task_key: hub_merchant
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_hub.py
+            # [vault table, BRONZE SOURCE KEY, months, load_date]. The source is a
+            # registry key and never a qualified table name.
+            parameters:
+              - "hub_merchant"
+              - "merchant"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+        - task_key: sat_merchant_dados
+          depends_on: [{ task_key: hub_merchant }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_satellite.py
+            parameters:
+              - "sat_merchant_dados"
+              - "merchant"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+              # THE FIFTH PARAMETER ONLY THIS ENTRY POINT TAKES, and it is the job's own
+              # parameter rather than a literal for `months`' reason: a hardcoded value
+              # would make the parameter above unreachable -- present, settable, and
+              # connected to nothing.
+              - "{{job.parameters.report_diagnostics}}"
+
+        # `vault_load_link.py` AND NOT `vault_load_partner_link.py`, and the difference is
+        # T5b. This link's empresa end IS derived -- `bronze_merchant` carries `cnpj`,
+        # fourteen characters, and no `cnpj_basico` -- but the derivation is DECLARED on
+        # the end (`LinkEnd.key_from`) and checked against the hub's own width at
+        # `build_registry`, so the generic loader computes it through `hash_key_over`.
+        # `opl.vault.partners` stays the loader for socios, whose derivation is
+        # hard-coded and whose link also carries dependent-child keys this one does not.
+        - task_key: link_merchant_empresa
+          depends_on: [{ task_key: hub_merchant }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_link.py
+            parameters:
+              - "link_merchant_empresa"
+              - "merchant"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+        # AFTER THE LINK IT HANGS OFF. The satellite keys through
+        # `link_hash_key_expression` rather than joining to the link, so this order is not
+        # what makes the keys agree -- it is what stops the satellite asserting a window
+        # for a relationship the link does not yet carry.
+        - task_key: sat_eff_merchant_empresa
+          depends_on: [{ task_key: link_merchant_empresa }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_effectivity.py
+            parameters:
+              - "sat_eff_merchant_empresa"
+              - "merchant"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

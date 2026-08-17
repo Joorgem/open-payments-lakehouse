@@ -154,6 +154,16 @@ _GUARDED_JOBS = (
     # to nothing at all, and reports success. Every other job in this list writes rows that
     # are wrong; this one writes rows that are unreachable.
     "gold_fact_payment_job.yml",
+    # The merchant vault job (F-DB Task 5), and this list's question has an answer here
+    # that no other vault entry has: it is the only job in this repository that can write
+    # a CLOSING row, and a close is a DERIVED claim -- the source never told us the
+    # relationship ended, we inferred it from an absence. `sat_eff_merchant_empresa` is
+    # insert-only like every other table here, so a wheel from another revision that
+    # closed a window on a different condition leaves a row asserting a relationship
+    # ended, on a table whose repair is deleting rows by hand. The other vault jobs write
+    # keys and payloads that a later correct load re-derives; this one writes an
+    # inference about something that is no longer there to re-read.
+    "vault_merchant_job.yml",
 )
 
 _UNGUARDED_JOBS = {

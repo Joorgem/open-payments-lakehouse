@@ -262,6 +262,36 @@ def reference_columns(link: Link, hubs: Sequence[Hub]) -> list[str]:
     ]
 
 
+def source_columns(link: Link, hubs: Sequence[Hub]) -> list[str]:
+    """Every column of the ONE source this loader reads a hub business key out of, in
+    end order -- the list `refuse_non_string_columns` is handed.
+
+    EVERY END'S BUSINESS KEY MUST BE READABLE FROM THIS ONE SOURCE, which is what makes
+    a link loadable from a single table at all: estabelecimentos carries `cnpj_basico`
+    (hub_empresa's whole key) as well as the establishment triple, so one scan produces
+    both references. A link whose ends live in two sources needs a join and is a
+    different loader; refusing on this list means it arrives as an error naming the
+    missing column rather than as a NULL reference.
+
+    "READABLE FROM", NOT "NAMED AFTER", SINCE F-DB, AND THAT IS ONE WORD OF WIDENING
+    RATHER THAN A NEW CAPABILITY. `link_candidates`' docstring read "EVERY HUB'S BUSINESS
+    KEY MUST BE A COLUMN OF THIS ONE SOURCE", which is what made T5's original ruling look
+    buildable: `bronze_merchant` carries `cnpj` and no `cnpj_basico`, so `hub_empresa`'s
+    key is not a column of it under that name. `LinkEnd.source_columns` answers where each
+    end's key really lives -- the hub's own names, or the columns a `key_from` declares --
+    and both the refusal and the expression read that one answer. What is unchanged is the
+    requirement: ONE source, one scan, no join. `hash_key_for_end` is the expression half.
+
+    A NAMED FUNCTION RATHER THAN A COMPREHENSION INSIDE THE CALLER, because the paragraph
+    above is what it is FOR, and `link_candidates` reached this project's 50-line function
+    cap carrying it. The prose moves with the code it describes."""
+    return [
+        name
+        for end, hub in zip(link.ends, hubs, strict=True)
+        for name in end.source_columns(hub)
+    ]
+
+
 def link_candidates(
     spark: SparkSession,
     link: Link,
@@ -275,22 +305,8 @@ def link_candidates(
     reference per participating hub, and the `record_source` of the earliest month the
     relationship appeared in.
 
-    EVERY END'S BUSINESS KEY MUST BE READABLE FROM THIS ONE SOURCE, which is what makes
-    a link loadable from a single table at all. `refuse_non_string_columns` says so by
-    name: estabelecimentos carries `cnpj_basico` (hub_empresa's whole key) as well as
-    the establishment triple, so one scan produces both references. A link whose ends
-    live in two sources needs a join and is a different loader; refusing here means it
-    arrives as an error naming the missing column rather than as a NULL reference.
-
-    "READABLE FROM", NOT "NAMED AFTER", SINCE F-DB, AND THAT IS ONE WORD OF WIDENING
-    RATHER THAN A NEW CAPABILITY. This paragraph read "EVERY HUB'S BUSINESS KEY MUST BE A
-    COLUMN OF THIS ONE SOURCE", which is what made T5's original ruling look buildable:
-    `bronze_merchant` carries `cnpj` and no `cnpj_basico`, so `hub_empresa`'s key is not a
-    column of it under that name. `LinkEnd.source_columns` answers where each end's key
-    really lives -- the hub's own names, or the columns a `key_from` declares -- and both
-    the refusal and the expression below read that one answer. What is unchanged is the
-    requirement: ONE source, one scan, no join, and a missing column is still an error
-    naming it rather than a NULL reference. `hash_key_for_end` is the expression half.
+    ONE SOURCE, ONE SCAN, AND EVERY END'S KEY READ OUT OF IT -- see `source_columns`
+    above, which is the list this refuses on and where that requirement is argued.
 
     THE REFERENCES ARE COMPUTED, NOT LOOKED UP. Joining to the hubs to fetch their
     digests would make this load depend on the hubs having been loaded first and would
@@ -306,12 +322,7 @@ def link_candidates(
     therefore validated as two distinct columns and written as one -- the exact
     collision the registry guard exists to prevent, reached by passing it."""
     source = read_snapshot_window(spark, source_table, months, axis=axis)
-    components = [
-        name
-        for end, hub in zip(link.ends, hubs, strict=True)
-        for name in end.source_columns(hub)
-    ]
-    refuse_non_string_columns(source, components)
+    refuse_non_string_columns(source, source_columns(link, hubs))
     keyed = source.select(
         link_hash_key_expression(link, identifying_hubs(link, hubs)).alias(link.hash_key),
         *(

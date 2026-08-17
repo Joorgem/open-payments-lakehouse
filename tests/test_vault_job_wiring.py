@@ -9,12 +9,12 @@ count: that file's subject is the BRONZE ingestion flow -- a table's landing dir
 checkpoint, its gate verdict, its promote -- and every helper in it resolves a
 `opl.bronze.registry` key. This file's subject is the vault, where a task is handed TWO
 registry keys (a vault table and a bronze source) and the mistakes are different in
-kind. The one thing that does cross is the revision guard, and it stays there: the four
+kind. The one thing that does cross is the revision guard, and it stays there: all five
 vault jobs are in its `_GUARDED_JOBS` so the guard's position, its parameter and its
 environment are asserted by the file that owns that argument, not re-asserted here.
 
 WHAT A COPIED VAULT JOB GETS WRONG, which is what every lock below is shaped around.
-These four YAMLs were written from one template and each task carries a vault table name
+These five YAMLs were written from one template and each task carries a vault table name
 AND a bronze table name, so a paste can leave either behind -- and both wrong values are
 the names of tables that EXIST:
 
@@ -41,9 +41,11 @@ _naming_a_window_nobody_chose`. That the ENTRY POINT refuses it when handed one 
 `tests/test_vault_entry_points.py`, and the zero it exists to prevent is measured against
 real Spark in `tests/vault/test_effectivity_window.py`.
 
-AND THIS FILE IS NOW A PAIR, SPLIT BY F-DB TASK 1 AT EXACTLY 800 LINES, with F-DB's
-`vault_merchant_job.yml` still to be added to `_VAULT_JOBS` and to the totality lock. The
-seam is the one this repository has drawn twice already and named both times:
+AND THIS FILE IS NOW A PAIR, SPLIT BY F-DB TASK 1 AT EXACTLY 800 LINES. F-DB's
+`vault_merchant_job.yml` HAS SINCE BEEN ADDED to `_VAULT_JOBS`, which is what that split
+made room for -- and the totality lock now covers eighteen registered tables across TWO
+domains rather than fourteen across one. The seam is the one this repository has drawn
+twice already and named both times:
 `test_task_wiring.py` reads the SCRIPTS and `test_job_yaml_wiring.py` reads the JOB that
 hands them arguments; `test_gold_entry_points.py` and `test_gold_job_wiring.py` are that
 pair one layer along. The vault had both halves in one file. What went to
@@ -52,7 +54,9 @@ sweeps over the six entry points, and the refusals reached by driving a script's
 `main()`. What stayed is everything that parametrizes over `_VAULT_JOBS`. Which side a
 lock lands on is decided by what makes it CHANGE -- a new job changes this file, a new
 entry point changes that one -- and F-DB adds a job and no entry point, which is why the
-other half moved out rather than this one.
+other half moved out rather than this one. That prediction held: Task 5 added
+`vault_merchant_job.yml` and `tests/test_vault_entry_points.py` needed no edit, because
+all four loaders its tasks run already existed.
 
 Nothing here starts Spark: every assertion is about wiring. The two locks below that
 consult a script load it by path with the importlib pattern the other task tests use --
@@ -60,6 +64,7 @@ consult a script load it by path with the importlib pattern the other task tests
 from __future__ import annotations
 
 import importlib.util
+import pkgutil
 from pathlib import Path
 
 import pytest
@@ -67,10 +72,10 @@ import yaml
 
 from opl.bronze.registry import table_spec as bronze_table_spec
 from opl.config import SENTINEL_MONTH, is_month
-from opl.contracts.cnpj_schemas import columns_for
+from opl.contracts.catalogue import columns_for
 from opl.vault import domains
-from opl.vault.domains import cnpj as cnpj_domain
 from opl.vault.job_params import optional_flag
+from opl.vault.links import undeclared_derived_ends
 from opl.vault.observation import ObservationGrain
 from opl.vault.registry import (
     EffectivitySatellite,
@@ -81,21 +86,42 @@ from opl.vault.registry import (
     VaultTable,
 )
 
+# `columns_for` COMES FROM `opl.contracts.catalogue` AND NOT FROM `cnpj_schemas`, SINCE
+# F-DB. The pairing lock below reads the contract of whatever bronze table a task names,
+# and three of those contracts are not the Receita's file layouts at all --
+# `cnpj_schemas.columns_for` raises KeyError for `merchant`. The catalogue is the join
+# over every source, which is the question this lock is actually asking.
+
 _REPO = Path(__file__).resolve().parents[1]
 _SRC = _REPO / "databricks" / "src"
 _RESOURCES = _REPO / "databricks" / "resources"
 
-# THE FOUR VAULT JOBS, ENUMERATED. A glob would silently give a job added later
+# THE FIVE VAULT JOBS, ENUMERATED. A glob would silently give a job added later
 # whichever behaviour it happened to inherit, and the totality lock below -- every
 # registered vault table is loaded by exactly one task -- is only a claim about the
-# vault if this list is the whole of it. `test_the_four_vault_jobs_are_the_vault_yamls
+# vault if this list is the whole of it. `test_the_five_vault_jobs_are_the_vault_yamls
 # _on_disk` closes the other direction.
 _VAULT_JOBS = (
     "vault_empresa_job.yml",
     "vault_estabelecimento_job.yml",
     "vault_partner_job.yml",
     "vault_reference_job.yml",
+    # F-DB Task 5, and the first vault job over a source that is not the Receita's file
+    # feed. Every lock below is total over it unchanged; what it needs from this list is
+    # the same thing the other four do.
+    "vault_merchant_job.yml",
 )
+
+# THE JOBS WHOSE `report_diagnostics` DEFAULT IS ON, WITH THE REASON -- a declared
+# exception rather than a hole in the lock below, on `_UNGUARDED_JOBS`' shape in
+# `test_job_yaml_launch_guards.py`. The default is off everywhere else because the two
+# diagnostics were most of a 5,635 s load over 69M keys and both answered 0.
+_DIAGNOSTICS_DEFAULT_ON = {
+    "vault_merchant_job.yml": (
+        "1,088 rows, where the argument for off was measured on 69M -- and off, the "
+        "departure figure is None, which is this phase's headline at hub grain"
+    ),
+}
 
 _GUARD = "assert_deployed_revision"
 _PYTHON_FILE_PREFIX = "../src/"
@@ -200,15 +226,22 @@ def _is_a_derived_link(link: Link) -> bool:
     """Does this link have an end `load_link` cannot compute?
 
     THE SAME CONDITION `opl.vault.links._refuse_a_link_this_loader_cannot_write` TESTS,
-    read from the spec rather than restated as a list of table names. That refusal is
-    the reason there are two link loaders at all: `load_link` computes every end's
-    reference from the columns that hub is NAMED after, and a non-identifying end's
-    business key is derived instead -- so both ends of `link_company_partner` would be
-    hashed from `cnpj_basico` and every relationship would read as a company partnered
-    with itself, with the right row count and working joins. Deriving the routing from
-    the condition means a wave-2 link with a dependent-child key is routed correctly by
-    this lock on the day it is registered, rather than passing it by omission."""
-    return bool(link.dependent_child_keys) or any(not end.identifying for end in link.ends)
+    and since F-DB it is the same FUNCTION rather than a restatement of it:
+    `undeclared_derived_ends` is exported from that module for exactly this caller. That
+    refusal is the reason there are two link loaders at all -- `load_link` computes every
+    end's reference from the columns that hub is NAMED after, so an undeclared derived
+    end would hash both ends of `link_company_partner` from `cnpj_basico` and every
+    relationship would read as a company partnered with itself, with the right row count
+    and working joins.
+
+    THE CONDITION MOVED AND THE ROUTING DID NOT, WHICH IS WHAT THIS RE-DERIVATION IS FOR.
+    It read `any(not end.identifying ...)`, and that flag was a PROXY for "derived".
+    `link_merchant_empresa`'s empresa end is derived AND identifying, so under the old
+    spelling this lock would have routed it to `vault_load_partner_link.py` -- a loader
+    that would refuse it -- while under the flag's stated MEANING it belongs on
+    `vault_load_link.py`, which can now write it. Asking the loader's own function means
+    the two cannot disagree about which entry point a link needs."""
+    return bool(link.dependent_child_keys) or bool(undeclared_derived_ends(link))
 
 
 def _entry_point_for(spec: VaultTable) -> str:
@@ -241,7 +274,15 @@ def _required_source_columns(spec: VaultTable) -> tuple[str, ...]:
             # `partner_link_candidates` refuses the COMPANY end's key and the two
             # dependent-child keys; the partner end is derived from one of the latter.
             return (*hubs[0].business_key_columns, *spec.dependent_child_key_columns)
-        return tuple(name for hub in hubs for name in hub.business_key_columns)
+        # `link_candidates` asks the END where its hub's key lives -- the hub's own
+        # column names, or the columns a `LinkEnd.key_from` declares. Restated as
+        # `hub.business_key_columns` this lock would demand `cnpj_basico` from
+        # `bronze_merchant`, which has no such column, and refuse a pairing that works.
+        return tuple(
+            name
+            for end, hub in zip(spec.ends, hubs, strict=True)
+            for name in end.source_columns(hub)
+        )
     if isinstance(spec, EffectivitySatellite):
         link = domains.parent_link(spec)
         return (*domains.link_identity_columns(link), spec.entry_column)
@@ -263,7 +304,7 @@ def _parents_in(spec: VaultTable) -> tuple[str, ...]:
 # --- the locks -----------------------------------------------------------------------
 
 
-def test_the_four_vault_jobs_are_the_vault_yamls_on_disk():
+def test_the_five_vault_jobs_are_the_vault_yamls_on_disk():
     """`_VAULT_JOBS` is what every lock below iterates, so a vault job missing from it
     is a job none of them look at -- and the totality lock underneath would then say
     "every vault table is loaded" while ignoring the file that loads some of them."""
@@ -460,11 +501,40 @@ def test_the_diagnostics_flag_is_declared_exactly_where_a_task_is_handed_one(job
             "never a literal, or the job parameter cannot reach it"
         )
     if handed:
-        assert optional_flag(declared[name], parameter=name) is False, (
-            f"{job_yml}'s {name} default is {declared[name]!r}, which parses ON. Every run "
-            "launched without --params would pay for a second full scan of the source and "
-            "a materialised observation ledger it never asked for"
+        _assert_the_diagnostics_default_is_off_unless_declared_otherwise(
+            job_yml, name, declared[name]
         )
+
+
+def _assert_the_diagnostics_default_is_off_unless_declared_otherwise(
+    job_yml: str, name: str, default: str
+) -> None:
+    """Off, unless the job is in `_DIAGNOSTICS_DEFAULT_ON` with a reason beside it.
+
+    AN EXCEPTION WITH A NAME RATHER THAN A WEAKER LOCK, on `_UNGUARDED_JOBS`' shape. The
+    default is off because two extra full passes over 69M keys were most of a 5,635 s
+    load; that is a COST argument, and it has an answer per source rather than in
+    general. On 1,088 rows the cost is nothing and the departure figure is the phase's
+    headline -- and off, `load_satellite` reports it as `None`, which it deliberately
+    keeps distinguishable from a measured 0. A headline that depends on an override at
+    launch is a headline somebody forgets to ask for.
+
+    Both directions are asserted, so an entry that outlives its job's default fails here
+    rather than silently exempting a job that no longer needs exempting."""
+    parsed = optional_flag(default, parameter=name)
+    if job_yml in _DIAGNOSTICS_DEFAULT_ON:
+        assert parsed is True, (
+            f"{job_yml} is listed in _DIAGNOSTICS_DEFAULT_ON because {name} costs it "
+            f"nothing ({_DIAGNOSTICS_DEFAULT_ON[job_yml]}), and its default is "
+            f"{default!r}, which parses OFF. Take the entry out or turn the default on"
+        )
+        return
+    assert parsed is False, (
+        f"{job_yml}'s {name} default is {default!r}, which parses ON. Every run "
+        "launched without --params would pay for a second full scan of the source and "
+        "a materialised observation ledger it never asked for. If that cost is nothing "
+        "for this source, say so in _DIAGNOSTICS_DEFAULT_ON rather than here"
+    )
 
 
 @pytest.mark.parametrize("job_yml", _VAULT_JOBS)
@@ -510,6 +580,23 @@ def _load(name: str):
     return module
 
 
+def _grains_the_domains_declare() -> dict[str, ObservationGrain]:
+    """Every `ObservationGrain` bound at module level by any domain module, by name.
+
+    The package is scanned the way `opl.vault.registry.discover_domains` scans it --
+    underscore-prefixed modules skipped -- so this is total over the domains that exist
+    rather than over the ones this file happened to import."""
+    found: dict[str, ObservationGrain] = {}
+    for info in pkgutil.iter_modules(list(domains.__path__)):
+        if info.name.startswith("_"):
+            continue
+        module = importlib.import_module(f"{domains.__name__}.{info.name}")
+        for value in vars(module).values():
+            if isinstance(value, ObservationGrain):
+                found[value.name] = value
+    return found
+
+
 def _grains_the_jobs_build() -> list[tuple[str, str, str, ObservationGrain]]:
     """Every `(job, task, script, grain)` the vault YAMLs' load tasks build, skipping the
     tasks whose loader takes no observation grain.
@@ -542,21 +629,25 @@ def test_the_grain_this_task_builds_is_the_grain_the_domain_declares():
     the reason it is asserted rather than argued.
 
     `opl/vault/domains/cnpj.py` declares `EMPRESA_GRAIN`, `ESTABELECIMENTO_GRAIN` and
-    `COMPANY_PARTNER_GRAIN` -- an observation grain is not a registered table, so there
-    is no way for a job to reach one by name without a mapping that would itself be the
-    second spelling. So the two satellite entry points call the SAME constructor over the
-    SAME two registry entries, and this compares the result against what the domain
-    declares, per (satellite task, bronze source) pairing the YAMLs actually carry.
+    `COMPANY_PARTNER_GRAIN`, and `merchant_domain.py` declares two more -- an observation
+    grain is not a registered table, so there is no way for a job to reach one by name
+    without a mapping that would itself be the second spelling. So the two satellite entry
+    points call the SAME constructor over the SAME two registry entries, and this compares
+    the result against what the domain declares, per (satellite task, bronze source)
+    pairing the YAMLs actually carry.
+
+    IT SWEEPS THE DOMAINS PACKAGE RATHER THAN ONE MODULE, SINCE F-DB. It read
+    `vars(cnpj_domain)` while there was one domain, which would have reported the merchant
+    grains as "declared by no constant" -- a lock that goes red for the right reason and
+    names the wrong cause. The sweep is `discover_domains`' own mechanism, so a wave-2
+    domain is covered on the day its file lands rather than on the day somebody adds an
+    import here.
 
     The grain is the argument whose mistakes are invisible in the output: it decides the
     reported departure count for a descriptive satellite and WHICH WINDOWS CLOSE for the
     effectivity one. The loaders' own `_refuse_a_mismatched_grain` covers the runtime
     half; this covers the half that would otherwise be a paragraph of prose."""
-    declared = {
-        value.name: value
-        for value in vars(cnpj_domain).values()
-        if isinstance(value, ObservationGrain)
-    }
+    declared = _grains_the_domains_declare()
     built = _grains_the_jobs_build()
     for job_yml, key, script, grain in built:
         assert grain.name in declared, (
