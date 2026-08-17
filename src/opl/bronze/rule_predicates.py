@@ -38,8 +38,10 @@ from opl.unicode_case import DIVERGENT_CHARACTER_CLASS
 
 _REPLACEMENT_CHAR = "�"
 
+
 def _null_or_blank(col: str) -> Callable[[], Column]:
     return lambda: F.col(col).isNull() | (F.trim(F.col(col)) == "")
+
 
 def _encoding_check(contract: str) -> Callable[[], Column]:
     """U+FFFD in ANY column of the contract, not two hand-picked ones.
