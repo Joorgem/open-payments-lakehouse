@@ -267,7 +267,8 @@ def _refuse_a_mismatched_grain(
     whether or not a future domain follows the naming convention.
 
     The key-space half is `_grain_key_mismatch`, which is where the order decision the
-    first multi-column key forced is argued."""
+    first multi-column key forced is argued, and the third check is
+    `_refuse_a_prefixed_hub_grain`."""
     if grain.bronze_table != source_table:
         raise ValueError(
             f"the observation grain reads {grain.bronze_table!r} and the satellite is "
@@ -276,9 +277,38 @@ def _refuse_a_mismatched_grain(
             "another key space, and its refusal of an unloaded month would be checked "
             "against another table's months. Pass the grain built for this source"
         )
+    _refuse_a_prefixed_hub_grain(hub, grain)
     mismatch = _grain_key_mismatch(hub, grain)
     if mismatch is not None:
         raise ValueError(mismatch)
+
+
+def _refuse_a_prefixed_hub_grain(hub: Hub, grain: ObservationGrain) -> None:
+    """A hub grain may not be read through a `KeyPrefix`.
+
+    A FLAT REFUSAL RATHER THAN A COMPARISON, WHICH IS WHY IT IS NOT PART OF
+    `_grain_key_mismatch`. F-DB Task 5's correction pass gave `ObservationGrain` a
+    derivation -- the thing that makes `link_merchant_empresa`'s ledger key on the eight
+    characters its digest is over rather than on the fourteen bronze holds. A HUB has no
+    such thing: its business key is read from the columns it is NAMED after
+    (`loading._padded_components` is the whole of it), so there is no declaration to
+    compare a prefix against.
+
+    AND THE MISTAKE POINTS THE OPPOSITE WAY FROM THE LINK'S. A missing prefix made that
+    ledger FINER than the link; a prefix here makes this one COARSER than the hub -- one
+    ledger key spanning several hub keys -- so a departure is reported only when the last
+    of them leaves, and the count is small, plausible and about a key space this
+    satellite wrote no row for."""
+    if not grain.key_prefixes:
+        return
+    raise ValueError(
+        f"the observation grain declares key prefixes {tuple(grain.key_prefixes)} and "
+        f"hub {hub.name!r} reads its business key from the columns it is named after. A "
+        "prefix would key the ledger on a truncation of a hub key -- COARSER than the "
+        "hub, so several hub keys share one ledger key and a departure is reported only "
+        "when the last of them leaves. Prefixes belong to a LINK end that declares one; "
+        "pass the grain built for this hub"
+    )
 
 
 def satellite_candidates(
