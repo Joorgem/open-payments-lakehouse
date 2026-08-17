@@ -522,6 +522,37 @@ container was stopped by the same event and had to be restarted — **and the se
 survived it**, which is Task 0's persistence matrix (§0.4) confirmed in the field rather than
 in a probe: a stop is not a `down`.
 
+### 2.3 Task 4, verified by the controller because its agent died too
+
+**Controller-verified.** Task 4's implementer died with its process before reporting — the
+**third** on this branch. Its seven commits survived (`be6ee0c..3ed6ba5`), tree clean, no
+stash: the `merchant` contract, `postgres_source.py`, the host-side extractor, the fifth
+landing mode, a third audit-column path, the DQ rule set, `bronze_merchant_job.yml` and its
+ingest, across 29 files and 3,928 insertions.
+
+| check | result |
+|---|---|
+| `uv run ruff check .` | **clean** |
+| files at or over 800 lines | **none** |
+| non-Spark surface (11 files) | **258 passed in 5.70 s** |
+| Spark surface (`test_merchant_rules.py`, `test_snapshot.py`) | **113 passed in 278.29 s** |
+| collection | **2,342 / 2,365, 23 deselected** |
+
+**371 tests green, and that is execution rather than review.** No independent pass has read
+this task, which is the state Tasks 0-3 were each taken out of by a reviewer who found real
+defects — including three blockers in this document.
+
+**ONE CAP REGRESSION EXISTED AND IT WAS THE CONTROLLER'S, NOT TASK 4'S.** Measured across
+`0054df1..HEAD`, exactly one function crossed the 50-line cap during this phase:
+`seed_merchant_db.mutate`, 45 lines when the Task 3 reviewer measured it and **53** after the
+controller's own review-fix commit inlined the atomic-readiness block. Task 4, by contrast,
+caught three of its own and moved them (`406667e`). The timing is the whole point: the
+controller broke that cap **in the commit that fixed the review which had caught the same
+species in Task 2**, and nothing surfaced it until this handoff measurement — because
+**neither the file cap nor the function cap is enforced by any test in this repository.**
+Repaired by lifting the write into `_announce_readiness`, whose docstring now carries the
+reason.
+
 ---
 
 ## 3. What ships UNEXERCISED
