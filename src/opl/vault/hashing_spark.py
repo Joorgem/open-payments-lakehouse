@@ -80,9 +80,8 @@ mapping in Unicode 14.0 -- U+2C5F, U+A7C1, U+A7D1, U+A7D7, U+A7D9, and the
 U+10597-U+105BC span MINUS U+105A2, U+105B2 and U+105BA, which do not diverge. (The
 three exclusions were missing from this sentence until Task 7's correction pass, which
 made the enumeration beside "exactly FORTY" name forty-three. `UNICODE_VERSION_DIVERGENCE`
-in `tests/vault/test_hashing_spark.py` is the authority; this prose is a reading of it
-and the test is what runs.) A DBR upgrade onto Java 21 would re-key any vault row
-containing one.
+in `opl.unicode_case` is the authority; this prose is a reading of it and the test is what
+runs.) A DBR upgrade onto Java 21 would re-key any vault row containing one.
 
 WHAT IS DONE ABOUT IT, since it cannot be fixed from here. The forty are pinned as an
 EQUALITY in `test_the_two_spellings_upper_case_every_cased_character_the_same_way`, so
@@ -90,9 +89,17 @@ a JDK bump in either direction -- introducing new divergences, or removing these
 turns the suite red rather than re-keying the vault quietly. No CNPJ bronze row can
 currently hold one: the CSV dialect is cp1252 and none of the forty is encodable in
 it, which `test_no_character_the_two_spellings_disagree_about_can_reach_cnpj_bronze`
-asserts against the imported dialect rather than a restated encoding name. A wave-2
-feed that is not cp1252-bound reaches them immediately, and should read this paragraph
-first.
+asserts against the imported dialect rather than a restated encoding name.
+
+THE WAVE-2 FEED THAT THIS PARAGRAPH WARNED ABOUT ARRIVED, AND IT IS GUARDED NOW.
+"A wave-2 feed that is not cp1252-bound reaches them immediately" was written before
+F-DB existed; the UTF-8 Postgres merchant registry is that feed. Plan T10 rules the
+constraint a BRONZE DQ RULE rather than a bound on the seeder, and
+`opl.bronze.rule_predicates._case_divergence_check` is it: a row carrying one of the forty
+is rejected in the gate under `unhashable_case_divergence`, before it can reach a
+satellite's `hash_diff` and produce two digests for one payload with nothing going red.
+That is why the set is pinned in `opl.unicode_case` and not in the test that measures it --
+bronze may not import the vault, and `src/` may not import from `tests/`.
 
 THE GAPS THAT REMAIN, STATED RATHER THAN LEFT TO BE FOUND:
 

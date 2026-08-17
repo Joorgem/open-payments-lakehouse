@@ -34,6 +34,7 @@ from opl.bronze.rules import rules_for
 from opl.bronze.schema import struct_for
 from opl.bronze.snapshot_axis import INSTANT_WIDTH, _is_instant
 from opl.contracts.merchant import COLUMNS, CONTRACT, REQUIRED_COLUMNS
+from opl.unicode_case import UNICODE_VERSION_DIVERGENCE
 
 _REPLACEMENT_CHAR = "�"
 
@@ -134,6 +135,7 @@ def test_the_merchant_rule_order_is_pinned():
         "bad_snapshot_at_shape",
         "unparseable_credit_limit",
         "encoding_replacement_char",
+        "unhashable_case_divergence",
         "unprovable_snapshot_ref_date",
     ]
 
@@ -273,15 +275,17 @@ def test_the_declared_precision_is_exercised_rather_than_nominal(spark):
 
 
 def test_a_replacement_character_is_caught_in_the_columns_no_earlier_rule_inspects(spark):
-    """LIVE HERE FOR A REASON THE OTHER TWO JSON SOURCES DO NOT HAVE. `legal_name` and
-    `trade_name` are Portuguese and accented, and plan T10 records that a UTF-8 source is
-    exactly the feed that reaches the forty characters JDK 17 and CPython 3.12 upper-case
-    differently. The seeded population is bounded below U+0250 deliberately, so this rule
-    guards the BOUNDARY rather than the seed: a manual `psql` INSERT, a re-seed and the
-    mutation script are all outside it.
+    """U+FFFD IS MOJIBAKE AND NOTHING ELSE, and this docstring used to claim more.
 
-    Java's decoder substitutes U+FFFD SILENTLY where Python raises, so this character is the
-    only in-band evidence a byte was lost."""
+    It said this rule was the guard plan T10 asks for -- against the forty characters
+    JDK 17 and CPython 3.12 upper-case differently. It is not, and cannot be: those forty
+    are valid, correctly decoded characters and this rule looks for exactly one character,
+    U+FFFD, which is what Java's decoder substitutes SILENTLY where Python raises. The two
+    have no relationship beyond both being about text. T10's guard is
+    `unhashable_case_divergence`, tested below.
+
+    What this rule is for is unchanged and is the reason it is live on this contract:
+    U+FFFD is the only in-band evidence that a byte was lost on the way in."""
     for column in ("legal_name", "trade_name", "status", "mcc", "risk_tier"):
         assert _reasons(spark, [_row(**{column: f"x{_REPLACEMENT_CHAR}y"})]) == [
             "encoding_replacement_char"
@@ -298,6 +302,76 @@ def test_a_replacement_character_in_the_cnpj_is_SHADOWED_by_the_shape_rule(spark
     assert _reasons(spark, [_row(cnpj=f"0005734300012{_REPLACEMENT_CHAR}")]) == [
         "bad_cnpj_shape"
     ]
+
+
+# --- T10: the forty characters the two hash spellings disagree about ------------------
+#
+# A BMP member and an ASTRAL one, named by code point and then ASSERTED against the pinned
+# set rather than trusted. The astral half is not decoration: twenty-nine of the forty are
+# above U+FFFF, and a character class written with the literal characters instead of
+# `\x{...}` would contain a surrogate pair rather than the code point -- which is why
+# `opl.unicode_case` derives the class from the set. A test using only U+A7C1 would pass
+# over a pattern that could not see the other twenty-nine.
+_DIVERGENT_BMP = "ꟁ"
+_DIVERGENT_ASTRAL = "\U00010597"
+
+# U+105A2 SITS INSIDE THE SPAN AND DOES NOT DIVERGE, which is the control that makes the
+# assertions below about a measured SET rather than about a range somebody eyeballed. The
+# prose in `hashing_spark` named forty-three characters until it was corrected, for exactly
+# this reason.
+_INSIDE_THE_SPAN_BUT_AGREEING = "\U000105a2"
+
+
+@pytest.mark.parametrize("character", [_DIVERGENT_BMP, _DIVERGENT_ASTRAL])
+@pytest.mark.parametrize("column", ["legal_name", "trade_name"])
+def test_a_case_divergent_character_is_refused_by_its_OWN_named_rule(spark, column, character):
+    """PLAN T10's GUARD, WHERE T10 SAID IT BELONGS: the bronze gate, not the seeder.
+
+    The seeder bound protects the seed and nothing else -- not a manual `psql` INSERT, not
+    the mutation script, not a re-seed with different literals. This runs on every landed
+    row whatever wrote it.
+
+    THE REASON IS ASSERTED AND NOT JUST THE REJECTION, because the gate is first-match-wins
+    and a test asserting only "the row was rejected" would pass on the wrong rule. In
+    particular it would pass if `encoding_replacement_char` -- which ranks ABOVE this and
+    was until now the only thing anyone pointed at for T10 -- had fired. It cannot: these
+    are valid characters and that rule looks for U+FFFD.
+
+    WHAT IT PREVENTS. `F.upper` uses Java's case table (JDK 17, Unicode 13.0) and
+    `str.upper()` uses CPython's (3.12, Unicode 15.0); the two disagree about exactly these
+    forty. One in `legal_name` reaches the satellite's `hash_diff`, the Python and Spark
+    digests disagree on real data, and NOTHING GOES RED, because the loaders only ever use
+    the Spark spelling."""
+    assert ord(character) in UNICODE_VERSION_DIVERGENCE, "the fixture left the pinned set"
+
+    assert _reasons(spark, [_row(**{column: f"ACME {character} LTDA"})]) == [
+        "unhashable_case_divergence"
+    ]
+
+
+def test_a_character_inside_the_span_that_AGREES_is_left_alone(spark):
+    """GUARD THE GUARD, and for this rule it is the assertion that matters most.
+
+    A predicate that refused the whole U+10597-U+105BC range would pass every assertion
+    above and reject three characters this lakehouse hashes identically in both spellings.
+    The rule has to mean the MEASURED set, and the only way to show that is a member of the
+    range that is not a member of the set."""
+    assert ord(_INSIDE_THE_SPAN_BUT_AGREEING) not in UNICODE_VERSION_DIVERGENCE
+
+    assert _reasons(spark, [_row(legal_name=f"ACME {_INSIDE_THE_SPAN_BUT_AGREEING} LTDA")]) == [
+        None
+    ]
+
+
+def test_a_case_divergent_character_in_the_cnpj_is_SHADOWED_by_the_shape_rule(spark):
+    """The fold is total over all fourteen columns and first-match-wins is still the
+    contract, so said out loud for `encoding_replacement_char`'s reason: these strings are
+    data an operator filters a quarantine on. One of the forty in `cnpj` breaks the digit
+    test, so the row is REJECTED and nothing gets through, but this rule can never be the
+    REPORTED reason there. The columns it can be reported for are `legal_name` and
+    `trade_name` -- which are the columns T10 says a UTF-8 source reaches the forty
+    through."""
+    assert _reasons(spark, [_row(cnpj=f"0005734300012{_DIVERGENT_BMP}")]) == ["bad_cnpj_shape"]
 
 
 def test_an_unprovable_reference_date_is_refused_last(spark):

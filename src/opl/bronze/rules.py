@@ -29,6 +29,7 @@ from opl.bronze.rule_predicates import (
     _bad_iso_date,
     _bad_snapshot_instant,
     _basico_length,
+    _case_divergence_check,
     _cnpj_basico_length,
     _encoding_check,
     _null_or_blank,
@@ -351,11 +352,26 @@ def _required_rules(contract: str) -> list[tuple[str, Callable[[], Column]]]:
 #     so a value that casts to NULL makes two different payloads digest the same.
 #   - `encoding_replacement_char`, folded over all fourteen columns. LIVE HERE FOR A REASON
 #     THE OTHER TWO JSON SOURCES DO NOT HAVE: `legal_name` and `trade_name` are Portuguese
-#     and accented, and plan T10 records that a UTF-8 source is exactly the feed that reaches
-#     the forty characters JDK 17 and CPython 3.12 upper-case differently. The seeded
-#     population is bounded below U+0250 deliberately, so this guards the BOUNDARY rather
-#     than the seed -- a manual `psql` INSERT, a re-seed and the mutation script are all
-#     outside it.
+#     and accented, so a decode that went wrong has somewhere to show up.
+#   - `unhashable_case_divergence`, folded over all fourteen columns, and it is a DIFFERENT
+#     rule from the one above rather than a restatement of it. `encoding_replacement_char`
+#     finds U+FFFD -- mojibake, the evidence that a byte was LOST. This finds the forty
+#     characters JDK 17 (Unicode 13.0) and CPython 3.12 (Unicode 15.0) UPPER-CASE
+#     DIFFERENTLY: valid, correctly decoded, and arriving exactly as sent. Plan T10 rules
+#     that this constraint is a BRONZE DQ RULE and not a seeder assertion, in those words,
+#     because a bound on `merchant_population.py` "protects the seed and nothing else -- not
+#     the mutation script, not a manual `psql`, not a re-seed". The CNPJ contracts get the
+#     same guard free at the boundary, their dialect being cp1252, in which none of the
+#     forty is encodable; a UTF-8 Postgres source has no such property. What it prevents is
+#     the failure with nothing to see: the row reaches the satellite's `hash_diff`, the
+#     Python and Spark digests disagree on real data, and NO TEST GOES RED, because the
+#     loaders only ever use the Spark spelling. SHADOWED on every column an earlier rule
+#     inspects -- one of the forty in `cnpj` breaks `bad_cnpj_shape`'s digit test -- so the
+#     columns it can be the REPORTED reason for are `legal_name` and `trade_name`, which are
+#     the columns T10 says a UTF-8 source reaches them through. `opl.unicode_case` pins the
+#     set as data and `tests/vault/test_hashing_spark.py` holds it as an EQUALITY against a
+#     sweep of every cased character, so a JDK bump in either direction turns the suite red
+#     rather than re-keying the vault quietly.
 #   - `unprovable_snapshot_ref_date`, LAST, for the reason the CNPJ sets put it last: it is
 #     the only rule here that describes the FILE rather than the row.
 #
@@ -417,6 +433,7 @@ def _merchant_rules() -> list[tuple[str, Callable[[], Column]]]:
             _unparseable_decimal(CREDIT_LIMIT_COLUMN, _CREDIT_LIMIT_TYPE),
         ),
         ("encoding_replacement_char", _encoding_check(MERCHANT_CONTRACT)),
+        ("unhashable_case_divergence", _case_divergence_check(MERCHANT_CONTRACT)),
         (_UNPROVABLE_REF_DATE, _unprovable_ref_date),
     ]
 

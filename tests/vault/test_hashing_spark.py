@@ -40,6 +40,7 @@ import pytest
 from pyspark.sql import functions as F
 
 from opl.contracts.cnpj_schemas import CSV_DIALECT
+from opl.unicode_case import UNICODE_VERSION_DIVERGENCE
 from opl.vault.hashing import hash_key, zero_pad_cnpj
 from opl.vault.hashing_spark import (
     TRIMMED_CHARACTERS,
@@ -74,28 +75,23 @@ CASED_CHARACTERS = tuple(
     if not (0xD800 <= code <= 0xDFFF) and chr(code).upper() != chr(code)
 )
 
-# THE FORTY CHARACTERS THE TWO SPELLINGS DISAGREE ABOUT TODAY, pinned exactly.
+# THE FORTY CHARACTERS THE TWO SPELLINGS DISAGREE ABOUT TODAY ARE PINNED IN `src/`, NOT
+# HERE, AND THE MOVE IS PLAN T10's CONSEQUENCE RATHER THAN TIDINESS.
 #
-# THE CAUSE IS A UNICODE VERSION SKEW AND NEITHER SIDE IS PINNED ANYWHERE. `F.upper`
-# bottoms out in Java's `String.toUpperCase`, whose case table is the JDK's Unicode
-# version -- JDK 17 ships Unicode 13.0. `str.upper()` uses CPython's, which for 3.12
-# is Unicode 15.0. All forty below gained a case mapping in Unicode 14.0, so Java
-# leaves them unchanged and Python upper-cases them, and the digests differ. Measured
-# on java.version 17.0.19 against CPython 3.12.13 / unicodedata 15.0.0; CI pins
-# `temurin` `17` (`.github/workflows/ci.yml`), which is the same case table.
+# They were declared in this file, which made them unreachable by the only other layer that
+# needs them: `opl.bronze.rules` has to REFUSE one of the forty at the gate, before it can
+# reach a satellite's `hash_diff`, and `src/` may not import from `tests/`. Nor may bronze
+# import the vault, so the set could not simply move next door either. It lives in
+# `opl.unicode_case`, above both, which carries the measurement, the versions and the three
+# non-diverging characters inside the span.
 #
-# ASSERTED AS AN EQUALITY, NOT AS AN ALLOW-LIST, and that is deliberate. A JDK bump
-# onto Java 21 (Unicode 15) would make these forty AGREE -- which changes their
-# digests, which re-keys any vault row containing one. A change in EITHER direction is
-# a re-keying and must be a decision, so both turn this test red. That is the whole
-# safety property: the alternative is a DBR upgrade silently re-keying the vault.
-UNICODE_VERSION_DIVERGENCE = frozenset(
-    {0x2C5F, 0xA7C1, 0xA7D1, 0xA7D7, 0xA7D9}
-    | set(range(0x10597, 0x105A2))
-    | set(range(0x105A3, 0x105B2))
-    | set(range(0x105B3, 0x105BA))
-    | {0x105BB, 0x105BC}
-)
+# WHAT DID NOT MOVE IS THE ASSERTION, and that is the half that matters. The sweep below
+# still holds the pinned set as an EQUALITY against every cased character in Unicode. A
+# pinned set that is only ever READ by a rule is a constant; it is a tripwire only while
+# something re-measures it, and this test is that something. A JDK bump onto Java 21
+# (Unicode 15) makes these forty AGREE -- which changes their digests, which re-keys any
+# vault row containing one -- so a change in EITHER direction turns this red rather than
+# re-keying the vault quietly.
 
 
 def _spark_digests(spark, rows: list[tuple], schema: str, columns: list[str]) -> list[str]:

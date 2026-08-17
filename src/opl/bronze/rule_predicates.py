@@ -34,6 +34,7 @@ from opl.bronze.snapshot_axis import INSTANT_PATTERN, INSTANT_WIDTH
 from opl.contracts.catalogue import CONTRACT_COLUMNS
 from opl.contracts.merchant import CNPJ_WIDTH
 from opl.contracts.ptax import PUBLISHED_AT_COLUMN
+from opl.unicode_case import DIVERGENT_CHARACTER_CLASS
 
 _REPLACEMENT_CHAR = "�"
 
@@ -86,6 +87,51 @@ def _encoding_check(contract: str) -> Callable[[], Column]:
         chain = F.lit(False)
         for column in columns:
             chain = chain | F.col(column).contains(_REPLACEMENT_CHAR)
+        return chain
+
+    return predicate
+
+
+def _case_divergence_check(contract: str) -> Callable[[], Column]:
+    """A character the two hash spellings UPPER-CASE DIFFERENTLY, in ANY column.
+
+    NOT A SECOND `_encoding_check`, AND THE DIFFERENCE IS THE WHOLE POINT. That rule finds
+    U+FFFD -- mojibake, the in-band evidence that a byte was LOST. These forty characters
+    are valid, correctly decoded, and arrive exactly as the source sent them. What is wrong
+    with them is not the bytes: it is that `F.upper` bottoms out in Java's case table
+    (JDK 17, Unicode 13.0) and `str.upper()` in CPython's (3.12, Unicode 15.0), and the two
+    disagree about these forty. `opl.unicode_case` pins the set and carries the measurement.
+
+    WHY BRONZE AND NOT THE SEEDER, which is plan T10's ruling and the reason this rule
+    exists at all. Revision 1 bounded what `scripts/merchant_population.py` may write, and
+    that protects the seed and nothing else -- not the mutation script, not a manual `psql`
+    INSERT, not a re-seed with different literals. The CNPJ contracts get this guard for
+    free at the BOUNDARY: their dialect is cp1252 and none of the forty is encodable in it,
+    which `test_no_character_the_two_spellings_disagree_about_can_reach_cnpj_bronze`
+    asserts against the imported dialect. A UTF-8 Postgres source has no such property, so
+    the guard has to be where every other content constraint in this repository lives.
+
+    WHAT IT PREVENTS, and it is the failure with nothing to see. A row carrying one reaches
+    the satellite's `hash_diff`. The loaders only ever use the SPARK spelling, so nothing
+    goes red -- the Python and Spark digests simply disagree on real data, and the day a
+    DBR upgrade moves onto Java 21 (Unicode 15) the forty start AGREEING and every vault
+    row containing one is silently re-keyed.
+
+    A CLASS BUILT FROM THE PINNED SET rather than a literal beside it: twenty-nine of the
+    forty are astral, and `opl.unicode_case` explains why they are spelled `\\x{...}`. The
+    fold is total over the contract for `_encoding_check`'s reason -- derived, so a v2
+    column arrives covered -- and it is SHADOWED on the columns an earlier rule already
+    inspects, since the gate is first-match-wins: one of these in `cnpj` breaks
+    `bad_cnpj_shape`'s digit test and one in `onboarded_on` breaks the ISO shape. The
+    columns it can be the REPORTED reason for are the free-text ones, `legal_name` and
+    `trade_name`, which are exactly the columns T10 says a UTF-8 source reaches them
+    through."""
+    columns = tuple(CONTRACT_COLUMNS[contract])
+
+    def predicate() -> Column:
+        chain = F.lit(False)
+        for column in columns:
+            chain = chain | F.col(column).rlike(DIVERGENT_CHARACTER_CLASS)
         return chain
 
     return predicate
