@@ -24,6 +24,7 @@ from opl.bronze.snapshot import (  # noqa: E402
     token_month_key,
 )
 from opl.bronze.snapshot_axis import INSTANT_PATTERN, _is_instant  # noqa: E402
+from opl.config import SESSION_TIMEZONE, SESSION_TIMEZONE_CONFIG  # noqa: E402
 
 _ROOT = "/Volumes/workspace/default/landing/cnpj"
 ESTAB = f"{_ROOT}/2026-06/estabelecimentos/K3241.K03200Y0.D60613.ESTABELE"
@@ -302,6 +303,50 @@ def test_a_trailing_newline_is_null_because_DOLLAR_ACCEPTS_ONE_IN_BOTH_ENGINES(s
         "is the WIDTH check doing the work rather than the regex"
     )
     assert not _is_instant("2026-08-16T23:13:13.521147Z\n")
+
+
+def test_the_day_does_not_move_with_the_SESSION_TIMEZONE(spark):
+    """THE HAZARD THIS FUNCTION EXISTS TO AVOID, and until now nothing here discriminated
+    it: every assertion above is a positive case or a malformed shape, and all of them pass
+    just as happily over an implementation that casts through a timestamp.
+
+    `ref_date_from_instant` reads the first ten ISO CHARACTERS and hands them to `to_date`,
+    never casting to `timestamp`, so `spark.sql.session.timeZone` cannot reach it. The
+    established bar for saying so is `tests/gold/test_conformed.py`'s
+    `day_of` test: set a hostile zone, and pin BOTH the right answer and the wrong one a
+    naive cast produces -- because a test that only pinned the right answer would pass on a
+    UTC box whatever the implementation did.
+
+    THE INSTANT IS CHOSEN SO THE TWO ANSWERS DIFFER. `02:00Z` on 2026-08-17 is 23:00 on
+    2026-08-16 in `America/Sao_Paulo` (UTC-3), so the naive cast moves the day BACK one. It
+    has to be westward: this dev box's local Spark inherits `America/Sao_Paulo`, and an
+    eastward zone would move the day only for instants late in the UTC day.
+
+    The zone is restored in a `finally` because the session is shared across this module --
+    a leaked `spark.conf.set` would make every later test in the file a different test."""
+    instant = "2026-08-17T02:00:00.000000Z"
+    pinned = spark.conf.get(SESSION_TIMEZONE_CONFIG)
+    assert pinned == SESSION_TIMEZONE, "the suite's session is no longer the pinned one"
+    frame = spark.createDataFrame([(instant,)], "src string")
+    try:
+        spark.conf.set(SESSION_TIMEZONE_CONFIG, "America/Sao_Paulo")
+        under_the_zone = frame.select(
+            ref_date_from_instant(F.col("src")).alias("read"),
+            F.to_date(F.col("src").cast("timestamp")).alias("cast"),
+        ).collect()[0]
+    finally:
+        spark.conf.set(SESSION_TIMEZONE_CONFIG, pinned)
+
+    assert under_the_zone["read"] == dt.date(2026, 8, 17), (
+        "ref_date_from_instant moved the day with the session zone, which is the whole "
+        "thing it exists not to do -- a satellite's applied_date would then depend on the "
+        "cluster's clock configuration rather than on the instant the extractor stamped"
+    )
+    assert under_the_zone["cast"] == dt.date(2026, 8, 16), (
+        "the cast no longer moves the day under America/Sao_Paulo. If that is true the "
+        "control is gone: this test would pass over an implementation that casts through "
+        "a timestamp, and both this assertion and snapshot.py's docstring need revisiting"
+    )
 
 
 def test_an_impossible_day_inside_a_well_formed_instant_is_null(spark):
