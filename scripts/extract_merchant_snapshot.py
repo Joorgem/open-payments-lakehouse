@@ -41,6 +41,16 @@ watermark against `t2` afterwards. A partial read of the readiness file is expec
 written with a plain `write_text`, so a poller can observe it mid-write) and is treated as
 "not yet", never as a signal.
 
+`--since` AND `--wait-for` ARE NOT INDEPENDENT FLAGS, and treating them as two was the
+third appearance of that species in this phase. `--since` IS the incremental run, and the
+complement it produces is only a complement if the watermark it is asked about is at or
+after `t2` -- a value only the readiness file carries. So `--since` without `--wait-for` is
+REFUSED, and when both are given the `--since` VALUE is compared against `t2` as well as
+this run's own watermark. The argument is the operand that carries the race: it is
+snapshot 1's watermark, produced by an earlier process, and a snapshot 1 that read between
+t1 and t2 hands over a stamp under t1 that makes `WHERE updated_at > :since` RETURN the
+eight held-open rows instead of missing them.
+
 --- THE FILE IS WRITTEN LOCALLY, VERIFIED AS BYTES, AND THEN PUT ----------------------
 
 `opl.bronze.generated_landing.emit_records_file` CANNOT be reused, AND THE REASON IS
@@ -77,7 +87,8 @@ run-scoped name would make every re-run a second ingest of the same rows under a
 two instants and therefore two files; re-landing one is the same path, and `upload_to_volume`
 overwrites it with identical bytes.
 
-usage: extract_merchant_snapshot.py --month YYYY-MM [--wait-for PATH] [--since WATERMARK]
+usage: extract_merchant_snapshot.py --month YYYY-MM [--wait-for PATH]
+                                    [--since WATERMARK --wait-for PATH]
 """
 
 from __future__ import annotations
@@ -146,6 +157,58 @@ def wait_for_readiness(path: Path, timeout: float = READY_TIMEOUT_SECONDS) -> di
         "every other count stays exactly right. Run `seed_merchant_db.py mutate "
         "--ready-on <this path> --release-on <a path this run touches>` first."
     )
+
+
+def _refuse_an_incremental_run_without_the_hand_off(args: argparse.Namespace) -> None:
+    """Refuse `--since` without `--wait-for`, because they were never independent.
+
+    THE CHECK IS BOUND TO WHAT IT IS ABOUT -- "this is an incremental run" -- rather than
+    to whether the caller happened to pass a second flag. `--since` runs the incremental
+    query whose complement IS this phase's headline, and the only thing standing between
+    that complement and the race the module docstring names is the mutation's `t2`. Without
+    `--wait-for` there is no `t2` on this run AT ALL, so the check below cannot be made and
+    silently was not: a snapshot 1 that landed between t1 and t2 records a watermark under
+    t1, the held-open rows become visible to `WHERE updated_at > watermark`, and the miss
+    falls from 48 to 40 while the row count, the byte count, the sha256 and the watermark
+    all still print correct.
+
+    This is the third instance of that species in this phase. The other two -- inferring
+    readiness from an `idle in transaction` session, and comparing a seed window against an
+    authored constant -- were closed by naming the thing being trusted. This names it too:
+    an incremental run has a hand-off, or it does not run."""
+    if args.since is not None and args.wait_for is None:
+        raise MerchantSnapshotRefused(
+            f"--since {args.since!r} was given without --wait-for. The incremental query is "
+            "the one whose complement this phase publishes, and it is only a complement if "
+            "the watermark it is asked about is at or after the mutation's t2 -- which is a "
+            "value only the readiness file carries. Run with --wait-for <the mutation's "
+            "--ready-on path> so the hand-off can be CHECKED rather than assumed: without "
+            "it the miss silently falls from 48 to 40 while every other number printed by "
+            "this script stays exactly right."
+        )
+
+
+def _refuse_a_since_before_t2(
+    conn: psycopg.Connection, since: str, stamps: dict[str, str]
+) -> None:
+    """Refuse an incremental run asked about a watermark taken before the mutation's t2.
+
+    THE VALUE THAT ACTUALLY CARRIES THE RACE IS THIS ARGUMENT, not this run's own
+    watermark, and the two are different claims. `--since` is snapshot 1's watermark,
+    produced by an EARLIER process: if that read landed between t1 and t2 it recorded a
+    stamp below t1, and `WHERE updated_at > :since` then RETURNS the eight held-open rows
+    the whole measurement is about. Snapshot 2's own watermark is t2 in that run and in a
+    correct one alike, so checking it alone cannot see this.
+
+    Asked of Postgres for `watermark_is_at_or_after`'s reason: two spellings of one
+    instant, and a Python string comparison between them is wrong on most values."""
+    if not watermark_is_at_or_after(conn, since, stamps["t2"]):
+        raise MerchantSnapshotRefused(
+            f"--since is {since!r}, BEFORE the mutation's t2={stamps['t2']}. That value is "
+            "snapshot 1's watermark, so snapshot 1 was read between t1 and t2 -- and this "
+            "incremental query would RETURN the held-open rows rather than miss them, "
+            "which is the one number in this phase's headline that nothing authored."
+        )
 
 
 def _refuse_a_watermark_before_t2(
@@ -231,7 +294,9 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
         "--wait-for", type=Path, help="the mutation's --ready-on file; waited for, then checked"
     )
     parser.add_argument(
-        "--since", help="the previous snapshot's watermark; runs the incremental query too"
+        "--since",
+        help="the previous snapshot's watermark; runs the incremental query too. REQUIRES "
+        "--wait-for: see `_refuse_an_incremental_run_without_the_hand_off`",
     )
     parser.add_argument(
         "--out",
@@ -270,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     # parameter. A substituted month would write into one month's landing dir and read
     # another's -- a job that succeeds having ingested nothing.
     month = require_month(args.month, action="extract")
+    _refuse_an_incremental_run_without_the_hand_off(args)
     print(f"  dsn: {redacted_dsn()}")
     stamps = wait_for_readiness(args.wait_for) if args.wait_for else None
     with psycopg.connect(dsn(), autocommit=True) as conn:
@@ -278,6 +344,8 @@ def main(argv: list[str] | None = None) -> int:
         observed = snapshot(conn, schema=args.schema, since=args.since)
         if stamps is not None:
             _refuse_a_watermark_before_t2(conn, observed, stamps)
+            if args.since is not None:
+                _refuse_a_since_before_t2(conn, args.since, stamps)
     # THE TRANSACTION IS OVER BEFORE ANYTHING IS UPLOADED. A `READ ONLY` transaction that
     # has merely read a table blocks every `ALTER TABLE` on it for as long as it lives.
     manifest = manifest_of(observed, _land(observed, args, month))
