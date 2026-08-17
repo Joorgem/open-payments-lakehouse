@@ -154,6 +154,13 @@ CHUNKS=(
   "vault-cnpj-hashing|tests/vault/test_cnpj_vault.py tests/vault/test_hashing.py tests/vault/test_hashing_spark.py tests/vault/test_satellite_diagnostics.py tests/vault/test_observation_axis.py"
   "vault-estab|tests/vault/test_estabelecimento_vault.py"
   "vault-socios|tests/vault/test_socios_vault.py"
+  # F-DB Task 5, and its own chunk on `vault-estab`/`vault-socios`' precedent rather than
+  # a seventh member of `vault-ledger-registry`: it builds a module-scoped Spark fixture
+  # (three Delta writes, then five vault loads) and therefore pays the setup that the
+  # paragraph above prices a vault file at. MEASURED alone on the box: 17 passed in
+  # 574.77s. That is the second-slowest chunk in this list, so it does not go anywhere
+  # near the two under the standing split warning.
+  "vault-merchant|tests/vault/test_merchant_vault.py"
   "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_observation_grain.py tests/vault/test_registry.py tests/vault/test_reference_vault.py tests/vault/test_effectivity_window.py tests/vault/test_link_key_derivation.py"
 )
 
