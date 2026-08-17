@@ -32,8 +32,12 @@ HUB GRAIN WOULD BE THE WRONG LEDGER AND WOULD FAIL QUIETLY. A partner who loses 
 two partnerships is `absent_after_observation` at LINK grain and plainly `observed` at
 hub grain, so a hub-grain ledger would report no departure and the window would stay
 open forever. `_refuse_a_mismatched_link_grain` compares the grain's key columns against
-the link's own identity columns, which is the strongest available statement of "the
-ledger is keyed on the thing the satellite records".
+the link's own identity columns, AND -- since F-DB Task 5's correction -- the prefixes
+those columns are read through against the link's own, which together are the strongest
+available statement of "the ledger is keyed on the thing the satellite records". The
+second half is not decoration: a name says which column, never which VALUE, and a link
+keyed on `substring(cnpj, 1, 8)` whose identity column is `cnpj` had a ledger one
+many-to-one map finer than itself while the name check passed by construction.
 
 THE OPEN IS DELIVERED AND THE CLOSE IS DERIVED, AND THE TABLE KEEPS THEM APART. The
 entry column keeps the SOURCE'S OWN NAME and the source's own spelling --
@@ -108,6 +112,7 @@ from opl.vault.registry import (
     Link,
     identifying_hubs,
     identity_columns_of,
+    identity_derivations_of,
 )
 
 # THE ONE STATE THIS VAULT CLOSES A WINDOW ON. Named here, once, and written into every
@@ -154,7 +159,10 @@ def _grain_key_mismatch(
     or invents a reported departure COUNT; a link grain that is wrong decides which
     windows this loader CLOSES, and a window wrongly left open is a live wrong answer in
     the table rather than a number in a log. The order argument itself is argued once,
-    in the satellite's version, and is not restated here."""
+    in the satellite's version, and is not restated here.
+
+    A THIRD MISTAKE, WHICH IS NEITHER OF THESE AND IS THE ONE COLUMN NAMES CANNOT CARRY,
+    falls through to `_grain_derivation_mismatch`."""
     declared = tuple(grain.key_columns)
     if set(declared) != set(identity):
         return (
@@ -177,7 +185,45 @@ def _grain_key_mismatch(
             "key_columns=opl.vault.registry.link_identity_columns(registry, <the link>) "
             "rather than restating the columns"
         )
-    return None
+    return _grain_derivation_mismatch(link, grain)
+
+
+def _grain_derivation_mismatch(link: Link, grain: ObservationGrain) -> str | None:
+    """Why `grain` reads its key columns differently from how `link` keys on them, or
+    None if it does not.
+
+    THE MISTAKE THE TWO CHECKS ABOVE STRUCTURALLY CANNOT SEE, and it produced this
+    phase's signature failure once already. They compare COLUMN NAMES, and a name says
+    nothing about the value: `link_merchant_empresa` is keyed on `substring(cnpj, 1, 8)`
+    while its identity column is `cnpj`, so a grain naming exactly the right columns can
+    still be keyed on a FINER value space than the link. `cnpj -> cnpj[:8]` is
+    many-to-one, so one link hash key has many ledger keys, one of them can be
+    `absent_after_observation` while another is `observed`, and the satellite then writes
+    an active row and a closing row on the SAME `applied_date` for the SAME hash key --
+    every count in `EffectivityLoadResult` ordinary, the table asserting a relationship
+    is simultaneously open and closed, and `changed_rows`' `F.lag` (partitioned on the
+    hash key, ordered on `applied_date`, no tie-break) leaving which of the two a reader
+    gets unstable between runs.
+
+    ORDER-SENSITIVE LIKE THE COLUMNS, AND FOR A WEAKER REASON. Nothing downstream pairs
+    these positionally -- `ObservationGrain.key_expression` looks a prefix up by column --
+    so this could compare sets. It compares the tuple because `identity_derivations_of` is
+    derived from the link in hash order and any caller passing something else has restated
+    it, which is the drift the whole pair of checks exists to refuse."""
+    declared = tuple(grain.key_prefixes)
+    keyed_on = identity_derivations_of(link)
+    if declared == keyed_on:
+        return None
+    return (
+        f"the observation grain reads its key columns through {declared} and link "
+        f"{link.name!r} keys on {keyed_on}. The names agree and the VALUES would not: a "
+        "prefix the grain does not apply leaves the ledger keyed on the raw column, "
+        "which is finer than the link -- one hash key with several ledger keys, one of "
+        "which can depart while another is observed, so the same relationship gets an "
+        "active row and a closing row on one applied_date. Build the grain with "
+        "key_prefixes=opl.vault.registry.identity_derivations_of(<the link>) beside "
+        "key_columns rather than restating either"
+    )
 
 
 def _refuse_a_mismatched_link_grain(
@@ -193,6 +239,11 @@ def _refuse_a_mismatched_link_grain(
     a partner leaves EVERY company, so a relationship that really ended stays open with
     nothing failing. `identity_columns_of` derives the comparison from the link's own
     spec, so the two cannot drift.
+
+    AND `identity_derivations_of` DERIVES THE OTHER HALF, since F-DB Task 5's correction:
+    the names are one statement about the grain and the prefixes they are read through
+    are the other, and a check that could see only the names was satisfied by
+    construction while the ledger sat at a FINER grain than the link.
 
     NAMED FOR THE LINK, not `_refuse_a_mismatched_grain`, because
     `opl.vault.satellites` has a function of that name doing the HUB half and the two
@@ -287,9 +338,19 @@ def _departures(
     THE GATE. `CLOSING_STATE` and nothing else, so a key our own DQ gate removed --
     `rejected_by_our_gate`, 1,781 of them at link grain in 2026-07 -- reaches this
     function and is filtered out, rather than never being asked about. The ledger is
-    keyed on the link's RAW identity columns, so the same
+    keyed on the link's identity columns under their own names, so the same
     `link_hash_key_expression` that keyed bronze keys the ledger: one spelling, and the
     two sides cannot disagree about which relationship a departure belongs to.
+
+    ONE SPELLING SURVIVES A DECLARED PREFIX BECAUSE A PREFIX IS IDEMPOTENT, and that is
+    what keeps this line from needing a second expression. Where the grain declares one,
+    `_side` has already truncated the column, so `link_hash_key_expression` re-applies
+    `substring(x, 1, w)` to a value that is already `w` characters -- a no-op, and the
+    `zero_padded_column` behind it pads to the same width rather than refusing, because
+    it refuses only an OVERLONG value. The alternative -- naming the ledger's column
+    after the hub's key and hashing it here by name -- would be a second spelling of the
+    link's digest, which is the cost this module and `opl.vault.loading` both refuse to
+    pay elsewhere.
 
     THE JOIN IS ON THE MONTH AND NEVER ON A BUSINESS KEY, which is what keeps the 4
     measured departures whose `cpf_cnpj_socio` is NULL from being lost or invented. The

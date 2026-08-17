@@ -79,7 +79,7 @@ from opl.vault import domains
 from opl.vault.effectivity import load_effectivity_satellite
 from opl.vault.job_params import required_load_date, required_months, required_spec
 from opl.vault.observation import ObservationGrain
-from opl.vault.registry import EffectivitySatellite, Link
+from opl.vault.registry import EffectivitySatellite, Link, identity_derivations_of
 
 # The narrowest window in which a key can be absent from a month the ledger reports on:
 # one month to be seen in, one later month to be missing from. Named rather than
@@ -96,12 +96,20 @@ def grain_for(link: Link, source: BronzeTable) -> ObservationGrain:
     report no departure and the window would stay open forever
     (`opl.vault.effectivity`). `domains.link_identity_columns` derives the columns from
     the link's own spec, in hash order, which is exactly what
-    `_refuse_a_mismatched_link_grain` compares against."""
+    `_refuse_a_mismatched_link_grain` compares against.
+
+    AND `identity_derivations_of` DERIVES HOW THOSE COLUMNS ARE READ, which the columns
+    alone cannot say. `link_merchant_empresa` is keyed on `substring(cnpj, 1, 8)` and its
+    identity column is `cnpj`; without the prefix this job would build a ledger one
+    many-to-one map FINER than the link and close windows on merchants that never
+    departed. It needs no registry lookup -- a derivation is declared on the end -- which
+    is why it is not spelled `domains.link_identity_derivations`."""
     return ObservationGrain.in_default_schema(
         name=link.name,
         bronze=source.bronze,
         quarantine=source.quarantine,
         key_columns=domains.link_identity_columns(link),
+        key_prefixes=identity_derivations_of(link),
         # THE AXIS IS THE SOURCE'S OWN DECLARATION, CARRIED RATHER THAN CHOSEN. This is
         # the derivation T7 put the field on `BronzeTable` for: the ledger reads
         # (business key, snapshot axis), the axis is a property of what was observed and

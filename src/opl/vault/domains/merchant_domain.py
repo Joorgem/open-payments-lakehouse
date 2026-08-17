@@ -127,6 +127,7 @@ from opl.vault.registry import (
     Satellite,
     VaultDomain,
     identity_columns_of,
+    identity_derivations_of,
 )
 
 _MERCHANT = bronze_table_spec("merchant")
@@ -241,9 +242,19 @@ MERCHANT_GRAIN = ObservationGrain.in_default_schema(
 # (its link's grain is a hub key plus dependent-child keys, spelled from two specs) and
 # this one can: the function takes the link and its hubs explicitly, needs no built
 # registry, and is the SAME call `opl.vault.effectivity._refuse_a_mismatched_link_grain`
-# compares against. So the ledger's key columns and the link's identity cannot drift, and
-# in particular the grain is keyed on `cnpj` -- the column bronze HAS -- rather than on
-# `cnpj_basico`, which it does not.
+# compares against. So the ledger's key columns and the link's identity cannot drift.
+#
+# AND `identity_derivations_of` BESIDE IT, WHICH IS THE HALF THIS COMMENT USED TO ARGUE
+# WAS NOT NEEDED. It said the grain is keyed on `cnpj` -- "the column bronze HAS" --
+# rather than on `cnpj_basico`, "which it does not", and treated that as the end of the
+# matter. It is not: `cnpj` is fourteen characters, the link hashes eight of them, and
+# `cnpj -> cnpj[:8]` is MANY-TO-ONE. A merchant that keeps its eight-character root and
+# changes its full `cnpj` -- a branch, a check-digit correction, an ordinary `UPDATE` the
+# seeded DDL permits with no immutability guard -- is then TWO ledger keys and ONE link
+# hash key, and the effectivity satellite writes an active row AND a closing row on the
+# same `applied_date` for that key. The two columns are not the same partition; the prefix
+# is what makes the ledger's VALUES the link's identity, and it is read off the link's own
+# ends so the two still cannot drift.
 MERCHANT_EMPRESA_GRAIN = ObservationGrain.in_default_schema(
     name=LINK_MERCHANT_EMPRESA.name,
     bronze=_MERCHANT.bronze,
@@ -251,6 +262,7 @@ MERCHANT_EMPRESA_GRAIN = ObservationGrain.in_default_schema(
     key_columns=identity_columns_of(
         LINK_MERCHANT_EMPRESA, (HUB_MERCHANT, HUB_EMPRESA)
     ),
+    key_prefixes=identity_derivations_of(LINK_MERCHANT_EMPRESA),
     snapshot_axis=_MERCHANT.snapshot_axis,
 )
 

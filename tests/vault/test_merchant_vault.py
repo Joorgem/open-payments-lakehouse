@@ -59,7 +59,7 @@ from opl.vault.hubs import load_hub
 from opl.vault.links import load_link
 from opl.vault.loading import hash_key_for_end, link_hash_key_expression
 from opl.vault.observation import ObservationGrain
-from opl.vault.registry import identifying_hubs
+from opl.vault.registry import identifying_hubs, identity_derivations_of
 from opl.vault.satellites import load_satellite
 
 from .conftest import AUDIT_DDL, INGESTED_AT, LOADED_AT, REJECT_REASON_DDL, write_delta
@@ -71,6 +71,10 @@ LINK = domains.table_spec("link_merchant_empresa")
 EFF = domains.table_spec("sat_eff_merchant_empresa")
 LINK_HUBS = domains.linked_hubs(LINK)
 LINK_IDENTITY = domains.link_identity_columns(LINK)
+# The COLUMNS are half the grain; these are the other half -- the prefixes those columns
+# are read through, which is what makes the ledger's values the link's identity rather
+# than a value space many-to-one onto it. See the branch test below.
+LINK_IDENTITY_PREFIXES = identity_derivations_of(LINK)
 
 _MERCHANT_SPEC = bronze_table_spec("merchant")
 MERCHANT_CONTRACT = tuple(columns_for("merchant"))
@@ -99,6 +103,12 @@ M_REJECTED = ("55555555-5555-4555-8555-555555555555", "10000004000199")
 M_NEW = ("66666666-6666-4666-8666-666666666666", "10000005000199")
 M_REPOINTED_BEFORE = ("77777777-7777-4777-8777-777777777777", "10000006000199")
 M_REPOINTED_AFTER = ("77777777-7777-4777-8777-777777777777", "10000007000199")
+# THE BRANCH: one merchant, ONE eight-character root, two different full CNPJs. Held out
+# of the shared fixture below and given a database of its own, because it is not a class
+# of the measured population -- it is the input that reaches the ledger-grain hole T5b
+# left, and it belongs to the test that names it rather than to every count in this file.
+M_BRANCH_BEFORE = ("88888888-8888-4888-8888-888888888888", "10000008000199")
+M_BRANCH_AFTER = ("88888888-8888-4888-8888-888888888888", "10000008000288")
 
 # Every eight-character root the fixture reaches, which is what `hub_empresa` must hold
 # before the link may be written -- `links.refuse_unloaded_hubs` refuses an empty one.
@@ -232,9 +242,30 @@ def merchant_source(spark, vault_database):
             name=HUB.name, key_columns=HUB.business_key_columns, **common
         ),
         link_grain=ObservationGrain(
-            name=LINK.name, key_columns=LINK_IDENTITY, **common
+            name=LINK.name, key_columns=LINK_IDENTITY,
+            key_prefixes=LINK_IDENTITY_PREFIXES, **common
         ),
     )
+
+
+@pytest.fixture(scope="module")
+def branch_source(spark, vault_database):
+    """One merchant, observed twice, whose full `cnpj` changes while its eight-character
+    ROOT does not -- and nothing else.
+
+    ITS OWN DATABASE RATHER THAN A ROW IN `_bronze_rows`, deliberately. The shared fixture
+    is "the measured population in miniature, one row per class" and every count in this
+    file is read off it; a branch is not a class the seeded population has (see the test
+    below for why it cannot), so adding it there would move seven assertions to prove one.
+    The effectivity loader reads bronze and quarantine and no hub table, so two rows and
+    an empty quarantine are the whole input."""
+    db = vault_database("merchant_branch")
+    bronze, quarantine = f"{db}.branch", f"{db}.branch_q"
+
+    write_delta(spark, bronze, _MERCHANT_SCHEMA,
+                [merchant_row(M_BRANCH_BEFORE, S1), merchant_row(M_BRANCH_AFTER, S2)])
+    write_delta(spark, quarantine, _QUARANTINE_SCHEMA, [])
+    return SimpleNamespace(db=db, bronze=bronze, quarantine=quarantine)
 
 
 @pytest.fixture
@@ -483,6 +514,79 @@ def test_a_re_pointed_merchant_closes_the_relationship_it_left(spark, merchant_l
     assert [row[IS_ACTIVE] for row in joined] == [True]
 
 
+def test_a_branch_on_one_root_is_one_open_window_and_never_a_close(spark, branch_source):
+    """THE LEDGER'S GRAIN IS THE VALUE THE LINK KEYS ON, AND NOT THE COLUMN IT READS IT
+    FROM -- the hole T5b left, on the one input that reaches it.
+
+    `identity_columns_of` answers this link's grain with the SOURCE column `cnpj`,
+    fourteen characters, and the link hashes `substring(cnpj, 1, 8)`. That map is
+    MANY-TO-ONE, so a merchant that keeps its eight-character root and changes its full
+    `cnpj` -- a branch, a check-digit correction, an ordinary `UPDATE` the seeded DDL
+    permits -- is TWO ledger keys and ONE link hash key. The first becomes
+    `absent_after_observation` while the second is `observed`, and the satellite writes an
+    active row AND a closing row on the same `applied_date` for the same hash key: a
+    relationship simultaneously open and closed, with `appended=3, closed=1` reading
+    entirely ordinary in the run log. `changed_rows`' `F.lag` is partitioned only by hash
+    key and ordered only by `applied_date`, so which of the two a reader gets is not even
+    stable between runs.
+
+    UNREACHABLE BY THIS REPOSITORY'S OWN DATA and asserted anyway:
+    `scripts/merchant_population.py` derives `merchant_id = uuid5(NAMESPACE, cnpj)`, so a
+    changed `cnpj` changes the surrogate too and `mutated()` never touches `cnpj` at all.
+    The schema this phase models is an operational Postgres table where `cnpj` is a
+    mutable `text` column, and the mechanism is what is on offer here.
+
+    NOT M_REPOINTED, WHICH IS THE CASE THAT ALREADY WORKED: that merchant changes ROOT
+    (`10000006` -> `10000007`), so its two ledger keys are two link hash keys and the
+    close is real. Only a branch inside ONE root reaches this."""
+    grain = ObservationGrain(
+        name=LINK.name, bronze_table=branch_source.bronze,
+        quarantine_table=branch_source.quarantine, key_columns=LINK_IDENTITY,
+        key_prefixes=LINK_IDENTITY_PREFIXES, snapshot_axis=INSTANT_SNAPSHOT,
+    )
+    target = f"{branch_source.db}.eff_branch_{uuid4().hex[:8]}"
+
+    result = load_effectivity_satellite(
+        spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=branch_source.bronze,
+        target_table=target, load_date=LOADED_AT, grain=grain, months=[S1, S2],
+    )
+    rows = spark.read.table(target).orderBy("applied_date").collect()
+
+    assert _link_key(spark, M_BRANCH_BEFORE) == _link_key(spark, M_BRANCH_AFTER), (
+        "one root is one link hash key -- the premise the ledger has to be keyed on"
+    )
+    assert [row[IS_ACTIVE] for row in rows] == [True]
+    assert result.closed == 0
+
+
+def test_a_grain_that_drops_the_links_derivation_is_refused_before_spark(
+    spark, branch_source
+):
+    """THE GUARD THAT COULD NOT SEE THIS, MADE ABLE TO. `_refuse_a_mismatched_link_grain`
+    compared the grain's key COLUMNS against `identity_columns_of`'s, and both sides call
+    the same function -- so it was satisfied by construction while the ledger sat one
+    many-to-one map finer than the link. Names cannot carry a derivation;
+    `identity_derivations_of` is the other half, and this grain names every right column
+    and reads them raw.
+
+    REFUSED RATHER THAN ANSWERED, and before a session: the load it would otherwise
+    perform writes an active row and a closing row for one hash key on one
+    `applied_date`, which no count in `EffectivityLoadResult` distinguishes from an
+    ordinary load."""
+    raw = ObservationGrain(
+        name=LINK.name, bronze_table=branch_source.bronze,
+        quarantine_table=branch_source.quarantine, key_columns=LINK_IDENTITY,
+        snapshot_axis=INSTANT_SNAPSHOT,
+    )
+
+    with pytest.raises(ValueError, match="names agree and the VALUES would not"):
+        load_effectivity_satellite(
+            spark, EFF, link=LINK, hubs=LINK_HUBS, source_table=branch_source.bronze,
+            target_table=f"{branch_source.db}.never", load_date=LOADED_AT, grain=raw,
+            months=[S1, S2],
+        )
+
+
 def test_a_relationship_present_in_both_snapshots_writes_one_open_and_no_close(
     spark, merchant_loaded
 ):
@@ -522,6 +626,7 @@ def test_the_monthly_axis_would_have_folded_both_snapshots_and_closed_nothing(
     monthly = ObservationGrain(
         name=LINK.name, bronze_table=merchant_source.bronze,
         quarantine_table=merchant_source.quarantine, key_columns=LINK_IDENTITY,
+        key_prefixes=LINK_IDENTITY_PREFIXES,
     )
     load_merchant_vault(spark, merchant_source, merchant_target, months=[S1, S2])
 

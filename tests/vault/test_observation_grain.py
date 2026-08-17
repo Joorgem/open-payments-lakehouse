@@ -42,6 +42,7 @@ import pytest
 from opl.bronze.snapshot_axis import INSTANT_SNAPSHOT, MONTHLY_SNAPSHOT
 from opl.config import DEFAULT
 from opl.vault.observation import MONTH_COLUMN, ObservationGrain
+from opl.vault.specs import KeyPrefix
 
 
 def test_a_grain_with_no_key_columns_is_refused():
@@ -161,3 +162,61 @@ def test_an_axis_named_at_the_configured_schema_entry_point_reaches_the_grain():
 
     assert grain.snapshot_axis == INSTANT_SNAPSHOT
     assert grain.snapshot_column == "_snapshot_at"
+
+
+# --- the key prefixes, which F-DB Task 5's correction pass added ---------------------
+
+
+def test_a_grain_declares_no_key_prefix_by_default():
+    """The field that makes the ledger's KEY the value a derived link hashes, and the
+    default that keeps every grain declared before it byte-identical: none of the three in
+    `opl/vault/domains/cnpj.py` reads a key component through anything but its own name,
+    so all three construct unchanged and answer unchanged."""
+    grain = ObservationGrain(
+        name="x", bronze_table="b", quarantine_table="q", key_columns=("cnpj_basico",)
+    )
+
+    assert grain.key_prefixes == ()
+
+
+def test_a_key_prefix_on_a_column_the_grain_is_not_keyed_on_is_refused():
+    """A prefix names the column it TRUNCATES, so one naming a column the grain does not
+    key on applies to nothing -- and the ledger stays keyed on the raw value, which is the
+    exact state the declaration was added to leave behind. Silent: the spec would read as
+    though the derivation had taken effect."""
+    with pytest.raises(ValueError, match="not among its key columns"):
+        ObservationGrain(
+            name="x", bronze_table="b", quarantine_table="q",
+            key_columns=("merchant_id",),
+            key_prefixes=(KeyPrefix(column="cnpj", width=8),),
+        )
+
+
+def test_two_key_prefixes_on_one_column_are_refused():
+    """Only one can apply, and which one would depend on declaration order -- a grain
+    whose VALUES depend on the order two lines were typed in."""
+    with pytest.raises(ValueError, match="more than one key prefix"):
+        ObservationGrain(
+            name="x", bronze_table="b", quarantine_table="q",
+            key_columns=("merchant_id", "cnpj"),
+            key_prefixes=(
+                KeyPrefix(column="cnpj", width=8), KeyPrefix(column="cnpj", width=14)
+            ),
+        )
+
+
+def test_key_prefixes_reach_the_grain_through_the_configured_schema_entry_point():
+    """`in_default_schema` is what `vault_load_effectivity.grain_for` calls, so a prefix
+    dropped by that constructor would be declared on the link, checked against the link by
+    `_refuse_a_mismatched_link_grain`, and then never applied to the source -- except that
+    the check reads the grain, so the job would be refused rather than wrong. Asserted
+    anyway: a refused deploy is not the outcome a correct declaration should have."""
+    prefixes = (KeyPrefix(column="cnpj", width=8),)
+    grain = ObservationGrain.in_default_schema(
+        name="link_merchant_empresa", bronze="bronze_merchant",
+        quarantine="bronze_merchant_quarantine",
+        key_columns=("merchant_id", "cnpj"), key_prefixes=prefixes,
+        snapshot_axis=INSTANT_SNAPSHOT,
+    )
+
+    assert grain.key_prefixes == prefixes

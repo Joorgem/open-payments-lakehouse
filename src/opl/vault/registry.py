@@ -143,6 +143,7 @@ __all__ = [
     "discover_domains",
     "identifying_hubs",
     "identity_columns_of",
+    "identity_derivations_of",
     "link_identity_columns",
     "linked_hubs",
     "parent_hub",
@@ -497,12 +498,20 @@ def identity_columns_of(link: Link, hubs: Sequence[Hub]) -> tuple[str, ...]:
 
     IT ASKS THE END, NOT THE HUB, SINCE F-DB, and that is what makes the grain right for
     a DERIVED end. The columns this returns are read off BRONZE -- the observation
-    ledger's `_side` projects the source to exactly them -- so for
+    ledger's `_side` projects the source to exactly these names -- so for
     `link_merchant_empresa` the answer is `merchant_id` and `cnpj`, the columns the
     source has, and not `merchant_id` and `cnpj_basico`, which would be a ledger keyed on
     a column `bronze_merchant` does not carry. `LinkEnd.source_columns` answers `None`
     and a declaration in one place, so the two cannot drift; for every end declared
-    before F-DB it returns the hub's own column names and this function is unchanged."""
+    before F-DB it returns the hub's own column names and this function is unchanged.
+
+    NAMES ARE HALF THE GRAIN AND `identity_derivations_of` IS THE OTHER HALF -- read them
+    together or the ledger is FINER than the link. `cnpj` is fourteen characters and the
+    link hashes eight of them, so one link hash key has many `cnpj` values and a ledger
+    keyed on the column alone reports a departure for a merchant that merely changed
+    branch. Nothing in a column NAME can say that; see `identity_derivations_of`, which
+    the observation grain carries beside these names and this function's own docstring
+    once implied did not exist."""
     identifying = [
         (end, hub) for end, hub in zip(link.ends, hubs, strict=True) if end.identifying
     ]
@@ -515,6 +524,43 @@ def identity_columns_of(link: Link, hubs: Sequence[Hub]) -> tuple[str, ...]:
 def link_identity_columns(registry: Mapping[str, VaultTable], link: Link) -> tuple[str, ...]:
     """`identity_columns_of` with the link's hubs resolved against the registry."""
     return identity_columns_of(link, _link_hubs(registry, link))
+
+
+def identity_derivations_of(link: Link) -> tuple[KeyPrefix, ...]:
+    """The derivations `identity_columns_of`'s column names are read THROUGH, in the same
+    hash order: one `KeyPrefix` per identifying end that declares one, and nothing for an
+    end that reads its hub's key by name.
+
+    THE HALF OF THE GRAIN A COLUMN NAME CANNOT CARRY, and leaving it out is the defect
+    this function exists to close. `link_merchant_empresa` keys on `substring(cnpj, 1, 8)`
+    while its identity COLUMN is `cnpj`; `cnpj -> cnpj[:8]` is many-to-one, so an
+    observation ledger keyed on the name alone is strictly FINER than the link -- and
+    `effectivity._grain_key_mismatch`'s own docstring says what finer costs: "it closes
+    windows that never departed". Measured: one merchant keeping its root and changing its
+    full `cnpj` produced an active row AND a closing row on the same `applied_date` for
+    the same hash key, with `appended=3, closed=1` in the run log.
+
+    EMPTY FOR EVERY LINK WRITTEN BEFORE F-DB, which is what makes it free to carry: no end
+    of either CNPJ link declares a `key_from` on the identifying side, so both grains stay
+    byte-identical and `ObservationGrain` defaults to no derivation at all.
+
+    DEPENDENT-CHILD KEYS CONTRIBUTE NOTHING and that is not an omission: they are read
+    from the source under their own names, exactly as `identity_columns_of` appends them.
+
+    NOT ZIPPED AGAINST THE NAMES POSITIONALLY. A `key_from` declares one prefix per
+    business-key COMPONENT, so an end over a two-component hub contributes two names and
+    two prefixes; the pairing that matters is by column, and `ObservationGrain` makes it
+    by looking each prefix's column up in its key columns rather than by position.
+
+    NO `hubs` AND NO REGISTRY, WHICH IS WHY THERE IS NO `link_identity_derivations` BESIDE
+    `link_identity_columns`. A derivation is declared entirely on the END -- the hub is
+    consulted only for the names an UNDECLARED end reads, which is the case that
+    contributes nothing here -- so asking for hubs would be asking a caller for an
+    argument this cannot check and does not use. Both grain-building sites already hold
+    the `Link`."""
+    return tuple(
+        prefix for end in link.identifying_ends for prefix in (end.key_from or ())
+    )
 
 
 def table_spec(registry: Mapping[str, VaultTable], name: str) -> VaultTable:
