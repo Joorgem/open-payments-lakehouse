@@ -16,7 +16,15 @@ empirically:
 - client `"3"`: matched Python 3.12.3, but pip then failed to fetch the
   ~300MB pyspark wheel with a generic "Unable to find or download the
   required package" error, reproducible on repeat runs (Free Edition's
-  governed egress/serverless install budget can't complete that download).
+  ~~governed egress/~~serverless install budget can't complete that download).
+
+> **AMENDED 2026-08-17 by F-DB: the egress half of that alternative is ruled out, so the
+> remaining explanation is the install budget.** This line offered two causes it could not
+> separate. F-API's Task 0 separated them by measurement — a serverless task resolved a public
+> host, got HTTP 200 and pulled 192,973 bytes, and `requests` calls now run in production from
+> a job task. **Egress is not what failed the ~300 MB pyspark fetch.** The decision below is
+> unchanged; only the attributed cause narrows, and it narrows to the half that was always the
+> more likely of the two.
 
 A prior fix moved `pyspark`/`delta-spark` into the PEP 735 `dev` dependency
 group. Review found this mechanism wrong: dependency groups are a
