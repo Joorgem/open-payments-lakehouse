@@ -525,7 +525,22 @@ in a probe: a stop is not a `down`.
 ### 2.3 Task 4, verified by the controller because its agent died too
 
 **Controller-verified.** Task 4's implementer died with its process before reporting — the
-**third** on this branch. Its seven commits survived (`be6ee0c..3ed6ba5`), tree clean, no
+~~**third**~~ **second this branch can substantiate**.
+
+> **"THE THIRD" IS A COUNT THIS REPOSITORY CANNOT SUPPORT, AND IT IS CORRECTED RATHER THAN
+> LEFT.** The Task 4 review walked all thirty-seven commits of `0054df1..HEAD` for every death
+> this branch names or implies — death language in a commit body, an unexplained gap in the
+> timeline, a stash recovery — and found **two**: Task 3's (§2.1, and `be179ec`'s own message)
+> and Task 4's. Task 0, Task 1 and Task 2's sessions run continuously. `.plans/HANDOFF.md` and
+> the continuation prompt both say three as well, so the number propagated to three documents
+> before anyone counted it.
+>
+> A third may well have happened — the two `run_suite.sh` kills of §2.2 are two events, and
+> whether they took one implementer or two is not something the commit record answers. **That
+> is the point: it is not answerable from what ships**, and this document's own §2.1 records
+> an undisclosed death as a defect against itself. Two is what the record substantiates; three
+> is not quotable, on the same discipline `docs/f3-run-evidence.md` §0.4 applies to its own
+> count of twenty-one. Its seven commits survived (`be6ee0c..3ed6ba5`), tree clean, no
 stash: the `merchant` contract, `postgres_source.py`, the host-side extractor, the fifth
 landing mode, a third audit-column path, the DQ rule set, `bronze_merchant_job.yml` and its
 ingest, across 29 files and 3,928 insertions.
@@ -538,9 +553,16 @@ ingest, across 29 files and 3,928 insertions.
 | Spark surface (`test_merchant_rules.py`, `test_snapshot.py`) | **113 passed in 278.29 s** |
 | collection | **2,342 / 2,365, 23 deselected** |
 
-**371 tests green, and that is execution rather than review.** No independent pass has read
-this task, which is the state Tasks 0-3 were each taken out of by a reviewer who found real
-defects — including three blockers in this document.
+**371 tests green, and that is execution rather than review.** ~~No independent pass has read
+this task~~ — **superseded 2026-08-17: four did**, one lens each (buildability, provenance,
+data modelling, PostgreSQL), and §2.4 is what they found.
+
+> **THE `258` IS A COUNT OVER TEN FILES AND THE ROW BESIDE IT SAYS ELEVEN.** Re-measured: the
+> eleven files this task touched outside the two Spark-backed ones collect **294**, and
+> **294 − 36 = 258** where 36 is `tests/test_job_yaml_wiring.py`, which the enumeration names
+> and the number does not include. All 294 pass, in **6.02 s** — so the correction moves the
+> figure *up* and nothing under it changes. It is the same shape as this document's other two
+> arithmetic defects: a number right about one population printed as the answer about another.
 
 **ONE CAP REGRESSION EXISTED AND IT WAS THE CONTROLLER'S, NOT TASK 4'S.** Measured across
 `0054df1..HEAD`, exactly one function crossed the 50-line cap during this phase:
@@ -553,7 +575,200 @@ species in Task 2**, and nothing surfaced it until this handoff measurement — 
 Repaired by lifting the write into `_announce_readiness`, whose docstring now carries the
 reason.
 
+> **"EXACTLY ONE" WAS FALSE WHEN IT WAS WRITTEN, AND A SECOND CROSSING WAS OVER THE CAP IN
+> THE TREE AT THAT MOMENT.** Found by the Task 4 review, and measured three times
+> independently — by the controller before the dispatch, and by two of the four reviewers
+> against the merge base in a clean `main` worktree, each by AST
+> (`end_lineno - lineno + 1`, the measure the rule states):
+>
+> | | at `0054df1` | at `9337aa6` |
+> |---|---|---|
+> | `databricks/src/vault_load_partner_link.py::main` | **34** | **51** ❌ |
+> | `scripts/seed_merchant_db.py::mutate` | 45 | 45 (repaired by `1418270`) |
+> | functions at or over 50 lines, whole tree | **33** | **33** |
+>
+> `vault_load_partner_link.main` was pushed over by **`76c61e5`**, the fix pass that carried
+> the snapshot axis into the vault entry points, with a seventeen-line non-monthly-axis
+> refusal block. **It is Task 2's regression and it was never counted** — including by
+> `f425574`, titled *"two functions Task 2 pushed over the 50-line cap"*, which fixed two
+> others in the same review cycle and did not reach this file.
+>
+> **THE WAY IT HID IS THE PART WORTH KEEPING.** The whole-tree count is 33 at both revisions.
+> One function left the set as this one entered — `autoloader._assert_source_dir_is_this_months`,
+> which `406667e` repaired — so a controller checking the total rather than the set would have
+> seen a number that had not moved and concluded nothing had. That is this phase's first defect
+> species, committed inside the paragraph whose subject is the third one.
+>
+> **The sentence above is left standing rather than edited**, because "the one cap regression
+> was mine" is the claim this correction is about and hiding it would defeat the point. The
+> corrected statement: **at least two functions crossed the cap during this phase**, both of
+> them in commits the controller authored, and the second was still over the cap when the
+> paragraph claiming there was one shipped.
+
 ---
+
+### 2.4 The Task 4 review — four lenses, and the third silent failure was finally found
+
+**Dispatched 2026-08-17**, one lens each — buildability, provenance, data modelling, and the
+PostgreSQL domain — each with the task's tension named in its brief and the test that closes it
+demanded rather than suggested. **Every finding below was verified by the controller against the
+primary source before it was accepted**, so what follows is controller-verified as to existence;
+where a reviewer measured something the controller did not re-run, it says so.
+
+**Task 4's own deliverable came out well, and that is a result rather than a courtesy.** No
+reviewer found a BLOCKING defect in the extraction layer's mechanics. `databricks bundle
+validate -t free` returns **Validation OK!**; `ruff` is clean; all four import-time guard
+families are correct for `merchant`; the fifth landing mode is filed in the **right** half of
+the landing-mode partition; the three `catalogue.py` edits are present and mutually consistent;
+the per-new-file sweep tax is genuinely paid rather than silently skipped; and the PTAX-paste
+tension the dispatch named was refused by the code — all four PTAX-only mechanisms are absent,
+and the one guard deliberately not reproduced (`_refuse_a_different_file`) is argued
+structurally rather than dropped.
+
+#### The two blocking findings
+
+**1. THE THIRD SILENT FAILURE, and it is in the flag wiring rather than in a query.**
+`scripts/extract_merchant_snapshot.py` takes `--since` and `--wait-for` as independent flags.
+`--since` alone runs the incremental query and produces the miss set; but
+`_refuse_a_watermark_before_t2` — the one check that the snapshot was not taken between t1 and
+t2 — runs only when `--wait-for` was *also* passed. So an incremental run without that second
+flag takes the complement with **no protection against the exact race the module's own docstring
+calls "the failure shape this repository refuses"**, and the published miss falls from 48 to 40
+while the row count, the byte count, the digest and the watermark all still print correct.
+**Nothing refused the combination and no test exercised it.** This phase predicted a third
+instance of this species and named the two already fixed; this is it, and it was reachable
+through a flag pair rather than through any of the three mechanisms that were being watched.
+
+**2. T10's guard landed exactly where T10's ruling refused to put it.** The merchant rule set
+ships `encoding_replacement_char`, which detects **U+FFFD** — mojibake — and has nothing to do
+with the forty characters JDK 17 and CPython 3.12 upper-case differently. Those are valid,
+correctly-decoded characters, and the only thing guarding against them is a bound on what the
+**seeder** may write. That is the seeder assertion T10 rejects by name, *"which protects the
+seed and nothing else — not the mutation script, not a manual `psql`, not a re-seed"*. A row
+carrying one of the forty reaches `hash_diff`, the Python and Spark digests disagree on real
+data, and **no test goes red**, because the loaders only ever use the Spark spelling.
+
+#### Three rulings whose decision survives and whose stated mechanism does not
+
+This is now four times in one phase, and it is worth naming as a pattern rather than counting
+again: **T3's volatility claim** (falsified by Task 0's implementer), **T4's `extra_float_digits`
+reason** (the pin is worth taking; the default was never unsafe), **T5** and **T11** below. In
+every case the decision was right and the argument offered for it was not — which is an argument
+for publishing mechanisms, since a ruling whose reason is never written down cannot be falsified
+at all.
+
+- **T11 — `ORDER BY … COLLATE "C"` survives; its stated consumer is the wrong one.** T11 says
+  the collation protects *"the byte-identity refusal the landing reuses"*. It cannot:
+  `refuse_bytes_that_are_not_the_payload` is a write-then-read-back check **inside one run**,
+  comparing in-memory bytes to the same execution's on-disk bytes, so whatever order the
+  `SELECT` returned is on both sides of the comparison and no collation can make it fire.
+  **The consumer that does need it was not named in the ruling and is one file away:**
+  `scripts/seed_merchant_db.py`'s content digest orders by the same expression inside a
+  `string_agg` and **is compared across runs** — it is the `807efa4c…` §2.1 reports as
+  byte-identical on the re-seed. Two hosts with different default collations would move that
+  digest for byte-identical table content, which is precisely the mysterious diff T11 describes.
+  The mechanism is real; it belongs to Task 3's seeder, not Task 4's extractor.
+- **T5 — a link rather than a duplicate hub is right; "two plain identifying hubs, therefore
+  `load_link` writes it" is false.** Recorded in full in the plan's T5, and it is Task 5's
+  starting condition rather than a Task 4 defect. `link_candidates` and
+  `link_hash_key_expression` read every hub's business key **from columns named after it**, and
+  `bronze_merchant` carries `cnpj` (fourteen characters) where `hub_empresa` keys on
+  `cnpj_basico` (eight). **Task 4's own docstrings already describe the join as "the first eight
+  characters"** — the contract, the DQ rule, and a `CNPJ_BASICO_WIDTH` constant declared for a
+  consumer that under T5-as-written would never exist. Task 4 was right and the plan was wrong.
+
+#### What the reviewers refused, correctly
+
+- **That the missing same-day-snapshot refusal is a gap.** T8 rules the two-different-days
+  requirement is *scheduling, not code*, and §3 already discloses that the job YAML records what
+  it cannot enforce. Building the refusal would exceed what T8 asked for.
+- **That the landing-mode "misfiled into the wrong half" hole is present here.** It is not:
+  `LANDING_POSTGRES` is correctly non-file-fed, and the test derives its set from `REGISTRY`
+  rather than from `LANDING_MODES`, as the plan required. The brief described the **guard's**
+  structural blind spot and the reviewer declined to convert that into a defect.
+- **That the third silent failure had to be inside Task 4's own surface.** The provenance
+  reviewer looked, did not find one of that shape there, and said so instead of forcing a fit.
+  The one that existed was found by a different lens, in a file the brief had pointed at for a
+  different reason.
+
+#### Two gaps between a correct implementation and the test that was demanded
+
+Both are cases where the **code is right** — verified live — and the committed test cannot tell
+whether it is:
+
+- **`pin_rendering_gucs` defeats a hostile environment, and no committed test proves it.**
+  Verified live under `PGTZ=America/Sao_Paulo`, `PGDATESTYLE='SQL, DMY'` and
+  `PGOPTIONS='-c extra_float_digits=-3'`: all seven GUCs read back at the pinned values and the
+  rendering came out byte-identical to the clean baseline. But the hermetic test's fake answers
+  `current_setting()` from a dict the **test** supplies, independent of whether the code ever
+  executed `set_config` — so it cannot distinguish "the pin worked" from "the pin never ran and
+  the defaults happened to disagree". **That is verbatim the failure T4's ruling rejects revision
+  1's test for**, arriving through a different route.
+- **`ref_date_from_instant` never casts, and its test never says so.** The implementation reads
+  the first ten ISO characters, which is the `gold.conformed.day_of` pattern and structurally
+  immune to the session timezone. The test asserts the positive case and malformed shapes; it
+  does not set a hostile zone and pin **both** the right answer and the wrong one, which is the
+  bar `tests/gold/test_conformed.py` set for exactly this hazard.
+
+#### And the durable item, recommended twice in this phase and shipped by neither
+
+**Neither the file cap nor the function cap is enforced by any test in this repository**, and
+this phase has now produced **four** wrong statements about them: three claiming compliance on a
+docstring-excluded measure, and one — corrected above — claiming exactly one crossing while a
+second sat over the cap in the tree. **The correction pass ships the test**, as an AST check with
+a committed allow-list of the pre-existing over-cap functions that fails in both directions, so
+the list shrinks as functions are fixed and cannot rot. The 33 pre-existing over-cap functions
+are left alone; F-API already ruled on them.
+
+#### 2.4.1 The correction pass — nine commits, and it refused half of one instruction correctly
+
+**Controller-verified**: tree clean, no stash, `ruff` clean, `databricks bundle validate -t free`
+→ **Validation OK!**, **32** functions at or over 50 lines (was 33), largest tracked Python file
+**799**. Collection **2,342 / 2,365 → 2,360 / 2,386**, and the +18 selected / +3 deselected are
+attributed by **diffing the listings rather than the totals** — the discipline this document had
+to learn twice.
+
+**The refusal is the most valuable thing in the pass, and it sharpened the fix.** The controller's
+instruction was to bind the safety check to "this is an incremental run". The implementer refused
+half of it with the mechanism: **the value that carries the race is the `--since` ARGUMENT, not
+this run's own watermark.** `--since` is snapshot 1's watermark, produced by an earlier process —
+and if *that* read landed between t1 and t2 it recorded a stamp below t1, so
+`WHERE updated_at > :since` **returns** the eight held-open rows instead of missing them, while
+snapshot 2's own watermark reads t2 in the broken run and in a correct one alike. Checking this
+run's watermark alone therefore **cannot see it**. Both refusals now exist, and the argument is
+compared to t2 *in Postgres*, because `max(updated_at)::text` and `datetime.isoformat()` are two
+spellings of one instant that a Python string comparison gets wrong on most values.
+
+**Three of the new tests were shown to discriminate by breaking the thing they guard**, which is
+the standard this project reached after counting how many of its guards had never been proven able
+to fail:
+
+- With the `--since` refusal patched out, the test does not merely fail to raise — it **connects
+  to the live container and completes a full unprotected incremental extract**, printing 1,088
+  rows, a watermark, 477,163 bytes and a sha256, every number correct. The species, drawn from
+  life.
+- With T10's new rule patched out, a row carrying **U+A7C1** in `legal_name` comes back with
+  reject reason **`[None]`** — not rejected for a neighbouring reason, **accepted**. T10's latent
+  defect, live, before the guard existed.
+- With `RENDERING_GUCS["TimeZone"]` doctored to `America/Sao_Paulo`, the GUC read-back check
+  **still passes** and the rendering comes out `2026-08-15 14:23:01.123456-03` against the
+  committed `…17:23:01.123456+00`. **Only the committed literal catches it** — which is precisely
+  why T4's ruling demanded literals and rejected a client-against-client comparison.
+
+**And T4's own wording is wrong about `IntervalStyle`, found unasked.** *"The rendering is
+byte-identical to the clean baseline"* holds for six of the seven pinned GUCs and is **false** for
+this one: the server default `postgres` renders `5 days 03:00:00` where the pin `iso_8601` renders
+`P5DT3H`. The pin **overrides** that default rather than agreeing with it — which makes it the one
+assertion in the set that **no no-op pin can satisfy on any container**, and it is now the control
+the live test leans on. A sentence that was wrong turned out to name the strongest available check.
+
+**Two more, about this box rather than this phase.** `ruff check` is not a PEP 8 clearance here —
+the blank-line rules are `E301`-`E303`, ruff-preview-only, and this project selects `E,F,I,UP,B`,
+so a mechanical split left three seams at one blank line and ruff was silent. And
+`scripts/run_suite.sh`'s chunk 1 (`--ignore=tests/vault`, i.e. gold *and* bronze) will **likely
+blow its own 600 s cap** on this machine: `tests/gold` alone did not finish in 570 s and
+`tests/gold/test_conformed.py` is 22 tests in 267.87 s. **Inferred from two direct measurements
+rather than measured**, because running the script is forbidden — and labelled as an inference.
 
 ## 3. What ships UNEXERCISED
 
@@ -630,6 +845,29 @@ be inferred**, because a ledger that only grows stops being read:
   `eb20b14ed46dd6073f31489e3c27e57328a5c0f0b764aba8ce9e99225363783d`, written and read back
   as bytes on the extraction host. **The `upload_to_volume` half of that script is
   unexercised**, and it is the half that needs a credential.
+
+  > **THAT sha256 IS NOT REPRODUCIBLE AND THE LINE ABOVE PRINTED IT AS THOUGH IT WERE.**
+  > Measured by the Task 4 provenance review, which ran the committed script twice, unmodified,
+  > against the same container: **1,088 rows and 477,163 bytes reproduce exactly on every run,
+  > and the digest is different every time** — three runs, three digests, one byte length.
+  >
+  > **The mechanism is the design working.** Every row carries `_snapshot_at`, the reading
+  > transaction's own instant at fixed `.US` width (T7), so the payload's LENGTH is a property
+  > of the data and its CONTENT is a property of *when the run happened*. A reader who checked
+  > this digest the way §0.3's pool digest can be checked would find a mismatch and conclude
+  > something was wrong.
+  >
+  > **It is not a defect in any pin, and the PostgreSQL review established why:** nothing
+  > committed compares a landed Postgres file's digest across runs. The golden-byte test
+  > (`tests/test_postgres_source.py`) runs against scripted rows through a hermetic fake and
+  > never executes a live `SELECT`, so it cannot observe this at all; no CI job runs the live
+  > extractor yet. **The instability becomes a defect only if a future test asserts byte
+  > identity of a landed file across two live runs — and the design says never to try**, since
+  > the filename is itself a function of the instant and there is one file per transaction.
+  >
+  > Flagged on the same discipline §0.4 applies to the ad-hoc `peek()` figures it labels *"not
+  > reproducible from anything committed"*. The row count and the byte count are re-derivable;
+  > the digest is provenance for one execution and nothing more.
 - **`opl.config.landing_postgres_tmp` IS DECLARED AND NOTHING WILL EVER WRITE TO IT** — not
   "has not yet". Every other mode's producer runs on Databricks and stages inside the Volume
   so `os.replace` can make the file appear whole; this one runs on the host and PUTs a
@@ -651,3 +889,25 @@ be inferred**, because a ledger that only grows stops being read:
   seeded (un-mutated) table, `--since <the watermark>` returns **0** rows and `--since <one
   microsecond earlier>` returns **1** — which demonstrates the strict `>` on a populated
   boundary and demonstrates nothing about the 48-row miss. That number is Task 6's.
+
+### Added by the Task 4 correction pass
+
+- **THE THREE LIVE POSTGRES TESTS RUN ON ONE WINDOWS BOX AND NOWHERE ELSE.** T4's closing test
+  now exists against the shipped `pin_rendering_gucs`, with committed literals under a hostile
+  `PGTZ`/`PGDATESTYLE`/`PGOPTIONS`, and it passes — but it carries the `postgres` marker, and
+  `addopts = "-m 'not integration'"` deselects it by default while CI runs a bare
+  `uv run pytest -v`. **They are the +3 deselected in the collection delta.** T2b's CI job is
+  Task 6's, and until it lands the sentence this phase owes is the one F-API had to write about
+  local Spark: *verified on one Windows box and nowhere else.*
+- **`unhashable_case_divergence` HAS REJECTED NOTHING OUTSIDE A FIXTURE.** The rule is proven to
+  fire — and proven that its absence lets U+A7C1 through as `[None]` — but the seeded population
+  is bounded below the divergence set on purpose (T10 refuses seeding one of the forty to "prove"
+  it), so **no real row has ever met this rule**. That is the intended state and not a gap: the
+  guard exists for a manual `psql`, a re-seed, or a mutation script that is not this one.
+- **`_refuse_a_since_before_t2` HAS NEVER REFUSED A REAL RACE.** Its discrimination is
+  demonstrated by patching the refusal out and watching a full unprotected extract complete, which
+  is stronger than most guards in this repository can claim — but the race itself has not occurred
+  outside that construction, and it cannot until Task 6 drives two snapshots on two calendar days.
+- **`src/opl/unicode_case.py` AND `src/opl/bronze/rule_predicates.py` HAVE RUN ZERO ROWS ON
+  DATABRICKS**, like everything else in §3's Task 4 block, and for the same reason: nothing has
+  been ingested.
