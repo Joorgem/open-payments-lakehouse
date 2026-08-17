@@ -558,8 +558,17 @@ def test_the_generic_link_loader_refuses_the_link_it_cannot_write(
     after, and this link's partner end is derived. Left unrefused it would not crash --
     `link_candidates` would compute a partner reference from `cnpj_basico`, giving every
     partner the COMPANY's digest, so every relationship would appear to be a company
-    partnered with itself."""
-    with pytest.raises(ValueError, match="dependent-child keys or a non-identifying"):
+    partnered with itself.
+
+    THE REFUSAL IS UNCHANGED AND ITS WORDING IS NOT, WHICH IS F-DB TASK 5's ONE VISIBLE
+    EFFECT ON THIS LINK. The guard used to refuse on `not end.identifying`, a PROXY for
+    "this end's key is derived"; it now refuses on the reason itself -- an end whose key
+    is neither named columns of the source nor a declared `LinkEnd.key_from`. This link's
+    partner end declares nothing and is non-identifying, so it is refused by both
+    spellings, and `opl.vault.partners` is still its loader. The match below is on the
+    new sentence rather than on a substring the old one happened to share, so it cannot
+    pass against a message that stopped naming what it refuses."""
+    with pytest.raises(ValueError, match="nor a declared derivation"):
         load_link(
             spark, LINK, hubs=LINK_HUBS, hub_tables=socios_hub_tables(socios_target),
             source_table=socios_source.bronze,

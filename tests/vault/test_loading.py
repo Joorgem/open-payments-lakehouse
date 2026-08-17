@@ -31,21 +31,31 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pyspark.sql import functions as F
 
 from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT
 from opl.vault import domains
 from opl.vault.hashing import hash_key
+from opl.vault.hashing_spark import hash_key_column, zero_padded_column
 from opl.vault.hubs import load_hub
 from opl.vault.links import load_link
 from opl.vault.loading import (
     changed_rows,
     hash_key_expression,
+    hash_key_for_end,
+    link_hash_key_expression,
     read_snapshot_window,
     rows_in,
 )
 from opl.vault.months import validated_months
 from opl.vault.partners import load_partner_link
-from opl.vault.registry import BusinessKeyColumn, Hub
+from opl.vault.registry import (
+    BusinessKeyColumn,
+    Hub,
+    KeyPrefix,
+    LinkEnd,
+    identifying_hubs,
+)
 
 from .conftest import LOADED_AT, MAY, write_delta
 
@@ -169,6 +179,106 @@ def test_a_business_key_with_no_width_is_not_padded(spark):
     hub = Hub(name="h", hash_key="h_hk", business_keys=(BusinessKeyColumn(name="k"),))
 
     assert frame.select(hash_key_expression(hub).alias("d")).first()["d"] == hash_key(["7"])
+
+
+# --------------------------------------------------------------------------- #
+# THE ACCEPTANCE FOR F-DB TASK 5, AND IT IS NOT THAT THE NEW LINK LOADS.
+#
+# `LinkEnd.key_from` changed the two expressions every link in this vault is keyed by,
+# for a source that does not exist yet -- the same shape as Task 2's snapshot axis, and
+# the same acceptance: the test shows the OLD answer unchanged, not that the new path
+# works. The old formulas are RE-IMPLEMENTED below from the spec rather than imported,
+# so this compares two independent derivations in one process; importing the shipped one
+# would compare it with itself.
+# --------------------------------------------------------------------------- #
+
+_LINK_SOURCE_SCHEMA = (
+    "cnpj_basico string, cnpj_ordem string, cnpj_dv string, "
+    "identificador_socio string, cpf_cnpj_socio string"
+)
+_LINK_SOURCE_ROW = ("1234567", "12", "3", "2", "***111111**")
+
+
+def _pre_f_db_padded(key, column):
+    """`opl.vault.loading._padded`'s per-column branch, verbatim as it stood before
+    `key_from` existed: pad to the spec's width, or take the value as it is."""
+    return column if key.width is None else zero_padded_column(column, width=key.width)
+
+
+def _pre_f_db_link_hash_key(link, hubs):
+    """`link_hash_key_expression` as it stood before F-DB: every identifying end's HUB
+    read from the columns the hub is named after, then the dependent-child keys."""
+    components = [
+        _pre_f_db_padded(key, F.col(key.name))
+        for hub in hubs
+        for key in hub.business_keys
+    ]
+    components += [
+        _pre_f_db_padded(key, F.col(key.name)) for key in link.dependent_child_keys
+    ]
+    return hash_key_column(components)
+
+
+@pytest.mark.parametrize(
+    "name", ["link_empresa_estabelecimento", "link_company_partner"]
+)
+def test_a_link_written_before_key_from_hashes_exactly_what_it_hashed_before(spark, name):
+    """THE FIRST DEMANDED TEST. Both links proven over 33.13 GB keep their identity
+    column to the byte, and the comparison is against the formula the code no longer
+    contains rather than against a golden string a re-run of the new code produced."""
+    link = domains.table_spec(name)
+    hubs = domains.linked_hubs(link)
+    identifying = identifying_hubs(link, hubs)
+    frame = spark.createDataFrame([_LINK_SOURCE_ROW], _LINK_SOURCE_SCHEMA)
+
+    row = frame.select(
+        link_hash_key_expression(link, identifying).alias("now"),
+        _pre_f_db_link_hash_key(link, identifying).alias("before"),
+    ).first()
+
+    assert row["now"] == row["before"]
+
+
+@pytest.mark.parametrize(
+    "name", ["link_empresa_estabelecimento", "link_company_partner"]
+)
+def test_an_end_that_declares_nothing_writes_the_hubs_own_reference(spark, name):
+    """The other half of the same claim: `hash_key_for_end` on an undeclared end is
+    `hash_key_expression(hub)`, so every reference column those two links write is the
+    digest `load_hub` wrote, exactly as before.
+
+    Asserted on EVERY end, including `link_company_partner`'s partner end -- which
+    `load_link` still refuses, and whose reference `opl.vault.partners` still derives
+    for itself, so the value compared here is what `link_candidates` WOULD write if it
+    ever ran on it. That is the point: nothing about the derived end changed either."""
+    link = domains.table_spec(name)
+    hubs = domains.linked_hubs(link)
+    frame = spark.createDataFrame([_LINK_SOURCE_ROW], _LINK_SOURCE_SCHEMA)
+
+    for index, (end, hub) in enumerate(zip(link.ends, hubs, strict=True)):
+        row = frame.select(
+            hash_key_for_end(end, hub).alias("now"),
+            hash_key_expression(hub).alias("before"),
+        ).first()
+        assert row["now"] == row["before"], f"{name} end {index}"
+
+
+def test_a_declared_end_reads_its_prefix_and_pads_to_the_hubs_width(spark):
+    """The new path, on the shape F-DB actually needs: eight characters of a fourteen-
+    character CNPJ, hashed as the hub's own eight-character key.
+
+    Compared against `hash_key` on the SLICED value, so this pins that the reference is
+    the digest `load_hub` wrote for that root rather than only that the two agree."""
+    hub = Hub(
+        name="hub_empresa", hash_key="hub_empresa_hk",
+        business_keys=(BusinessKeyColumn(name="cnpj_basico", width=8),),
+    )
+    end = LinkEnd(hub=hub.name, key_from=(KeyPrefix(column="cnpj", width=8),))
+    frame = spark.createDataFrame([("12345678000199",)], "cnpj string")
+
+    row = frame.select(hash_key_for_end(end, hub).alias("derived")).first()
+
+    assert row["derived"] == hash_key(["12345678"])
 
 
 # --------------------------------------------------------------------------- #

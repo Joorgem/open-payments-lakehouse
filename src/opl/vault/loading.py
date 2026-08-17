@@ -52,7 +52,7 @@ from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT, SnapshotAxis
 from opl.vault.columns import APPLIED_DATE, HASH_DIFF, RECORD_SOURCE
 from opl.vault.hashing_spark import hash_key_column, zero_padded_column
 from opl.vault.months import validated_months
-from opl.vault.registry import BusinessKeyColumn, Hub, Link
+from opl.vault.registry import BusinessKeyColumn, Hub, Link, LinkEnd
 
 # Bronze's own RSRC column, carried into the vault verbatim rather than re-derived.
 #
@@ -76,7 +76,9 @@ __all__ = [
     "SnapshotAxis",
     "changed_rows",
     "earliest_record_source",
+    "end_components",
     "hash_key_expression",
+    "hash_key_for_end",
     "hash_key_over",
     "link_hash_key_expression",
     "read_snapshot_window",
@@ -159,6 +161,53 @@ def hash_key_over(hub: Hub, sources: Sequence[Column]) -> Column:
     return hash_key_column(_padded(hub.business_keys, list(sources)))
 
 
+def _end_sources(end: LinkEnd, hub: Hub) -> list[Column]:
+    """The RAW columns one link end's hub business key is read from, before padding.
+
+    ONE LIST, TWO CONSUMERS, WHICH IS WHAT KEEPS THEM FROM DISAGREEING. `end_components`
+    pads it for the LINK's own digest and `hash_key_for_end` hands the same list to
+    `hash_key_over` for the end's HUB REFERENCE. If those were two derivations, a link
+    could carry a reference column that joins correctly and an identity column computed
+    over something else -- which is the failure `opl.vault.links.refuse_mismatched_hubs`
+    describes for a reordered pair: every row present, every join working, and the
+    table's identity disagreeing with the one a re-load computes.
+
+    `key_from is None` IS THE PRE-F-DB BRANCH AND IS BYTE-IDENTICAL TO IT. It returns
+    exactly `[F.col(key.name) for key in hub.business_keys]`, which is what
+    `_padded_components` reads and what `hash_key_expression` hashes, so every end of
+    both CNPJ links takes the same path through different words."""
+    if end.key_from is None:
+        return [F.col(key.name) for key in hub.business_keys]
+    return [
+        F.substring(F.col(prefix.column), 1, prefix.width) for prefix in end.key_from
+    ]
+
+
+def end_components(end: LinkEnd, hub: Hub) -> list[Column]:
+    """One link end's hub business key, padded to the hub's declared widths, read from
+    wherever the END says it lives -- the components a link's own hash key concatenates.
+
+    THE DECLARATION IS THE ONLY THING THAT DIFFERS. The widths, the order and the padding
+    are the hub's, through `_padded`, so a derived end takes the digest of a value padded
+    exactly as `load_hub` padded the value it wrote. `build_registry` has already refused
+    a prefix whose width is not the hub's, so the pad is a no-op on a well-formed
+    declaration and a refusal rather than a truncation on a malformed value."""
+    return _padded(hub.business_keys, _end_sources(end, hub))
+
+
+def hash_key_for_end(end: LinkEnd, hub: Hub) -> Column:
+    """The hub reference one link end writes: the hub's own hash key, taken over
+    whatever columns that end declares.
+
+    THROUGH `hash_key_over`, WHICH IS THE SEAM THAT ALREADY EXISTED -- "the same
+    standard, the same widths, the same order, read somewhere else". `opl.vault.partners`
+    was its only caller and reached it by hard-coding socios' derivation in a second
+    loader; this reaches it from a DECLARATION, which is the whole of T5b. An end with no
+    declaration hands it the hub's own columns, so the result is `hash_key_expression`'s
+    to the byte."""
+    return hash_key_over(hub, _end_sources(end, hub))
+
+
 def link_hash_key_expression(link: Link, hubs: Sequence[Hub]) -> Column:
     """A link's own hash key: the standard over every IDENTIFYING end's hub business
     key, concatenated in the link's declared order, then its dependent-child keys.
@@ -203,8 +252,21 @@ def link_hash_key_expression(link: Link, hubs: Sequence[Hub]) -> Column:
 
     DEPENDENT-CHILD KEYS COME LAST, after every hub, and that order is load-bearing for
     the same reason the hub order is -- the components are flattened with no boundary
-    marker, so moving one re-keys the whole table."""
-    components = [component for hub in hubs for component in _padded_components(hub)]
+    marker, so moving one re-keys the whole table.
+
+    `hubs` IS ZIPPED STRICTLY AGAINST `link.identifying_ends` SINCE F-DB, which turns the
+    paragraph above from an instruction into a refusal: every caller already passed
+    `identifying_hubs(link, hubs)`, and a caller that passed something else got a digest
+    over the wrong hubs rather than an error. The pairing is what a DERIVED end needs --
+    `end_components` reads the columns the END declares, so `link_merchant_empresa` hashes
+    the first eight characters of `cnpj` where `link_empresa_estabelecimento` hashes
+    `cnpj_basico` by name. Every end written before F-DB declares nothing, so its
+    components are `_padded_components(hub)` exactly as before."""
+    components = [
+        component
+        for end, hub in zip(link.identifying_ends, hubs, strict=True)
+        for component in end_components(end, hub)
+    ]
     components += _padded(
         link.dependent_child_keys,
         [F.col(key.name) for key in link.dependent_child_keys],
