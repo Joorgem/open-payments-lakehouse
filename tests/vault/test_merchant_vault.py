@@ -51,9 +51,11 @@ import pytest
 
 from opl.bronze.registry import table_spec as bronze_table_spec
 from opl.bronze.snapshot_axis import INSTANT_SNAPSHOT
+from opl.contracts import merchant as merchant_contract
 from opl.contracts.catalogue import columns_for
 from opl.vault import domains
 from opl.vault.columns import CLOSED_BY, IS_ACTIVE, LAST_OBSERVED_ON
+from opl.vault.domains.merchant_domain import UNMODELLED_MERCHANT_COLUMNS
 from opl.vault.effectivity import CLOSING_STATE, load_effectivity_satellite
 from opl.vault.hubs import load_hub
 from opl.vault.links import load_link
@@ -387,6 +389,43 @@ def test_the_hub_grain_ledger_reports_one_departure_where_the_link_grain_closes_
     forever, with nothing failing."""
     assert merchant_loaded.dados_result.candidate_departures == 1
     assert merchant_loaded.eff_result.closed == 2
+
+
+def test_the_key_the_link_the_payload_and_the_open_partition_the_merchant_contract():
+    """Every one of the eleven POSTGRES columns is the hub's business key, part of the
+    link's identity, the satellite's payload, the effectivity window's delivered open, or
+    a declared omission -- and the five sets are disjoint.
+
+    ON `cnpj.py`'s PRECEDENT, AND FOR THE REASON THAT FILE ALREADY HELD AND THIS ONE ONLY
+    ARGUED. `merchant_domain.py`'s docstring accounts for each of the four columns
+    `sat_merchant_dados` does not carry, and the arguments are right; what it lacked was
+    the mechanical half. A twelfth column added to `opl.contracts.merchant.SOURCE_COLUMNS`
+    would have landed in bronze, been modelled by nothing, and turned no test red --
+    indistinguishable from one someone forgot, which is exactly what
+    `UNMODELLED_MERCHANT_COLUMNS` exists never to be. Pure, no Spark: an upstream column
+    turns it red in milliseconds.
+
+    OVER `SOURCE_COLUMNS` AND NOT THE FOURTEEN-COLUMN CONTRACT. The other three are the
+    OBSERVING TRANSACTION's stamps -- `_snapshot_at`, `_pg_snapshot`, `_pg_wal_lsn` --
+    which this lakehouse writes rather than reads from Postgres, and one of them is this
+    source's snapshot AXIS rather than a fact about a merchant. They are not modelled and
+    must not be: `opl.contracts.merchant` already asserts at import that the two groups
+    partition the contract and that the leading underscore is what tells them apart, so
+    this test's scope is total without restating that guard.
+
+    `cnpj` IS TAKEN OFF THE LINK RATHER THAN NAMED. It is accounted for because it is the
+    link's identity, and a test that spelled it would still pass on the day the link
+    stopped keying on it."""
+    source = set(merchant_contract.SOURCE_COLUMNS)
+    key = set(HUB.business_key_columns)
+    link_only = set(LINK_IDENTITY) - key
+    payload, omitted = set(DADOS.payload_columns), set(UNMODELLED_MERCHANT_COLUMNS)
+    entry = {EFF.entry_column}
+    sets = (key, link_only, payload, entry, omitted)
+
+    assert set().union(*sets) == source
+    assert sum(len(part) for part in sets) == len(merchant_contract.SOURCE_COLUMNS)
+    assert source.isdisjoint(merchant_contract.OBSERVATION_COLUMNS)
 
 
 def test_the_diagnostics_were_measured_rather_than_skipped(merchant_loaded):
