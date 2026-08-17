@@ -914,13 +914,16 @@ to a file rather than piped through `tail`, because JVM teardown displaces the s
 
 | chunk | result |
 |---|---|
-| `tests/vault/test_merchant_vault.py` | **20 passed**, 549.98 s |
+| `tests/vault/test_merchant_vault.py` | **20 passed**, 549.98 s — and **20 passed**, 603.47 s re-run at final HEAD |
 | `tests/vault` (rest) | **270 passed**, 1353.96 s |
 | `tests/gold` | **462 passed**, 1551.91 s |
 | `tests` (rest: root + `tests/bronze`) | **1703 passed, 26 deselected**, 1074.38 s |
 
 **20 + 270 + 462 + 1703 = 2,455**, which is the collection total exactly — so the four chunks
-partition the suite and none was run twice or skipped. A single `uv run pytest` was started twice
+partition the suite and none was run twice or skipped. **The merchant chunk was run before the
+hub-grain refusal existed, so it was run again at final HEAD** — the change is a no-op on a hub
+grain that declares no prefix, which is an argument and not a measurement until the suite has
+seen it. A single `uv run pytest` was started twice
 and abandoned both times: it was pacing at **~7 hours** on this box, which is why
 `scripts/run_suite.sh` exists and why chunking is the only affordable honest option here.
 `uv run ruff check .` clean; `tests/test_size_caps.py` green in both directions — it caught
