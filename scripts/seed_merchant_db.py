@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import pathlib
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -399,6 +400,26 @@ def census(conn: psycopg.Connection, schema: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------------
 
 
+def _announce_readiness(ready: pathlib.Path, t1: object, t2: object) -> None:
+    """Publish the readiness file ATOMICALLY, once `t2 > t1` has been refused or passed.
+
+    WRITTEN THROUGH A TEMPORARY AND RENAMED, because the reader is another PROCESS
+    polling `exists()` -- the pattern `mutate`'s own contract hands the extractor. A plain
+    `write_text` is create-then-write, so a poller can observe the path between the two
+    and read an empty or half-written `t1=`, then proceed as though it were ready.
+    `os.replace` is atomic within a directory: the file is either absent or complete.
+
+    IT LIVES OUT HERE BECAUSE IT PUSHED `mutate` PAST THE 50-LINE CAP -- 45 lines when the
+    Task 3 reviewer measured it, 53 once this block went in. The controller had just
+    corrected Task 2 for reporting cap compliance on a docstring-excluded measure, and
+    then broke the same cap in the commit that fixed that review's findings. Neither cap
+    is enforced by any test; only measurement catches this.
+    """
+    staged = ready.with_name(f"{ready.name}.{os.getpid()}.tmp")
+    staged.write_text(_readiness_text(t1, t2), encoding="utf-8")
+    os.replace(staged, ready)
+
+
 def _readiness_text(t1: object, t2: object) -> str:
     """The readiness file's whole content, in one place so the reader can be tested."""
     return "".join([f"t1={t1.isoformat()}", chr(10), f"t2={t2.isoformat()}", chr(10)])
@@ -501,15 +522,7 @@ def mutate(
             "Without t2 > t1 the out-of-order miss would be a fabrication.",
         )
         if ready is not None:
-            # WRITTEN THROUGH A TEMPORARY AND RENAMED, because the reader is another
-            # PROCESS polling `exists()` -- the pattern this function's contract hands
-            # the extractor. A plain `write_text` is create-then-write, so a poller can
-            # observe the path between the two and read an empty or half-written `t1=`,
-            # then proceed as though it were ready. `os.replace` is atomic in a
-            # directory: the file is either absent or complete.
-            staged = ready.with_name(f"{ready.name}.{os.getpid()}.tmp")
-            staged.write_text(_readiness_text(t1, t2), encoding="utf-8")
-            os.replace(staged, ready)
+            _announce_readiness(ready, t1, t2)
         release()
         slow.execute("COMMIT")
     finally:
