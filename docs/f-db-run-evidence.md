@@ -832,6 +832,101 @@ attributed id by id from diffed listings: 6 T10 + 1 F6 + 3 F1 + 4 sweep-tax + 4 
 
 Every file edited to prove a point was restored, with `git status --porcelain` empty after each.
 
+### 2.5 The Task 5 correction pass — the ledger's grain was FINER than the value its link keys on
+
+**One blocking defect, closed with the fix rather than the fallback the brief authorised.**
+
+**THE DEFECT, AND IT IS THIS PHASE'S SIGNATURE SPECIES: every count correct, and the table
+asserting something impossible.** `registry.identity_columns_of` answers a link's
+grain by asking the END, and for a `KeyPrefix`-derived end it returns the raw source column —
+`cnpj`, fourteen characters — while `link_merchant_empresa` hashes `substring(cnpj, 1, 8)`.
+`cnpj → cnpj[:8]` is **many-to-one**, so the observation ledger gating the effectivity satellite
+sat at a grain strictly FINER than the link's identity. `effectivity._grain_key_mismatch`'s own
+docstring names what finer costs — *"it closes windows that never departed"* — and
+`_refuse_a_mismatched_link_grain` could not see it: it compared the grain's column NAMES against
+`identity_columns_of`'s, and **both sides call the same function**, so the check was satisfied by
+construction.
+
+**Reproduced on local Spark before anything was changed**, one merchant keeping its
+eight-character root across a change of full `cnpj` (`10000008000199` → `10000008000288`) — a
+branch, a check-digit correction, an ordinary `UPDATE` the seeded DDL permits with no
+immutability guard:
+
+```
+assert [row[IS_ACTIVE] for row in rows] == [True]
+E       assert [True, True, False] == [True]
+E         Left contains 2 more items, first extra item: True
+1 failed, 17 deselected in 128.84s
+```
+
+**Three rows for ONE link hash key: an active row and a closing row on the same `applied_date`,
+i.e. a relationship simultaneously open and closed** — and `EffectivityLoadResult(appended=3,
+closed=1)` reads entirely ordinary in a run log. `changed_rows`' `F.lag` is partitioned only on
+the hash key and ordered only on `applied_date` with no tie-break, so **which of the two a reader
+gets is not stable between runs.**
+
+**THE FIX AND WHAT DECIDED IT.** `ObservationGrain` gains `key_prefixes`, derived from the link
+by the new `registry.identity_derivations_of`; `observation._side` projects each key column
+through `grain.key_expression`, so the ledger's VALUES are `(merchant_id, cnpj[:8])`. The
+fallback — a loud injectivity refusal — was not taken because the fix costs one field, one
+projection and one comparison, and **`effectivity._departures` needs no second hash expression at
+all**: a prefix is idempotent, `substring(substring(x, 1, w), 1, w) == substring(x, 1, w)`, so
+`link_hash_key_expression` re-applied to an already-derived value is a no-op and the ONE spelling
+of the link's digest survives. The alternative naming (the ledger's column as the hub's
+`cnpj_basico`) is the more honest label and would have bought exactly that second spelling.
+`observation.py`'s *"it does not hash"* bullet is **not** violated — its whole argument is about a
+second spelling of the HASH standard, and a substring leaves the value readable and reconcilable
+against the source by eye.
+
+**And the guard now sees values as well as names.** `_grain_derivation_mismatch` compares the
+grain's prefixes against the link's own, so a grain naming every right column and reading them
+raw is refused before Spark.
+
+**THE SYMMETRIC HOLE THE NEW FIELD OPENED, FOUND UNASKED AND CLOSED IN THE SAME PASS.** A
+`KeyPrefix` on a **hub** grain makes that ledger COARSER than the hub — `10000001` and `10000002`
+fold into one ledger key at width 7 — so `candidate_departures` would be reported only when the
+LAST company sharing a truncation left: small, plausible, and about a key space no satellite row
+exists for. A hub's business key is read from the columns it is named after and there is nothing
+to compare a prefix against, so `satellites._refuse_a_prefixed_hub_grain` refuses one outright.
+
+**THE MERCHANT CONTRACT'S PARTITION IS NOW ENFORCED RATHER THAN ARGUED.**
+`merchant_domain.py`'s docstring accounted for each of the four Postgres columns
+`sat_merchant_dados` does not carry and the arguments are right; `domains/cnpj.py` holds itself to
+a mechanical standard the merchant domain did not, so a twelfth column in
+`opl.contracts.merchant.SOURCE_COLUMNS` would have been modelled by nothing and turned no test
+red. `test_the_key_the_link_the_payload_and_the_open_partition_the_merchant_contract` closes it
+over the eleven Postgres columns, with `cnpj` taken off the LINK rather than named.
+
+**Collection 2,447 / 2,473 → 2,455 / 2,481**, attributed by diffing the sorted listings rather
+than the totals: **+8 selected ids, 0 removed, and the deselected count unchanged at 26.** The
+listings were diffed in both directions precisely because a whole-tree count in this phase once
+read 33 before and 33 after while one item entered the set and another left it. Three in
+`tests/vault/test_merchant_vault.py` (the branch reproduction, the derivation refusal, the
+contract partition), four in `tests/vault/test_observation_grain.py` (the default, the two
+construction refusals, the configured-schema entry point), one in
+`tests/vault/test_satellite_diagnostics.py` (the hub-grain refusal). That last one was kept
+**out of** `tests/vault/test_cnpj_vault.py`, where it belonged by subject and would have taken
+that file from 780 to **808** — over the 800-line cap, which is how it was found.
+
+**THE WHOLE SUITE RAN, IN FOUR CHUNKS, AND THE FOUR COUNTS SUM TO THE COLLECTION.** One pytest
+process at a time — never two, which this phase measured as 11 failures — and output redirected
+to a file rather than piped through `tail`, because JVM teardown displaces the summary line:
+
+| chunk | result |
+|---|---|
+| `tests/vault/test_merchant_vault.py` | **20 passed**, 549.98 s |
+| `tests/vault` (rest) | **270 passed**, 1353.96 s |
+| `tests/gold` | **462 passed**, 1551.91 s |
+| `tests` (rest: root + `tests/bronze`) | **1703 passed, 26 deselected**, 1074.38 s |
+
+**20 + 270 + 462 + 1703 = 2,455**, which is the collection total exactly — so the four chunks
+partition the suite and none was run twice or skipped. A single `uv run pytest` was started twice
+and abandoned both times: it was pacing at **~7 hours** on this box, which is why
+`scripts/run_suite.sh` exists and why chunking is the only affordable honest option here.
+`uv run ruff check .` clean; `tests/test_size_caps.py` green in both directions — it caught
+`satellites._refuse_a_mismatched_grain` crossing to **53** lines under this pass's own edit, which
+is what `_refuse_a_prefixed_hub_grain` was split out of.
+
 ## 3. What ships UNEXERCISED
 
 **Standing decision §4.6: a path that ran zero rows through it is not a path that works.**
@@ -973,3 +1068,28 @@ be inferred**, because a ledger that only grows stops being read:
 - **`src/opl/unicode_case.py` AND `src/opl/bronze/rule_predicates.py` HAVE RUN ZERO ROWS ON
   DATABRICKS**, like everything else in §3's Task 4 block, and for the same reason: nothing has
   been ingested.
+
+### Added by the Task 5 correction pass
+
+- **THE DEFECT `ObservationGrain.key_prefixes` FIXES IS UNREACHABLE BY THIS REPOSITORY'S OWN
+  DATA, AND THE FIELD THEREFORE CHANGES NO PUBLISHED NUMBER.**
+  `scripts/merchant_population.py` derives `merchant_id = uuid5(NAMESPACE, cnpj)`, so a changed
+  `cnpj` changes the surrogate key too, and `mutated()` never touches `cnpj` at all — **Task 6
+  cannot produce a merchant that keeps its eight-character root and changes its full CNPJ.** The
+  branch case exists only in `tests/vault/test_merchant_vault.py`'s own two-row fixture. The
+  mechanism is fixed against the schema this phase claims to model: an operational Postgres table
+  where `cnpj` is a mutable `text` column with no immutability guard.
+- **`ObservationGrain.key_prefixes` AND `key_expression` HAVE RUN ZERO ROWS ON DATABRICKS**, like
+  everything else this phase has built, and for the same reason: nothing has been ingested. Every
+  measurement above is local Spark over a synthesised fixture.
+- **`_grain_derivation_mismatch` AND `_refuse_a_prefixed_hub_grain` HAVE REFUSED NOTHING BUT A
+  TEST.** Both are proven able to fire, each against the construction it exists to refuse, and
+  neither has met a real mis-declared grain — nor can it, while
+  `vault_load_effectivity.grain_for` and `merchant_domain.py` are the only two sites that build
+  one and both derive both halves from the link spec. That is the intended state: the guards
+  exist for the third site, and `tests/test_vault_job_wiring.py` compares the two that exist
+  field for field.
+- **NO NON-EMPTY `key_prefixes` REACHES ANY GRAIN BUT ONE.** `link_merchant_empresa` is the only
+  link in this vault with a declared derivation on an identifying end, so the three CNPJ-domain
+  grains and the merchant domain's own HUB grain all carry `()` and take the pre-existing path
+  byte for byte. The field's second consumer arrives with wave 2 or not at all.
