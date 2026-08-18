@@ -20,17 +20,27 @@ measured wrong, and `run_suite.sh` leans on this paragraph to justify a chunk.
 WHICH SIDE A TEST LANDS ON IS DECIDED BY WHAT MAKES IT CHANGE. `ObservationGrain` is a
 frozen dataclass with a validating `__post_init__`, and the refusals here pin what that
 validator refuses -- six at the split, NINE now, Task 2 having added the axis-aware ones
--- -- they change when the GRAIN's shape changes. The ledger's own
+-- and they change when the GRAIN's shape changes. The ledger's own
 argument refusals (`months=[]`, a bare string month, `2026-13`, a month no table
 carries) stayed with the ledger: they are `observation_ledger`'s guards, three of them
 run against real fixture data, and one of them is worth an eager Spark job on purpose.
 
-AND THIS IS WHERE F-DB TASK 2's GRAIN WORK GOES. T7 moves the snapshot axis onto
-`BronzeTable` and makes `observation.py:208-210` -- the refusal against keying a grain
-on its own axis, pinned below by `test_the_month_column_is_refused_as_a_business_key
-_column` -- grain-aware rather than a comparison against a module constant. A guard
-that silently stops guarding is the failure that refusal exists to prevent, so its
-successor belongs beside it, in the half of the split that has room.
+AND THIS IS WHERE F-DB TASK 2's GRAIN WORK LANDED. T7 moved the snapshot axis onto
+`BronzeTable` and made the refusal against keying a grain on its own axis -- pinned below
+by `test_the_month_column_is_refused_as_a_business_key_column` -- grain-aware rather than
+a comparison against a module constant. Its successor sits beside it:
+`test_the_axis_refusal_reads_THIS_GRAINS_AXIS_AND_NOT_THE_DEFAULT_ONE`, which is the
+assertion that the guard reads the grain's OWN axis, since a guard that silently stops
+guarding is the failure that refusal exists to prevent.
+
+WRITTEN IN THE PAST TENSE, AND THE LINE-NUMBER PIN IS GONE, both deliberately. This
+paragraph described T7 as still to come while lines 5-6 above already recorded that it
+had landed -- the second future-tense sentence in this docstring to go stale inside its
+own phase, and the paragraph directly above says why prose that describes a seam is
+exactly what gets measured wrong. It also pinned `observation.py:208-210`, which no
+longer names the refusal it claimed to: a line range is a citation that rots on the next
+edit to a file this one does not own, so the successor is named by TEST NAME, which
+`grep` follows and a rename breaks loudly.
 
 Both files' docstrings point at the other, because neither is a claim about the ledger
 alone: a grain that constructs is not a grain that answers, and a ledger tested only
