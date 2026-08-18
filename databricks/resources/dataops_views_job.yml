@@ -1,0 +1,64 @@
+# databricks/resources/dataops_views_job.yml
+#
+# F4's imperative SQL, which is where governance and observability have to live
+# because a Databricks Asset Bundle cannot express either. Measured against
+# `databricks bundle schema` on CLI 1.8.0: there is no `tables` resource and no
+# `View` resource at all, and `grants` exists only on Catalog, Schema, Volume,
+# RegisteredModel, ExternalLocation and VectorSearchIndex. So a view, a table grant,
+# a column mask and a tag are each "imperative SQL some job must issue" -- and the
+# alternative, a statement an operator runs by hand once, is the documented-manual-
+# state failure mode this phase set out to avoid.
+#
+# WHY IT TAKES NO `table` PARAMETER, unlike every ingestion job. Its output is TOTAL
+# over the registry: `opl.bronze.reconcile` derives one arm per registered table, so
+# a table registered later is reconciled the day it is registered. A `table`
+# parameter here would be a coordinate that can be wrong for no gain -- and the
+# paste-lock this repo runs over the ingestion jobs exists precisely because seven of
+# their task parameter lists CAN be wrong.
+#
+# THE GUARD IS HERE FOR A REASON THIS LIST HAS NOT USED BEFORE. Every other guarded
+# job writes rows: a stale wheel appends the wrong ones. This job writes none. What a
+# stale wheel does here is worse in one specific way -- `CREATE OR REPLACE VIEW`
+# takes the NAME the correct definition would have had, so a wheel from another
+# revision leaves a reconciliation that is individually well-formed, that reports
+# verdicts nobody reviewed, and that an operator reads off a dashboard believing it
+# is the reviewed one. Nothing fails and nothing looks wrong.
+resources:
+  jobs:
+    dataops_views:
+      name: opl-dataops-views
+      parameters:
+        - name: revision
+          # The same sentinel every guarded job declares
+          # (opl.bronze.provenance.SENTINEL_REVISION), and the same reason: a job
+          # parameter default cannot validate anything, so its only job is to be a
+          # value the code refuses.
+          #
+          #     databricks bundle run dataops_views -t free \
+          #       --params revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
+      tasks:
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        - task_key: create_views
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/create_dataops_views.py
+            # No parameters, and the task refuses any. See its header's argv line:
+            # the views are total over the registry, so there is no coordinate to
+            # hand it and nothing for a wrong value to reach.
+            parameters: []
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

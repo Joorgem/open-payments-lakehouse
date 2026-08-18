@@ -164,6 +164,19 @@ _GUARDED_JOBS = (
     # keys and payloads that a later correct load re-derives; this one writes an
     # inference about something that is no longer there to re-read.
     "vault_merchant_job.yml",
+    # F4 Task 1's views job, and this list's question has an answer here that no entry
+    # above has, because this is the first guarded job that WRITES NOTHING. Every other
+    # entry argues from rows: a wheel from another revision appends the wrong ones, and
+    # the repair is deleting them by hand. This job issues `CREATE OR REPLACE VIEW` and
+    # touches no row at all -- which makes the same question sharper rather than moot.
+    # The view's DEFINITION is the deployed wheel's output: `opl.bronze.reconcile`
+    # derives the SQL, the verdict ladder and the remedy string from `REGISTRY`, and OR
+    # REPLACE takes the NAME the correct definition would have had. So a stale wheel
+    # leaves a reconciliation that is individually well-formed, that classifies batches
+    # by a ladder nobody reviewed, and that an operator then reads off a dashboard
+    # believing it is the reviewed one. Nothing fails, nothing looks wrong, and the
+    # artefact that would say otherwise is the thing that was overwritten.
+    "dataops_views_job.yml",
 )
 
 _UNGUARDED_JOBS = {
