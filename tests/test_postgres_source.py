@@ -386,9 +386,12 @@ def test_the_record_carries_the_contracts_fourteen_columns_in_order():
 
 
 def test_the_three_stamps_are_carried_onto_every_row():
-    """ADR 0016's finding, met for the third time: the RFB's applied date comes from a
-    filename, PTAX's quote date from the REQUEST, and this instant from the transaction
-    that read the rows. None of the three is in the payload."""
+    """ADR 0017's Pattern 1 -- ADR 0016's finding, met for the third time: the RFB's
+    applied date comes from a filename, PTAX's quote date from the REQUEST, and this
+    instant from the transaction that read the rows. None of the three is in the payload.
+
+    0016 is where the SECOND of the three was found; 0017 is where three coincidences
+    become a stated property of snapshot ingestion."""
     observed = snapshot(_connection(rows=[_ROW, _ROW]))
     records = records_of(observed)
 

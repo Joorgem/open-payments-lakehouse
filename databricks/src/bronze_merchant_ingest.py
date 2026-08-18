@@ -46,6 +46,8 @@ that column unconditionally to build `applied_date`. So `add_instant_audit_colum
 derives it from `_snapshot_at`, the instant the EXTRACTOR's transaction stamped and carried
 in every row -- which is the same species ADR 0016 found for PTAX's quote date and the RFB's
 applied date: three sources, three times, the key you must diff on is not in the payload.
+THAT IS ADR 0017's PATTERN 1, which is where the three become a stated property rather than
+three coincidences; 0016 is where the second of them was found.
 
 THE INSTANT COLUMN COMES FROM THE SPEC, never from a literal here. `spec.snapshot_axis` is
 what the vault's observation ledger groups by, so deriving `applied_date` from any other

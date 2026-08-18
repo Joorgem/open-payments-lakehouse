@@ -245,9 +245,23 @@ REQUIRED_COLUMNS = (
 # Fourteen characters of digits: eight of root, four of establishment ordinal, two check
 # digits. A LENGTH-AND-DIGITS fact rather than a numeric one -- see `CNPJ_COLUMN`.
 CNPJ_WIDTH = 14
-# The root that reaches `hub_empresa`. Named here because the DQ rule and the vault's link
-# both need it and neither may re-derive it: `opl.generator.cnpj_pool.CNPJ_BASICO_WIDTH` is
-# the same number one package away, and this contract cannot import it.
+# The root that reaches `hub_empresa`, declared here because this contract is where the
+# CNPJ's shape is documented and it can import nothing to borrow the number from.
+#
+# THE SENTENCE THAT USED TO BE HERE NAMED TWO CONSUMERS THAT DO NOT READ THIS DECLARATION,
+# and the whole-branch code review is what caught it. It claimed "the DQ rule and the
+# vault's link both need it and neither may re-derive it". Neither reads it: the DQ rule
+# keeps its own literal in `opl.bronze.rule_predicates` -- and merchant has no root-width
+# rule at all, it checks the FOURTEEN-character `cnpj` -- while `link_merchant_empresa`
+# imports the constant from `opl.vault.domains.cnpj`.
+#
+# SO THIS IS THE FIFTH DECLARATION OF `8` IN THIS REPOSITORY, and the four others are
+# `generator.cnpj_pool`, `vault.domains.cnpj`, `vault.partners` and
+# `bronze.rule_predicates`. They are NOT collapsed into one: this module imports nothing by
+# a constraint its own docstring argues, and two of the others are loaders proven over
+# 33.13 GB. `tests/test_cnpj_pool.py` compares all five against each other instead --
+# which is the check that was missing, since this constant's only reader asserted the
+# module's own literal against itself and would have stayed green through any divergence.
 CNPJ_BASICO_WIDTH = 8
 
 # --- bronze naming ---------------------------------------------------------------------

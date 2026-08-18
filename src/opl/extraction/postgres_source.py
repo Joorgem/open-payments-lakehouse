@@ -542,7 +542,8 @@ def _record(row: Sequence[object], observed: Mapping[str, str]) -> dict[str, str
 def records_of(observation: MerchantSnapshot) -> tuple[dict[str, str | None], ...]:
     """`observation`'s rows as the contract's fourteen columns, in `COLUMNS` order.
 
-    THE THREE STAMPS ARE CARRIED, NOT RE-DERIVED, and that is ADR 0016's finding met for
+    THE THREE STAMPS ARE CARRIED, NOT RE-DERIVED, and that is ADR 0017's Pattern 1 --
+    ADR 0016's finding met for
     the third time: the RFB's applied date comes from a filename, PTAX's quote date is
     carried from the REQUEST because the response does not contain it, and this instant is
     carried from the transaction that read the rows. None of the three is in the payload.
