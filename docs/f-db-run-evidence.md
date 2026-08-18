@@ -89,20 +89,30 @@ workspace, four ids of three vintages, run 2026-08-15:
 > control before publishing the number, which is the only reason it is a paragraph here rather
 > than a fifth wrong figure.**
 
-**What is not in doubt** is the direction and its consequence: two ids from two different
-phases and two different authors, both older, both gone; two newer, both present. This is not
-the "resolves to nothing" species this repository has struck twice — those ids never named a
-real execution, and these demonstrably did.
+> **THE THREE PARAGRAPHS THAT USED TO FOLLOW HERE WERE DOWNSTREAM OF THE WITHDRAWN BOUND AND
+> ARE REWRITTEN, NOT LEFT.** They said the direction was *"not in doubt"*, that F2's and F3's
+> published ids *"can no longer be fetched by anyone"*, and that *"past the boundary above the
+> statement cannot be found at all"*. **All three rest on reading `Not Found` as expiry**, which
+> the control above is precisely what removes. Caught by CodeRabbit on the closing PR — **the
+> amendment did the thing the amendment is about**, which is why the correction is inline and
+> the original wording is quoted rather than deleted.
 
-**What follows, and it is a fact about every evidence document in this repository:** the
-statement ids published in `docs/f2-wave-1-*.md` and `docs/f3-*.md` — the ids that are the
-stated provenance for the vault's and the star's headline numbers — **can no longer be
-fetched by anyone.** F-API §3.1 already recorded that a `CLOSED` statement's rows cannot be
-read; what is new here is that past the boundary above the statement cannot be found at all.
+**What the four readings actually support.** Two ids returned `state: CLOSED` and two returned
+`was not found`, and that **asymmetry is real and unexplained** — the disposal story offered
+above would predict `Not Found` for all four, and it did not happen. So the endpoint's behaviour
+is not a simple function of age, and it is not a simple function of disposal either. **What is
+in doubt is the direction**; what is not in doubt is that the four readings differ.
 
-**This does not retract a single one of those numbers.** It retires the *mechanism* that was
-supposed to let a reader check them, and it means the guard has to be exercised **while a
-phase is running**, not at its close and never afterwards. §0.2 is what to do instead.
+**What this does NOT establish, and the earlier wording claimed:** nothing here shows that F2's
+and F3's published ids are unfetchable. `Not Found` on `/api/2.0/sql/statements/<id>` is
+ambiguous, and `/api/2.0/sql/history/queries` — the endpoint that actually answers about a past
+statement, and the only one that serves `result_from_cache` (§0.5) — was never pointed at them.
+**Their retrievability is UNMEASURED, not refuted.**
+
+**No number anywhere is retracted by any of this.** What is retired is the confidence that a
+published id is a durable handle, and the operational rule that follows is unchanged and is the
+only thing this section was ever really for: **exercise the guard while a phase is running**,
+and use the history endpoint when you do. §0.2 is what to do instead.
 
 ### 0.2 The claim this phase's headline rests on, RE-MEASURED rather than inherited
 
@@ -1191,7 +1201,7 @@ project has never been able to make, Files (CNPJ) and Databases (Postgres) meeti
 
 #### 2.6.6 Statement ids, with `from_cache` READ — the first time in this repository
 
-Nine ids, all checked at **00:07Z while the phase was running** and all resolving, with
+Nine ids, all checked at **00:07Z while the phase was running** ~~and all resolving~~, with
 `result_from_cache` read from `/api/2.0/sql/history/queries?include_metrics=true` because
 §0.5 established the manifest has no such key: **`False` for every one.**
 
@@ -1553,7 +1563,7 @@ identical from the outside.** It selected 21 and ran 21 — so the service conta
 came up and the tests reached a real database. That is the half `docs/f-db-run-evidence.md` §3
 recorded as unverifiable from this box, and it is now retired there.
 
-**Budget for the next phase:** ~20 minutes per CI round trip at 2,455 tests, up from F-API's
+**Budget for the next phase:** ~20 minutes per CI round trip at 2,455 tests *(the first-push baseline; the branch closed at 2,460 — see the second table below, and budget the RANGE)*, up from F-API's
 ~17 at 2,106 and F3's ~13 at 1,684.
 
 **CodeRabbit reported "Review completed" rather than "Review rate limited"**, and produced a
@@ -1575,7 +1585,7 @@ otherwise.**
 |---|---|---|
 | 1 | every artefact the phase promised exists, built by its own code | ✅ `bronze_merchant`, `hub_merchant`, `sat_merchant_dados`, `link_merchant_empresa`, `sat_eff_merchant_empresa`, two job YAMLs, ADR 0017 — all built by the code in this branch and counted in §2.6.4 |
 | 2 | every prediction marked confirmed or falsified, **the falsified ones kept** | ✅ §2.6.3 — nine of nine confirmed, and §1.3's three falsifiers each reachable and each failing to fire. **Earlier falsifications in this phase are kept in place**: T3's volatility claim, T4's float-digits reason, T5's loader claim, T11's stated consumer, and five wrong numbers about the controller's own work |
-| 3 | **CI green on the MERGED PR** | ✅ **PR #21 merged 2026-08-18T01:32:51Z as `43876b3`**, all four checks green on the merging revision — `test` 2,460 passed / 1 skipped, `postgres` 21 passed, `secret-scan`, and a CodeRabbit review that was *completed* rather than rate-limited |
+| 3 | **CI green on the MERGED PR** | ✅ **PR #21 merged 2026-08-18T01:32:51Z as `43876b3`**, with **THREE** CI checks green on the merging revision — `test` 2,460 passed / 1 skipped, `postgres` 21 passed, `secret-scan`. **CodeRabbit is counted separately and deliberately**: it is a *review*, not a required status check, and this file's own §A5 discipline is about not letting a bot's green stand in for something it is not. Its review was **completed** rather than rate-limited, and it found four real defects on the closing PR alone |
 | 4 | `docs/<phase>-run-evidence.md`, controller-verified separated from reported | ✅ every claim in this document carries one of the two labels, and §2.6.4 is the controller's own re-measurement of the run agent's headline |
 | 5 | `.plans/HANDOFF.md` updated, **including deleting what the phase made false** | ✅ the death count, the `from_cache` rule and the Task 4/5 state all corrected in place rather than overwritten |
 | 6 | what remains **unexercised** listed as unexercised | ✅ §3, accumulated as the phase ran rather than reconstructed at its end, including three refusals that *passed rather than fired* |
@@ -1591,7 +1601,17 @@ APIs, Databases — and the thing this last one bought that none of the other th
 **hard DELETE**, which is why sixteen effectivity windows carry a real closing row and this
 lakehouse has finally end-dated something.
 
-> **One regress this close does NOT pretend to escape.** This section records CI round 2, and
+> **AND THE CLOSING PR ITSELF DREW FOUR MORE FINDINGS, ALL REAL, ALL MINE.** CodeRabbit read the
+> docs-only PR that carries this section and found: the §0.1 amendment **withdrew a bound and
+> left three conclusions standing on it** — the species the amendment is about, committed inside
+> it; §2.6.6 still said *"all resolving"* after the correction established that the endpoint
+> which answered was never recorded; the next-phase budget quoted 2,455 where this section
+> establishes 2,460; and this very row said *"all four checks"* over **three** CI checks plus a
+> review. **A closing section is not a safe place**, and the count of five wrong numbers about
+> the author's own work in this document is now the count at the moment it was written, not a
+> total.
+>
+> > **One regress this close does NOT pretend to escape.** This section records CI round 2, and
 > the commit that records it is itself a change that CI ran again on. **A document cannot
 > contain the verdict on its own final revision** — F3 hit the same wall and spent PR #19 on one
 > line about it. What is quotable is what is written here: the checks that were green on the
