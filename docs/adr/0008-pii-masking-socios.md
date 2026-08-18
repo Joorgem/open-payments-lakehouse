@@ -117,6 +117,50 @@ Delta refuses a mistyped column rather than casting it.
 
 ### Fail-closed, and why that is the right direction
 
+> **MEASURED 2026-08-18, during F4's measurement pass: THE PERMISSIVE HALF CANNOT BE OPENED AS
+> WRITTEN, and this is stronger than "untested".** `is_account_group_member` resolves **account**
+> groups only. Measured on this workspace: a workspace-local group was created, the user was
+> added to it via SCIM, and `is_account_group_member('<that group>')` returned **false** while
+> `is_member('<that group>')` returned **true**. Of the account-level groups, exactly one
+> resolves — `account users`, i.e. everyone — and `databricks account groups list` returns
+> `Error: Not Found`, because the workspace host is not an account host and account SCIM is not
+> reachable with this token.
+>
+> **So `opl_pii_readers` cannot be created in a form that satisfies this predicate from this
+> box.** `src/opl/bronze/masking.py:173`'s *"it becomes correct the moment `opl_pii_readers`
+> exists"* names a moment that cannot arrive here.
+>
+> **THE FAIL-CLOSED ARGUMENT BELOW IS UNAFFECTED AND IS WHY THIS IS A CORRECTION AND NOT A
+> RETRACTION** — the mask hides, always, and has hidden 55,827,243 rows. What is wrong is the
+> claim that the control is merely dormant. **The repair is F4's decision** — switch the
+> predicate to `is_member`, which was measured working, or state that the control is
+> permanently closed here — and it is deliberately not taken in this note, because measuring a
+> fact and choosing a fix are different acts and this project separates them.
+>
+> **A CLAIM PUBLISHED HERE ON 2026-08-18 WAS TOO STRONG AND IS WITHDRAWN THE SAME DAY, BEFORE
+> IT MERGED.** It read: *"the revealing half is now measured anyway … two principals read the
+> same column of the same table at the same moment — one got cleartext, the other `***` … the
+> sentence below about the permissive branch being untested by construction was true when
+> written and is no longer."*
+>
+> **What was actually measured is that A UC column mask can reveal — not that THIS one can.**
+> The experiment ran against a **scratch** mask whose predicate was `is_member(<a scratch
+> group>)`. **The mask installed on `bronze_cnpj_socios` today is still this ADR's**, with
+> `is_account_group_member('opl_pii_readers')` — `information_schema.routines` returns it
+> verbatim, and the owner reads `***` through it right now.
+>
+> **So the withdrawn sentence contradicted the paragraph immediately above it.** That paragraph
+> proves this predicate *cannot* return true here; the sentence claimed its branch had been
+> exercised. Both cannot hold, and the one that holds is the paragraph.
+>
+> **The permissive branch of THIS mask remains untested by construction**, exactly as the
+> section below says. What is new and survives: a service principal with an OAuth secret is
+> available on Free Edition, so a two-principal proof **is buildable** once the predicate is
+> repaired — which is F4's T4, and which must produce a **committed, re-runnable artefact**
+> rather than a session transcript. **The withdrawn claim had none**: no statement id, no
+> timestamp, no SQL, no surviving object. Caught by the F4 plan's provenance audit before this
+> ADR merged.
+
 `is_account_group_member` returns **false** for a group that does not exist. So in
 a workspace where `opl_pii_readers` was never created — which is the current state
 of this one — *every* reader sees `***`, including the table owner's own queries.
