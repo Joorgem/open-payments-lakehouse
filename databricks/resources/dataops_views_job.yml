@@ -56,6 +56,31 @@ resources:
             # hand it and nothing for a wrong value to reach.
             parameters: []
 
+        # F4 Task 3: ADR 0006's reversal condition 1, and NOT a gate change -- it reads
+        # staging and prints counts. It lives in THIS job rather than in one of its own
+        # because it is the same kind of thing as the views: imperative, total over the
+        # registry, parameterless, and worth nothing unless the wheel that produced it is
+        # the wheel somebody reviewed. Both facts follow: the revision guard above already
+        # covers it, and a new job YAML would have had to be classified in
+        # `tests/test_job_yaml_launch_guards.py`'s exact list for a guard it would then
+        # duplicate.
+        #
+        # NO `depends_on` ON `create_views`, deliberately. It reads the STAGING TABLES
+        # directly and reads no view, so ordering it after the view creation would
+        # manufacture a dependency that does not exist -- and would make a view failure
+        # swallow a measurement that had nothing to do with it. It depends on the guard
+        # for the reason every task in this file does.
+        - task_key: measure_rule_overlap
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/measure_rule_overlap.py
+            # No parameters, and the task refuses any. Its counts are total over the
+            # registry and over every batch in each staging table, so there is neither a
+            # table nor a batch to hand it.
+            parameters: []
+
       environments:
         - environment_key: opl_env
           spec:

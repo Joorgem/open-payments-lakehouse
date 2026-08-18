@@ -439,6 +439,59 @@ checkable:
    adopted, is adopted for what it does and not as a workaround for a wiring
    defect.
 
+#### Where the three stand, 2026-08-18 (F4)
+
+Recorded here rather than left to be reassembled from three commits, because the whole
+point of stating checkable conditions is that someone can check them without a git
+archaeology session. **Two have moved. The decision has not, and cannot on these two.**
+
+1. **SHIPPED, F4 Task 3.** `src/opl/bronze/rule_overlap.py` is the all-matching-rules
+   aggregate this condition asks for: one aggregate pass per (table, batch) counting the
+   rows each rule matches **independently**, plus the rows matching two or more, over
+   every registered contract — including `payments`, `ptax`, `merchant` and `lookup`,
+   none of which the six cells above covered. `rescued_data_present` is counted apart
+   from the rules, because it is not one: it lives in `opl.bronze.dq`, above every
+   per-table rule, and it is 2,000 of the 5,589 rows in the live quarantines.
+   `databricks/src/measure_rule_overlap.py` prints the numbers; it is total over
+   `REGISTRY` and takes no parameters.
+
+   **It is a measurement and not a gate change.** The gate still reports the first match
+   (`_dq_reject_reason` is untouched), still fails closed on any reject, and no tolerance
+   of any kind exists. That ordering is this ADR's own requirement — the count "must ship
+   BEFORE any per-reason tolerance, never with it" — so shipping it is compliance with
+   the condition, not progress towards reversing the decision. All three are required.
+
+   **What it measured, 2026-08-18, over all 15 (table, batch) pairs in the workspace —
+   337,776,032 staged rows.** Every rule of every contract counted independently:
+   **`rules_matched_2_or_more` is 0 in all fifteen**, and so is the companion count of
+   rows carrying `rescued_data_present` alongside a matching rule. So the overlap
+   ["measured" above](#rejected-a-per-reason-threshold--and-this-one-fails-structurally)
+   over six cells and three tables now stands over fifteen cells and seven contracts, and
+   **the hole is still latent rather than open** — for `payments`, `ptax`, `merchant` and
+   `lookup` as well, none of which the six cells covered. Three things fell out of the
+   same pass and each is a re-derivation of something on this page rather than a new
+   claim: `empresas` 1 and 1, `socios` 1,797 and 1,786 — unchanged; **`estabelecimentos`
+   `encoding_replacement_char` = 4 in BOTH months**, which is the `†` footnote's
+   correction re-derived from the deployed rule set instead of from a hand-written query;
+   and the fifteen pairs' rejects total 5,593 against 5,589 rows in the live quarantines,
+   the difference being exactly those four 2026-06 rows the narrower gate promoted
+   un-flagged. `payments` batch `592660596679630` carries 2,000 `rescued_data_present`
+   and **zero matching rules**, which says F1b's injected drift adds a field and damages
+   no contract column — nothing is hidden underneath it.
+
+   These were taken by executing the shipped projection against the SQL warehouse
+   read-only, ahead of the job task's first workspace run; the run and its statement ids
+   belong to `docs/f4-run-evidence.md`.
+2. **NOT SHIPPED, AND NO CODE CAN SHIP IT.** This condition is evidentiary: it asks for
+   at least six monthly observations per table with a reject count ≥ 10. empresas'
+   numerator is 1 and estabelecimentos' is 0 for the family a threshold would tolerate,
+   and the only thing that moves either is the source getting dirtier — which is the
+   event the gate exists to catch. Writing more code cannot close it, and the fact that
+   condition 1 is now closed must not be read as two-thirds of a case for a threshold.
+3. **SHIPPED, F4 Task 2**, which wired `reclaim_landing` onto the triage path. Measured
+   on the 2026-08-18 run: 8,212,278,423 B freed — the 8.21 GB of 2026-06 CSVs this
+   section names as the standing residue.
+
 ### The warning for whoever applies this to a month nobody here has seen
 
 **Every rate on this page is a rate of the rule set deployed when it was

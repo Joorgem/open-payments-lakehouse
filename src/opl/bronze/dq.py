@@ -29,7 +29,32 @@ REJECT_COLUMN = "_dq_reject_reason"
 # clean. F1b's whole drift proof is that this fires.
 RESCUED_DATA_COLUMN = "_rescued_data"
 
+# The verdict that column produces, and the one reason string in this gate that is NOT a
+# rule -- it is applied here, above every per-table rule, and appears in no `rules_for`
+# set. Named rather than left as the literal it was inside `_reject_reason` because
+# `opl.bronze.rule_overlap` reports it as a category of its own and MUST NOT spell it a
+# second time: the two spellings would drift in the direction that does not announce
+# itself, leaving a report that names a reason no quarantine row carries.
+RESCUED_REASON = "rescued_data_present"
+
 Rules = list[tuple[str, Callable[[], Column]]]
+
+
+def rescued_condition(df: DataFrame) -> Column:
+    """Whether Auto Loader rescued anything for this row -- the gate's top verdict.
+
+    Extracted from `_reject_reason` unchanged, expression for expression, so that
+    `opl.bronze.rule_overlap` can count the same fact the chain branches on rather than
+    rebuild it. A frame with no `_rescued_data` column is the local-batch shape and is
+    not drift: `F.lit(None).isNotNull()` is false for every row, which is the same "this
+    frame is a different shape" handling the per-table rules get from
+    `skipped_rules`."""
+    column = (
+        F.col(RESCUED_DATA_COLUMN)
+        if RESCUED_DATA_COLUMN in df.columns
+        else F.lit(None)
+    )
+    return column.isNotNull()
 
 
 def skipped_rules(
@@ -118,12 +143,7 @@ def _reject_reason(df: DataFrame, rules: Rules) -> Column:
     A skip is SILENT HERE and reported by the job task (`skip_notice`): this
     function runs in unit tests on bare frames constantly, so a print here would
     be noise everywhere and a warning nowhere."""
-    rescued = (
-        F.col(RESCUED_DATA_COLUMN)
-        if RESCUED_DATA_COLUMN in df.columns
-        else F.lit(None)
-    )
-    chain = F.when(rescued.isNotNull(), F.lit("rescued_data_present"))
+    chain = F.when(rescued_condition(df), F.lit(RESCUED_REASON))
     # Asked, not re-decided, so the notice a task prints and the chain built here
     # can never describe different gates.
     skipped = {reason for reason, _ in skipped_rules(df.columns, rules)}
