@@ -176,8 +176,17 @@ and the ~48 GB/month floor survives as a projection of what accumulates when nob
 
 ### 0.6 GOVERNANCE: THE MASK CANNOT BE OPENED, AND ONE CLAIM ABOUT IT WAS WITHDRAWN
 
-**Controller-verified.** `masking.py:63` uses `is_account_group_member('opl_pii_readers')`; the
-`information_schema.routines` definition is unchanged; the owner reads `***` through it right now.
+**Controller-verified at Task 0.** `masking.py` used `is_account_group_member('opl_pii_readers')`;
+the `information_schema.routines` definition was unchanged; the owner read `***` through it.
+
+> **STALE LINE REFERENCE, corrected 2026-08-18.** This read *"`masking.py:63` uses …"* in the present
+> tense. Task 5 repaired the predicate: the module's line 79 now emits `is_member(...)`, and 63 is a
+> docstring line. **The deployed function is still the old one** — `information_schema.routines`
+> returns `is_account_group_member` with `last_altered 2026-08-03`, because the repair only reaches
+> the workspace when `ensure_masked_table` runs. **Shipped is not deployed**, and there is no
+> exposure either way: both predicates return false for the only principal in this workspace.
+> Caught by Task 5's independent reviewer, in a paragraph a later commit had edited around without
+> reading.
 **The permissive branch of this project's mask remains untested by construction.**
 
 **A claim to the contrary was published on this branch on 2026-08-18 and withdrawn the same day,
@@ -214,6 +223,19 @@ used has since been deleted. **It was caught by an audit reading the PR's own te
   > — `INSUFFICIENT_PERMISSIONS`, SQLSTATE 42501, measured **while the principal was still in the
   > group**. So the fast-closing control here is the **grant**, not the membership, and that is what
   > the two-principal differential is built on.
+  >
+  > **AND A THIRD TRIAL RECONCILED THE TWO, WHICH IS BETTER THAN EITHER.** Task 5's independent
+  > reviewer measured removal at **~5 m 04 s** — about 30% longer than Task 5's 3 m 54 s, so **that
+  > figure is a lower bound from a single trial and not a bound** — and measured addition visible in
+  > **4 seconds**. The difference is not noise and it is not disagreement: the reviewer's group was
+  > **created with the member already in it**, so no principal had ever resolved it to `false`, while
+  > Task 5 added a member to a group its reading principal had already read as false **twelve times**.
+  >
+  > **So what takes minutes is expiring a cached NEGATIVE, not propagating a membership.** All three
+  > sources are now consistent, none of them measured wrong, and the operational rule is sharper than
+  > any of the individual numbers: **a principal that has already been refused stays refused for
+  > minutes after it is authorised** — which is a usability cost, not a safety one — **while the
+  > safety-critical direction, withdrawal, is the `REVOKE`, and that is immediate.**
 
 **Unbacked and not to be cited without a re-run:** the two-principal transcript (principal deleted),
 the ABAC demonstration (policy removed), and ~~the "70 governed tag policies" (no endpoint named, and
@@ -221,12 +243,29 @@ the provenance lens could reach none of `/api/2.0/tag-policies`, `/api/2.1/tag-p
 `/api/2.0/account/tag-policies`)~~.
 
 > **THE TAG CLAIM IS BACKED, AND THE ENDPOINT IS NOW ON THE RECORD.** Task 5 found it:
-> `GET /api/2.1/tag-policies?page_size=200` returns **`tag_policies: 70`** with
-> `next_page_token: null`, including `class.name`, `class.br_cpf` and `class.br_cnpj`. The
-> provenance lens reached nothing because it queried the path without the page size and because
-> `/api/2.0/tag-policies` answers only that it is deprecated — **while naming the 2.1 path in its own
-> reply**. So the number was right and its provenance was recoverable; what was missing was one
-> parameter.
+> `GET /api/2.1/tag-policies` returns **`tag_policies: 70`**, including `class.name`,
+> `class.br_cpf` and `class.br_cnpj`. `/api/2.0/tag-policies` answers only that it is deprecated —
+> **while naming the 2.1 path in its own reply**.
+>
+> > **TWO THINGS THIS PARAGRAPH SAID ON 2026-08-18 ARE WITHDRAWN THE SAME DAY, AND BOTH WERE THE
+> > CONTROLLER'S.** They are the species this very paragraph was celebrating the phase for hunting.
+> >
+> > ~~*"with `next_page_token: null`"*~~ — **there is no such key.** Controller-re-verified: the
+> > response body's top-level keys are `['tag_policies']` and nothing else. Publishing `null` for a
+> > field nobody was served is **a structural absence printed in the shape of a measurement** —
+> > verbatim the defect `.plans/sql.sh`'s own header retracts for `from_cache: None`. **The
+> > completeness conclusion survives and now rests on what actually supports it: 70 policies came
+> > back in one page.**
+> >
+> > ~~*"the provenance lens reached nothing because it queried the path without the page size …
+> > what was missing was one parameter"*~~ — **false.** Controller-re-verified:
+> > `GET /api/2.1/tag-policies` **with no parameters at all returns all 70**. Whatever defeated the
+> > earlier audit, it was not the page size. **That sentence was an explanation of another agent's
+> > failure, published without testing the explanation** — which is the same error as publishing a
+> > number without measuring it, and it is worse for being about somebody else's work.
+> >
+> > Both caught by Task 5's independent reviewer, in the commit that was congratulating this phase
+> > for catching them elsewhere.
 >
 > **And the thing worth knowing costs more than the count.** Those policies' allowed-value lists are
 > **empty**, measured: `SET TAGS ('class.name' = 'personal_name')` is **refused** and
