@@ -21,14 +21,14 @@ and did not:** `docs/f0-validation-report.md` carries five premises of its own �
 availability, PTAX reachability — and **not one is about a database** (`grep -i postgres` → 0
 hits), while master spec §9 lists F0 as standing up "Docker Redpanda/**Postgres**/Spark".
 
-### 0.1 THE PROVENANCE GUARD THIS PROJECT RELIES ON HAS AN EXPIRY DATE, AND NOBODY HAD MEASURED IT
+### 0.1 THE PROVENANCE GUARD THIS PROJECT RELIES ON WAS ASSUMED DURABLE, AND NOBODY HAD MEASURED IT
 
 **Controller-verified.** F-API §3.1 established a rule this project has leaned on since:
 
 > *"Checking that a published id resolves costs one API call and is the cheapest guard this
 > project has."*
 
-It is a good rule and **it decays**. `GET /api/2.0/sql/statements/<id>` against the `opl-free`
+It is a good rule and **it had never been checked**. `GET /api/2.0/sql/statements/<id>` against the `opl-free`
 workspace, four ids of three vintages, run 2026-08-15:
 
 | statement id | published by | ran | result |
@@ -97,6 +97,15 @@ workspace, four ids of three vintages, run 2026-08-15:
 > amendment did the thing the amendment is about**, which is why the correction is inline and
 > the original wording is quoted rather than deleted.
 
+> **AND THE GREP THAT FOUND THE LAST TWO SITES MISSED THIS SECTION'S OWN HEADER, FOR A REASON
+> WORTH KEEPING.** The header read *"HAS AN EXPIRY DATE"* and the topic sentence *"it decays"* —
+> both in this document's own voice, unstruck, directly above the blocks withdrawing exactly
+> that. **The controller's grep was case-sensitive and this document SHOUTS its headers**:
+> `grep expiry` returns 2 hits, `grep -i expiry` returns 3, and the third is the title. Found by
+> the independent reviewer dispatched because CodeRabbit returned *"Review rate limited"* on the
+> push that carried the fixes — which §A5 treats as absence, not approval. **A retraction that
+> closes by grep closes by `grep -i`.**
+
 **What the four readings actually support.** Two ids returned `state: CLOSED` and two returned
 `was not found`, and that **asymmetry is real and unexplained** — the disposal story offered
 above would predict `Not Found` for all four, and it did not happen. So the endpoint's behaviour
@@ -109,7 +118,7 @@ ambiguous, and `/api/2.0/sql/history/queries` — the endpoint that actually ans
 statement, and the only one that serves `result_from_cache` (§0.5) — was never pointed at them.
 **Their retrievability is UNMEASURED, not refuted.**
 
-**No number anywhere is retracted by any of this.** What is retired is the confidence that a
+**No number about the vault's or the star's headline measurements is retracted by any of this** — the scope the original wording had, restored, because the broadened version was false on this section's own terms: the 8–35 hour band IS a number this document published and withdrew.** What is retired is the confidence that a
 published id is a durable handle, and the operational rule that follows is unchanged and is the
 only thing this section was ever really for: **exercise the guard while a phase is running**,
 and use the history endpoint when you do. §0.2 is what to do instead.
@@ -1617,8 +1626,8 @@ lakehouse has finally end-dated something.
 > the author's own work in this document is now the count at the moment it was written, not a
 > total.
 >
-> > **One regress this close does NOT pretend to escape.** This section records CI round 2, and
-> the commit that records it is itself a change that CI ran again on. **A document cannot
-> contain the verdict on its own final revision** — F3 hit the same wall and spent PR #19 on one
-> line about it. What is quotable is what is written here: the checks that were green on the
-> revision that merged.
+> > > **One regress this close does NOT pretend to escape.** This section records CI round 2, and
+> > the commit that records it is itself a change that CI ran again on. **A document cannot
+> > contain the verdict on its own final revision** — F3 hit the same wall and spent PR #19 on
+> > one line about it. What is quotable is what is written here: the checks that were green on
+> > the revision that merged.
