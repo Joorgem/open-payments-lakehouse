@@ -27,8 +27,11 @@ SEVEN STATUSES, AND THE ORDER OF THE LADDER IS THE WHOLE DESIGN.
 
   * `paused_by_decision` -- FIRST, and it outranks everything including a table with no
     rows at all. `lookup` is two snapshot months behind its three CNPJ siblings (2026-06
-    against 2026-07, with merchant/payments/ptax at 2026-08) and would read 66 days
-    overdue against a 45-day expectation. It is not overdue; it is a scope decision
+    against 2026-07, with merchant/payments/ptax at 2026-08). Measured 2026-08-18 21:55Z:
+    its `last_source_date` is 2026-06-13, so `source_age_days` is 66 -- which, against the
+    45-day expectation its siblings carry, is 21 days PAST, not 66. The age and the
+    overshoot are different numbers and this header used to print the first as the second.
+    Either way it is not overdue; it is a scope decision
     somebody recorded, and `cadence_note` prints the citation beside it. A metric that
     cannot tell "deliberately not ingested" from "ingest broken" is the alert an operator
     mutes in week one, after which it protects nothing.
@@ -131,7 +134,22 @@ def _quote(text: str) -> str:
 
     These strings are English prose written for an operator to read, so an apostrophe is a
     matter of time. Refusing the character instead would push the escaping problem into the
-    prose, which is the half of this that a reviewer would have to keep noticing."""
+    prose, which is the half of this that a reviewer would have to keep noticing.
+
+    THIS FUNCTION IS NOT REUSED, AND THAT IS THE HAZARD'S CURRENT SHAPE RATHER THAN ITS
+    CLOSURE. Every other site in this repository that interpolates a Python value into a
+    SQL string was swept -- `reconcile._REMEDY_PREFIX`/`_SUFFIX` and `_VERDICT_LADDER`,
+    `promote.py:177`, `retention.py:262`, `reclaim_landing.py:329/383/402`,
+    `dq_gate_batch.py:100`, `backfill_masks.py:90/91`, `cnpj_pool.py:167`,
+    `ptax_source.py:202` -- and NONE of them is exposed today. Not because any of them
+    escapes: because each interpolates an identifier, a registry key, an enum constant or a
+    batch id, none of which has ever contained an apostrophe. So the apostrophe hazard in
+    this repository is LATENT, not closed. The day one of those constants gains one -- a
+    remedy line rephrased, a verdict given a possessive -- it behaves exactly like the
+    doubled form does here: the character is deleted, the statement parses, and nothing
+    raises. Anyone building a SQL string out of English text should reach for this function
+    rather than an f-string, and anyone adding prose to one of the constants above should
+    know that the site around it does not."""
     return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 

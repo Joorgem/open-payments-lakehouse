@@ -7,14 +7,20 @@
 # "deliberately not", both of which are questions about a job's tasks. A dashboard has
 # no task and cannot answer either.
 #
-# THE WAREHOUSE ID IS NOT COMMITTED, AND THAT IS THE POINT OF `${var.wh}`.
-# `databricks bundle generate dashboard` writes the literal id into the YAML, and a
-# warehouse id is workspace-scoped platform state: committed, it makes
-# "reproducible from GitHub" false for the one artefact a reviewer will try to redeploy
-# into their own workspace. The `lookup:` block in `databricks.yml` resolves the id from
-# the warehouse's NAME at validate time -- measured 2026-08-18, `bundle validate -o json`
-# renders `"wh": {"lookup": {...}, "value": "13cf10c8..."}` -- so the name is what is in
-# the repository and the id is what is in the deploy.
+# THE WAREHOUSE ID IS COMMITTED AS NO RESOURCE VALUE, AND THAT IS THE POINT OF
+# `${var.wh}`. The wording matters: the literal id IS in this repository, once, inside the
+# `databricks.yml` comment that argues against making it a value -- so "never committed",
+# which is what this header said first, is false as written and true as meant.
+# `databricks bundle generate dashboard` writes the literal id into the YAML as the
+# resource's `warehouse_id`, and a warehouse id is workspace-scoped platform state: as a
+# VALUE it makes "reproducible from GitHub" false for the one artefact a reviewer will try
+# to redeploy into their own workspace. The `lookup:` block in `databricks.yml` resolves
+# the id from the warehouse's NAME at validate time -- measured 2026-08-18, `bundle
+# validate -o json` renders `"wh": {"lookup": {...}, "value": "13cf10c8..."}` -- so the
+# name is what is in the repository and the id is what is in the deploy.
+# `tests/dataops/test_dashboard.py` sweeps the PARSED values of every committed bundle file
+# for it, which is the check the claim actually needs; the first version read raw text and
+# skipped `databricks.yml`, the one file where the string appears.
 #
 # `embed_credentials` IS LEFT AT ITS DEFAULT, WHICH IS FALSE, and that is a decision
 # rather than an omission: the dashboard then runs on the VIEWER's privileges. That is

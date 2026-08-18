@@ -14,6 +14,14 @@ step. Adding a view here is the whole of adding a view: the task issues it, the 
 lock covers it, and no new job and no new guard-list entry is needed
 (`databricks/resources/dataops_views_job.yml` already carries the revision guard).
 
+THAT SENTENCE USED TO BE TRUE ONLY BY INSPECTION, which is the weakest way for a claim
+spanning a module boundary to be true: nothing imported or AST-read
+`databricks/src/create_dataops_views.py`, so a second hand-written `spark.sql(...)` there
+would have created a view outside this list -- and outside the only lock that covers views
+at all -- with every test green. `tests/dataops/test_views.py::test_the_job_task_issues
+_exactly_the_ddls_this_module_publishes` now runs that task's `main([])` against a
+recording session and holds its statements equal to `all_view_ddls(DEFAULT)`, in order.
+
 ORDER IS THE ORDER THE TASK ISSUES THEM IN, and it is not load-bearing: none of these
 views reads another, so each `CREATE OR REPLACE` stands alone and a failure on any one
 leaves the rest as they were."""

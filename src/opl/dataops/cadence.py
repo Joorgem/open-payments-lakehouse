@@ -103,8 +103,10 @@ CADENCE: dict[str, Cadence] = {
     # 2026-06 alone, two snapshot months behind its three CNPJ siblings, and it is not
     # broken: F1.4b PR B recorded that 2026-07 lookups were out of scope for the phase
     # because the zips were never on disk. Without this entry the source-freshness metric
-    # reports it 66 days stale against a 45-day expectation and an operator either chases
-    # a decision somebody already took or mutes the alert.
+    # reports it 66 days old -- measured 2026-08-18 21:55Z, `_snapshot_ref_date` 2026-06-13
+    # -- which is 21 days PAST the 45-day expectation its siblings carry, and an operator
+    # either chases a decision somebody already took or mutes the alert. (The age and the
+    # overshoot are different numbers; this comment used to print the first as the second.)
     "lookup": Cadence(
         kind=PAUSED,
         every_days=None,

@@ -1,7 +1,13 @@
 # databricks/src/create_dataops_views.py
 """Job task: (re)create the DataOps views. Derives; writes no row anywhere.
 
-WHAT IT CREATES IS `opl.dataops.views.DATAOPS_VIEWS` AND NOTHING ELSE, which is why F4
+WHAT IT CREATES IS `opl.dataops.views.DATAOPS_VIEWS` AND NOTHING ELSE -- and that is now
+EXECUTED rather than asserted in a header. `tests/dataops/test_views.py::test_the_job_task
+_issues_exactly_the_ddls_this_module_publishes` runs `main([])` against a recording session
+and holds the statements it issues equal to `all_view_ddls(DEFAULT)`, in order. Until it
+existed, a second hand-written `spark.sql(...)` here would have created a view that the
+`dataops_` collision lock -- whose totality rests on this loop -- knew nothing about. It is
+also why F4
 Task 4 added two views here and no job, no task and no guard-list entry. The two it added
 -- `dataops_task_telemetry` over `system.lakeflow`/`system.query`, and `dataops_freshness`
 over bronze -- are the same kind of thing as Task 1's reconciliation: derived, idempotent,
@@ -27,9 +33,10 @@ IDEMPOTENT, and the idempotence is `CREATE OR REPLACE`, not `IF NOT EXISTS`. The
 distinction is argued in `reconcile.create_view_ddl`: `IF NOT EXISTS` is right for a
 table, whose rows must not be dropped, and wrong for a view, where it would leave an
 older definition standing while the run that was meant to replace it reports SUCCESS.
-That matters here because `max_retries: 0` does not prevent a retry -- measured, 20
-task-pairs across 6 task keys ran attempt 0 and attempt 1 -- so every statement this
-task issues must be safe to run twice.
+That matters here because `max_retries: 0` does not prevent a retry -- measured 2026-08-18
+21:55Z, 24 (job run, task key) pairs across 7 task keys ran two attempts -- so every
+statement this task issues must be safe to run twice. That count grows with the workspace,
+which is why it now carries the time it was read.
 
 WHAT IT DELIBERATELY DOES NOT DO: promote anything. `dataops_reconciliation` prints the
 `repromote_triaged_batch` command for every stranded batch and runs none of them.

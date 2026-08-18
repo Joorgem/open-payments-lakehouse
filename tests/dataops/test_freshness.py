@@ -40,7 +40,8 @@ _EMPTY_CONFIG = OplConfig(catalog="spark_catalog", schema=_EMPTY_SCHEMA)
 _ROWS: dict[str, tuple[str, str | None]] = {
     # Paused, and stale by any measure anyone could invent. Still not a fault.
     "lookup": ("2020-01", "date_sub(current_date(), 900)"),
-    # 400 days past a 45-day expectation.
+    # 400 days OLD, which is 355 days past a 45-day expectation. The two are different
+    # numbers and this comment used to print the age as the overshoot.
     "empresas": ("2026-07", "date_sub(current_date(), 400)"),
     "estabelecimentos": ("2026-07", "current_date()"),
     # Rows, a declared cadence, and no observable source date on any of them.

@@ -8,15 +8,22 @@ absent rather than zero. The view writes nothing and costs nothing until it is r
 job task that stamped timings would cost 15-30 s on jobs whose smallest tasks finish in
 16, and would measure the instrument.
 
-FOUR CORRECTIONS, EACH MEASURED AGAINST THE LIVE WORKSPACE ON 2026-08-18, AND EACH ONE
-IS A WRONG NUMBER THAT NOTHING WOULD HAVE REPORTED:
+EVERY SYSTEM-TABLE COUNT BELOW CARRIES A READING TIME, and that is not decoration. These
+tables grow with every run, so a bare count in a docstring is false by the next job and
+unfalsifiable afterwards -- which is how the first version of this header came to argue
+its own naming from an instance that had evaporated by the time a reviewer looked (see
+`no_sql_attributed`, below). Unless stated otherwise, every figure here was read at
+**2026-08-18 21:53-21:58 UTC** against the `opl-free` workspace.
+
+FOUR CORRECTIONS, EACH MEASURED AGAINST THE LIVE WORKSPACE, AND EACH ONE IS A WRONG
+NUMBER THAT NOTHING WOULD HAVE REPORTED:
 
 1. **The join key is `t.run_id`.** `q.query_source.job_info.job_task_run_id = t.job_run_id`
    returns ZERO rows and no error; `t.task_run_id` does not exist. On `t.run_id` the join
-   matches 143 of 273 task runs.
+   matches 145 of 274 task runs.
 
-2. **The timeline is sliced on the hour, so `run_id` is not unique in it.** 273 task runs
-   occupy 283 rows; one three-period row set belongs to a single 94-minute satellite load.
+2. **The timeline is sliced on the hour, so `run_id` is not unique in it.** 274 task runs
+   occupy 284 rows; one three-period row set belongs to a single 94-minute satellite load.
    Every consumer must group.
 
 3. **`execution_duration_seconds` IS NOT ADDITIVE ACROSS THOSE PERIODS -- it repeats.**
@@ -26,37 +33,79 @@ IS A WRONG NUMBER THAT NOTHING WOULD HAVE REPORTED:
    the run's own total. Same for `setup_` and `cleanup_`, which repeat their 1 on every
    period.
 
-4. **The `query.history` side fans out ~5x**, so it is aggregated to task-run grain
-   BEFORE the join. Read straight off the join, any per-task metric is multiplied by the
-   statement count.
+4. **The `query.history` side fans out 4.5x** -- 649 attributed statements over 145 task
+   runs -- so it is aggregated to task-run grain BEFORE the join. Read straight off the
+   join, any per-task metric is multiplied by the statement count.
 
 A NULL HERE MEANS "THE PLATFORM RECORDED NO STATEMENT", AND IT MUST NEVER RENDER AS 0.
-130 of 273 task runs match nothing, and they are not idle: `assert_deployed_revision`
-(41 runs), `check_bad_rows` (29), `fail_on_dq` (22), `unzip` (18) and `smoke` (14) issue
+129 of 274 task runs match nothing, and they are not idle: `assert_deployed_revision`
+(42 runs), `check_bad_rows` (29), `fail_on_dq` (22), `unzip` (18) and `smoke` (14) issue
 no SQL at all. `fail_on_dq` -- this phase's headline DQ event -- has zero rows in
 `system.query.history`. A dashboard showing `read_rows = 0` against it says the gate read
 no rows; the truth is that the platform knows nothing about the gate. This repository has
 found six guards whose output could not distinguish "passed" from "never ran", and this is
 that shape one level out.
 
-AND THE DISTINCTION IS LIVE, NOT HYPOTHETICAL: **15 task runs issued SQL that read
-exactly 0 rows** -- all four `ensure_masked_table` runs, three of 24 `dq_gate_batch`, three
-of 27 `promote`, two of three `create_views`. `create_views` appears on BOTH sides, so
-coalescing NULL to 0 would put two of its runs and one other in the same bucket while they
-mean opposite things. `sql_telemetry` names which side a row is on, and `statements` is the
-one column that decides: NULL there, and only there, means nothing was attributed.
+AND THE DISTINCTION IS LIVE, NOT HYPOTHETICAL: **16 task runs issued SQL that read
+exactly 0 rows** -- all four `ensure_masked_table` runs, all three `create_views`, three of
+27 `promote`, three of 24 `dq_gate_batch`, two of four `reclaim_landing` and the one
+`backfill_quarantine`. Coalescing NULL to 0 would put those 16 in the same bucket as the
+129 above while they mean opposite things. `sql_telemetry` names which side a row is on,
+and `statements` is the one column that decides: NULL there, and only there, means nothing
+was attributed.
 
-`no_sql_attributed` IS DELIBERATELY NOT SPELLED `no_sql_issued`, and one measurement is
-why. Of three `create_views` task runs -- a task whose entire body is
-`CREATE OR REPLACE VIEW` -- one is attributed no statement at all. So an empty right-hand
-side is a statement about `system.query.history`, not about the task, and naming it after
-the task's behaviour would have been a claim the data does not support.
+`no_sql_attributed` IS DELIBERATELY NOT SPELLED `no_sql_issued`, AND THE REASON IS NOT THE
+ONE THIS HEADER FIRST GAVE. It argued from an instance -- "of three `create_views` task
+runs, one is attributed no statement at all" -- and that instance is gone: all three now
+show `statements = 2, read_rows = 0`, with no fourth run in between. The vanished instance
+IS the mechanism, and it is `system.query.history`'s INGESTION LAG:
+
+  * Measured 2026-08-18 21:56:25Z: a statement of this session's own, completed 21:53:13Z,
+    was ABSENT from `system.query.history` three minutes later, and the table's newest row
+    sat 729 s behind `current_timestamp()`. The same lag read 599 s two minutes earlier and
+    1,349 s in an independent reading the same evening. It is minutes to tens of minutes
+    and it is not fixed.
+  * So a task run that finished inside that window is attributed nothing YET, and the
+    attribution appears later with nothing having run. A view that called that
+    `no_sql_issued` would be publishing a claim about the task from a fact about the table.
+
+WHICH IS WHY THE LABEL IS NOT BINARY. `sql_telemetry` has four values, and the two new ones
+exist so that "the record does not reach this run" cannot be read as "this run issued no
+SQL" -- the failure the whole column was added to prevent, one level further out:
+
+  * `measured`             -- statements were attributed. The metrics mean what they say.
+  * `not_yet_attributed`   -- the run ended AFTER the newest statement `query.history`
+                              holds, so the record has not caught up to it. The label is
+                              conservative in the right direction: `ended_at > watermark`
+                              proves the record cannot yet cover the run, while
+                              `ended_at <= watermark` only makes coverage likely, since
+                              ingestion is not strictly ordered.
+  * `older_than_history`   -- the run ended BEFORE the oldest statement `query.history`
+                              holds, so whatever it issued is outside the window the table
+                              retains. The retention figures for the two system tables are
+                              deliberately NOT asserted here as documented numbers: the
+                              view measures the window it actually has (`MIN(end_time)`)
+                              instead, which cannot go stale against a docs page. That this
+                              arm is live rather than theoretical is measured -- 10 task
+                              runs already sit before `query.history`'s oldest row, all of
+                              them `smoke`, which issues no SQL anyway. The day the two
+                              retentions diverge further, runs that DID issue SQL cross the
+                              same line, and this is the label they get.
+  * `no_sql_attributed`    -- the run sits INSIDE the window on both sides and the platform
+                              still holds nothing for it. This is the only one of the four
+                              that is evidence about the task.
+
+WHY THE WINDOW AND NOT A COLUMN. The two bounds are constant across every row, so
+publishing them per row is 274 copies of two timestamps; the label is the part a consumer
+branches on. `ds_task_runs` is `ORDER BY started_at DESC LIMIT 200`, so the rows a reader
+looks at FIRST are exactly the ones most exposed to the lag -- which is the whole reason
+this cannot stay a footnote in a docstring.
 
 ONE ROW PER ATTEMPT, NOT PER TASK, AND `attempt` IS HOW A CONSUMER SEES IT. `max_retries:
 0` does not prevent a retry: 24 (job run, task key) pairs in this workspace hold two
-`run_id`s, `fail_on_dq` alone accounting for ten. A sum grouped by task key therefore
-counts a retried task twice, and there is no way to make that not so -- both attempts
-really ran. What this view refuses to do is hide it.
+`run_id`s, across 7 task keys, `fail_on_dq` alone accounting for 11. A sum grouped by task
+key therefore counts a retried task twice, and there is no way to make that not so -- both
+attempts really ran. What this view refuses to do is hide it.
 
 WHY THE GROUP BY CARRIES `job_id`, `job_run_id` AND `task_key` RATHER THAN `MAX()`-ING
 THEM. They are attributes of a task run and cannot vary within one, so the two spellings
@@ -64,6 +113,19 @@ are equivalent today. They differ in how they fail: `MAX()` would silently pick 
 disagreeing task keys and label the row with it, while grouping emits two rows and breaks
 the run_id-is-unique property a reader can check. A loud wrong answer is the one this
 project keeps choosing.
+
+THERE IS NO `workspace_id` PREDICATE AND NO TIME BOUND, AND BOTH ARE SAFE ONLY BECAUSE OF
+A FACT ABOUT THIS WORKSPACE. `job_id`'s own column comment in `system.lakeflow.jobs` reads
+"Only unique within a single workspace", and this view groups and joins on `job_id` and
+`run_id` alone. Measured: `COUNT(DISTINCT workspace_id)` over the timeline is **1**, so
+there is nothing to collide with. THE DAY A SECOND WORKSPACE'S ROWS APPEAR IN THIS
+METASTORE -- a metastore shared across workspaces, or a federated `system` schema -- two
+different jobs with the same `job_id` merge into one row set and the numbers stay
+plausible. The fix is a `workspace_id` in every GROUP BY and in both join predicates; it
+is not written today because a column with one value is a predicate nobody can test.
+Likewise there is no `WHERE started_at > ...`: the view is total over what the platform
+retains, which is the honest default for a record whose whole point is that its edges are
+where the labels above come from.
 
 WHAT IS DELIBERATELY LEFT OUT. `system.query.history.from_result_cache` is a real column
 and it is not here: it is a property of a STATEMENT, and summing it to task-run grain
@@ -113,9 +175,16 @@ from dataclasses import dataclass
 # view can be in, so the prefix plus that module's lock is the whole of the protection.
 TASK_TELEMETRY_VIEW = "dataops_task_telemetry"
 
-# The two values of `sql_telemetry`, spelled once because a dashboard filters on them.
+# The four values of `sql_telemetry`, spelled once because a dashboard filters on them.
+# `MEASURED` is the only one that says the metrics mean something; of the other three, only
+# `NO_SQL_ATTRIBUTED` is evidence about the TASK -- the other two are facts about how far
+# `system.query.history` reaches. See the header's "WHICH IS WHY THE LABEL IS NOT BINARY".
 MEASURED = "measured"
 NO_SQL_ATTRIBUTED = "no_sql_attributed"
+NOT_YET_ATTRIBUTED = "not_yet_attributed"
+OLDER_THAN_HISTORY = "older_than_history"
+
+SQL_TELEMETRY_VALUES = (MEASURED, NOT_YET_ATTRIBUTED, OLDER_THAN_HISTORY, NO_SQL_ATTRIBUTED)
 
 
 @dataclass(frozen=True)
@@ -128,8 +197,8 @@ class SystemTables:
     a view whose SQL can never be executed anywhere but a workspace -- and this project has
     already shipped four guards that were green because nothing could run them. The tests
     point these three at local fixtures and drive the shipped string; `tests/dataops/
-    test_telemetry.py::test_the_shipped_view_reads_the_platforms_own_tables` pins that the
-    default is what deploys."""
+    test_views.py::test_the_telemetry_view_that_deploys_reads_the_platforms_own_tables`
+    pins that the default is what deploys."""
 
     timeline: str = "system.lakeflow.job_task_run_timeline"
     query_history: str = "system.query.history"
@@ -150,7 +219,13 @@ def _task_runs_sql(system: SystemTables) -> str:
     `MAX_BY(result_state, period_end_time)` rather than `MAX(result_state)`: every period
     but the last carries NULL, and what is wanted is the state AT THE END, not the
     alphabetically largest state the run ever showed. The two agree on every row in this
-    workspace and disagree the moment a run reports two terminal states.
+    workspace -- measured, ZERO runs here report two distinct terminal states -- and they
+    disagree the moment one does. The stakes are one-directional and that is why this is
+    `MAX_BY`: alphabetically `CANCELED < FAILED < SUCCEEDED`, so `MAX` does not garble a
+    state, it REPORTS A FAILED RUN AS SUCCEEDED and leaves every other number intact.
+    `tests/dataops/test_telemetry.py::test_the_state_is_the_one_the_run_ended_on_and_not
+    _the_largest_it_ever_showed` drives a constructed run that ends FAILED after a
+    SUCCEEDED period, because no observed row can tell the two apart.
 
     `MAX` on the three durations, never `SUM` -- see the header's correction 3."""
     return (
@@ -170,8 +245,9 @@ def _task_runs_sql(system: SystemTables) -> str:
 def _job_names_sql(system: SystemTables) -> str:
     """`job_id` to its current display name, deduped over an SCD table.
 
-    `system.lakeflow.jobs` keeps a row per change, so a rename fans the join out. One job
-    in this workspace already has two rows. `MAX_BY(name, change_time)` takes the latest.
+    `system.lakeflow.jobs` keeps a row per change, so a rename fans the join out. Measured
+    2026-08-18 21:53Z: 25 rows over 22 `job_id`s, so THREE jobs here already carry more
+    than one. `MAX_BY(name, change_time)` takes the latest.
 
     ROWS WITH A `delete_time` ARE KEPT. A deleted job's task runs still happened, and
     filtering them would drop task runs from a telemetry view -- silently, and exactly for
@@ -183,7 +259,7 @@ def _job_names_sql(system: SystemTables) -> str:
 
 
 def _statements_sql(system: SystemTables) -> str:
-    """`query.history` summed to task-run grain, which is what stops the ~5x fan-out.
+    """`query.history` summed to task-run grain, which is what stops the 4.5x fan-out.
 
     `statements` IS THE DISCRIMINATOR, not the metrics. `SUM` skips NULLs, so a task run
     whose statements were all recorded without a `read_rows` would show `read_rows` NULL
@@ -201,26 +277,71 @@ def _statements_sql(system: SystemTables) -> str:
     )
 
 
+def _history_window_sql(system: SystemTables) -> str:
+    """The two edges of what `query.history` actually holds. One row, two timestamps.
+
+    NOT FILTERED BY `job_task_run_id`. The window wanted is the table's ingestion and
+    retention frontier, which interactive statements evidence just as well as job ones --
+    and restricting it to job statements would move the frontier by however long this
+    workspace happened to go without running a job, which is a property of an operator's
+    week rather than of the table.
+
+    WHAT IT COSTS: a second aggregate over `query.history` -- one column, no join, no
+    grouping -- on a table this view already reads once. It is a view, so nothing pays it
+    until somebody reads it, and the alternative was a label that is wrong for every task
+    run finishing inside a lag measured in minutes to tens of minutes."""
+    return (
+        "SELECT MIN(end_time) AS oldest_statement, MAX(end_time) AS newest_statement\n"
+        f"  FROM {system.query_history}"
+    )
+
+
+def _sql_telemetry_case() -> str:
+    """The four-value label, first-match-wins, and the ORDER is the argument.
+
+    `MEASURED` first: an attributed run needs no window reasoning. Then the two edges,
+    BEFORE the bare `NO_SQL_ATTRIBUTED` else -- reversing that would let a run the record
+    cannot reach be reported as a run the record reached and found empty, which is the
+    exact substitution `sql_telemetry` exists to refuse.
+
+    `newest_statement IS NULL` (an empty or unreadable `query.history`) folds into
+    `NOT_YET_ATTRIBUTED` rather than into the ELSE. With no statement recorded anywhere,
+    "nothing has been attributed yet" is literally true, and the ELSE would instead claim
+    the record covers a run it demonstrably does not."""
+    return (
+        f"CASE WHEN s.statements IS NOT NULL THEN '{MEASURED}'\n"
+        "    WHEN w.newest_statement IS NULL OR t.ended_at > w.newest_statement\n"
+        f"      THEN '{NOT_YET_ATTRIBUTED}'\n"
+        f"    WHEN t.ended_at < w.oldest_statement THEN '{OLDER_THAN_HISTORY}'\n"
+        f"    ELSE '{NO_SQL_ATTRIBUTED}' END AS sql_telemetry"
+    )
+
+
 def task_telemetry_sql(system: SystemTables = SYSTEM) -> str:
     """The view body: one row per task-run attempt, with its statements where there are any.
 
     LEFT JOINs on both sides and for the same reason -- a task run whose job has aged out
-    of `system.lakeflow.jobs` (three of them here) and a task run that issued no SQL (130)
-    are both facts to report, and an inner join would delete them from the record."""
+    of `system.lakeflow.jobs` (three of them here) and a task run that issued no SQL (129)
+    are both facts to report, and an inner join would delete them from the record.
+
+    `CROSS JOIN history_window` is a one-row broadcast, not a fan-out: the CTE aggregates
+    the whole of `query.history` to a single row, so every task run is paired with the same
+    two timestamps and the row count is unchanged."""
     return (
         f"WITH task_runs AS (\n  {_task_runs_sql(system)}\n),\n"
         f"job_names AS (\n  {_job_names_sql(system)}\n),\n"
-        f"statements AS (\n  {_statements_sql(system)}\n)\n"
+        f"statements AS (\n  {_statements_sql(system)}\n),\n"
+        f"history_window AS (\n  {_history_window_sql(system)}\n)\n"
         "SELECT t.run_id, t.job_run_id, t.job_id, j.job_name, t.task_key,\n"
         "  ROW_NUMBER() OVER (\n"
         "    PARTITION BY t.job_run_id, t.task_key ORDER BY t.started_at\n"
         "  ) AS attempt,\n"
         "  t.started_at, t.ended_at, t.result_state,\n"
         "  t.setup_seconds, t.execution_seconds, t.cleanup_seconds, t.timeline_periods,\n"
-        f"  CASE WHEN s.statements IS NULL THEN '{NO_SQL_ATTRIBUTED}'\n"
-        f"    ELSE '{MEASURED}' END AS sql_telemetry,\n"
+        f"  {_sql_telemetry_case()},\n"
         "  s.statements, s.read_rows, s.written_rows, s.written_bytes\n"
         "FROM task_runs t\n"
+        "  CROSS JOIN history_window w\n"
         "  LEFT JOIN job_names j ON j.job_id = t.job_id\n"
         "  LEFT JOIN statements s ON s.run_id = t.run_id"
     )

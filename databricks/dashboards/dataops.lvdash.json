@@ -16,7 +16,9 @@
       "displayName": "Which task keys the platform records SQL for, and which it does not",
       "queryLines": [
         "SELECT task_key, sql_telemetry, COUNT(*) AS task_runs,\n",
-        "  SUM(CASE WHEN read_rows = 0 THEN 1 ELSE 0 END) AS runs_reading_zero_rows,\n",
+        "  COUNT(read_rows) AS runs_with_a_row_count,\n",
+        "  SUM(CASE WHEN read_rows = 0 THEN 1 WHEN read_rows > 0 THEN 0 END)\n",
+        "    AS runs_reading_zero_rows,\n",
         "  MAX(execution_seconds) AS slowest_seconds\n",
         "FROM workspace.default.dataops_task_telemetry\n",
         "GROUP BY task_key, sql_telemetry\n",
@@ -105,6 +107,7 @@
                     { "name": "task_key", "expression": "`task_key`" },
                     { "name": "sql_telemetry", "expression": "`sql_telemetry`" },
                     { "name": "task_runs", "expression": "`task_runs`" },
+                    { "name": "runs_with_a_row_count", "expression": "`runs_with_a_row_count`" },
                     { "name": "runs_reading_zero_rows", "expression": "`runs_reading_zero_rows`" },
                     { "name": "slowest_seconds", "expression": "`slowest_seconds`" }
                   ]
@@ -119,13 +122,14 @@
                   { "fieldName": "task_key", "displayName": "task" },
                   { "fieldName": "sql_telemetry", "displayName": "SQL telemetry" },
                   { "fieldName": "task_runs", "displayName": "task runs" },
+                  { "fieldName": "runs_with_a_row_count", "displayName": "runs with a read-rows number" },
                   { "fieldName": "runs_reading_zero_rows", "displayName": "runs that read 0 rows" },
                   { "fieldName": "slowest_seconds", "displayName": "slowest (s)" }
                 ]
               },
               "frame": {
                 "showTitle": true,
-                "title": "no_sql_attributed is not zero - these tasks issue no SQL the platform records"
+                "title": "sql_telemetry has four values - only no_sql_attributed is about the task"
               }
             }
           },

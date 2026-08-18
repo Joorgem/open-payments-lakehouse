@@ -218,6 +218,17 @@ _NON_JOB_RESOURCES = {
     ),
 }
 
+# THE RESOURCE KINDS THAT RUN NO CODE OF THIS PROJECT'S, WHICH IS THE PROPERTY THE THIRD
+# LIST ACTUALLY DEPENDS ON. The first spelling of `test_the_non_job_resources_declare_no
+# _job_at_all` asked only for the absence of a `jobs` key, and that is narrower than the
+# question: a DAB `pipelines:` resource runs a wheel, declares no `jobs` key at all, and
+# would therefore have been filed here and never asked whether a run of it against another
+# revision's wheel matters. Nothing like that exists in this bundle today, which is exactly
+# when the vocabulary is cheap to widen. An ALLOW-LIST rather than a deny-list, for the
+# reason the glob was not narrowed: a check that skips what it does not recognise reports
+# green over the one resource nobody classified.
+_RESOURCE_KINDS_THAT_RUN_NOTHING = frozenset({"dashboards"})
+
 
 def test_every_yaml_under_resources_is_classified():
     """The classification is TOTAL over `databricks/resources/*.yml`.
@@ -243,20 +254,29 @@ def test_every_yaml_under_resources_is_classified():
     )
 
 
-def test_the_non_job_resources_declare_no_job_at_all():
+def test_the_non_job_resources_declare_nothing_that_runs_this_projects_code():
     """THE THIRD LIST IS NOT A PLACE TO PUT THINGS, and this is what makes that true.
 
-    Without this, a job YAML filed under `_NON_JOB_RESOURCES` passes the totality check
-    and is never asked for a revision guard -- so the third category, added to keep an
-    exact classification honest, would become the way around it. A resource file declares
-    no `resources.jobs` key, or it belongs in one of the two lists above."""
+    Without this, a resource that runs a wheel and is filed under `_NON_JOB_RESOURCES`
+    passes the totality check and is never asked for a revision guard -- so the third
+    category, added to keep an exact classification honest, would become the way around it.
+
+    THE QUESTION IS NOT "IS THERE A `jobs` KEY". That was the first spelling and it is a
+    proxy: a DAB `pipelines:` resource runs a wheel and declares no `jobs` key, so it would
+    have passed. The property is that every resource kind in the file is one that runs no
+    code of this project's, and the allow-list is where a new kind has to argue for itself
+    -- a resource kind nobody has thought about fails here rather than being waved
+    through."""
     for resource_yml, why in _NON_JOB_RESOURCES.items():
         document = yaml.safe_load((RESOURCES / resource_yml).read_text(encoding="utf-8"))
-        jobs = document.get("resources", {}).get("jobs")
-        assert not jobs, (
-            f"{resource_yml} declares job(s) {sorted(jobs)} but is filed as a non-job "
+        kinds = set(document.get("resources", {}))
+        runners = sorted(kinds - _RESOURCE_KINDS_THAT_RUN_NOTHING)
+        assert not runners, (
+            f"{resource_yml} declares resource kind(s) {runners} but is filed as a non-job "
             f"resource ({why}), so nothing asks whether a run of it against a wheel from "
-            "another revision matters. Move it to _GUARDED_JOBS or _UNGUARDED_JOBS"
+            "another revision matters. Move it to _GUARDED_JOBS or _UNGUARDED_JOBS, or add "
+            f"the kind to _RESOURCE_KINDS_THAT_RUN_NOTHING with the argument for why it "
+            "cannot run this project's code"
         )
 
 

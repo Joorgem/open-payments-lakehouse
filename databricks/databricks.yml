@@ -31,10 +31,18 @@ targets:
 # THE ONE BUNDLE VARIABLE, added by F4 Task 4 for the dashboard resource.
 #
 # A warehouse id is workspace-scoped platform state. `databricks bundle generate
-# dashboard` hardcodes it into the resource YAML, and committing it makes this
-# repository's "reproducible from GitHub" claim false for exactly the artefact a
-# reviewer is most likely to try redeploying into their own workspace -- the id resolves
+# dashboard` hardcodes it into the resource YAML, and committing it AS A RESOURCE VALUE
+# makes this repository's "reproducible from GitHub" claim false for exactly the artefact
+# a reviewer is most likely to try redeploying into their own workspace -- the id resolves
 # to nothing there, and the failure is at deploy time with no hint of why.
+#
+# THE LITERAL ID APPEARS BELOW, IN THIS COMMENT, AND THAT IS THE ONLY PLACE IT IS
+# COMMITTED. Prose naming the hazard is not the hazard, and pretending otherwise would mean
+# a rule this file could not state its own reason for. `tests/dataops/test_dashboard.py::
+# test_no_workspace_scoped_warehouse_id_is_committed_as_a_resource_value` therefore sweeps
+# the PARSED values of every committed bundle file rather than their raw text -- comments
+# are gone by the time YAML is a document, so the claim it checks is exactly the claim that
+# matters.
 #
 # `lookup:` asks the workspace for the id of the warehouse with this NAME, at validate
 # time. Measured 2026-08-18: `databricks bundle validate -t free -o json` renders
