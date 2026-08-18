@@ -697,6 +697,85 @@ three task-starts and buys a number ADR 0006 has wanted since 2026-08-03.
 > *table count* alone diverge. The visited-set assertion is what carries that half; the summary
 > line's independent bite is on the **row** total, and that was proved by a mutation.
 
+### 1.5 Task 4 — telemetry as a view, and the spec item this phase refuses
+
+**Built:** `src/opl/dataops/` — `telemetry.py` (view `dataops_task_telemetry`), `cadence.py` (the
+expected cadence per bronze table, as data in the repo), `freshness.py` (view `dataops_freshness`),
+`views.py` (the composition root; the view list moved out of `opl.bronze.reconcile` so there is one
+of them). Plus a bundle-declared Lakeview dashboard. **No new job, no new task, no new guard-list
+entry** — the views join the idempotent task Task 1 already wired behind the revision guard.
+
+#### THE SPEC ITEM THIS PHASE REFUSES, RECORDED HERE BECAUSE A REFUSAL BURIED IN A DOCSTRING IS NOT A DECISION ANYONE CAN OVERRULE
+
+The plan asked for a **narrow written table** holding the three values no platform table can know:
+reject counts on an idempotent re-run, `collapsed_duplicates`, and `already_present`. **It is not
+built.** The controller's dispatch demanded either a wired writer or a refusal with a mechanism, and
+named the outcome that was not acceptable: an empty table, which is a guard that cannot fail with a
+schema on it. The implementer refused, the independent reviewer judged the refusal **rigour rather
+than scope-shrinking**, and its one objection was that a dropped spec item was findable only inside a
+module docstring. This section is that objection closed.
+
+**The grounds, in the order that decided it:**
+
+1. **Two of the three are already recoverable without a writer.** Reject counts on an idempotent
+   re-run live in the quarantine table, and `dataops_reconciliation` (Task 1) already reports them
+   per (table, batch). `already_present` follows from Delta history — verified: `hub_empresa`
+   version 2 is a `WRITE` with `numOutputRows = 0`, which **is** the idempotent second load.
+2. **The one genuinely unrecoverable value belongs to five other modules.** `collapsed_duplicates`
+   is real and non-zero — **4,329** of 2026-07's 27,990,592 partner-link rows, verified independently
+   by the reviewer against ADR 0011 — but it is computed in `opl.vault.{partners,reference,effectivity}`
+   and returned by five loader entry points. Persisting it means adding a **Delta append inside every
+   loader's write path**, from the one task in this phase whose stated remit is that it writes nothing.
+3. **The retry hazard is measured.** 24 `(job_run_id, task_key)` pairs ran two attempts despite
+   `max_retries: 0`. A telemetry write is precisely the side effect that turns that from harmless
+   into duplicate rows, and making it idempotent needs the task-run id as a key inside each of those
+   five entry points.
+
+**What reverses it:** the moment anything **branches** on `collapsed_duplicates` rather than printing
+it. That is when a run log stops being sufficient — and the write then belongs in that change, keyed
+on the task run id, in the loaders that produce the number.
+
+**A caveat the reviewer added to ground 1 that the argument did not carry:** the binding constraint
+on reading a row count at an old Delta version is **auto-VACUUM's file retention**, not
+`delta.logRetentionDuration` — `hub_empresa`'s versions 3 and 4 are a Predictive Optimization
+`VACUUM` on 2026-08-18 with `retentionCheckEnabled: false`, which physically removed 147 files. And
+`already_present` is the row count *before* the write, which needs the table at version N−1, not just
+its log.
+
+#### Three corrections the implementer made to the controller's own measured facts
+
+**The largest is one the controller had not seen at all.** `execution_duration_seconds` is **not
+additive across the hour-sliced periods — it repeats**. Task run `99407495289863`
+(`sat_empresa_dados`) carries `0 / 5633 / 5633` across three rows for a task whose wall clock is
+**5,635 s**. `SUM` reports **11,266** — a clean **2× overstatement of the most expensive task in the
+workspace**, silently, on the column anyone reaches for first. `MAX` is correct.
+
+The reviewer confirmed it and generalised it: `setup_duration_seconds` repeats `1/1/1` and
+`cleanup_duration_seconds` `0/1/1`, **both also take `MAX`** in the shipped view; across all eight
+multi-period runs `MAX(execution)` is within 5 s of wall clock in **8 of 8**; and `DESCRIBE TABLE`
+confirms there is no other additive-looking numeric column. The controller had flagged the ~4%
+`COUNT(*)` fan-out; this is a 2× error on the same table and was not on the list.
+
+Also corrected: **a retry gets a new `run_id` under the same `job_run_id` + `task_key`** (24 such
+pairs), so the view's grain is per-**attempt** and carries an `attempt` column rather than letting a
+sum double-count silently; and **`result_state` is NULL on every non-final period** (0 exceptions
+over 284 rows), so the aggregation is `MAX_BY(result_state, period_end_time)`.
+
+#### THE SEVENTH INSTANCE, AND IT WAS INSIDE A TEST WRITTEN TO PREVENT THE SPECIES
+
+`test_the_state_is_the_one_the_run_ended_on_and_not_the_largest_it_ever_showed` **could not fail on
+the mutation it is named for.** Measured by the reviewer: replacing `MAX_BY(result_state,
+period_end_time)` with `MAX(result_state)` in the shipped SQL left **118 passed, 0 failed**. Spark's
+`MAX` skips NULLs, and the only multi-period fixture run carried `(NULL, NULL, 'SUCCEEDED')` — so
+both aggregations returned the same value for every fixture row. **The fixture could not express the
+case the test was named for.**
+
+**The shipped code is right, and what the missing fixture was protecting is severe:** alphabetically
+`CANCELED < FAILED < SUCCEEDED`, so `MAX` **systematically reports a failed run as succeeded**, with
+every other number preserved. The module docstring had already conceded that the two aggregations
+*"disagree the moment a run reports two terminal states"* — and the one tuple that would prove it was
+never added. Closed in the correction pass.
+
 ### 2.2 The all-matching-rules sweep
 
 **Published 2026-08-18, before any run.** Over all seven contracts and every staging batch, evaluating
