@@ -358,7 +358,31 @@ scoped to each 2026-06 batch will report and what the Volume will hold afterward
 and afterwards `cnpj/2026-06/{empresas,socios}` list **zero files**, while `cnpj/2026-06/zips/` still
 holds all three groups' zips, untouched.
 
-**What would falsify it, and each is a real outcome rather than a hedge:** a non-zero `refused` means
+**Two preconditions the implementer named as open, closed by the controller BEFORE the run rather
+than diagnosed after it. Controller-verified 2026-08-18:**
+
+1. **The month must be derivable from the batch.** `reclaim_landing` now derives its delete boundary
+   from `_snapshot_month` on the batch's staging rows, and §0.5 had measured that column in *bronze*,
+   not in staging. Measured now:
+   `bronze_cnpj_empresas_staging` for `321750543973966` → `_snapshot_month = 2026-06`, **one distinct
+   value over all 68,629,148 rows**; `bronze_cnpj_socios_staging` for `1121645114029617` → `2026-06`,
+   one value over 27,838,448. Neither is NULL and neither names two months, so `resolve_month`
+   resolves rather than refusing.
+2. **The rules must not have widened since the batches were promoted.** `plan_promotion` re-derives
+   `staged_promotable` from **today's** rules and refuses if bronze no longer equals it — so a rule
+   widened since 2026-08-03 would turn the acceptance run red before reclaim ever started. Checked
+   two ways: the exact-order assertions pinning `empresas` and `socios` in `tests/bronze/test_rules.py`
+   are **unchanged** across `bb9b7b3..HEAD`, and the one commit in that range that edited a shared
+   rule module (`7332283`) changed the **PTAX** publication-instant rule, not
+   `unprovable_snapshot_ref_date`. Today's sets read
+   `[null_or_empty_*…, bad_cnpj_basico_length, encoding_replacement_char, unprovable_snapshot_ref_date]`
+   for both.
+
+**This is the check ADR 0006 demands of anyone reusing its numbers** — *"Any number derived from this
+section must be re-derived after every change to `rules_for`, or discarded"* — applied to its own
+2026-08-03 measurement before that measurement is leaned on again.
+
+**What would falsify the prediction, and each is a real outcome rather than a hedge:** a non-zero `refused` means
 `LandingScope`'s containment rejected a path that bronze names — which would be a defect in the
 month derivation, not in the delete; a non-zero `already_absent` means something removed files this
 document listed; and `deleted < 10` on either table means `files_of_batch` does not return what the
