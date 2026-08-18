@@ -249,9 +249,64 @@ Listed here so the phase's close can say which of these it changed:
 
 ---
 
-## 1. What each task must produce
+## 1. The tasks, as they ran
 
-*(Filled as the phase runs. The plan is `.plans/2026-08-18-f4-dataops.md` revision 2.)*
+### 1.1 Task 1 — the reconciliation, and it found the stranding without being told
+
+**Built:** `src/opl/bronze/reconcile.py`, `databricks/src/create_dataops_views.py`,
+`databricks/resources/dataops_views_job.yml`, `tests/bronze/test_reconcile.py`, and one entry in
+`tests/test_job_yaml_launch_guards.py`'s guard list. Two views, no table, no schema change.
+
+**Deployed and run. Controller-verified**, 2026-08-18:
+
+| | |
+|---|---|
+| revision the run was launched for | `9d8ea78c431c271bbe7b1c10e89a3778db8d2d64` |
+| revision stamped in the deployed wheel | `9d8ea78c431c271bbe7b1c10e89a3778db8d2d64` |
+| deployed wheel sha256 | `2009eb63eb08f968016d114972dc4285c0bcf889d073b7a6783e211d2a8394e7` |
+| local wheel sha256 | **identical** — the deployed artefact was downloaded and hashed, not trusted |
+| `opl/bronze/reconcile.py` present inside the downloaded wheel | yes |
+| job run | **`836110216544566`**, `opl-dataops-views`, **SUCCESS** |
+
+**What the view says, read back through the view rather than through the query that built it:**
+
+| verdict | (table, batch) pairs |
+|---|---|
+| `reconciled` | **14** |
+| `stranded_gated` | **1** |
+
+```
+source   | batch_id        | staged | promoted | quarantined | unaccounted | verdict
+payments | 592660596679630 |  10000 |        0 |        2000 |        8000 | stranded_gated
+remedy: databricks bundle run repromote_triaged_batch -t free
+        --params table=payments,batch_id=592660596679630,revision=$(git rev-parse HEAD)
+```
+
+**The acceptance was that it finds `592660596679630` without being told about it, and it does.**
+The other fourteen pairs reconcile exactly, including the four CNPJ batches that reached bronze
+through a repromote after the gate blocked them — which is the property that makes this a
+reconciliation and not a test for "the gate fired".
+
+**The file grain, which is Task 2's input. Controller-verified** through
+`dataops_reconciliation_by_file`: all **20** files of the two 2026-06 CNPJ batches are
+`reclaimable`, and the stranded payments file is **not** (8,000 unaccounted). Socios' two batches
+carry 1,797 and 1,786 rejected rows spread over 20 files and every one of those files is
+reclaimable — because a rejected row **is** an accounted-for row once it is in quarantine, which is
+exactly the distinction `retention.files_of_batch`'s current proof cannot make.
+
+**The recommendation on `592660596679630`, recorded here because a stranding reported and left
+unowned is not closed: DO NOT PROMOTE.** Its 2,000 `rescued_data_present` rows are F1b's
+deliberately injected schema drift and are the proof the gate catches drift; the 8,000 clean rows
+beside them are that experiment's other half. Promoting them would also change what the observation
+ledger means for those keys — the ledger classifies 1,781 socios link keys as `rejected_by_our_gate`
+today, and a promote is the one action that rewrites such a classification retroactively. **The
+owner of that decision is Jorge**; the command is printed by the view, and nothing automated will
+ever run it.
+
+**What Task 1 does NOT do, said plainly:** it writes no table, so nothing turns red when a batch
+strands. It is a view an operator or a dashboard reads. Making a stranding fail a run is a
+different decision — it would put a gate in front of a condition whose only current instance is a
+deliberate experiment.
 
 ---
 
