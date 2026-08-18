@@ -639,8 +639,19 @@ three task-starts and buys a number ADR 0006 has wanted since 2026-08-03.
 > rather than only in a commit because the claim it threatened is one this document makes.
 >
 > **And the numbers above were re-taken afterwards**, because the correction changed the code that
-> produced them. See the re-run below: a measurement whose code moved under it is a measurement
-> nobody has taken.
+> produced them. A measurement whose code moved under it is a measurement nobody has taken.
+>
+> **Re-run `321135201221285`**, task run `600061871178163`, SUCCESS, wheel sha256
+> `cecf324ad491eca1b7d2ede77405a3c53a0a7020f4d45aec8228c4b788128293`, stamped revision `538a966`.
+> The two runs' outputs were compared key by key by the controller: **208 keys each, and zero
+> differences.** Same summary line, same fifteen pairs, same 337,776,032 rows, same seven non-zeros,
+> same fifteen zeros. So the table above is the corrected code's output as well as the original's —
+> which is what makes it citable, and which nobody would have known without re-running it.
+>
+> **One limit the correction pass stated against its own interest, and it is right:** with the sweep
+> total, `len(measured)` and `len(REGISTRY)` are equal by construction, so no mutation can make the
+> *table count* alone diverge. The visited-set assertion is what carries that half; the summary
+> line's independent bite is on the **row** total, and that was proved by a mutation.
 
 ### 2.2 The all-matching-rules sweep
 
