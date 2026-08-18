@@ -21,14 +21,14 @@ and did not:** `docs/f0-validation-report.md` carries five premises of its own �
 availability, PTAX reachability — and **not one is about a database** (`grep -i postgres` → 0
 hits), while master spec §9 lists F0 as standing up "Docker Redpanda/**Postgres**/Spark".
 
-### 0.1 THE PROVENANCE GUARD THIS PROJECT RELIES ON HAS AN EXPIRY DATE, AND NOBODY HAD MEASURED IT
+### 0.1 THE PROVENANCE GUARD THIS PROJECT RELIES ON WAS ASSUMED DURABLE, AND NOBODY HAD MEASURED IT
 
 **Controller-verified.** F-API §3.1 established a rule this project has leaned on since:
 
 > *"Checking that a published id resolves costs one API call and is the cheapest guard this
 > project has."*
 
-It is a good rule and **it decays**. `GET /api/2.0/sql/statements/<id>` against the `opl-free`
+It is a good rule and **it had never been checked**. `GET /api/2.0/sql/statements/<id>` against the `opl-free`
 workspace, four ids of three vintages, run 2026-08-15:
 
 | statement id | published by | ran | result |
@@ -57,20 +57,71 @@ workspace, four ids of three vintages, run 2026-08-15:
 > consistent with the evidence**, which is a weaker sentence than the one first published
 > here and is the one the four ids earn.
 
-**What is not in doubt** is the direction and its consequence: two ids from two different
-phases and two different authors, both older, both gone; two newer, both present. This is not
-the "resolves to nothing" species this repository has struck twice — those ids never named a
-real execution, and these demonstrably did.
+> **THE PROBE THIS SECTION IS BUILT ON HAD NO CONTROL, AND WITH ONE THE AGE READING DOES NOT
+> SURVIVE.** Measured by the controller 2026-08-18T01:16Z, while the phase was still running.
+>
+> Two statement ids **this phase published an hour earlier** were re-checked with the same
+> method §0.1 used — `GET /api/2.0/sql/statements/<id>` — and both returned **`Error: Not
+> Found`**. Read against this section, that says ids expire inside an hour and the 8–35 h band
+> is far too generous.
+>
+> **It says nothing of the kind, and the control is what shows it.** A statement was then run
+> and fetched **immediately** — `01f19aa2-7e23-1379-a650-36a2854079bb`, seconds old — and the
+> same endpoint returned **`Error: Not Found`** for it too.
+>
+> **So this endpoint returns Not Found for a statement that has just run**, and a `was not
+> found` on it therefore cannot distinguish *expired* from *never retrievable this way*. The
+> most likely mechanism is that `.plans/sql.sh` reads the result set, which disposes the
+> statement — but that is an explanation offered, not measured, and it is not needed for the
+> conclusion.
+>
+> **What this does to §0.1.** The two `state: CLOSED` readings above are real and unexplained
+> by the disposal story, so the endpoint's behaviour is not a simple function of age in either
+> direction. **The 8–35 hour band is withdrawn as an age bound.** What survives is the weaker
+> statement §0.1 already reached on its own evidence — *"retention is the most likely
+> explanation and it is not the only one consistent with the evidence"* — and the operational
+> rule that motivated all of it, which is unaffected: **check a published id while the phase is
+> running, not at its close.**
+>
+> **The species is this document's own second one**: a check whose output cannot tell "it
+> passed" from "it never ran". §0.4 caught it as a `[]` that could not have been non-empty;
+> §0.5 caught it as a `from_cache` key that never existed. **This one was caught by running the
+> control before publishing the number, which is the only reason it is a paragraph here rather
+> than a fifth wrong figure.**
 
-**What follows, and it is a fact about every evidence document in this repository:** the
-statement ids published in `docs/f2-wave-1-*.md` and `docs/f3-*.md` — the ids that are the
-stated provenance for the vault's and the star's headline numbers — **can no longer be
-fetched by anyone.** F-API §3.1 already recorded that a `CLOSED` statement's rows cannot be
-read; what is new here is that past the boundary above the statement cannot be found at all.
+> **THE THREE PARAGRAPHS THAT USED TO FOLLOW HERE WERE DOWNSTREAM OF THE WITHDRAWN BOUND AND
+> ARE REWRITTEN, NOT LEFT.** They said the direction was *"not in doubt"*, that F2's and F3's
+> published ids *"can no longer be fetched by anyone"*, and that *"past the boundary above the
+> statement cannot be found at all"*. **All three rest on reading `Not Found` as expiry**, which
+> the control above is precisely what removes. Caught by CodeRabbit on the closing PR — **the
+> amendment did the thing the amendment is about**, which is why the correction is inline and
+> the original wording is quoted rather than deleted.
 
-**This does not retract a single one of those numbers.** It retires the *mechanism* that was
-supposed to let a reader check them, and it means the guard has to be exercised **while a
-phase is running**, not at its close and never afterwards. §0.2 is what to do instead.
+> **AND THE GREP THAT FOUND THE LAST TWO SITES MISSED THIS SECTION'S OWN HEADER, FOR A REASON
+> WORTH KEEPING.** The header read *"HAS AN EXPIRY DATE"* and the topic sentence *"it decays"* —
+> both in this document's own voice, unstruck, directly above the blocks withdrawing exactly
+> that. **The controller's grep was case-sensitive and this document SHOUTS its headers**:
+> `grep expiry` returns 2 hits, `grep -i expiry` returns 3, and the third is the title. Found by
+> the independent reviewer dispatched because CodeRabbit returned *"Review rate limited"* on the
+> push that carried the fixes — which §A5 treats as absence, not approval. **A retraction that
+> closes by grep closes by `grep -i`.**
+
+**What the four readings actually support.** Two ids returned `state: CLOSED` and two returned
+`was not found`, and that **asymmetry is real and unexplained** — the disposal story offered
+above would predict `Not Found` for all four, and it did not happen. So the endpoint's behaviour
+is not a simple function of age, and it is not a simple function of disposal either. **What is
+in doubt is the direction**; what is not in doubt is that the four readings differ.
+
+**What this does NOT establish, and the earlier wording claimed:** nothing here shows that F2's
+and F3's published ids are unfetchable. `Not Found` on `/api/2.0/sql/statements/<id>` is
+ambiguous, and `/api/2.0/sql/history/queries` — the endpoint that actually answers about a past
+statement, and the only one that serves `result_from_cache` (§0.5) — was never pointed at them.
+**Their retrievability is UNMEASURED, not refuted.**
+
+**No number about the vault's or the star's headline measurements is retracted by any of this** — the scope the original wording had, restored, because the broadened version was false on this section's own terms: the 8–35 hour band IS a number this document published and withdrew.** What is retired is the confidence that a
+published id is a durable handle, and the operational rule that follows is unchanged and is the
+only thing this section was ever really for: **exercise the guard while a phase is running**,
+and use the history endpoint when you do. §0.2 is what to do instead.
 
 ### 0.2 The claim this phase's headline rests on, RE-MEASURED rather than inherited
 
@@ -83,10 +134,15 @@ RFB retains baixadas"*, whose statement id is the first row of §0.1 and no long
 So it was re-measured, today, over `bronze_cnpj_empresas`. Statement
 **`01f1986b-af6c-1eb4-8585-f5edb3e11638`**, `from_cache: None`.
 
-**The query is quoted in full, and §0.1 is why.** A statement id is the only handle a reader
-has on a published measurement, the API does not return statement text, and §0.1 has just
-established that the handle dies somewhere inside a day and a half. A number published against an
-id alone is therefore unverifiable almost immediately — so the method goes in the document:
+**The query is quoted in full, and §0.1 is why.** A statement id is the only handle a reader has
+on a published measurement, and the API does not return statement text. ~~§0.1 has just
+established that the handle dies somewhere inside a day and a half.~~ **That clause quoted a
+bound §0.1 had ALREADY retracted one section above it, and then §0.1's later amendment withdrew
+the replacement bound too** — a retracted number surviving two doors down from its own
+retraction, found by grepping for it rather than by anyone reading the sentence. What §0.1
+supports is weaker and enough: **an id is not a durable handle**, by some mechanism the four
+readings do not settle. A number published against an id alone is therefore unverifiable — so
+the method goes in the document:
 
 ```sql
 SELECT COUNT(*)                                                     AS keys_total,
@@ -349,8 +405,9 @@ measurement) and **none about Databricks egress toward a laptop behind NAT** —
 ### 0.5 THE SECOND GUARD THIS PROJECT RELIES ON THAT NOBODY HAD CHECKED, and this one never fired at all
 
 **Controller-verified**, measured 2026-08-17 during Task 6. §0.1 found that a published
-statement id **expires**. This is the other half, and it is worse: the flag published beside
-those ids was never read.
+statement id ~~**expires**~~ **is not a durable handle** *(its expiry reading was withdrawn
+later that night; the id being unreliable is what survives)*. This is the other half, and it is
+worse: the flag published beside those ids was never read.
 
 This repository carries a standing rule, in `.plans/HANDOFF.md` and in `.plans/sql.sh`'s own
 header: *"never publish a number whose `from_cache` you did not read"* — because the DBSQL
@@ -1159,7 +1216,7 @@ project has never been able to make, Files (CNPJ) and Databases (Postgres) meeti
 
 #### 2.6.6 Statement ids, with `from_cache` READ — the first time in this repository
 
-Nine ids, all checked at **00:07Z while the phase was running** and all resolving, with
+Nine ids, all checked at **00:07Z while the phase was running** ~~and all resolving~~, with
 `result_from_cache` read from `/api/2.0/sql/history/queries?include_metrics=true` because
 §0.5 established the manifest has no such key: **`False` for every one.**
 
@@ -1168,8 +1225,20 @@ Nine ids, all checked at **00:07Z while the phase was running** and all resolvin
 `01f19a86-ecdd…` roots↔hub · `01f19a86-caba…` `hub_empresa` at 69,062,849 ·
 `01f19a88-5bbf…` ref_date.
 
-**The oldest resolved at 2 h 15 m**, which is consistent with §0.1's 8–35 h band and does not
-narrow it.
+~~**The oldest resolved at 2 h 15 m**, which is consistent with §0.1's 8–35 h band and does not
+narrow it.~~
+
+> **CORRECTED, because §0.1's band was withdrawn an hour later and this sentence leaned on it.**
+> The `from_cache` values above were read from **`/api/2.0/sql/history/queries`**, which is a
+> different endpoint from the `/api/2.0/sql/statements/<id>` §0.1 probed — and §0.1's amendment
+> shows that second endpoint returns `Not Found` for a statement **seconds** old. **Which
+> endpoint answered "resolving" for these nine is not recorded**, so the "oldest resolved at
+> 2 h 15 m" figure cannot be attached to either mechanism with confidence.
+>
+> **What is unambiguous, and is what the ids were published for:** the nine `result_from_cache`
+> values were **read**, and every one was `False` — the first time in this repository that
+> figure came from a source that actually serves it. The retention question is separate, is now
+> open rather than bounded, and none of these numbers depends on it.
 
 ### 2.7 CodeRabbit's thirteen, triaged against the code rather than taken on its word
 
@@ -1489,12 +1558,27 @@ what the branch now holds, because a CI number is a verdict a process emitted at
 | `postgres` | **21 passed, 2,461 deselected** | 8.01 s |
 | `secret-scan` | pass | 9 s |
 
+**And on the SECOND push**, after the CodeRabbit fix pass added five tests. Both rows are kept
+because the pair is the measurement: the suite grew and the wall clock **fell**, which is runner
+variance and not an improvement anyone made.
+
+| check | result at the fix-pass push | wall |
+|---|---|---|
+| `test` | **2,460 passed, 1 skipped, 26 deselected** | **969.10 s (16 m 09 s)** |
+| `postgres` | **21 passed, 2,466 deselected** | 7.58 s |
+| `secret-scan` | pass | 11 s |
+
+**2,455 + 5 = 2,460**, and the five are the new tests attributed by id in §2.7 — so the delta is
+accounted for rather than observed. **Budget ~16–20 min per CI round trip at ~2,460 tests**, and
+quote the range rather than either end: the two runs of the same suite on the same branch differ
+by **3 m 41 s**.
+
 **The `postgres` job's count is quoted because "it passed" and "it selected nothing" look
 identical from the outside.** It selected 21 and ran 21 — so the service container on **5433**
 came up and the tests reached a real database. That is the half `docs/f-db-run-evidence.md` §3
 recorded as unverifiable from this box, and it is now retired there.
 
-**Budget for the next phase:** ~20 minutes per CI round trip at 2,455 tests, up from F-API's
+**Budget for the next phase:** ~20 minutes per CI round trip at 2,455 tests *(the first-push baseline; the branch closed at 2,460 — see the second table below, and budget the RANGE)*, up from F-API's
 ~17 at 2,106 and F3's ~13 at 1,684.
 
 **CodeRabbit reported "Review completed" rather than "Review rate limited"**, and produced a
@@ -1516,11 +1600,34 @@ otherwise.**
 |---|---|---|
 | 1 | every artefact the phase promised exists, built by its own code | ✅ `bronze_merchant`, `hub_merchant`, `sat_merchant_dados`, `link_merchant_empresa`, `sat_eff_merchant_empresa`, two job YAMLs, ADR 0017 — all built by the code in this branch and counted in §2.6.4 |
 | 2 | every prediction marked confirmed or falsified, **the falsified ones kept** | ✅ §2.6.3 — nine of nine confirmed, and §1.3's three falsifiers each reachable and each failing to fire. **Earlier falsifications in this phase are kept in place**: T3's volatility claim, T4's float-digits reason, T5's loader claim, T11's stated consumer, and five wrong numbers about the controller's own work |
-| 3 | **CI green on the MERGED PR** | ⏳ **the one that is open.** CI is green on PR #21; the merge has not happened. This is the condition F3 had to record as open at its own close |
+| 3 | **CI green on the MERGED PR** | ✅ **PR #21 merged 2026-08-18T01:32:51Z as `43876b3`**, with **THREE** CI checks green on the merging revision — `test` 2,460 passed / 1 skipped, `postgres` 21 passed, `secret-scan`. **CodeRabbit is counted separately and deliberately**: it is a *review*, not a required status check, and this file's own §A5 discipline is about not letting a bot's green stand in for something it is not. Its review was **completed** rather than rate-limited, and it found four real defects on the closing PR alone |
 | 4 | `docs/<phase>-run-evidence.md`, controller-verified separated from reported | ✅ every claim in this document carries one of the two labels, and §2.6.4 is the controller's own re-measurement of the run agent's headline |
 | 5 | `.plans/HANDOFF.md` updated, **including deleting what the phase made false** | ✅ the death count, the `from_cache` rule and the Task 4/5 state all corrected in place rather than overwritten |
 | 6 | what remains **unexercised** listed as unexercised | ✅ §3, accumulated as the phase ran rather than reconstructed at its end, including three refusals that *passed rather than fired* |
 
-**Five hold. Condition 3 is open until the merge**, and it is recorded as open rather than
-anticipated — which is the distinction F3's evidence had to make about itself and F-API's
-close was the first to satisfy.
+~~**Five hold. Condition 3 is open until the merge**, and it is recorded as open rather than
+anticipated~~ — **ALL SIX HOLD, as of the merge at 01:32:51Z.** The sentence above is kept
+because it was the honest state when written, and because recording condition 3 as **open**
+rather than anticipated is the distinction F3's evidence had to make about itself: F3 could not
+close it at all, and F-API's was the first close in this project to satisfy all six.
+
+**F-DB IS CLOSED.** Four of four sources the job posting names are done — Files, Event streams,
+APIs, Databases — and the thing this last one bought that none of the other three could is a
+**hard DELETE**, which is why sixteen effectivity windows carry a real closing row and this
+lakehouse has finally end-dated something.
+
+> **AND THE CLOSING PR ITSELF DREW FOUR MORE FINDINGS, ALL REAL, ALL MINE.** CodeRabbit read the
+> docs-only PR that carries this section and found: the §0.1 amendment **withdrew a bound and
+> left three conclusions standing on it** — the species the amendment is about, committed inside
+> it; §2.6.6 still said *"all resolving"* after the correction established that the endpoint
+> which answered was never recorded; the next-phase budget quoted 2,455 where this section
+> establishes 2,460; and this very row said *"all four checks"* over **three** CI checks plus a
+> review. **A closing section is not a safe place**, and the count of five wrong numbers about
+> the author's own work in this document is now the count at the moment it was written, not a
+> total.
+>
+> > > **One regress this close does NOT pretend to escape.** This section records CI round 2, and
+> > the commit that records it is itself a change that CI ran again on. **A document cannot
+> > contain the verdict on its own final revision** — F3 hit the same wall and spent PR #19 on
+> > one line about it. What is quotable is what is written here: the checks that were green on
+> > the revision that merged.
