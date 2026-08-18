@@ -252,12 +252,56 @@ reproduce exactly; the third did not reproduce, and one number moved that was sa
   reported measurement this controller could not reproduce in one attempt, and that is recorded
   rather than glossed. **The poll costs nothing and the failure it guards against is silent**, which
   is why it stays.
+**AND THERE IS A THIRD PATH TO THE FLAG THAT NO DOCUMENT IN THIS REPOSITORY NAMED.** Found by Task
+4's implementer while building the telemetry view, **controller-verified 2026-08-18**:
+`system.query.history` carries **`from_result_cache` (BOOLEAN)** as a column — and
+`cache_origin_statement_id` beside it, which names *which* statement's result was reused.
+`system.information_schema.columns` returns both.
+
+`.plans/sql.sh`'s header says the flag *"IS served, by
+`/api/2.0/sql/history/queries?include_metrics=true`"*. That is true and it is **incomplete**: the
+flag is also plain SQL, with no REST call, no `metrics` object to materialise, and therefore none of
+the transient-`null` race §0.7 exists for.
+
+**So which path is right depends on when you ask, and that is measurable rather than arguable:**
+
+| | measured |
+|---|---|
+| a statement run seconds ago, looked up in `system.query.history` | **not there** — six consecutive polls returned no row |
+| newest row in `system.query.history` versus `current_timestamp()` | **1,349 s behind** — ~22 minutes |
+
+**For a number you are taking now — T5's benchmark — the REST endpoint with the poll is the only
+path that answers at all.** For a retrospective question — *was this figure I published last week
+served from cache?* — **the system-table column is strictly better**: one query, no race, and it
+names the origin statement. Neither replaces the other, and the repository had recorded only one of
+the two.
+
 - **`read_bytes` is not quite the invariant T5 wants to denominate in.** Four of five uncached runs
   read **386,504** exactly; run A read **386,515**, eleven bytes more. Eleven bytes on 386 KB is
   0.003% and irrelevant to a 7.2 GB before/after — but the claim T5 inherits is *"byte-identical
   within a batch"*, and the honest version is **"byte-identical in four of five readings, with one
   11-byte excursion on the session's first touch of the table"**. The mechanism for the excursion is
   **unmeasured**; a first-touch metadata read is a guess, not a finding.
+
+### 0.7.1 THE STANDARD SQL ESCAPE FOR AN APOSTROPHE SILENTLY DELETES IT HERE
+
+Found by Task 4's implementer when a test it had written for exactly this failed for real, and
+**controller-verified** on the `opl-free` warehouse 2026-08-18:
+
+```sql
+SELECT length('don''t') AS doubled, length('don\'t') AS backslashed, 'don''t' AS rendered
+--     4                              5                               dont
+```
+
+**`''` is not an escape in Databricks SQL.** The lexer ends the literal and starts another, adjacent
+literals concatenate, and the apostrophe is **gone** — length 4, rendering `dont`, **with nothing
+raising and nothing logged**. The backslash form is correct at 5.
+
+**This is species 1 in its purest form** — a silent failure that preserves every other number — and
+it is not confined to this phase: it applies to anything in this repository that interpolates prose
+into SQL, which now includes the cadence notes a dashboard prints to an operator. Task 4's escaper
+escapes the backslash first and then the quote; the general hazard is recorded here because the next
+person to build a SQL string from English text will not find it in a module they are reading.
 
 ### 0.8 SYSTEM-TABLE RETENTION: A MEASURED FLOOR, NOT AN UNKNOWN
 
