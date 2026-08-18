@@ -550,8 +550,14 @@ def measure_11b_the_reader_blocks_ddl() -> None:
         reader.execute("COMMIT")
         with clean_env(), connect() as writer:
             writer.execute("SET lock_timeout = '1000ms'")
-            writer.execute("ALTER TABLE smear ADD COLUMN blocked_column text")
-            print("  the same ALTER, once the reader COMMITTED: succeeded")
+            # A DIFFERENT COLUMN NAME, and the reason is the branch above it. The first
+            # ALTER is inside a `try` that catches only `LockNotAvailable`, so on the
+            # FALSIFYING outcome -- the reader did not block it, which is the answer this
+            # section exists to be able to report -- the column already exists and this
+            # unconditional repeat raised `DuplicateColumn`, aborting the probe before any
+            # later section ran. The interesting result was the one that broke the run.
+            writer.execute("ALTER TABLE smear ADD COLUMN blocked_column_after_commit text")
+            print("  the same ALTER (new column name), once the reader COMMITTED: succeeded")
 
 
 # --------------------------------------------------------------------------------

@@ -33,8 +33,25 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # --------------------------------------------------------------------------------
 
 
+class ComposeFailed(RuntimeError):
+    """A `docker compose` verb did not run, so nothing below it measures anything."""
+
+
 def compose(*args: str) -> str:
-    """Run `docker compose ...` at the repo root and return its combined output."""
+    """Run `docker compose ...` at the repo root and return its combined output.
+
+    RAISES ON A NON-ZERO EXIT, and that is the difference between a matrix and a table of
+    numbers. This ran with `check=False` and every call site discarded the result, so a
+    failed `docker compose restart` left the container up FROM BEFORE -- `report_survival`
+    then read an unchanged marker and printed `SURVIVES` for a verb that never ran. A
+    measurement describing nothing, in the exact shape it is printed in when it is real,
+    and pasted into an evidence document as such. This whole probe exists because revision
+    1 of the plan asserted this matrix and got it backwards; a silent green is how that
+    happens twice.
+
+    `check=True` would raise too, but `CalledProcessError` carries the exit code and not
+    the output -- and with `capture_output=True` the reason docker refused is only in the
+    output. So the check is written out, and stdout+stderr goes in the message."""
     result = subprocess.run(
         ["docker", "compose", *args],
         cwd=REPO_ROOT,
@@ -42,7 +59,14 @@ def compose(*args: str) -> str:
         text=True,
         check=False,
     )
-    return (result.stdout + result.stderr).strip()
+    output = (result.stdout + result.stderr).strip()
+    if result.returncode != 0:
+        raise ComposeFailed(
+            f"`docker compose {' '.join(args)}` exited {result.returncode}. Every "
+            "measurement after this verb would describe the state the PREVIOUS verb left, "
+            f"so the probe stops here rather than reporting it. Output:\n{output}"
+        )
+    return output
 
 
 MOUNT_FORMAT = (
