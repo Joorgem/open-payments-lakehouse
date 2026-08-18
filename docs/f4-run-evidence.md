@@ -811,27 +811,51 @@ structurally lack a source date read `no_source_axis` rather than an unexplained
 **And the 2× duration trap is closed in the shipped view**: task run `99407495289863` reports
 `execution_seconds = 5633`, not the 11,266 a `SUM` would have produced.
 
-#### A FOURTH VALUE THAT CANNOT FIRE — found by the controller, in code a correction pass added to fix the same species
+#### ~~A FOURTH VALUE THAT CANNOT FIRE~~ — THE CONTROLLER'S OWN FINDING, FALSIFIED FOUR MINUTES LATER, AND IT IS THIS PROJECT'S SIGNATURE ERROR
 
-The correction split `sql_telemetry` into four values, and the fourth — `not_yet_attributed`, for a
-run that ended **after** the newest statement `system.query.history` holds — returns **zero rows**.
-The reason is structural, and one statement settles it. **Controller-verified 2026-08-18:**
+> **WHAT THIS SECTION SAID, WITHDRAWN 2026-08-18 BEFORE IT MERGED.** It read: *"the fourth —
+> `not_yet_attributed` … returns zero rows. The reason is structural … `system.lakeflow.job_task_run_timeline`
+> **7,455 s (~2.07 h)** · `system.query.history` **1,780 s (~30 min)** … The timeline is roughly four
+> times slower … **The arm is unreachable while the lags stand in this order**."*
+>
+> **The two readings are real. The inference from them is false, and it is the species this
+> repository has now published seven times: a number correct about one population printed as the
+> answer about another.**
 
-| table | lag behind `current_timestamp()` |
-|---|---|
-| `system.lakeflow.job_task_run_timeline` | **7,455 s (~2.07 h)** |
-| `system.query.history` | **1,780 s (~30 min)** |
+**The mechanism, and it is worth more than the finding was.** `now − MAX(watermark)` **is not an
+ingestion lag.** It is the time since the newest *event* a table holds — ingestion delay **plus
+source idleness**. The timeline's source had been idle for hours: **no job ran between 20:23:23Z and
+the reading**, so nearly all of those 7,455 s were an empty workspace, not a slow pipe.
+`system.query.history` is fed by **every operator statement, including the ones doing the
+measuring** — so only *its* subtraction approximates a lag at all. **I compared a lag against a
+lag-plus-idleness and called the ratio a lag ratio.**
 
-**The timeline is roughly four times slower.** So by the time a task run is visible in the timeline
-at all, `query.history` has long since ingested its statements, and `run_ended_at > MAX(end_time)`
-cannot hold. **The arm is unreachable while the lags stand in this order** — and a reader seeing zero
-there would conclude that no run is ever too recent to attribute, when the truth is that the value
-cannot be produced.
+**Measured properly — on a single event's arrival rather than on a watermark delta:** a timeline row
+for a task that ended `22:25:22Z` was **absent at 22:29:13Z and present at 22:31:14Z**, so the
+timeline carried it within **231–352 s**, while `query.history` was still **2,013 s** behind at
+22:31:30Z. **The timeline is the faster table** — the opposite of the withdrawn premise.
 
-**That is this phase's second species again, in code written to close an instance of it.** The arm is
-fail-safe and stays; what it needed was to say what is true about itself. Handed back for correction
-with the measurement rather than the opinion — and with the caveat that a lag read once is a sample,
-not a bound.
+**And the arm fires.** At **22:31:14Z** the shipped view held **two `not_yet_attributed` rows** —
+`create_views` and `measure_rule_overlap` of a run that ended 22:24:39Z / 22:25:22Z, `statements`
+NULL. At **22:35:12Z** the same two rows read **`measured`**, carrying 4 and 7 statements, **with
+nothing having run in between**. The whole transition the label exists to describe, observed end to
+end in under four minutes.
+
+**So the arm is neither dead nor permanently live.** Its real reachability condition is
+`MAX(period_end_time) > MAX(end_time)` — no row can end later than the timeline's own watermark —
+and **both orderings occurred four minutes apart**. A zero in that column dates fast, which is a very
+different statement from the one this section first made.
+
+**Two things this cost and bought.** It cost a published claim that had to be withdrawn before it
+merged — by a controller who spent this phase correcting exactly this shape in four other documents.
+It bought the correct reading of both system tables, a demonstration of the arm working, and the rule
+that generalises: **a watermark delta on a table nobody is writing to measures the silence, not the
+pipe.** The `lag_seconds` column the correction refused hardest is refused for precisely that reason
+— it is the number that turned two hours of nobody running a job into a two-hour lag.
+
+**Caught by the agent the controller dispatched to record the finding**, which measured the premise
+instead of accepting it and reported that the more publicly readable of the two places the claim
+lived was this document.
 
 ### 2.2 The all-matching-rules sweep
 
