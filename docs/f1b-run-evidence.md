@@ -172,12 +172,14 @@ Task durations, **reported**: generate 27 s, ingest 31 s, gate 24 s, promote 33 
 price, and ~~Free Edition exposes no billing figure this project has ever read~~. The earlier
 wording called this source "free" against the vault's 33.13 GB and ~7.7 h, which is a price
 claim drawn from a duration; review of PR #16 was right to refuse it. What can be said is
-narrower and still useful: **three orders of magnitude less data and two fewer of wall
-clock than the vault**.
+narrower and still useful: **three orders of magnitude less data, and two orders of magnitude
+less wall-clock time, than the vault**.
 
 > **THE STRUCK CLAUSE WAS FALSE WHEN IT WAS WRITTEN, AND THE DISPROOF WAS ALREADY IN THIS
-> FOLDER.** Corrected 2026-08-18, during F4's measurement pass. Free Edition **does** expose
-> billing figures and this project **had already read them**:
+> FOLDER.** Corrected 2026-08-18, during F4's measurement pass. **This workspace's** Free
+> Edition tier **does** expose billing figures — the claim is scoped to `opl-free`, because one
+> workspace is the whole population anyone here has read — and this project **had already read
+> them**:
 > ~~`docs/f1.4b-pr-b-run-evidence.md` quotes `ESTIMATED_DBU` values off
 > `system.billing.usage` and `system.storage.predictive_optimization_operations_history`,
 > measured **2026-07-30**~~ — **the table named there is wrong, corrected the same day before
@@ -203,10 +205,14 @@ clock than the vault**.
 >
 > **This is the species F-DB's Task 0 was explicitly warned about** — *"F-API published a
 > 'first' that was false with the disproof eleven days old in the same folder. Do not inherit a
-> first."* Same shape, one document over, and it stood for six days because nobody grepped a
-> sibling evidence file before asserting a capability was absent. **A claim that something
-> cannot be measured is itself a measurement, and it needs the same evidence as any other.** That is the argument for 10,000 events rather than 50,000: generation
-is pure driver-side Python, measured at 50 s per profile at 50,000, and 10,000 at a 5 s
+> first."* Same shape, one document over. **It stood for six days** — 2026-08-12 to 2026-08-18 —
+> and what would have caught it is one `grep -i billing docs/`; whether anyone ran one and read
+> past it is not recorded, so the six days is the observable and the cause is not. **A claim that
+> something cannot be measured is itself a measurement, and it needs the same evidence as any
+> other.**
+
+That is the argument for 10,000 events rather than 50,000: generation is pure driver-side
+Python, measured at 50 s per profile at 50,000, and 10,000 at a 5 s
 interval preserves the same 13.9-hour span and thirteen one-hour windows that make lateness
 mean something.
 
