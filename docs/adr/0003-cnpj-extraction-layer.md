@@ -3,7 +3,20 @@
 ## Context
 RFB CNPJ open data is served from a Nextcloud "SERPRO+" public share over
 WebDAV (public share id `YggdBLfdninEJX9`, Basic auth token=id/empty password),
-NOT a plain file server. Serverless Databricks cannot reach it (ADR 0002).
+NOT a plain file server. ~~Serverless Databricks cannot reach it (ADR 0002).~~
+
+> **AMENDED 2026-08-17 by F-DB, in the same pass as ADR 0002's Context, because this sentence
+> INHERITS that premise and was never independently probed.** ADR 0002's egress claim was
+> measured false by F-API (a serverless task reached `olinda.bcb.gov.br` and ran the PTAX fetch
+> in production), and **no serverless probe was ever pointed at
+> `arquivos.receitafederal.gov.br`** — so this line asserts about the RFB share a limit that
+> was only ever tested somewhere else, and tested false there.
+>
+> **The Decision below is unchanged**, and the honest statement of its ground is that the
+> extraction layer runs off Databricks for the reasons that survive on their own: it needs
+> Range-resume over multi-gigabyte downloads, it unzips before landing, and F0 built it there.
+> **Whether serverless could reach this share is UNMEASURED**, and it is recorded as unmeasured
+> rather than converted into either a limit or a capability.
 
 ## Decision
 A pure-Python extraction layer (`opl.extraction`) runs off Databricks: lists a

@@ -37,6 +37,21 @@ module uses a capability the deploy target refuses, over a file set (`src/opl/**
 table anything touches. This file changes when an entry point changes; that one changes
 when the platform refuses something new.
 
+AND THE MONTH LOCK LEFT IN F-DB TASK 1, at 783 lines, with F-DB's Postgres ingest entry
+point still to be added. It is now `tests/test_month_wiring.py`, and the seam is this
+file's own title: the month is a JOB PARAMETER, it appears in no registry, and its
+consumers are a landing directory, an Auto Loader checkpoint and an audit column rather
+than a staging, bronze or quarantine name. This file changes when a table's COORDINATES
+change; that one changes when an entry point gains or loses a consumer of its window.
+Read together they say "one spec feeds every coordinate, one month feeds every
+consumer"; a task can satisfy either completely while failing the other.
+
+THAT SPLIT IS THE FIRST ONE OUT OF THIS FILE WITH SOMETHING SHARED ACROSS THE SEAM, so
+the three AST readers both halves ask for -- `main_of`, `sole_call`, `locals_of` -- went
+to `tests/task_ast.py` and were NOT copied, on `tests/job_yaml.py`'s precedent and for
+its reason. Everything below that resolves a `opl.bronze.registry` spec stayed: only
+this half has a spec to resolve.
+
 TO WHOEVER HITS THE RED HERE DURING THE REGISTRY REFACTOR: these describe a
 structure the refactor deliberately deletes, so some of them fail BY
 CONSTRUCTION once a script takes its table from a job parameter instead of a
@@ -66,6 +81,7 @@ import re
 from pathlib import Path
 
 import pytest
+from task_ast import locals_of, main_of, sole_call
 
 from opl.bronze.registry import REGISTRY
 
@@ -106,6 +122,15 @@ _TABLE_TASKS = [
     # reports SUCCESS, after 60 requests have already been made.
     "bronze_ptax_ingest",
     "fetch_ptax",
+    # F-DB Task 4, and it is ONE addition where the last two phases each made two. The
+    # ingest is the fifth spelling of "read a landing dir into staging" and the one that
+    # reads the FOURTH landing root. There is no producer entry point beside it, and that
+    # absence is the source's shape rather than an omission: this table's landing dir is
+    # filled by `scripts/extract_merchant_snapshot.py`, on the extraction host, because
+    # nothing running in the workspace can reach a database bound to localhost (plan T1).
+    # That script therefore sits outside this lock -- `task_ast.SRC` is `databricks/src`
+    # only -- which is recorded rather than worked around: it is not a job task.
+    "bronze_merchant_ingest",
 ]
 
 
@@ -146,52 +171,6 @@ def test_no_task_names_a_bronze_table_directly_any_more(script):
     )
     assert not named, f"{script}.py names bronze table(s) {named} directly"
     assert "table_spec(" in code
-
-
-def _main_of(script: str) -> ast.FunctionDef:
-    tree = ast.parse((_SRC / f"{script}.py").read_text(encoding="utf-8"), filename=f"{script}.py")
-    mains = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"]
-    assert len(mains) == 1, f"{script}.py does not define exactly one module-level main()"
-    return mains[0]
-
-
-def _sole_call(main: ast.FunctionDef, name: str, script: str) -> ast.Call:
-    """The one call to `name(...)` in the task's main, or a failure saying so.
-
-    Modelled on `_gate_quarantine` in test_fail_on_dq_task.py, and for its reason:
-    a lock that silently reads the first of several matches, or none at all,
-    passes just as happily on wiring it never looked at."""
-    calls = [
-        node
-        for node in ast.walk(main)
-        if isinstance(node, ast.Call)
-        and (
-            (isinstance(node.func, ast.Name) and node.func.id == name)
-            or (isinstance(node.func, ast.Attribute) and node.func.attr == name)
-        )
-    ]
-    assert len(calls) == 1, (
-        f"{script}.py main() makes {len(calls)} call(s) to {name}(), expected exactly 1 -- "
-        "this lock is reading the wrong call, or none, so it would pass on wiring it "
-        "never saw"
-    )
-    return calls[0]
-
-
-def _locals_of(main: ast.FunctionDef, script: str) -> dict[str, ast.expr]:
-    pairs = [
-        (target.id, node.value)
-        for node in ast.walk(main)
-        if isinstance(node, ast.Assign)
-        for target in node.targets
-        if isinstance(target, ast.Name)
-    ]
-    names = [name for name, _ in pairs]
-    assert len(names) == len(set(names)), (
-        f"{script}.py main() binds a local name twice; this lock resolves a name to a "
-        "single assignment and would pick an arbitrary one of them"
-    )
-    return dict(pairs)
 
 
 def _deref(expr: ast.expr, scope: dict[str, ast.expr], where: str) -> ast.expr:
@@ -251,9 +230,9 @@ def test_the_parameterised_ingest_binds_every_coordinate_to_the_one_resolved_spe
     that ONE spec, resolved from argv rather than from a literal, feeds every
     coordinate: the schema read with, the dir read from, the checkpoint deciding
     which files are new, and the table written to."""
-    main = _main_of("bronze_ingest")
-    scope = _locals_of(main, "bronze_ingest")
-    resolved = _sole_call(main, "table_spec", "bronze_ingest")
+    main = main_of("bronze_ingest")
+    scope = locals_of(main, "bronze_ingest")
+    resolved = sole_call(main, "table_spec", "bronze_ingest")
     assert not any(isinstance(arg, ast.Constant) for arg in resolved.args), (
         "bronze_ingest.py resolves its spec from a literal; the table is a job "
         "parameter, and a literal here pins every job that runs this file to one table"
@@ -262,18 +241,18 @@ def test_the_parameterised_ingest_binds_every_coordinate_to_the_one_resolved_spe
         "bronze_ingest.py main() no longer binds the table_spec(...) result to `spec`, "
         "so this lock cannot tell which spec the coordinates below came from"
     )
-    stream = _sole_call(main, "bronze_stream", "bronze_ingest")
+    stream = sole_call(main, "bronze_stream", "bronze_ingest")
     assert len(stream.args) >= 5, "bronze_stream() no longer takes contract/table_key here"
     bound = {
         "contract": _spec_field(stream.args[2], "bronze_stream contract"),
         "source_dir": _spec_field(
-            _sole_call(main, "landing_table", "bronze_ingest").args[0], "landing_table"
+            sole_call(main, "landing_table", "bronze_ingest").args[0], "landing_table"
         ),
         "checkpoint": _spec_field(
-            _sole_call(main, "checkpoint_location", "bronze_ingest").args[1], "checkpoint"
+            sole_call(main, "checkpoint_location", "bronze_ingest").args[1], "checkpoint"
         ),
         "written": _spec_field(
-            _table_arg(_sole_call(main, "toTable", "bronze_ingest").args[0], "toTable"),
+            _table_arg(sole_call(main, "toTable", "bronze_ingest").args[0], "toTable"),
             "toTable",
         ),
     }
@@ -298,9 +277,9 @@ def test_the_lookup_ingest_writes_the_lookup_tables_and_only_those():
     literal is the defect, because the table is a job parameter. Here the literal
     is the REQUIREMENT -- this entry point exists for exactly one table, and any
     other value silently redirects it."""
-    main = _main_of("bronze_lookup_ingest")
-    scope = _locals_of(main, "bronze_lookup_ingest")
-    resolved = _sole_call(main, "table_spec", "bronze_lookup_ingest")
+    main = main_of("bronze_lookup_ingest")
+    scope = locals_of(main, "bronze_lookup_ingest")
+    resolved = sole_call(main, "table_spec", "bronze_lookup_ingest")
     assert (
         len(resolved.args) == 1
         and isinstance(resolved.args[0], ast.Constant)
@@ -316,12 +295,12 @@ def test_the_lookup_ingest_writes_the_lookup_tables_and_only_those():
     )
     bound = {
         "checkpoint": _spec_field(
-            _sole_call(main, "checkpoint_location", "bronze_lookup_ingest").args[1],
+            sole_call(main, "checkpoint_location", "bronze_lookup_ingest").args[1],
             "checkpoint",
         ),
         "written": _spec_field(
             _table_arg(
-                _sole_call(main, "toTable", "bronze_lookup_ingest").args[0], "toTable"
+                sole_call(main, "toTable", "bronze_lookup_ingest").args[0], "toTable"
             ),
             "toTable",
         ),
@@ -329,169 +308,12 @@ def test_the_lookup_ingest_writes_the_lookup_tables_and_only_those():
     assert bound == {"checkpoint": "table_key", "written": "staging"}
 
 
-def _kwarg(call: ast.Call, name: str, where: str) -> ast.expr:
-    """The value of a `name=` keyword on `call`, or a failure saying it is absent.
-
-    An absent keyword must be a red test rather than a skipped assertion: the whole
-    point below is that the month is passed EVERYWHERE it is consumed, so "not
-    passed" is the defect, not a case to tolerate."""
-    for keyword in call.keywords:
-        if keyword.arg == name:
-            return keyword.value
-    raise AssertionError(f"{where}: this call has no {name}= keyword")
-
-
-# Every place an ingest entry point hands the month to something, as
-# (callee, positional index, keyword) -- exactly one of the last two is used.
-# ENUMERATED, not discovered: a fifth consumer added without an entry here would
-# be a fifth chance for the month to diverge, and a lock that globbed for `month`
-# would pass on whatever it happened to find.
-_MONTH_CONSUMERS: dict[str, list[tuple[str, int | None, str | None]]] = {
-    "bronze_ingest": [
-        # the directory the files are READ from
-        ("landing_table", 1, None),
-        # the state that records which of those files have been read
-        ("bronze_stream", None, "month"),
-        ("checkpoint_location", None, "month"),
-        # the value stamped into every row
-        ("add_audit_columns", None, "snapshot_month"),
-    ],
-    "bronze_lookup_ingest": [
-        ("bronze_lookup_stream", 2, None),
-        ("checkpoint_location", None, "month"),
-        ("add_audit_columns", None, "snapshot_month"),
-    ],
-    # F1b Task 3. Four consumers again, and the same four FACTS -- the directory read,
-    # the state that records which of its files have been read, and the value stamped
-    # into every row -- reached through the second landing root and the four-column
-    # audit stamp a generated source takes.
-    "bronze_payments_ingest": [
-        ("landing_generated_table", 1, None),
-        ("bronze_stream", None, "month"),
-        ("checkpoint_location", None, "month"),
-        ("add_common_audit_columns", None, "snapshot_month"),
-    ],
-    # The WRITER, and it belongs in this lock for the same reason every reader does:
-    # its month decides which directory the stream is written into, and the ingest task
-    # that follows resolves ITS source dir from the same job parameter. A month that
-    # diverged here would write one month's landing dir and read another's -- a job
-    # whose every task reports SUCCESS having ingested nothing. The staging dir is the
-    # second consumer because a file staged under one month and replaced into another
-    # is a cross-device rename that fails, or worse, does not.
-    "generate_payments": [
-        ("landing_generated_table", 1, None),
-        ("landing_generated_tmp", 1, None),
-    ],
-    # F-API Task 2. Four consumers again, and the same four FACTS -- reached through the
-    # THIRD landing root and through `registry_landing.landing_dir`, which resolves the
-    # root from the spec's landing mode rather than from this entry point knowing the
-    # layout. The month is the third positional argument there, not the second, because
-    # that function takes the whole spec.
-    "bronze_ptax_ingest": [
-        ("landing_dir", 2, None),
-        ("bronze_stream", None, "month"),
-        ("checkpoint_location", None, "month"),
-        ("add_common_audit_columns", None, "snapshot_month"),
-    ],
-    # THE FETCHER, and it belongs in this lock for `generate_payments`' reason: its month
-    # decides which directory the record is written into, and the ingest task that
-    # follows resolves ITS source dir from the same job parameter. A month that diverged
-    # here would write one month's landing dir and read another's -- a job whose every
-    # task reports SUCCESS having ingested nothing, after 42 HTTP round trips.
-    #
-    # Through `registry_landing`'s pair rather than `landing_api_table`/`landing_api_tmp`
-    # since F-API's fix pass, so the month is the THIRD positional argument here: this
-    # task built the api root's path itself while `bronze_ptax_ingest` asked `landing_dir`
-    # for it, which is one directory resolved two ways inside one job.
-    "fetch_ptax": [
-        ("landing_dir", 2, None),
-        ("landing_tmp_dir", 2, None),
-    ],
-}
-
-
-@pytest.mark.parametrize("script", sorted(_MONTH_CONSUMERS))
-def test_every_consumer_of_the_month_reads_the_one_required_local(script):
-    """ONE month local, bound by `require_month`, feeding every consumer.
-
-    `bronze_ingest.py` already said why for two of them -- "the SAME `month` the
-    stream read from -- one local, fed to both, so the snapshot the rows are
-    stamped with cannot drift from the folder they came out of". F1.4b PR B Task 5
-    Step 0 added a third and fourth consumer, and the third is the one that makes
-    this a lock rather than a tidiness check: the Auto Loader checkpoint. Keyed on a
-    month that is not the source directory's, a run drains 2026-07's files under
-    2026-06's checkpoint -- Spark's recovery semantics call a changed source
-    "generally not allowed ... likely to fail with unpredictable errors".
-
-    The second half is that the local is `require_month`'s result. A local bound to
-    `DEFAULT.month`, or to `args[2] if len(args) > 2 else DEFAULT.month`, would
-    satisfy every consistency check above while being the ONE value four entry
-    points have already substituted by accident (`require_month`'s own docstring
-    names them). Consistent and wrong is what this repo keeps paying for.
-
-    Reads the AST, so it sees the wiring rather than a run: nothing imports Spark."""
-    main = _main_of(script)
-    scope = _locals_of(main, script)
-    names: set[str] = set()
-    for callee, position, keyword in _MONTH_CONSUMERS[script]:
-        where = f"{script}: {callee}"
-        call = _sole_call(main, callee, script)
-        passed = call.args[position] if keyword is None else _kwarg(call, keyword, where)
-        assert isinstance(passed, ast.Name), (
-            f"{where} is handed {ast.dump(passed)[:80]}, not a local name -- a second "
-            "lookup of the month here can name a month the rest of this run did not use"
-        )
-        names.add(passed.id)
-    assert len(names) == 1, (
-        f"{script}.py feeds the month to its consumers from {sorted(names)} -- more than "
-        "one local, so the checkpoint, the source dir and the stamped column can diverge"
-    )
-    bound = scope.get(names.pop())
-    assert (
-        isinstance(bound, ast.Call)
-        and isinstance(bound.func, ast.Name)
-        and bound.func.id == "require_month"
-    ), (
-        f"{script}.py's month local is not `require_month(...)`'s result; a defaulted "
-        "month is consistent across every consumer above and still wrong in all of them"
-    )
-    # AND THE SAME PROPERTY FROM THE OTHER SIDE, because the enumeration above cannot
-    # see a consumer it does not name: a fifth one added tomorrow as
-    # `something(..., month=DEFAULT.month)` satisfies every assertion so far by being
-    # invisible to them. This needs no list -- the substitution has exactly one
-    # spelling, an attribute access for `month` on the config -- so it catches the
-    # consumer this file has not been taught about yet. `require_month`'s docstring
-    # names four entry points that each wrote it; two of them are these.
-    #
-    # THE SECOND DOOR: the owner is matched on its LAST dotted component, not on being
-    # a bare `Name`. `isinstance(node.value, ast.Name)` saw `DEFAULT.month` and missed
-    # `opl.config.DEFAULT.month` -- the same substitution written with the import spelled
-    # out, which is a normal thing to write and which this file's own imports make
-    # available. Unparsing and taking the tail catches every spelling of the owner while
-    # still requiring that it BE the config object, so `spec.month` or a local
-    # `parsed.month` is untouched.
-    substitutions = [
-        node
-        for node in ast.walk(main)
-        if isinstance(node, ast.Attribute)
-        and node.attr == "month"
-        and ast.unparse(node.value).rsplit(".", 1)[-1] in {"DEFAULT", "cfg"}
-    ]
-    assert not substitutions, (
-        f"{script}.py main() reads the config's pinned month directly ("
-        f"{len(substitutions)} occurrence(s)). That value equals the job YAMLs' own "
-        "default, so substituting it changes nothing observable until the first run "
-        "for another month -- and then it is wrong in the data, the checkpoint or a "
-        "delete boundary, with nothing in the log naming the month that was used"
-    )
-
-
 def _resolved_spec(main: ast.FunctionDef, scope: dict[str, ast.expr], script: str) -> ast.Call:
     """The one `table_spec(...)` call, checked to be argv-driven and bound to `spec`.
 
     Shared by the gate and the promote, which the ingest tests spell out inline
     because the lookup ingest's requirement is the opposite one (a literal)."""
-    resolved = _sole_call(main, "table_spec", script)
+    resolved = sole_call(main, "table_spec", script)
     assert not any(isinstance(arg, ast.Constant) for arg in resolved.args), (
         f"{script}.py resolves its spec from a literal; the table is a job parameter, "
         "and a literal here pins every job that runs this file to one table"
@@ -534,10 +356,10 @@ def test_the_promote_binds_every_coordinate_to_the_one_resolved_spec():
 
     The last assertion is the set the old entry was: exactly the three coordinates
     of one table, no fourth, and each qualified exactly once."""
-    main = _main_of("promote_batch")
-    scope = _locals_of(main, "promote_batch")
+    main = main_of("promote_batch")
+    scope = locals_of(main, "promote_batch")
     _resolved_spec(main, scope, "promote_batch")
-    call = _sole_call(main, "promote_batch", "promote_batch")
+    call = sole_call(main, "promote_batch", "promote_batch")
     bound = {
         kw.arg: _spec_field(
             _table_arg(
@@ -565,12 +387,12 @@ def test_the_gate_binds_the_table_it_reads_and_the_table_it_writes_to_one_spec()
     Collapsing them is not hypothetical -- a gate that reads its batch from the
     quarantine, or writes rejects into staging, is a one-identifier edit at either
     call site, and `table_spec(` would still be in the source afterwards."""
-    main = _main_of("dq_gate_batch")
-    scope = _locals_of(main, "dq_gate_batch")
+    main = main_of("dq_gate_batch")
+    scope = locals_of(main, "dq_gate_batch")
     _resolved_spec(main, scope, "dq_gate_batch")
-    read = _sole_call(main, "batch_rows", "dq_gate_batch")
+    read = sole_call(main, "batch_rows", "dq_gate_batch")
     assert len(read.args) >= 2, "batch_rows() no longer takes the table positionally"
-    written = _sole_call(main, "saveAsTable", "dq_gate_batch")
+    written = sole_call(main, "saveAsTable", "dq_gate_batch")
     assert len(written.args) >= 1, "saveAsTable() no longer takes the table positionally"
     bound = {
         "read": _spec_field(
@@ -643,10 +465,10 @@ def test_the_reclaim_proves_persistence_from_bronze_and_deletes_only_under_landi
     sibling `zips/<table>` holds the only copies of the source, and the last
     assertion is what keeps them unreachable: bronze is the only coordinate this
     task qualifies at all."""
-    main = _main_of("reclaim_landing")
-    scope = _locals_of(main, "reclaim_landing")
+    main = main_of("reclaim_landing")
+    scope = locals_of(main, "reclaim_landing")
     _resolved_spec(main, scope, "reclaim_landing")
-    proof = _sole_call(main, "files_of_batch", "reclaim_landing")
+    proof = sole_call(main, "files_of_batch", "reclaim_landing")
     assert len(proof.args) >= 2, "files_of_batch() no longer takes the table positionally"
     bound = {
         "proof": _spec_field(
@@ -657,7 +479,7 @@ def test_the_reclaim_proves_persistence_from_bronze_and_deletes_only_under_landi
             "reclaim_landing files_of_batch table",
         ),
         "deletes_under": _spec_field(
-            _sole_call(main, "landing_table", "reclaim_landing").args[0],
+            sole_call(main, "landing_table", "reclaim_landing").args[0],
             "reclaim_landing landing_table",
         ),
     }
@@ -673,10 +495,10 @@ def test_each_task_takes_its_rule_set_from_the_spec_it_resolved(script):
     task serves every table now, so the rule set has to follow the SAME spec the
     coordinates came from -- a task gating estab rows against the lookup's rules
     would pass rows the estab contract rejects."""
-    main = _main_of(script)
-    scope = _locals_of(main, script)
+    main = main_of(script)
+    scope = locals_of(main, script)
     _resolved_spec(main, scope, script)
-    call = _sole_call(main, "rules_for", script)
+    call = sole_call(main, "rules_for", script)
     assert len(call.args) == 1, f"{script}.py: rules_for() no longer takes one argument"
     assert _spec_field(call.args[0], f"{script} rules_for") == "contract"
 
@@ -708,22 +530,22 @@ def test_the_ptax_ingest_binds_every_coordinate_to_the_one_resolved_spec():
     WHOLE spec, which is the difference from `bronze_ingest`'s lock and is deliberate --
     the landing root comes from `spec.landing` there rather than from this file knowing the
     layout."""
-    main = _main_of("bronze_ptax_ingest")
-    scope = _locals_of(main, "bronze_ptax_ingest")
+    main = main_of("bronze_ptax_ingest")
+    scope = locals_of(main, "bronze_ptax_ingest")
     _resolved_spec(main, scope, "bronze_ptax_ingest")
-    stream = _sole_call(main, "bronze_stream", "bronze_ptax_ingest")
+    stream = sole_call(main, "bronze_stream", "bronze_ptax_ingest")
     assert len(stream.args) >= 5, "bronze_stream() no longer takes contract/table_key here"
     bound = {
         "contract": _spec_field(stream.args[2], "ptax bronze_stream contract"),
         "source_dir": _whole_spec_arg(
-            _sole_call(main, "landing_dir", "bronze_ptax_ingest").args[1], "ptax landing_dir"
+            sole_call(main, "landing_dir", "bronze_ptax_ingest").args[1], "ptax landing_dir"
         ),
         "checkpoint": _spec_field(
-            _sole_call(main, "checkpoint_location", "bronze_ptax_ingest").args[1],
+            sole_call(main, "checkpoint_location", "bronze_ptax_ingest").args[1],
             "ptax checkpoint",
         ),
         "written": _spec_field(
-            _table_arg(_sole_call(main, "toTable", "bronze_ptax_ingest").args[0], "toTable"),
+            _table_arg(sole_call(main, "toTable", "bronze_ptax_ingest").args[0], "toTable"),
             "ptax toTable",
         ),
     }
@@ -751,12 +573,13 @@ def test_the_fetch_writes_only_into_the_directories_its_own_spec_resolves():
     table at all: a fetch that named one is a fetch that could write to it.
 
     `generate_payments` is the same shape one root along and is locked by
-    `_MONTH_CONSUMERS` only, which is the gap this closes for the newer pair."""
-    main = _main_of("fetch_ptax")
-    scope = _locals_of(main, "fetch_ptax")
+    `test_month_wiring.py`'s `_MONTH_CONSUMERS` only, which is the gap this closes for
+    the newer pair."""
+    main = main_of("fetch_ptax")
+    scope = locals_of(main, "fetch_ptax")
     _resolved_spec(main, scope, "fetch_ptax")
     for callee in ("landing_dir", "landing_tmp_dir"):
-        call = _sole_call(main, callee, "fetch_ptax")
+        call = sole_call(main, callee, "fetch_ptax")
         assert len(call.args) == 3, f"fetch_ptax: {callee}() no longer takes (cfg, spec, month)"
         _whole_spec_arg(call.args[1], f"fetch_ptax {callee}")
     assert _qualified_spec_fields(main, "fetch_ptax") == [], (

@@ -27,7 +27,7 @@ and F2 wave 1's sharpest acceptance figure is 65,444 closed windows over 2026-06
 2026-07. Run as two single-month loads it is 0 and 0, both green, with a satellite that
 is a row short and nothing anywhere saying so. `databricks/src/vault_load_effectivity.py`
 REFUSES a one-month window before Spark for exactly this reason; that refusal is pinned
-in `tests/test_vault_job_wiring.py`, and this file is the measurement it rests on.
+in `tests/test_vault_entry_points.py`, and this file is the measurement it rests on.
 
 NOTHING HERE IS A DEFECT IN A LOADER. Every count below is the code behaving exactly as
 its own docstrings describe. That is the point: a test asserting a zero has to say

@@ -9,12 +9,12 @@ count: that file's subject is the BRONZE ingestion flow -- a table's landing dir
 checkpoint, its gate verdict, its promote -- and every helper in it resolves a
 `opl.bronze.registry` key. This file's subject is the vault, where a task is handed TWO
 registry keys (a vault table and a bronze source) and the mistakes are different in
-kind. The one thing that does cross is the revision guard, and it stays there: the four
+kind. The one thing that does cross is the revision guard, and it stays there: all five
 vault jobs are in its `_GUARDED_JOBS` so the guard's position, its parameter and its
 environment are asserted by the file that owns that argument, not re-asserted here.
 
 WHAT A COPIED VAULT JOB GETS WRONG, which is what every lock below is shaped around.
-These four YAMLs were written from one template and each task carries a vault table name
+These five YAMLs were written from one template and each task carries a vault table name
 AND a bronze table name, so a paste can leave either behind -- and both wrong values are
 the names of tables that EXIST:
 
@@ -35,28 +35,47 @@ the names of tables that EXIST:
 
 AND THE ONE THAT IS NOT A PASTE: a window too narrow to close an effectivity window.
 That is not a wrong value at all -- it is a legitimate, well-formed window that cannot
-produce the table's defining output, and it reports success. The guard, its reason, and
-the zero it exists to prevent are pinned in the last section of this file and measured
-against real Spark in `tests/vault/test_effectivity_window.py`.
+produce the table's defining output, and it reports success. What is pinned HERE is that
+no job YAML can hand a task one silently -- `test_the_months_default_refuses_rather_than
+_naming_a_window_nobody_chose`. That the ENTRY POINT refuses it when handed one anyway is
+`tests/test_vault_entry_points.py`, and the zero it exists to prevent is measured against
+real Spark in `tests/vault/test_effectivity_window.py`.
 
-Nothing here starts Spark: every assertion is about wiring. The entry points are loaded
-by path with the importlib pattern the other task tests use -- `databricks/src` scripts
-are job entry points, not part of the opl wheel."""
+AND THIS FILE IS NOW A PAIR, SPLIT BY F-DB TASK 1 AT EXACTLY 800 LINES. F-DB's
+`vault_merchant_job.yml` HAS SINCE BEEN ADDED to `_VAULT_JOBS`, which is what that split
+made room for -- and the totality lock now covers eighteen registered tables across TWO
+domains rather than fourteen across one. The seam is the one this repository has drawn
+twice already and named both times:
+`test_task_wiring.py` reads the SCRIPTS and `test_job_yaml_wiring.py` reads the JOB that
+hands them arguments; `test_gold_entry_points.py` and `test_gold_job_wiring.py` are that
+pair one layer along. The vault had both halves in one file. What went to
+`tests/test_vault_entry_points.py` is everything that consults no YAML at all: the two
+sweeps over the six entry points, and the refusals reached by driving a script's own
+`main()`. What stayed is everything that parametrizes over `_VAULT_JOBS`. Which side a
+lock lands on is decided by what makes it CHANGE -- a new job changes this file, a new
+entry point changes that one -- and F-DB adds a job and no entry point, which is why the
+other half moved out rather than this one. That prediction held: Task 5 added
+`vault_merchant_job.yml` and `tests/test_vault_entry_points.py` needed no edit, because
+all four loaders its tasks run already existed.
+
+Nothing here starts Spark: every assertion is about wiring. The two locks below that
+consult a script load it by path with the importlib pattern the other task tests use --
+`databricks/src` scripts are job entry points, not part of the opl wheel."""
 from __future__ import annotations
 
-import ast
 import importlib.util
+import pkgutil
 from pathlib import Path
 
 import pytest
 import yaml
 
 from opl.bronze.registry import table_spec as bronze_table_spec
-from opl.config import DEFAULT, SENTINEL_MONTH, is_month
-from opl.contracts.cnpj_schemas import columns_for
+from opl.config import SENTINEL_MONTH, is_month
+from opl.contracts.catalogue import columns_for
 from opl.vault import domains
-from opl.vault.domains import cnpj as cnpj_domain
 from opl.vault.job_params import optional_flag
+from opl.vault.links import undeclared_derived_ends
 from opl.vault.observation import ObservationGrain
 from opl.vault.registry import (
     EffectivitySatellite,
@@ -67,30 +86,42 @@ from opl.vault.registry import (
     VaultTable,
 )
 
+# `columns_for` COMES FROM `opl.contracts.catalogue` AND NOT FROM `cnpj_schemas`, SINCE
+# F-DB. The pairing lock below reads the contract of whatever bronze table a task names,
+# and three of those contracts are not the Receita's file layouts at all --
+# `cnpj_schemas.columns_for` raises KeyError for `merchant`. The catalogue is the join
+# over every source, which is the question this lock is actually asking.
+
 _REPO = Path(__file__).resolve().parents[1]
 _SRC = _REPO / "databricks" / "src"
 _RESOURCES = _REPO / "databricks" / "resources"
 
-# THE FOUR VAULT JOBS, ENUMERATED. A glob would silently give a job added later
+# THE FIVE VAULT JOBS, ENUMERATED. A glob would silently give a job added later
 # whichever behaviour it happened to inherit, and the totality lock below -- every
 # registered vault table is loaded by exactly one task -- is only a claim about the
-# vault if this list is the whole of it. `test_the_four_vault_jobs_are_the_vault_yamls
+# vault if this list is the whole of it. `test_the_five_vault_jobs_are_the_vault_yamls
 # _on_disk` closes the other direction.
 _VAULT_JOBS = (
     "vault_empresa_job.yml",
     "vault_estabelecimento_job.yml",
     "vault_partner_job.yml",
     "vault_reference_job.yml",
+    # F-DB Task 5, and the first vault job over a source that is not the Receita's file
+    # feed. Every lock below is total over it unchanged; what it needs from this list is
+    # the same thing the other four do.
+    "vault_merchant_job.yml",
 )
 
-_ENTRY_POINTS = (
-    "vault_load_hub",
-    "vault_load_satellite",
-    "vault_load_link",
-    "vault_load_partner_link",
-    "vault_load_effectivity",
-    "vault_load_reference",
-)
+# THE JOBS WHOSE `report_diagnostics` DEFAULT IS ON, WITH THE REASON -- a declared
+# exception rather than a hole in the lock below, on `_UNGUARDED_JOBS`' shape in
+# `test_job_yaml_launch_guards.py`. The default is off everywhere else because the two
+# diagnostics were most of a 5,635 s load over 69M keys and both answered 0.
+_DIAGNOSTICS_DEFAULT_ON = {
+    "vault_merchant_job.yml": (
+        "1,088 rows, where the argument for off was measured on 69M -- and off, the "
+        "departure figure is None, which is this phase's headline at hub grain"
+    ),
+}
 
 _GUARD = "assert_deployed_revision"
 _PYTHON_FILE_PREFIX = "../src/"
@@ -102,7 +133,9 @@ _LOAD_DATE_REFERENCE = "{{job.start_time.iso_datetime}}"
 # after them, because it is the only loader here with optional work to skip. The arity is
 # derived from the SCRIPT below rather than allowed to be "4 or 5", so a fifth parameter
 # handed to a loader that ignores it -- the shape a copy of a satellite task produces --
-# is refused here instead of being passed to nothing.
+# is refused here instead of being passed to nothing. Spelled in
+# `tests/test_vault_entry_points.py` too, which asks a different thing of it: the
+# parameter NAME the loader declares, rather than the arity of the task handed to it.
 _DIAGNOSTICS_SCRIPT = "vault_load_satellite"
 
 # The one loader per kind, EXCEPT for links -- see `_entry_point_for`, where the split
@@ -193,15 +226,22 @@ def _is_a_derived_link(link: Link) -> bool:
     """Does this link have an end `load_link` cannot compute?
 
     THE SAME CONDITION `opl.vault.links._refuse_a_link_this_loader_cannot_write` TESTS,
-    read from the spec rather than restated as a list of table names. That refusal is
-    the reason there are two link loaders at all: `load_link` computes every end's
-    reference from the columns that hub is NAMED after, and a non-identifying end's
-    business key is derived instead -- so both ends of `link_company_partner` would be
-    hashed from `cnpj_basico` and every relationship would read as a company partnered
-    with itself, with the right row count and working joins. Deriving the routing from
-    the condition means a wave-2 link with a dependent-child key is routed correctly by
-    this lock on the day it is registered, rather than passing it by omission."""
-    return bool(link.dependent_child_keys) or any(not end.identifying for end in link.ends)
+    and since F-DB it is the same FUNCTION rather than a restatement of it:
+    `undeclared_derived_ends` is exported from that module for exactly this caller. That
+    refusal is the reason there are two link loaders at all -- `load_link` computes every
+    end's reference from the columns that hub is NAMED after, so an undeclared derived
+    end would hash both ends of `link_company_partner` from `cnpj_basico` and every
+    relationship would read as a company partnered with itself, with the right row count
+    and working joins.
+
+    THE CONDITION MOVED AND THE ROUTING DID NOT, WHICH IS WHAT THIS RE-DERIVATION IS FOR.
+    It read `any(not end.identifying ...)`, and that flag was a PROXY for "derived".
+    `link_merchant_empresa`'s empresa end is derived AND identifying, so under the old
+    spelling this lock would have routed it to `vault_load_partner_link.py` -- a loader
+    that would refuse it -- while under the flag's stated MEANING it belongs on
+    `vault_load_link.py`, which can now write it. Asking the loader's own function means
+    the two cannot disagree about which entry point a link needs."""
+    return bool(link.dependent_child_keys) or bool(undeclared_derived_ends(link))
 
 
 def _entry_point_for(spec: VaultTable) -> str:
@@ -234,7 +274,15 @@ def _required_source_columns(spec: VaultTable) -> tuple[str, ...]:
             # `partner_link_candidates` refuses the COMPANY end's key and the two
             # dependent-child keys; the partner end is derived from one of the latter.
             return (*hubs[0].business_key_columns, *spec.dependent_child_key_columns)
-        return tuple(name for hub in hubs for name in hub.business_key_columns)
+        # `link_candidates` asks the END where its hub's key lives -- the hub's own
+        # column names, or the columns a `LinkEnd.key_from` declares. Restated as
+        # `hub.business_key_columns` this lock would demand `cnpj_basico` from
+        # `bronze_merchant`, which has no such column, and refuse a pairing that works.
+        return tuple(
+            name
+            for end, hub in zip(spec.ends, hubs, strict=True)
+            for name in end.source_columns(hub)
+        )
     if isinstance(spec, EffectivitySatellite):
         link = domains.parent_link(spec)
         return (*domains.link_identity_columns(link), spec.entry_column)
@@ -256,7 +304,7 @@ def _parents_in(spec: VaultTable) -> tuple[str, ...]:
 # --- the locks -----------------------------------------------------------------------
 
 
-def test_the_four_vault_jobs_are_the_vault_yamls_on_disk():
+def test_the_five_vault_jobs_are_the_vault_yamls_on_disk():
     """`_VAULT_JOBS` is what every lock below iterates, so a vault job missing from it
     is a job none of them look at -- and the totality lock underneath would then say
     "every vault table is loaded" while ignoring the file that loads some of them."""
@@ -453,11 +501,40 @@ def test_the_diagnostics_flag_is_declared_exactly_where_a_task_is_handed_one(job
             "never a literal, or the job parameter cannot reach it"
         )
     if handed:
-        assert optional_flag(declared[name], parameter=name) is False, (
-            f"{job_yml}'s {name} default is {declared[name]!r}, which parses ON. Every run "
-            "launched without --params would pay for a second full scan of the source and "
-            "a materialised observation ledger it never asked for"
+        _assert_the_diagnostics_default_is_off_unless_declared_otherwise(
+            job_yml, name, declared[name]
         )
+
+
+def _assert_the_diagnostics_default_is_off_unless_declared_otherwise(
+    job_yml: str, name: str, default: str
+) -> None:
+    """Off, unless the job is in `_DIAGNOSTICS_DEFAULT_ON` with a reason beside it.
+
+    AN EXCEPTION WITH A NAME RATHER THAN A WEAKER LOCK, on `_UNGUARDED_JOBS`' shape. The
+    default is off because two extra full passes over 69M keys were most of a 5,635 s
+    load; that is a COST argument, and it has an answer per source rather than in
+    general. On 1,088 rows the cost is nothing and the departure figure is the phase's
+    headline -- and off, `load_satellite` reports it as `None`, which it deliberately
+    keeps distinguishable from a measured 0. A headline that depends on an override at
+    launch is a headline somebody forgets to ask for.
+
+    Both directions are asserted, so an entry that outlives its job's default fails here
+    rather than silently exempting a job that no longer needs exempting."""
+    parsed = optional_flag(default, parameter=name)
+    if job_yml in _DIAGNOSTICS_DEFAULT_ON:
+        assert parsed is True, (
+            f"{job_yml} is listed in _DIAGNOSTICS_DEFAULT_ON because {name} costs it "
+            f"nothing ({_DIAGNOSTICS_DEFAULT_ON[job_yml]}), and its default is "
+            f"{default!r}, which parses OFF. Take the entry out or turn the default on"
+        )
+        return
+    assert parsed is False, (
+        f"{job_yml}'s {name} default is {default!r}, which parses ON. Every run "
+        "launched without --params would pay for a second full scan of the source and "
+        "a materialised observation ledger it never asked for. If that cost is nothing "
+        "for this source, say so in _DIAGNOSTICS_DEFAULT_ON rather than here"
+    )
 
 
 @pytest.mark.parametrize("job_yml", _VAULT_JOBS)
@@ -486,7 +563,13 @@ def test_every_vault_task_runs_unretried_in_the_declared_serverless_environment(
         assert spec["dependencies"] == ["../../dist/*.whl"]
 
 
-# --- the entry points themselves -----------------------------------------------------
+# --- the one thing the job layer re-derives ------------------------------------------
+#
+# The two locks below are the only ones here that consult a SCRIPT, and both do it in
+# service of a YAML claim: which grain the task a YAML declares will build, and which
+# parameter name the loader a YAML hands a fifth argument to declares. Everything that
+# asks a script a question of its own -- what it must not spell, and what it refuses
+# when driven -- is `tests/test_vault_entry_points.py`.
 
 
 def _load(name: str):
@@ -497,71 +580,21 @@ def _load(name: str):
     return module
 
 
-def _tree(script: str) -> ast.Module:
-    return ast.parse((_SRC / f"{script}.py").read_text(encoding="utf-8"), filename=script)
+def _grains_the_domains_declare() -> dict[str, ObservationGrain]:
+    """Every `ObservationGrain` bound at module level by any domain module, by name.
 
-
-def _non_docstring_strings(tree: ast.Module) -> list[str]:
-    """Every string literal in `tree` that is not a docstring.
-
-    The docstrings are excluded for `test_git_is_consulted_at_build_time_and_nowhere_the
-    _artefact_runs`' reason: this repository's prose names the thing a module must NOT do
-    in order to explain why, and a check over the raw text would refuse the explanation
-    along with the thing. Comments never reach the AST, so they are free."""
-    docstrings = {
-        id(node.body[0].value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Module | ast.FunctionDef | ast.ClassDef)
-        and node.body
-        and isinstance(node.body[0], ast.Expr)
-        and isinstance(node.body[0].value, ast.Constant)
-        and isinstance(node.body[0].value.value, str)
-    }
-    return [
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        and id(node) not in docstrings
-    ]
-
-
-@pytest.mark.parametrize("script", _ENTRY_POINTS)
-def test_no_vault_entry_point_spells_a_catalog_or_a_schema(script):
-    """The qualification comes from `opl.config.DEFAULT.table` and from nowhere else.
-
-    `opl.vault.registry` states the division these tasks are the other half of: a spec
-    carries an unqualified name, the loaders take a qualified table as an argument, and
-    `opl.config` is consulted "by whatever calls a loader" -- which, until this branch,
-    was nothing at all. A literal `workspace.default.` here would be that consultation
-    forked, and Free Edition's single catalog is what would make the fork invisible."""
-    qualification = f"{DEFAULT.catalog}.{DEFAULT.schema}."
-    spelled = [
-        value for value in _non_docstring_strings(_tree(script)) if qualification in value
-    ]
-    assert not spelled, (
-        f"{script}.py spells {qualification!r} in {spelled}. Catalog and schema come "
-        "from opl.config.DEFAULT.table(name); a second spelling is a coordinate that "
-        "drifts the day this project is on a workspace with more than one catalog"
-    )
-    qualifies = [
-        node for node in ast.walk(_tree(script))
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "table"
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "DEFAULT"
-    ]
-    assert qualifies, f"{script}.py never calls DEFAULT.table(...), so it qualifies nothing"
-
-
-@pytest.mark.parametrize("script", _ENTRY_POINTS)
-def test_no_vault_entry_point_raises_system_exit(script):
-    """Serverless runs these under IPython, where an uncaught `SystemExit` reports a
-    SUCCESSFUL run as FAILED. Every task under databricks/src calls a bare `main()`;
-    these six are new, so the shape is pinned rather than assumed."""
-    source = (_SRC / f"{script}.py").read_text(encoding="utf-8")
-    assert "SystemExit" not in source
-    assert source.rstrip().endswith('if __name__ == "__main__":\n    main()')
+    The package is scanned the way `opl.vault.registry.discover_domains` scans it --
+    underscore-prefixed modules skipped -- so this is total over the domains that exist
+    rather than over the ones this file happened to import."""
+    found: dict[str, ObservationGrain] = {}
+    for info in pkgutil.iter_modules(list(domains.__path__)):
+        if info.name.startswith("_"):
+            continue
+        module = importlib.import_module(f"{domains.__name__}.{info.name}")
+        for value in vars(module).values():
+            if isinstance(value, ObservationGrain):
+                found[value.name] = value
+    return found
 
 
 def _grains_the_jobs_build() -> list[tuple[str, str, str, ObservationGrain]]:
@@ -596,21 +629,25 @@ def test_the_grain_this_task_builds_is_the_grain_the_domain_declares():
     the reason it is asserted rather than argued.
 
     `opl/vault/domains/cnpj.py` declares `EMPRESA_GRAIN`, `ESTABELECIMENTO_GRAIN` and
-    `COMPANY_PARTNER_GRAIN` -- an observation grain is not a registered table, so there
-    is no way for a job to reach one by name without a mapping that would itself be the
-    second spelling. So the two satellite entry points call the SAME constructor over the
-    SAME two registry entries, and this compares the result against what the domain
-    declares, per (satellite task, bronze source) pairing the YAMLs actually carry.
+    `COMPANY_PARTNER_GRAIN`, and `merchant_domain.py` declares two more -- an observation
+    grain is not a registered table, so there is no way for a job to reach one by name
+    without a mapping that would itself be the second spelling. So the two satellite entry
+    points call the SAME constructor over the SAME two registry entries, and this compares
+    the result against what the domain declares, per (satellite task, bronze source)
+    pairing the YAMLs actually carry.
+
+    IT SWEEPS THE DOMAINS PACKAGE RATHER THAN ONE MODULE, SINCE F-DB. It read
+    `vars(cnpj_domain)` while there was one domain, which would have reported the merchant
+    grains as "declared by no constant" -- a lock that goes red for the right reason and
+    names the wrong cause. The sweep is `discover_domains`' own mechanism, so a wave-2
+    domain is covered on the day its file lands rather than on the day somebody adds an
+    import here.
 
     The grain is the argument whose mistakes are invisible in the output: it decides the
     reported departure count for a descriptive satellite and WHICH WINDOWS CLOSE for the
     effectivity one. The loaders' own `_refuse_a_mismatched_grain` covers the runtime
     half; this covers the half that would otherwise be a paragraph of prose."""
-    declared = {
-        value.name: value
-        for value in vars(cnpj_domain).values()
-        if isinstance(value, ObservationGrain)
-    }
+    declared = _grains_the_domains_declare()
     built = _grains_the_jobs_build()
     for job_yml, key, script, grain in built:
         assert grain.name in declared, (
@@ -635,104 +672,6 @@ def test_the_grain_this_task_builds_is_the_grain_the_domain_declares():
         f"{len(built)} of the {expected} registered tables whose loader takes an "
         "observation grain had one checked here"
     )
-
-
-# --- the window that cannot close a window -------------------------------------------
-#
-# The tension this phase names, and the guard that closes it. `observation_ledger`
-# derives its key universe from the same window it reports on, so over ONE month every
-# key it knows about is present in the only month it is asked about and no key can reach
-# `absent_after_observation` -- the one state that closes an effectivity window. A
-# one-month window therefore closes ZERO windows for any data, always, and reports
-# success doing it. `tests/vault/test_effectivity_window.py` measures that zero against
-# real Spark; what is pinned here is that the job layer refuses the window rather than
-# running it.
-
-_A_GOOD_LOAD_DATE = "2026-08-09T12:00:00"
-
-
-def test_the_effectivity_task_refuses_a_window_too_narrow_to_close_anything():
-    """The guard, driven through `main` rather than called directly, so what is pinned
-    is that it is ON the path and not merely present in the file."""
-    task = _load("vault_load_effectivity")
-    with pytest.raises(ValueError, match="closes a window on absence"):
-        task.main(["sat_eff_company_partner", "socios", "2026-07", _A_GOOD_LOAD_DATE])
-
-
-def test_the_window_guard_runs_before_the_session_and_lets_two_months_through():
-    """BOTH HALVES IN ONE RUN, and neither is reachable any other way without Spark.
-
-    Two months and a load date that cannot parse: the failure must be the LOAD DATE's,
-    which proves the window guard passed on two months -- and it proves the guard stands
-    ahead of `SparkSession.builder.getOrCreate()`, because a guard after the session
-    would start one to reject an argument. A refusal that costs a serverless start is a
-    refusal an operator learns to route around."""
-    task = _load("vault_load_effectivity")
-    with pytest.raises(ValueError, match="ISO-8601"):
-        task.main(["sat_eff_company_partner", "socios", "2026-06+2026-07", ""])
-
-
-def test_a_repeated_month_cannot_inflate_the_window_past_the_guard():
-    """`months=2026-07+2026-07` is two entries and ONE month.
-
-    The ledger folds a duplicate away and answers the same, so nothing in the library
-    cares -- which is exactly why the refusal lives in `opl.vault.job_params` and why it
-    is worth a test of its own. The guard above measures narrowness by COUNTING months;
-    admitted, this typo would carry a one-month window straight past it and back into the
-    zero-closes load."""
-    task = _load("vault_load_effectivity")
-    with pytest.raises(ValueError, match="more than once"):
-        task.main(["sat_eff_company_partner", "socios", "2026-07+2026-07", _A_GOOD_LOAD_DATE])
-
-
-def test_a_task_handed_no_diagnostics_flag_runs_the_cheap_load_rather_than_refusing():
-    """THE ONE ABSENT JOB PARAMETER THIS PACKAGE DEFAULTS INSTEAD OF REFUSING, asserted
-    because it is the exception to everything above it in this section. A missing window
-    is refused: every default is a load nobody chose. A missing FLAG has a default that
-    claims LESS rather than something wrong -- neither diagnostic is measured and the
-    result says `None`, which nothing can read as a zero. Absence has to keep working
-    besides: `test_an_entry_point_handed_a_table_of_the_wrong_kind_refuses_before_spark`
-    drives `main` with four arguments, as does any operator's older launch command."""
-    name = _load(_DIAGNOSTICS_SCRIPT).DIAGNOSTICS_PARAMETER
-
-    assert optional_flag(None, parameter=name) is False
-    assert optional_flag("", parameter=name) is False
-    assert optional_flag("false", parameter=name) is False
-    assert optional_flag("true", parameter=name) is True
-    assert optional_flag(" TRUE ", parameter=name) is True
-
-
-def test_a_diagnostics_flag_the_parser_cannot_read_is_refused_and_not_read_as_off():
-    """`report_diagnostics=yes` is an operator ASKING for the measurement.
-
-    Defaulted, their run comes back with `None` in both fields -- byte-identical to the
-    run they were trying not to launch -- and there is nothing in the log to say the
-    parameter was ignored. The refusal costs a relaunch; the default costs the
-    measurement they came for."""
-    with pytest.raises(ValueError, match="report_diagnostics='yes'"):
-        optional_flag("yes", parameter="report_diagnostics")
-
-
-@pytest.mark.parametrize(
-    "script,table",
-    [
-        ("vault_load_hub", "sat_empresa_dados"),
-        ("vault_load_satellite", "hub_empresa"),
-        ("vault_load_link", "ref_cnae"),
-        ("vault_load_effectivity", "link_company_partner"),
-        ("vault_load_reference", "sat_eff_company_partner"),
-    ],
-)
-def test_an_entry_point_handed_a_table_of_the_wrong_kind_refuses_before_spark(script, table):
-    """The refusal that makes the YAML lock above more than a style rule.
-
-    `domains.table_spec` refuses a name no domain registers; what it cannot refuse is a
-    REGISTERED table of the wrong kind, which is what a copied task produces. Without
-    this the mistake arrives as an `AttributeError` inside Spark's analysis, naming a
-    dataclass field rather than a table."""
-    task = _load(script)
-    with pytest.raises(ValueError, match="was handed vault table"):
-        task.main([table, "empresas", "2026-06+2026-07", _A_GOOD_LOAD_DATE])
 
 
 # --- mutation probes: the locks above, proved able to fail ---------------------------
@@ -791,8 +730,9 @@ def test_the_source_lock_catches_a_satellite_left_reading_the_table_it_was_copie
 def test_the_months_default_lock_catches_a_real_window_nobody_would_have_chosen(tmp_path):
     """Proves the default lock can fail, in the shape that is silent HERE and was not in
     bronze. A `months: "2026-07"` default makes every un-parameterised run of the partner
-    job close zero windows and report success -- the whole failure this file's last
-    section exists for, reached through a YAML default rather than through a launch."""
+    job close zero windows and report success -- the whole failure the window section of
+    `tests/test_vault_entry_points.py` exists for, reached through a YAML default rather
+    than through a launch."""
     root = _mutated(
         "vault_partner_job.yml", tmp_path, f'default: "{SENTINEL_MONTH}"', 'default: "2026-07"'
     )

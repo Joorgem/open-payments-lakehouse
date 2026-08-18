@@ -558,8 +558,11 @@ def test_the_generic_link_loader_refuses_the_link_it_cannot_write(
     after, and this link's partner end is derived. Left unrefused it would not crash --
     `link_candidates` would compute a partner reference from `cnpj_basico`, giving every
     partner the COMPANY's digest, so every relationship would appear to be a company
-    partnered with itself."""
-    with pytest.raises(ValueError, match="dependent-child keys or a non-identifying"):
+    partnered with itself.
+
+    THE REFUSAL IS UNCHANGED AND ITS WORDING IS NOT (F-DB Task 5): `not end.identifying`
+    was a proxy: see `links.undeclared_derived_ends` for the reason it now refuses on."""
+    with pytest.raises(ValueError, match="nor a declared derivation"):
         load_link(
             spark, LINK, hubs=LINK_HUBS, hub_tables=socios_hub_tables(socios_target),
             source_table=socios_source.bronze,

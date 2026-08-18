@@ -49,6 +49,7 @@ from opl.vault import domains, satellites
 from opl.vault.columns import APPLIED_DATE
 from opl.vault.observation import ObservationGrain
 from opl.vault.satellites import SatelliteLoadResult, load_satellite
+from opl.vault.specs import KeyPrefix
 
 from .conftest import (
     JUL,
@@ -290,6 +291,36 @@ def test_the_line_a_skipped_run_prints_cannot_be_read_as_a_measured_zero():
     assert "_diagnostics_note(months, result)" in Path(task.__file__).read_text(
         encoding="utf-8"
     ), "main no longer prints through _diagnostics_note, so this test measures nothing"
+
+
+def test_a_hub_grain_declaring_a_key_prefix_is_refused(spark, source, target):
+    """THE HOLE F-DB TASK 5's CORRECTION PASS OPENED WHILE CLOSING ANOTHER, refused where
+    it would land. A grain may now be READ THROUGH a `KeyPrefix` -- the derivation that
+    makes `link_merchant_empresa`'s ledger key on the eight characters its digest is over
+    rather than on the fourteen bronze holds. A HUB has none: its business key is read
+    from the columns it is named after (`loading._padded_components` is the whole of it),
+    so there is nothing to compare a prefix against and it is refused outright.
+
+    AND HERE THE MISTAKE POINTS THE OTHER WAY, which is why the refusal is worth its own
+    test rather than falling out of the link's. On a link the missing prefix made the
+    ledger FINER than the thing it gates; a prefix on a hub key makes it COARSER --
+    `10000001` and `10000002` fold into one ledger key at width 7 -- so this file's whole
+    subject, `candidate_departures`, would be reported only when the LAST company sharing
+    a truncation left. Small, plausible, and about a key space no satellite row exists
+    for."""
+    truncated = ObservationGrain(
+        name="hub_empresa", bronze_table=source.bronze,
+        quarantine_table=source.quarantine, key_columns=("cnpj_basico",),
+        key_prefixes=(KeyPrefix(column="cnpj_basico", width=7),),
+    )
+
+    with pytest.raises(ValueError, match="reads its business key from the columns"):
+        load_satellite(
+            spark, SAT, hub=HUB, source_table=source.bronze, target_table=target.sat,
+            load_date=LOADED_AT, grain=truncated, months=[JUN, JUL],
+        )
+
+    assert not spark.catalog.tableExists(target.sat)
 
 
 def test_a_result_cannot_call_one_diagnostic_measured_and_the_other_not():

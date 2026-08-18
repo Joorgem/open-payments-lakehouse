@@ -48,10 +48,11 @@ from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
 from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN, SNAPSHOT_REF_DATE_COLUMN
+from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT, SnapshotAxis
 from opl.vault.columns import APPLIED_DATE, HASH_DIFF, RECORD_SOURCE
 from opl.vault.hashing_spark import hash_key_column, zero_padded_column
 from opl.vault.months import validated_months
-from opl.vault.registry import BusinessKeyColumn, Hub, Link
+from opl.vault.registry import BusinessKeyColumn, Hub, Link, LinkEnd
 
 # Bronze's own RSRC column, carried into the vault verbatim rather than re-derived.
 #
@@ -69,11 +70,15 @@ BRONZE_RECORD_SOURCE = "_record_source"
 # defines rather than restated strings.
 __all__ = [
     "BRONZE_RECORD_SOURCE",
+    "MONTHLY_SNAPSHOT",
     "SNAPSHOT_MONTH_COLUMN",
     "SNAPSHOT_REF_DATE_COLUMN",
+    "SnapshotAxis",
     "changed_rows",
     "earliest_record_source",
+    "end_components",
     "hash_key_expression",
+    "hash_key_for_end",
     "hash_key_over",
     "link_hash_key_expression",
     "read_snapshot_window",
@@ -156,6 +161,53 @@ def hash_key_over(hub: Hub, sources: Sequence[Column]) -> Column:
     return hash_key_column(_padded(hub.business_keys, list(sources)))
 
 
+def _end_sources(end: LinkEnd, hub: Hub) -> list[Column]:
+    """The RAW columns one link end's hub business key is read from, before padding.
+
+    ONE LIST, TWO CONSUMERS, WHICH IS WHAT KEEPS THEM FROM DISAGREEING. `end_components`
+    pads it for the LINK's own digest and `hash_key_for_end` hands the same list to
+    `hash_key_over` for the end's HUB REFERENCE. If those were two derivations, a link
+    could carry a reference column that joins correctly and an identity column computed
+    over something else -- which is the failure `opl.vault.links.refuse_mismatched_hubs`
+    describes for a reordered pair: every row present, every join working, and the
+    table's identity disagreeing with the one a re-load computes.
+
+    `key_from is None` IS THE PRE-F-DB BRANCH AND IS BYTE-IDENTICAL TO IT. It returns
+    exactly `[F.col(key.name) for key in hub.business_keys]`, which is what
+    `_padded_components` reads and what `hash_key_expression` hashes, so every end of
+    both CNPJ links takes the same path through different words."""
+    if end.key_from is None:
+        return [F.col(key.name) for key in hub.business_keys]
+    return [
+        F.substring(F.col(prefix.column), 1, prefix.width) for prefix in end.key_from
+    ]
+
+
+def end_components(end: LinkEnd, hub: Hub) -> list[Column]:
+    """One link end's hub business key, padded to the hub's declared widths, read from
+    wherever the END says it lives -- the components a link's own hash key concatenates.
+
+    THE DECLARATION IS THE ONLY THING THAT DIFFERS. The widths, the order and the padding
+    are the hub's, through `_padded`, so a derived end takes the digest of a value padded
+    exactly as `load_hub` padded the value it wrote. `build_registry` has already refused
+    a prefix whose width is not the hub's, so the pad is a no-op on a well-formed
+    declaration and a refusal rather than a truncation on a malformed value."""
+    return _padded(hub.business_keys, _end_sources(end, hub))
+
+
+def hash_key_for_end(end: LinkEnd, hub: Hub) -> Column:
+    """The hub reference one link end writes: the hub's own hash key, taken over
+    whatever columns that end declares.
+
+    THROUGH `hash_key_over`, WHICH IS THE SEAM THAT ALREADY EXISTED -- "the same
+    standard, the same widths, the same order, read somewhere else". `opl.vault.partners`
+    was its only caller and reached it by hard-coding socios' derivation in a second
+    loader; this reaches it from a DECLARATION, which is the whole of T5b. An end with no
+    declaration hands it the hub's own columns, so the result is `hash_key_expression`'s
+    to the byte."""
+    return hash_key_over(hub, _end_sources(end, hub))
+
+
 def link_hash_key_expression(link: Link, hubs: Sequence[Hub]) -> Column:
     """A link's own hash key: the standard over every IDENTIFYING end's hub business
     key, concatenated in the link's declared order, then its dependent-child keys.
@@ -200,8 +252,21 @@ def link_hash_key_expression(link: Link, hubs: Sequence[Hub]) -> Column:
 
     DEPENDENT-CHILD KEYS COME LAST, after every hub, and that order is load-bearing for
     the same reason the hub order is -- the components are flattened with no boundary
-    marker, so moving one re-keys the whole table."""
-    components = [component for hub in hubs for component in _padded_components(hub)]
+    marker, so moving one re-keys the whole table.
+
+    `hubs` IS ZIPPED STRICTLY AGAINST `link.identifying_ends` SINCE F-DB, which turns the
+    paragraph above from an instruction into a refusal: every caller already passed
+    `identifying_hubs(link, hubs)`, and a caller that passed something else got a digest
+    over the wrong hubs rather than an error. The pairing is what a DERIVED end needs --
+    `end_components` reads the columns the END declares, so `link_merchant_empresa` hashes
+    the first eight characters of `cnpj` where `link_empresa_estabelecimento` hashes
+    `cnpj_basico` by name. Every end written before F-DB declares nothing, so its
+    components are `_padded_components(hub)` exactly as before."""
+    components = [
+        component
+        for end, hub in zip(link.identifying_ends, hubs, strict=True)
+        for component in end_components(end, hub)
+    ]
     components += _padded(
         link.dependent_child_keys,
         [F.col(key.name) for key in link.dependent_child_keys],
@@ -209,7 +274,9 @@ def link_hash_key_expression(link: Link, hubs: Sequence[Hub]) -> Column:
     return hash_key_column(components)
 
 
-def earliest_record_source(keyed: DataFrame, group_by: Sequence[str]) -> DataFrame:
+def earliest_record_source(
+    keyed: DataFrame, group_by: Sequence[str], *, axis: SnapshotAxis = MONTHLY_SNAPSHOT
+) -> DataFrame:
     """One row per group, carrying the `record_source` of the EARLIEST month the group
     appeared in.
 
@@ -221,11 +288,17 @@ def earliest_record_source(keyed: DataFrame, group_by: Sequence[str]) -> DataFra
     partial aggregate, so it costs no shuffle beyond the grouping that is already
     needed to collapse a key's many monthly rows into one.
 
-    `keyed` must carry `_snapshot_month` and `_record_source`; the result carries
-    `group_by` and `record_source` and nothing else."""
+    `keyed` must carry `axis.column` and `_record_source`; the result carries
+    `group_by` and `record_source` and nothing else.
+
+    "EARLIEST" IS A `min` OVER A STRING, so it is the axis's FORMAT that makes this
+    chronological -- see `opl.bronze.snapshot_axis`, which is where both declared
+    formats are pinned to sort that way and where the argument lives. Defaulted for
+    `read_snapshot_window`'s reason: both callers here are over monthly sources and
+    neither had to change."""
     return (
         keyed.groupBy(*group_by)
-        .agg(F.min(F.struct(SNAPSHOT_MONTH_COLUMN, BRONZE_RECORD_SOURCE)).alias(_FIRST_SEEN))
+        .agg(F.min(F.struct(axis.column, BRONZE_RECORD_SOURCE)).alias(_FIRST_SEEN))
         .select(
             *group_by,
             F.col(f"{_FIRST_SEEN}.{BRONZE_RECORD_SOURCE}").alias(RECORD_SOURCE),
@@ -304,7 +377,9 @@ def changed_rows(
     return candidates.join(changed, on=[key, APPLIED_DATE], how="left_semi")
 
 
-def _validated_months(months: Sequence[str] | None) -> tuple[str, ...] | None:
+def _validated_months(
+    months: Sequence[str] | None, axis: SnapshotAxis
+) -> tuple[str, ...] | None:
     """The window, or `None` for "every month the source holds".
 
     Shares `opl.vault.months.validated_months` with the observation ledger rather than
@@ -315,27 +390,42 @@ def _validated_months(months: Sequence[str] | None) -> tuple[str, ...] | None:
     to gain."""
     return validated_months(
         months,
-        column=SNAPSHOT_MONTH_COLUMN,
+        axis=axis,
         consequence="An empty or unmatched window loads nothing and reports success",
     )
 
 
 def read_snapshot_window(
-    spark: SparkSession, table: str, months: Sequence[str] | None
+    spark: SparkSession,
+    table: str,
+    months: Sequence[str] | None,
+    *,
+    axis: SnapshotAxis = MONTHLY_SNAPSHOT,
 ) -> DataFrame:
     """`table`, narrowed to `months`, or the whole table when `months` is None.
 
     `None` IS THE DEFAULT EVERY CALLER SHOULD PREFER. A vault load is idempotent by
     hash key, so re-reading a month already loaded costs a scan and changes nothing,
-    where omitting one leaves a hole that only a later full reload closes."""
+    where omitting one leaves a hole that only a later full reload closes.
+
+    `axis` IS KEYWORD-ONLY AND DEFAULTED, WHICH IS WHAT KEEPS THIS A GENERALISATION
+    RATHER THAN A MIGRATION. Nine call sites across six loaders pass a window to this
+    function and every one of them is over a monthly RFB or generated source; the
+    default is what they already meant, so none of them had to change to keep being
+    right. A source with a finer axis passes its own, and the two loaders that already
+    take an `ObservationGrain` read it off THAT rather than accepting a second
+    parameter -- a grain and an axis argument that could disagree would be two
+    spellings of one decision, and the disagreement would land as a window that
+    silently selected nothing."""
     frame = spark.read.table(table)
-    window = _validated_months(months)
+    window = _validated_months(months, axis)
     if window is None:
         return frame
-    if SNAPSHOT_MONTH_COLUMN not in frame.columns:
+    if axis.column not in frame.columns:
         raise ValueError(
-            f"{table!r} has no {SNAPSHOT_MONTH_COLUMN} column, so a month window "
-            "cannot be applied to it. Every bronze table carries one; a source that "
-            "does not is not a monthly snapshot and must be loaded whole"
+            f"{table!r} has no {axis.column} column, so a {axis.name} window cannot be "
+            "applied to it. Every bronze table carries the axis its BronzeTable "
+            "declares; a source whose column is missing is not the snapshot its "
+            "registry entry claims and must be loaded whole"
         )
-    return frame.filter(F.col(SNAPSHOT_MONTH_COLUMN).isin(list(window)))
+    return frame.filter(F.col(axis.column).isin(list(window)))

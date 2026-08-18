@@ -89,6 +89,15 @@ _GUARDED_JOBS = (
     # would have to be written under, and the repair is deleting a file from the Volume
     # by hand.
     "bronze_ptax_job.yml",
+    # The merchant job, and this list's question has yet another answer here: its input was
+    # produced by a DIFFERENT ARTEFACT ON A DIFFERENT MACHINE. Every other job in this list
+    # either reads bytes somebody else published or writes its own with the same wheel that
+    # then reads them. Here a host-side extractor built the file, and the wheel that ingests
+    # it can be from another revision without anything in the workspace noticing -- it would
+    # read a landed snapshot against a different contract, stamp `_snapshot_ref_date` with a
+    # different derivation, and append the result to the table the vault's first end-dating
+    # is measured from.
+    "bronze_merchant_job.yml",
     # The operator job, and its inclusion is a decision rather than completeness: a
     # repromote APPENDS TO BRONZE, the system of record, re-applying whatever DQ rules
     # the deployed wheel happens to carry. Run against a stale wheel it appends rows
@@ -145,6 +154,16 @@ _GUARDED_JOBS = (
     # to nothing at all, and reports success. Every other job in this list writes rows that
     # are wrong; this one writes rows that are unreachable.
     "gold_fact_payment_job.yml",
+    # The merchant vault job (F-DB Task 5), and this list's question has an answer here
+    # that no other vault entry has: it is the only job in this repository that can write
+    # a CLOSING row, and a close is a DERIVED claim -- the source never told us the
+    # relationship ended, we inferred it from an absence. `sat_eff_merchant_empresa` is
+    # insert-only like every other table here, so a wheel from another revision that
+    # closed a window on a different condition leaves a row asserting a relationship
+    # ended, on a table whose repair is deleting rows by hand. The other vault jobs write
+    # keys and payloads that a later correct load re-derives; this one writes an
+    # inference about something that is no longer there to re-read.
+    "vault_merchant_job.yml",
 )
 
 _UNGUARDED_JOBS = {

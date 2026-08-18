@@ -1,9 +1,43 @@
 # ADR 0002 — Two-layer topology (extraction vs transformation)
 
 ## Context
-Databricks Free Edition serverless compute blocks outbound internet to
+
+> **AMENDED 2026-08-17 by F-DB. HALF OF THIS PARAGRAPH WAS MEASURED FALSE BY F-API ON
+> 2026-08-14 AND F-API DID NOT COME BACK TO SAY SO.** The amendment is **scoped to this
+> Context**. The Decision below stands unchanged, and so does everything from *"Validation
+> notes"* onward — those are live decisions cited by `CLAUDE.md`, `README.md` and
+> `docs/f0-validation-report.md`, and none of them is retracted here.
+
+~~Databricks Free Edition serverless compute blocks outbound internet to
 untrusted domains (DNS resolution fails); LinkedIn verification does not lift
-this. Therefore BCB API calls and Postgres reads cannot run as Databricks jobs.
+this. Therefore BCB API calls and Postgres reads cannot run as Databricks jobs.~~
+
+**What was measured** (`docs/f-api-run-evidence.md` §0.8): a serverless task resolved
+`olinda.bcb.gov.br` to `150.171.109.72`, received HTTP 200 from the BCB, and pulled
+**192,973 bytes** from an unrelated second host. The PTAX fetch then ran **in production** as
+a job task — one `fetch` task, 52 s, 60 single-day HTTPS requests. **So "blocks outbound
+internet to untrusted domains" is false as stated, and "BCB API calls cannot run as
+Databricks jobs" is false by demonstration**: they do, on the critical path, today.
+
+**The conclusion survives for Postgres, and the reason is a different one.** The database is
+a container bound to `localhost:5433` on a development machine behind a home NAT. Egress
+*out of* Databricks creates no route *into* that machine: these are opposite directions, and
+the struck paragraph reached the right answer for Postgres by conflating them. What rules out
+a Databricks-side Postgres read is **network topology**, not an egress policy.
+
+**That reason is ARGUED, NOT MEASURED, and the distinction is the point of writing it down.**
+There is no public address to point a probe at, so **no measurement is offered here and none
+is implied**. A reader holding F-API's egress result must not be able to read this as a test
+that was run. For the same discipline: **`psycopg[binary]` on serverless is unmeasured and
+stays that way** — "we did not measure it" and "it does not work" are two sentences this
+project keeps having to separate, and F-DB's extractor runs host-side for the topology reason
+above rather than because a driver was found wanting.
+
+**Why the amendment is here rather than in a new ADR.** The Decision this Context introduces
+is unchanged and correct: extraction off Databricks, landing to a UC Volume, transformation
+on Databricks. A new ADR superseding this one would retire a topology that is running, over a
+premise defect in one paragraph. F-DB is the fourth source to depend on that topology and the
+first whose reason for it is not the one written here.
 
 ## Decision
 Split into (1) an Extraction & Landing layer that runs OFF Databricks (Docker

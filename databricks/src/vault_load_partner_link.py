@@ -27,7 +27,9 @@ import sys
 
 from pyspark.sql import SparkSession
 
+from opl.bronze.registry import BronzeTable
 from opl.bronze.registry import table_spec as bronze_table_spec
+from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT
 from opl.config import DEFAULT
 from opl.vault import domains
 from opl.vault.job_params import required_load_date, required_months, required_spec
@@ -35,10 +37,40 @@ from opl.vault.partners import load_partner_link
 from opl.vault.registry import Link
 
 
+def _refuse_a_non_monthly_source(spec: Link, source: BronzeTable) -> None:
+    """THIS LOADER IS MONTHLY, AND A NON-MONTHLY SOURCE IS REFUSED RATHER THAN DEFAULTED.
+
+    `load_partner_link` takes no `axis`: it folds on `_snapshot_month` throughout. Nothing
+    in the deployed wiring pairs it with a non-monthly source, but nothing in THIS file
+    stopped one either -- `bronze_table_spec` accepts any registered table. Every bronze row
+    carries `_snapshot_month` whatever its axis (`autoloader.add_common_audit_columns`), so
+    the failure would not raise: the window would validate, the fold would silently use the
+    wrong axis, and the load would report success. Refused by default here rather than
+    admitted by an `else`, which is `fetch_ptax._refuse_a_table_this_does_not_fetch`'s
+    discipline applied to the axis instead of the landing mode.
+
+    A NAMED FUNCTION RATHER THAN A BLOCK INSIDE `main`, and that is this file's own
+    correction. The block was added to `main` by the commit that wired the axis into the
+    remaining four entry points, and it took `main` from 34 lines to 51 -- past this
+    project's 50-line function cap, which is measured over the AST and therefore counts the
+    ten comment lines that carry the argument. Nobody saw it because the tree held 33
+    over-cap functions before that commit and 33 after: one left the set as this one
+    entered. Lifted at the seam, on `registry_landing._landing_and_tmp`'s precedent, so the
+    prose survives at full length and the refusal gains a name a traceback can print."""
+    if source.snapshot_axis != MONTHLY_SNAPSHOT:
+        raise ValueError(
+            f"refusing to load {spec.name}: {source.name} declares the "
+            f"{source.snapshot_axis.name} snapshot axis, and `load_partner_link` folds on "
+            f"{MONTHLY_SNAPSHOT.column} throughout. A loader that cannot honour an axis "
+            f"must refuse the source rather than quietly read the wrong column"
+        )
+
+
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     spec = required_spec(args[0] if args else "", Link, loader="vault_load_partner_link")
     source = bronze_table_spec(args[1] if len(args) > 1 else "")
+    _refuse_a_non_monthly_source(spec, source)
     months = required_months(args[2] if len(args) > 2 else "", action=f"load {spec.name}")
     load_date = required_load_date(args[3] if len(args) > 3 else "")
     spark = SparkSession.builder.getOrCreate()

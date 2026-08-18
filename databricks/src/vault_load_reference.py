@@ -24,11 +24,40 @@ import sys
 
 from pyspark.sql import SparkSession
 
+from opl.bronze.registry import BronzeTable
 from opl.bronze.registry import table_spec as bronze_table_spec
+from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT
 from opl.config import DEFAULT
 from opl.vault.job_params import required_load_date, required_months, required_spec
 from opl.vault.reference import load_reference_table
 from opl.vault.registry import ReferenceTable
+
+
+def _refuse_a_non_monthly_source(spec: ReferenceTable, source: BronzeTable) -> None:
+    """THIS LOADER IS MONTHLY, AND A NON-MONTHLY SOURCE IS REFUSED RATHER THAN DEFAULTED.
+
+    `load_reference_table` takes no `axis`: it folds on `_snapshot_month` throughout.
+    Nothing in the deployed wiring pairs it with a non-monthly source, but nothing in THIS
+    file stopped one either -- `bronze_table_spec` accepts any registered table. Every
+    bronze row carries `_snapshot_month` whatever its axis
+    (`autoloader.add_common_audit_columns`), so the failure would not raise: the window
+    would validate, the fold would silently use the wrong axis, and the load would report
+    success. Refused by default here rather than admitted by an `else`, which is
+    `fetch_ptax._refuse_a_table_this_does_not_fetch`'s discipline applied to the axis
+    instead of the landing mode.
+
+    A NAMED FUNCTION FOR ITS TWIN'S REASON. The identical block was added to `main` here
+    and in `vault_load_partner_link.py` by one commit; there it took `main` past the
+    50-line cap and here it left six lines of room. Lifted in both, so the pair still reads
+    as a pair and the next line added to this file is not the one that repeats the
+    crossing."""
+    if source.snapshot_axis != MONTHLY_SNAPSHOT:
+        raise ValueError(
+            f"refusing to load {spec.name}: {source.name} declares the "
+            f"{source.snapshot_axis.name} snapshot axis, and `load_reference_table` folds on "
+            f"{MONTHLY_SNAPSHOT.column} throughout. A loader that cannot honour an axis "
+            f"must refuse the source rather than quietly read the wrong column"
+        )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -37,6 +66,7 @@ def main(argv: list[str] | None = None) -> None:
         args[0] if args else "", ReferenceTable, loader="vault_load_reference"
     )
     source = bronze_table_spec(args[1] if len(args) > 1 else "")
+    _refuse_a_non_monthly_source(spec, source)
     months = required_months(args[2] if len(args) > 2 else "", action=f"load {spec.name}")
     load_date = required_load_date(args[3] if len(args) > 3 else "")
     spark = SparkSession.builder.getOrCreate()

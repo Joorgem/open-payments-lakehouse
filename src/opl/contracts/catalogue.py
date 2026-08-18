@@ -34,7 +34,7 @@ is checking. A tuple removes the question instead of documenting it.
 """
 from __future__ import annotations
 
-from opl.contracts import payments, ptax
+from opl.contracts import merchant, payments, ptax
 from opl.contracts.cnpj_schemas import TABLES
 
 # Every source that is NOT the RFB's own file layouts, as (contract key, owning module).
@@ -43,6 +43,10 @@ from opl.contracts.cnpj_schemas import TABLES
 _SINGLE_CONTRACT_SOURCES = (
     (payments.CONTRACT, "opl.contracts.payments"),
     (ptax.CONTRACT, "opl.contracts.ptax"),
+    # F-DB Task 4. The third non-RFB source, and the third whose key could collide with
+    # either of the two above rather than only with the RFB half -- which is exactly the
+    # blindness F-API Task 2 found in the guard below when there were two.
+    (merchant.CONTRACT, "opl.contracts.merchant"),
 )
 
 
@@ -97,6 +101,15 @@ CONTRACT_COLUMNS: dict[str, tuple[str, ...]] = {
     **{contract: tuple(columns) for contract, columns in TABLES.items()},
     payments.CONTRACT: tuple(payments.COLUMNS),
     ptax.CONTRACT: tuple(ptax.COLUMNS),
+    # The merchant half is `opl.contracts.merchant.COLUMNS`, whose order is authoritative
+    # for the same reason. THIS LINE IS A SEPARATE EDIT FROM THE TWO ABOVE and is not
+    # derived from `_SINGLE_CONTRACT_SOURCES`: that tuple carries (key, module NAME) for a
+    # message, not the module object, so there is nothing there to read a column list off.
+    # Adding a source is therefore three edits to this file -- the import, the collision
+    # list, and this literal -- and missing this one makes
+    # `registry._assert_contracts_exist` refuse at import and takes the whole suite red,
+    # which is the loud direction and is why it has not been "simplified" into a loop.
+    merchant.CONTRACT: tuple(merchant.COLUMNS),
 }
 
 

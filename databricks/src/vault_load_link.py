@@ -37,7 +37,12 @@ def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     spec = required_spec(args[0] if args else "", Link, loader="vault_load_link")
     source = bronze_table_spec(args[1] if len(args) > 1 else "")
-    months = required_months(args[2] if len(args) > 2 else "", action=f"load {spec.name}")
+    # THE AXIS COMES OFF THE SOURCE, into both the window validator and the loader --
+    # see `vault_load_hub.py` for why defaulting is worse here than refusing.
+    axis = source.snapshot_axis
+    months = required_months(
+        args[2] if len(args) > 2 else "", action=f"load {spec.name}", axis=axis
+    )
     load_date = required_load_date(args[3] if len(args) > 3 else "")
     spark = SparkSession.builder.getOrCreate()
     hubs = domains.linked_hubs(spec)
@@ -54,6 +59,7 @@ def main(argv: list[str] | None = None) -> None:
         target_table=DEFAULT.table(spec.name),
         load_date=load_date,
         months=list(months),
+        axis=axis,
     )
     print(
         f"vault_load_link: {result.table} +{result.appended} rows from "

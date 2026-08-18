@@ -28,12 +28,19 @@ next.
   drift between the two targets fails CI (`opl._version_check`) instead of
   surfacing in production — see
   [`docs/adr/0001-dual-target-versions.md`](docs/adr/0001-dual-target-versions.md).
-- **Honest Databricks Free Edition constraints, verified, not assumed**:
-  serverless compute blocks outbound internet to untrusted domains (no CNPJ
-  download from inside Databricks), so extraction and landing run off-platform
-  and only reach Databricks through a control-plane PAT upload into a Unity
-  Catalog Volume — see
-  [`docs/adr/0002-two-layer-topology.md`](docs/adr/0002-two-layer-topology.md).
+- **Honest Databricks Free Edition constraints — and the one this project got wrong
+  about itself**: extraction and landing run off-platform and reach Databricks only
+  through a control-plane PAT upload into a Unity Catalog Volume. That topology is
+  right and it is running. **The reason first given for it was not.** This README
+  used to say serverless compute blocks outbound internet to untrusted domains, and
+  called it *verified*; a later phase measured a serverless task resolving a public
+  host, receiving HTTP 200 and pulling 192,973 bytes, and then ran an API fetch as a
+  production job task. **The constraint that survives is network topology** — egress
+  out of Databricks creates no route into a database on a laptop behind a home NAT,
+  which is the opposite direction — and it is labelled *argued*, not measured, because
+  there is no address to point a probe at. See
+  [`docs/adr/0002-two-layer-topology.md`](docs/adr/0002-two-layer-topology.md), whose
+  Context carries the amendment and the measurement that forced it.
 
 ## Built vs Roadmap
 
@@ -49,13 +56,20 @@ today.
 
 ## Topology (two layers, by necessity)
 
-Databricks Free Edition serverless compute blocks outbound internet to
-untrusted domains, so extraction can't run on Databricks — it runs off it and
-lands data through the control plane instead:
+Extraction runs off Databricks and lands data through the control plane. **Not
+because serverless is cut off from the internet — it is not, and this document
+said so for four phases.** A serverless task has reached a public API and run it
+in production. What keeps extraction off-platform is per-source and concrete:
+the CNPJ share needs Range-resume over multi-gigabyte downloads and unzipping
+before landing, and the Postgres source is a container on a development machine
+behind a home NAT, which no amount of outbound egress reaches. See
+[ADR 0002](docs/adr/0002-two-layer-topology.md).
 
-```
-EXTRACTION & LANDING (off Databricks: local / GitHub Actions — have internet)
+```text
+EXTRACTION & LANDING (off Databricks — the reason is per-source, see above)
   CNPJ WebDAV share --> extractor (resume/retry/checksum) --> local files
+  Postgres  :5433   --> one REPEATABLE READ READ ONLY txn  --> local files
+                        (full snapshot + the instant that read it)
                                                                   |
                                        upload via Databricks SDK (PAT)
                                                                   v
@@ -63,6 +77,11 @@ EXTRACTION & LANDING (off Databricks: local / GitHub Actions — have internet)
                                                                   |
 TRANSFORMATION (Databricks Free Edition: serverless, UC, Jobs)   v
   Bronze (Auto Loader) --> Silver (Data Vault 2.0) --> Gold (Kimball star)
+
+AND ONE SOURCE DOES NOT PASS THROUGH THIS DIAGRAM AT ALL:
+  BCB/Olinda PTAX --> fetched BY A SERVERLESS JOB TASK, in production
+                      (60 HTTPS requests, 52 s) -- which is the measurement
+                      that falsified this section's own former premise
 ```
 
 ## Run locally

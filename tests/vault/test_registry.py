@@ -241,15 +241,25 @@ def test_an_underscore_prefixed_module_is_skipped_and_does_not_have_to_be_a_doma
     assert [domain.name for domain in discovered] == ["payments"]
 
 
-def test_the_cnpj_domain_registers_its_wave_one_tables():
+def test_the_registered_tables_are_the_two_domains_wave_one_tables():
     """The real package, through the real entry point. Pinned as literals for the
     reason the bronze registry pins its four table names: a rename is a re-keying of
-    everything downstream and should cost a deliberate edit here."""
+    everything downstream and should cost a deliberate edit here.
+
+    TWO DOMAINS SINCE F-DB, WHICH IS THE ONE THING THIS LIST NOW PROVES THAT IT DID NOT.
+    The four `*_merchant*` entries are declared in `opl/vault/domains/merchant_domain.py`
+    and nothing in `opl/vault/` names that module: discovery is a directory scan, so a
+    second domain is registered by existing. That is the "+1 file, 0 modified" claim
+    holding at the level it was made -- `domains/__init__.py` and `registry.py`'s
+    discovery are untouched -- and this assertion is where a domain that stopped being
+    discovered would show up as four missing names rather than as a job failing."""
     assert sorted(domains.REGISTRY) == [
         "hub_empresa",
         "hub_estabelecimento",
+        "hub_merchant",
         "link_company_partner",
         "link_empresa_estabelecimento",
+        "link_merchant_empresa",
         "ref_cnae",
         "ref_motivo",
         "ref_municipio",
@@ -257,9 +267,11 @@ def test_the_cnpj_domain_registers_its_wave_one_tables():
         "ref_pais",
         "ref_qualificacao",
         "sat_eff_company_partner",
+        "sat_eff_merchant_empresa",
         "sat_empresa_dados",
         "sat_estabelecimento_dados",
         "sat_estabelecimento_endereco",
+        "sat_merchant_dados",
     ]
     assert domains.table_spec("hub_empresa").hash_key == "hub_empresa_hk"
     assert domains.table_spec("hub_estabelecimento").business_key_columns == (

@@ -175,6 +175,58 @@ class OplConfig:
             f"{require_month(month, action='locate the api staging dir')}/{table}"
         )
 
+    # --- the FOURTH landing root: sources read out of an operational database ----------
+    #
+    # A FOURTH ROOT AND NOT `api/`, on exactly the argument the third block above makes
+    # against `generated/`. `api/` means "somebody else's bytes, fetched over HTTP, by a
+    # task running INSIDE the workspace" -- and every one of those three clauses is false
+    # here. The merchant registry's bytes are produced by a database this project runs, and
+    # they are read by a HOST-SIDE extractor (plan T1: the database is a container bound to
+    # localhost:5433, and egress out of Databricks creates no route into a laptop behind a
+    # home NAT). Landing them under `api/` would make that root's own sentence false.
+    #
+    # `postgres/` AND NOT `merchant/`, for the reason `generated/` is not `payments/` and
+    # `api/` is not `ptax/`: the discriminator is HOW THE BYTES ARRIVE, so a second
+    # database source lands beside this one under one root instead of forcing a fifth.
+    #
+    # THE MONTH IS REQUIRED HERE TOO AND FALLS BACK NOWHERE -- see the generated block for
+    # the full argument, including the empty-string hole that collapses a table dir onto
+    # the month root.
+    @property
+    def landing_postgres_root(self) -> str:
+        return f"{self.volume_root}/postgres"
+
+    def landing_postgres_month(self, month: str) -> str:
+        return (
+            f"{self.landing_postgres_root}/"
+            f"{require_month(month, action='locate the postgres landing month')}"
+        )
+
+    def landing_postgres_table(self, table: str, month: str) -> str:
+        """The directory a database-fed table's Auto Loader reads for `month`."""
+        return f"{self.landing_postgres_month(month)}/{table}"
+
+    def landing_postgres_tmp(self, table: str, month: str) -> str:
+        """Where a database-fed table's writer would stage a half-written file.
+
+        DECLARED AND, TODAY, NEVER WRITTEN TO -- which is a property of this source's
+        topology rather than an omission, and is recorded here rather than left for a
+        reader to discover. Every other landing mode's producer runs ON Databricks and
+        stages inside the Volume so that `os.replace` can make the file appear whole; one
+        UC Volume is one FUSE mount, which is what makes that rename atomic. This source's
+        producer runs on the extraction HOST: it writes and verifies a local file and then
+        PUTs it through `opl.extraction.landing.upload_to_volume`, so there is no
+        Volume-side staging step to point anywhere.
+        `opl.bronze.registry_landing._landing_and_tmp` resolves both directories in ONE
+        dispatch on purpose -- so a landing dir and its staging twin can never come from
+        two different roots -- and that dispatch is total, so this half exists because the
+        mapping is total, not because something writes here. It is on the standing
+        unexercised list."""
+        return (
+            f"{self.volume_root}/_tmp/postgres/"
+            f"{require_month(month, action='locate the postgres staging dir')}/{table}"
+        )
+
     def table(self, name: str) -> str:
         return f"{self.catalog}.{self.schema}.{name}"
 
@@ -199,7 +251,14 @@ DEFAULT = OplConfig()
 # survived it because the check lived in a second place instead of in the guard all
 # four entry points route through. `ref_date_column` now asks `is_month` rather than
 # re-spelling the rule.
-_MONTH = re.compile(r"^[0-9]{4}-(0[1-9]|1[0-2])$")
+# THE PATTERN IS NAMED AND UNANCHORED, and the compiled anchored form is built from it.
+# `opl.bronze.snapshot_axis` composes an INSTANT out of a month followed by a day and a
+# time, and it needs the month half as a SUBPATTERN -- the alternative was for that module
+# to spell `[0-9]{4}-(0[1-9]|1[0-2])` again, which is the second spelling this whole
+# comment block is about. `is_month` below is unchanged and stays the one PREDICATE; this
+# is the one PATTERN, and neither is derived from the other by anyone else.
+MONTH_PATTERN = r"[0-9]{4}-(0[1-9]|1[0-2])"
+_MONTH = re.compile(f"^{MONTH_PATTERN}$")
 
 
 def is_month(value: str) -> bool:

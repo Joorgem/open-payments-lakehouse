@@ -70,14 +70,15 @@ from opl.vault.columns import LOAD_DATE, RECORD_SOURCE
 from opl.vault.hashing_spark import refuse_non_string_columns
 from opl.vault.loading import (
     BRONZE_RECORD_SOURCE,
-    SNAPSHOT_MONTH_COLUMN,
+    MONTHLY_SNAPSHOT,
+    SnapshotAxis,
     earliest_record_source,
-    hash_key_expression,
+    hash_key_for_end,
     link_hash_key_expression,
     read_snapshot_window,
     rows_in,
 )
-from opl.vault.registry import Hub, Link, identifying_hubs
+from opl.vault.registry import Hub, Link, LinkEnd, identifying_hubs
 
 
 @dataclass(frozen=True)
@@ -195,6 +196,31 @@ def refuse_unloaded_hubs(
         _refuse_a_hub_that_was_never_loaded(link, hub, table, rows)
 
 
+def undeclared_derived_ends(link: Link) -> tuple[LinkEnd, ...]:
+    """The ends of `link` whose business key is neither named columns of the source nor
+    a declared derivation.
+
+    THIS IS THE CONDITION `_refuse_a_link_this_loader_cannot_write` TESTS, RE-DERIVED IN
+    F-DB RATHER THAN RELAXED, and named so the job-wiring lock can route a link to an
+    entry point by asking the same question rather than restating it. The old spelling
+    was `not end.identifying`, and that flag was a PROXY: the refusal's own docstring
+    gave the reason as "a non-identifying end's business key is not a column of the
+    source under the hub's own name -- it is derived". `LinkEnd.key_from` makes that
+    reason checkable directly, and the two questions come apart the moment an end is
+    derived AND identifying -- `link_merchant_empresa`'s empresa end, whose `cnpj` must
+    be in the link's digest or a merchant re-pointed to another company keeps its link
+    hash key and no window is ever closed.
+
+    SO THE GUARD IS STRICTLY SHARPER, NOT WEAKER. `link_company_partner`'s partner end
+    declares no `key_from` and is non-identifying, so it is still refused, and its
+    derivation still lives in `opl.vault.partners` -- which is not migrated, because
+    that link also carries dependent-child keys this loader does not write and the
+    migration would buy no capability while touching a loader proven over 33.13 GB."""
+    return tuple(
+        end for end in link.ends if end.key_from is None and not end.identifying
+    )
+
+
 def _refuse_a_link_this_loader_cannot_write(link: Link) -> None:
     """This loader writes one hub reference per end and nothing else.
 
@@ -203,22 +229,25 @@ def _refuse_a_link_this_loader_cannot_write(link: Link) -> None:
     "can THIS loader write it", which is a statement about this module. Putting the two
     together made the partner loader refuse the very link it exists for.
 
-    WHAT IT PREVENTS IS NOT A CRASH. A link whose partner end is derived would still
-    load here: `link_candidates` computes every end's reference from the columns its
+    WHAT IT PREVENTS IS NOT A CRASH. A link with an UNDECLARED derived end would still
+    load here: `link_candidates` would compute that end's reference from the columns its
     hub is NAMED after, so both ends of `link_company_partner` would be hashed from
     `cnpj_basico` and every relationship would read as a company partnered with
     itself -- right row count, working joins, nonsense. And its dependent-child keys
     would be hashed into the link's key by `link_hash_key_expression` and then not
     written, so the table's identity column would describe columns it does not have."""
-    if link.dependent_child_keys or any(not end.identifying for end in link.ends):
+    undeclared = undeclared_derived_ends(link)
+    if link.dependent_child_keys or undeclared:
         raise ValueError(
-            f"link {link.name!r} declares dependent-child keys or a non-identifying "
-            "end, and this loader writes hub references and nothing else. A "
-            "non-identifying end's business key is not a column of the source under "
-            "the hub's own name -- it is derived -- so both ends would be hashed from "
+            f"link {link.name!r} declares dependent-child keys or an end whose business "
+            f"key is neither named columns of the source nor a declared derivation "
+            f"({[end.hub for end in undeclared]}), and this loader writes hub references "
+            "and nothing else. Such an end is derived, so both ends would be hashed from "
             "the same column and every relationship would read as a company partnered "
-            "with itself. `opl.vault.partners.load_partner_link` is the loader that "
-            "knows the derivation; see its module docstring for why it is separate"
+            "with itself. Either declare the derivation with `LinkEnd.key_from`, which "
+            "this loader CAN write and `build_registry` checks against the hub, or use "
+            "`opl.vault.partners.load_partner_link`, which knows socios' own; see its "
+            "module docstring for why that one is separate"
         )
 
 
@@ -233,6 +262,36 @@ def reference_columns(link: Link, hubs: Sequence[Hub]) -> list[str]:
     ]
 
 
+def source_columns(link: Link, hubs: Sequence[Hub]) -> list[str]:
+    """Every column of the ONE source this loader reads a hub business key out of, in
+    end order -- the list `refuse_non_string_columns` is handed.
+
+    EVERY END'S BUSINESS KEY MUST BE READABLE FROM THIS ONE SOURCE, which is what makes
+    a link loadable from a single table at all: estabelecimentos carries `cnpj_basico`
+    (hub_empresa's whole key) as well as the establishment triple, so one scan produces
+    both references. A link whose ends live in two sources needs a join and is a
+    different loader; refusing on this list means it arrives as an error naming the
+    missing column rather than as a NULL reference.
+
+    "READABLE FROM", NOT "NAMED AFTER", SINCE F-DB, AND THAT IS ONE WORD OF WIDENING
+    RATHER THAN A NEW CAPABILITY. `link_candidates`' docstring read "EVERY HUB'S BUSINESS
+    KEY MUST BE A COLUMN OF THIS ONE SOURCE", which is what made T5's original ruling look
+    buildable: `bronze_merchant` carries `cnpj` and no `cnpj_basico`, so `hub_empresa`'s
+    key is not a column of it under that name. `LinkEnd.source_columns` answers where each
+    end's key really lives -- the hub's own names, or the columns a `key_from` declares --
+    and both the refusal and the expression read that one answer. What is unchanged is the
+    requirement: ONE source, one scan, no join. `hash_key_for_end` is the expression half.
+
+    A NAMED FUNCTION RATHER THAN A COMPREHENSION INSIDE THE CALLER, because the paragraph
+    above is what it is FOR, and `link_candidates` reached this project's 50-line function
+    cap carrying it. The prose moves with the code it describes."""
+    return [
+        name
+        for end, hub in zip(link.ends, hubs, strict=True)
+        for name in end.source_columns(hub)
+    ]
+
+
 def link_candidates(
     spark: SparkSession,
     link: Link,
@@ -240,23 +299,21 @@ def link_candidates(
     *,
     source_table: str,
     months: Sequence[str] | None,
+    axis: SnapshotAxis = MONTHLY_SNAPSHOT,
 ) -> DataFrame:
     """One row per relationship in the window: the link's hash key, one hash-key
     reference per participating hub, and the `record_source` of the earliest month the
     relationship appeared in.
 
-    EVERY HUB'S BUSINESS KEY MUST BE A COLUMN OF THIS ONE SOURCE, which is what makes a
-    link loadable from a single table at all. `refuse_non_string_columns` says so by
-    name: estabelecimentos carries `cnpj_basico` (hub_empresa's whole key) as well as
-    the establishment triple, so one scan produces both references. A link whose ends
-    live in two sources needs a join and is a different loader; refusing here means it
-    arrives as an error naming the missing column rather than as a NULL reference.
+    ONE SOURCE, ONE SCAN, AND EVERY END'S KEY READ OUT OF IT -- see `source_columns`
+    above, which is the list this refuses on and where that requirement is argued.
 
     THE REFERENCES ARE COMPUTED, NOT LOOKED UP. Joining to the hubs to fetch their
     digests would make this load depend on the hubs having been loaded first and would
-    silently drop a relationship whose hub row is missing. `hash_key_expression` is the
-    same function `load_hub` keys with, so the digests agree by construction rather
-    than by ordering.
+    silently drop a relationship whose hub row is missing. `hash_key_for_end` reaches
+    `hash_key_column` through the hub's own widths and order for every end -- directly
+    for an end the source names, and through `hash_key_over` for a declared derivation --
+    so the digests agree with `load_hub`'s by construction rather than by ordering.
 
     THE REFERENCE COLUMN NAME COMES FROM THE END, NOT FROM THE HUB, and that is a
     correction rather than a nicety. `build_registry` validates a link's columns under
@@ -264,19 +321,18 @@ def link_candidates(
     under `hub.hash_key`, which ignores it. A link with two roled ends on one hub was
     therefore validated as two distinct columns and written as one -- the exact
     collision the registry guard exists to prevent, reached by passing it."""
-    source = read_snapshot_window(spark, source_table, months)
-    components = [name for hub in hubs for name in hub.business_key_columns]
-    refuse_non_string_columns(source, components)
+    source = read_snapshot_window(spark, source_table, months, axis=axis)
+    refuse_non_string_columns(source, source_columns(link, hubs))
     keyed = source.select(
         link_hash_key_expression(link, identifying_hubs(link, hubs)).alias(link.hash_key),
         *(
-            hash_key_expression(hub).alias(end.reference_column(hub))
+            hash_key_for_end(end, hub).alias(end.reference_column(hub))
             for end, hub in zip(link.ends, hubs, strict=True)
         ),
-        F.col(SNAPSHOT_MONTH_COLUMN),
+        F.col(axis.column),
         F.col(BRONZE_RECORD_SOURCE),
     )
-    return earliest_record_source(keyed, reference_columns(link, hubs))
+    return earliest_record_source(keyed, reference_columns(link, hubs), axis=axis)
 
 
 def load_link(
@@ -289,6 +345,7 @@ def load_link(
     target_table: str,
     load_date: datetime,
     months: Sequence[str] | None = None,
+    axis: SnapshotAxis = MONTHLY_SNAPSHOT,
 ) -> LinkLoadResult:
     """Append every relationship of `source_table` that `target_table` does not already
     hold, stamped with `load_date`.
@@ -305,7 +362,7 @@ def load_link(
     refuse_unloaded_hubs(spark, link, hubs, hub_tables)
     before = rows_in(spark, target_table)
     candidates = link_candidates(
-        spark, link, hubs, source_table=source_table, months=months
+        spark, link, hubs, source_table=source_table, months=months, axis=axis
     )
     if before:
         candidates = candidates.join(

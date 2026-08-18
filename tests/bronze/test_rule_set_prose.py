@@ -37,7 +37,16 @@ _BACKTICKED = re.compile(r"`([a-z][a-z0-9_]*\*?)`")
 # The prefixes every reject reason in this repository is built from. Anything backticked in
 # the prose that starts with one of these is being named AS A RULE, which is what makes the
 # reverse direction below possible without parsing English.
-_REASON_PREFIXES = ("null_or_empty", "bad_", "unparseable_", "unprovable_", "encoding_")
+#
+# `unhashable_` joined the vocabulary with `unhashable_case_divergence` (plan T10), and it
+# belongs to the family `unparseable_` and `unprovable_` already spell: "this value reached
+# the gate and the pipeline cannot do the one thing it needs to do with it". It is a
+# PREFIX list rather than a name list, so a second `unhashable_*` rule is covered; adding
+# to it is the only way a new reason family becomes visible to the sweeps below, which is
+# why it is a declaration and not a regex over anything backticked.
+_REASON_PREFIXES = (
+    "null_or_empty", "bad_", "unparseable_", "unprovable_", "unhashable_", "encoding_",
+)
 
 # `rescued_data_present` is `opl.bronze.dq`'s own reason, ranked above every per-table rule
 # and produced by no rule set, so the summary names it legitimately while `rules_for` never

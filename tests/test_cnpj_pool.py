@@ -66,6 +66,40 @@ def test_the_width_is_the_one_the_vault_declares():
     assert CNPJ_BASICO_WIDTH == VAULT_WIDTH == 8
 
 
+def test_every_declaration_of_the_root_width_in_this_repository_agrees():
+    """All FIVE spellings of `8`, compared against each other rather than each against
+    the literal.
+
+    THE TWO-WAY ASSERTION ABOVE WAS NOT ENOUGH, and the whole-branch code review is what
+    found it. F-DB added a fifth declaration (`opl.contracts.merchant`) whose only reader
+    asserted the module's own literal against itself -- green through any divergence
+    between the other four, which is the species this repository keeps catching: a check
+    whose output cannot tell "it passed" from "it never ran".
+
+    THEY ARE NOT COLLAPSED INTO ONE DECLARATION, deliberately. `opl.contracts.merchant`
+    imports nothing at all, by a constraint its own docstring argues (the extraction
+    scripts import the registry on a host where pyspark is absent), and
+    `opl.vault.partners` and `opl.vault.domains.cnpj` are loaders proven over 33.13 GB
+    that this phase has no reason to edit for a mechanical gain. So the repair is a
+    cross-check, on this file's own precedent, not a refactor."""
+    from opl.bronze.rule_predicates import _CNPJ_BASICO_WIDTH as RULE_WIDTH
+    from opl.contracts.merchant import CNPJ_BASICO_WIDTH as CONTRACT_WIDTH
+    from opl.vault.partners import CNPJ_BASICO_WIDTH as PARTNER_WIDTH
+
+    widths = {
+        "opl.generator.cnpj_pool": CNPJ_BASICO_WIDTH,
+        "opl.vault.domains.cnpj": VAULT_WIDTH,
+        "opl.vault.partners": PARTNER_WIDTH,
+        "opl.contracts.merchant": CONTRACT_WIDTH,
+        "opl.bronze.rule_predicates": RULE_WIDTH,
+    }
+    assert set(widths.values()) == {8}, (
+        f"the CNPJ root width is declared five times and they disagree: {widths}. "
+        "Every one of them decides which characters reach a hash key or a DQ rule, so a "
+        "divergence re-keys one consumer against the others with no error anywhere"
+    )
+
+
 def test_the_module_executes_nothing_and_imports_no_engine():
     """The architectural line, over the AST rather than by reading.
 

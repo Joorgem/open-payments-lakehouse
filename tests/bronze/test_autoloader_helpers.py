@@ -433,7 +433,7 @@ def test_no_state_path_and_no_source_check_accepts_a_month_require_month_would_r
     the entry points and for every path they build.
 
     Defence-in-depth and said so: `bronze_ingest.py` and `bronze_lookup_ingest.py` both
-    bind `require_month`, and `tests/test_task_wiring.py` locks that they keep doing so.
+    bind `require_month`, and `tests/test_month_wiring.py` locks that they keep doing so.
     This is what stops a FIFTH caller from being the one that finds out.
 
     No Spark anywhere: every refusal is a string check in the signature's own frame."""

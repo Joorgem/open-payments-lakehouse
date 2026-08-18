@@ -1,6 +1,16 @@
 """Proves the two-layer topology: the extraction layer (here, local) can land
-files into a Unity Catalog Volume via the control plane (allowed), even though
-serverless compute cannot reach the public internet.
+files into a Unity Catalog Volume via the control plane, byte-identical on the
+way back.
+
+WHAT THIS PROBE DOES AND DOES NOT ESTABLISH. It establishes the control-plane
+landing path, which is what the topology rests on and what this file has always
+verified. It says NOTHING about serverless egress -- and the sentence that used
+to close this paragraph, "even though serverless compute cannot reach the public
+internet", was measured FALSE on 2026-08-14: a serverless task resolved a public
+host, received HTTP 200 and pulled 192,973 bytes, and an API fetch has since run
+as a production job task. Corrected here in 2026-08-17's pass rather than only in
+ADR 0002, because a retraction that reaches the ADR and not the code is this
+repository's own documented failure, committed twice in F-API.
 
 Catalog/schema note: the design brief assumed `main.default`, which is the
 layout on some Databricks Free Edition workspaces. This workspace instead

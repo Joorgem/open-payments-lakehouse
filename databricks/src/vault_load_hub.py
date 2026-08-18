@@ -34,7 +34,18 @@ def main(argv: list[str] | None = None) -> None:
     # naming the valid alternatives, and neither refusal needs Spark.
     spec = required_spec(args[0] if args else "", Hub, loader="vault_load_hub")
     source = bronze_table_spec(args[1] if len(args) > 1 else "")
-    months = required_months(args[2] if len(args) > 2 else "", action=f"load {spec.name}")
+    # THE AXIS COMES OFF THE SOURCE THAT WAS JUST RESOLVED, and it has to reach BOTH the
+    # window validator and the loader. `required_months` runs before Spark, so a source
+    # whose axis is an instant has every window value rejected here as "not YYYY-MM" --
+    # the refusal F-DB Task 2 exists to unblock, at the one place that fires before a
+    # serverless session is paid for. Defaulting instead is WORSE THAN THE REFUSAL: every
+    # bronze row carries `_snapshot_month` (`autoloader.add_common_audit_columns`), so a
+    # month-shaped window against a non-monthly source is accepted and then silently
+    # filtered on the wrong axis.
+    axis = source.snapshot_axis
+    months = required_months(
+        args[2] if len(args) > 2 else "", action=f"load {spec.name}", axis=axis
+    )
     load_date = required_load_date(args[3] if len(args) > 3 else "")
     spark = SparkSession.builder.getOrCreate()
     result = load_hub(
@@ -44,6 +55,7 @@ def main(argv: list[str] | None = None) -> None:
         target_table=DEFAULT.table(spec.name),
         load_date=load_date,
         months=list(months),
+        axis=axis,
     )
     # THE SUCCESS LINE MATTERS AS MUCH AS THE REFUSAL, per `assert_deployed_revision`:
     # a task log that does not name what ran is what made PR A's stale-bundle incident

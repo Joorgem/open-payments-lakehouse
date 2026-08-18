@@ -112,6 +112,7 @@ from opl.vault.hashing_spark import hash_key_column, refuse_non_string_columns
 from opl.vault.loading import (
     BRONZE_RECORD_SOURCE,
     SNAPSHOT_REF_DATE_COLUMN,
+    SnapshotAxis,
     changed_rows,
     hash_key_expression,
     read_snapshot_window,
@@ -266,7 +267,8 @@ def _refuse_a_mismatched_grain(
     whether or not a future domain follows the naming convention.
 
     The key-space half is `_grain_key_mismatch`, which is where the order decision the
-    first multi-column key forced is argued."""
+    first multi-column key forced is argued, and the third check is
+    `_refuse_a_prefixed_hub_grain`."""
     if grain.bronze_table != source_table:
         raise ValueError(
             f"the observation grain reads {grain.bronze_table!r} and the satellite is "
@@ -275,9 +277,38 @@ def _refuse_a_mismatched_grain(
             "another key space, and its refusal of an unloaded month would be checked "
             "against another table's months. Pass the grain built for this source"
         )
+    _refuse_a_prefixed_hub_grain(hub, grain)
     mismatch = _grain_key_mismatch(hub, grain)
     if mismatch is not None:
         raise ValueError(mismatch)
+
+
+def _refuse_a_prefixed_hub_grain(hub: Hub, grain: ObservationGrain) -> None:
+    """A hub grain may not be read through a `KeyPrefix`.
+
+    A FLAT REFUSAL RATHER THAN A COMPARISON, WHICH IS WHY IT IS NOT PART OF
+    `_grain_key_mismatch`. F-DB Task 5's correction pass gave `ObservationGrain` a
+    derivation -- the thing that makes `link_merchant_empresa`'s ledger key on the eight
+    characters its digest is over rather than on the fourteen bronze holds. A HUB has no
+    such thing: its business key is read from the columns it is NAMED after
+    (`loading._padded_components` is the whole of it), so there is no declaration to
+    compare a prefix against.
+
+    AND THE MISTAKE POINTS THE OPPOSITE WAY FROM THE LINK'S. A missing prefix made that
+    ledger FINER than the link; a prefix here makes this one COARSER than the hub -- one
+    ledger key spanning several hub keys -- so a departure is reported only when the last
+    of them leaves, and the count is small, plausible and about a key space this
+    satellite wrote no row for."""
+    if not grain.key_prefixes:
+        return
+    raise ValueError(
+        f"the observation grain declares key prefixes {tuple(grain.key_prefixes)} and "
+        f"hub {hub.name!r} reads its business key from the columns it is named after. A "
+        "prefix would key the ledger on a truncation of a hub key -- COARSER than the "
+        "hub, so several hub keys share one ledger key and a departure is reported only "
+        "when the last of them leaves. Prefixes belong to a LINK end that declares one; "
+        "pass the grain built for this hub"
+    )
 
 
 def satellite_candidates(
@@ -287,6 +318,7 @@ def satellite_candidates(
     *,
     source_table: str,
     months: Sequence[str] | None,
+    axis: SnapshotAxis,
 ) -> DataFrame:
     """One row per (hash key, applied_date) in the window, carrying the payload, its
     `hash_diff` and the source row's `record_source`.
@@ -296,7 +328,7 @@ def satellite_candidates(
     operational identity of the run, the ref date is the date the RFB itself declares
     in its filename, and it is not month-end -- 2026-06 carries the 13th and 2026-07
     the 11th. Deriving a date from the month would invent a day."""
-    source = read_snapshot_window(spark, source_table, months)
+    source = read_snapshot_window(spark, source_table, months, axis=axis)
     payload = tuple(satellite.payload_columns)
     refuse_non_string_columns(source, (*hub.business_key_columns, *payload))
     keyed = source.select(
@@ -319,6 +351,7 @@ def _collapsed_duplicates(
     hub: Hub,
     source_table: str,
     months: Sequence[str] | None,
+    axis: SnapshotAxis,
 ) -> int:
     """Source rows in the window, minus distinct (hash key, `applied_date`) pairs.
 
@@ -339,7 +372,7 @@ def _collapsed_duplicates(
     values can share a hash key. Counting the raw columns would report fewer duplicates
     than the fold actually performs, which is the wrong direction for a number whose
     whole job is to make the fold visible."""
-    source = read_snapshot_window(spark, source_table, months)
+    source = read_snapshot_window(spark, source_table, months, axis=axis)
     keyed = source.select(
         hash_key_expression(hub).alias(hub.hash_key),
         F.col(SNAPSHOT_REF_DATE_COLUMN).alias(APPLIED_DATE),
@@ -379,6 +412,7 @@ def _diagnostics(
     source_table: str,
     months: Sequence[str] | None,
     ledger: DataFrame,
+    axis: SnapshotAxis,
     *,
     report: bool,
 ) -> tuple[int | None, int | None]:
@@ -393,7 +427,7 @@ def _diagnostics(
     if not report:
         return None, None
     return (
-        _collapsed_duplicates(spark, satellite, hub, source_table, months),
+        _collapsed_duplicates(spark, satellite, hub, source_table, months, axis),
         _candidate_departures(ledger),
     )
 
@@ -448,6 +482,31 @@ def _append_changed(
     )
 
 
+# WHY `load_satellite`'S ARGUMENT PROSE IS HERE. F-DB Task 2 added the axis paragraph and
+# pushed this function to 56 lines against the `< 50 INCLUDING comments` cap (master
+# protocol §4.9). No test enforces that cap, which is how it was reported compliant on a
+# docstring-excluded measure; `opl.bronze.rules:413` moved prose to module level for the
+# same reason. Nothing here is dropped.
+#
+# `load_date` HAS NO DEFAULT, for `load_hub`'s reason: a loader that stamps its own clock
+# cannot be asserted against, and in the data it would make the LDTS a record of when the
+# pipeline happened to run rather than of the load it belongs to.
+#
+# `report_diagnostics` DEFAULTS OFF, AND OFF REPORTS `None` RATHER THAN `0`. On, this load
+# pays a second full scan of the source and materialises the ledger's key-space grid to
+# fill `collapsed_duplicates` and `candidate_departures`; off it pays neither, and "not
+# measured" is a thing no reader can confuse with "measured, found none". The first real
+# run spent most of 5,635 s on the two and both answered 0; see `_diagnostics`.
+#
+# THE AXIS COMES OFF THE GRAIN AND IS NOT A SECOND PARAMETER. The grain was already
+# required, `_refuse_a_mismatched_grain` has already pinned it to this source table, and
+# its axis is the source's own declaration -- so an `axis=` argument here would be a second
+# spelling of one decision, whose disagreement would land as a window that silently
+# selected nothing.
+#
+# IDEMPOTENT: a re-run finds every (key, applied_date) it would write already persisted,
+# drops them before the window, and appends nothing. The write is a single Delta append, so
+# there is no partial state between the refusals and the committed rows.
 def load_satellite(
     spark: SparkSession,
     satellite: Satellite,
@@ -462,31 +521,21 @@ def load_satellite(
 ) -> SatelliteLoadResult:
     """Append a row for every (hash key, `applied_date`) whose payload changed.
 
-    `load_date` is an argument with no default, for `load_hub`'s reason: a loader that
-    stamps its own clock cannot be asserted against, and in the data it would make the
-    LDTS a record of when the pipeline happened to run.
-
-    `report_diagnostics` DEFAULTS OFF, AND OFF REPORTS `None` RATHER THAN `0`. On, this
-    load pays a second full scan of the source and materialises the ledger's key-space
-    grid to fill `collapsed_duplicates` and `candidate_departures`; off it pays neither,
-    and "not measured" is a thing no reader can confuse with "measured, found none". The
-    first real run spent most of 5,635 s on the two and both answered 0; see _diagnostics.
-
-    Idempotent: a re-run finds every (key, applied_date) it would write already
-    persisted, drops them before the window, and appends nothing. The write is a single
-    Delta append, so there is no partial state between the refusals and the committed
-    rows."""
+    Idempotent, and its three arguments-without-defaults are argued in the comment block
+    above this function."""
     _refuse_a_mismatched_hub(satellite, hub)
     _refuse_a_mismatched_grain(hub, grain, source_table)
+    axis = grain.snapshot_axis
     candidates = satellite_candidates(
-        spark, satellite, hub, source_table=source_table, months=months
+        spark, satellite, hub, source_table=source_table, months=months, axis=axis
     )
     # DERIVED ON EVERY LOAD, INCLUDING ONE THAT REPORTS NOTHING FROM IT: this is the only
     # route by which `months` reaches `observation._window`'s refusal of a month with no
     # row on either side. Lazy past that refusal -- see `_candidate_departures`.
     ledger = observation_ledger(spark, grain, months=months)
     collapsed, departures = _diagnostics(
-        spark, satellite, hub, source_table, months, ledger, report=report_diagnostics
+        spark, satellite, hub, source_table, months, ledger, axis,
+        report=report_diagnostics,
     )
     before = rows_in(spark, target_table)
     _append_changed(spark, candidates, satellite, hub, target_table, load_date, before)

@@ -1,0 +1,150 @@
+# databricks/resources/bronze_merchant_job.yml
+# One job YAML PER TABLE, deliberately -- not one for_each_task over the registry. Same
+# reason as every other job here: for_each shares a single {{job.run_id}} and therefore one
+# _batch_id across tables, which contradicts the one-batch-is-one-table's-ingest assumption
+# the gate, promote_batch and the repromote operator job all rest on.
+#
+# WRITTEN AS A COPY of the PTAX job, which is the risk every file in this directory carries:
+# `merchant` appears in FOUR task parameter lists below -- ingest, dq_gate_batch, promote and
+# fail_on_dq -- and every wrong value it could carry is the name of a table that EXISTS, so a
+# leftover string does not fail the run: it ingests, gates or promotes another table and
+# reports SUCCESS. tests/test_job_yaml_wiring.py refuses any registered table name in this
+# file other than this job's own, and the prose below capitalises table names for that lock's
+# sake: registry keys are lower-case, so a case-sensitive grep of this file counts PARAMETERS
+# only.
+#
+# --- WHAT THIS JOB LACKS THAT EVERY OTHER INGESTION JOB HAS -------------------------------
+#
+# IT HAS NO TASK THAT FILLS THE LANDING DIRECTORY, and it is the first job in this repository
+# of which that is true. The CNPJ jobs run unzip_table.py, the Payments job runs
+# generate_payments.py, the PTAX job runs fetch_ptax.py. This one runs nothing, because the
+# producer cannot run here: `scripts/extract_merchant_snapshot.py` reads one REPEATABLE READ
+# READ ONLY transaction out of a Postgres container bound to localhost:5433 on the extraction
+# host and PUTs the file through the Files API (plan T1). Egress OUT of Databricks creates no
+# route INTO a laptop behind a home NAT -- an argument about direction, not a measurement, and
+# nothing here should be read as one.
+#
+# THE OPERATIONAL CONSEQUENCE, stated because the failure is quiet: this job must not be
+# launched until the extractor has landed the snapshot(s) for the month it is given. Launched
+# early it drains an empty directory and reports SUCCESS having ingested zero rows -- and for
+# THIS table that reading is worse than usual, because a snapshot with no rows is exactly what
+# a table whose every row was deleted looks like, and the vault would end-date every key.
+#
+#     uv run python scripts/extract_merchant_snapshot.py --month 2026-08 \
+#       --wait-for /tmp/merchant-ready.txt          # snapshot 1, on the extraction host
+#     ...                                           # snapshot 2, a DIFFERENT calendar day
+#     databricks bundle run bronze_merchant -t free \
+#       --params month=2026-08,revision=$(git rev-parse HEAD)
+#
+# TWO SNAPSHOTS, TWO FILES, ONE MONTH DIRECTORY, and that is not a compromise -- it is plan
+# T7. The landing filename is derived from the snapshot INSTANT, so two observations are two
+# paths and Auto Loader drains only what its checkpoint has not seen. What distinguishes them
+# downstream is `_snapshot_at`, a CONTRACT column carried in every row, and NOT
+# `_snapshot_month`: both snapshots are ingested by this one run in this one month, and
+# labelling them two fabricated months would be a second spelling of "when" in a row that
+# already carries a real instant.
+#
+# AND THEY ARE TAKEN ON TWO GENUINELY DIFFERENT CALENDAR DAYS (plan T8), which is a
+# SCHEDULING constraint this file cannot enforce and therefore records: the vault satellite
+# dedups on groupBy(hash_key, applied_date), applied_date is a DATE, and two observations on
+# one day fold into one row with no error and no red test.
+#
+# IT HAS NO reclaim_landing. That task deletes landed files once bronze proves it holds their
+# rows, and it refuses any table that does not land as zips -- because the zips in the sibling
+# directory are the only way back to the source. The way back here is the DATABASE, and it is
+# a WEAKER way back than a zip: a snapshot is an instant that has passed and cannot be read
+# again. So nothing is deleted, and the reason is the opposite of the PTAX job's.
+#
+# IT HAS NO ensure_masked_table. The merchant contract declares no masked column -- it holds
+# a surrogate key, a CNPJ, two company names, four categorical codes, a credit limit and three
+# stamps, and there is no personal datum anywhere in it. tests/test_job_yaml_wiring.py asserts
+# the ABSENCE as well as the presence, because that task is a documented no-op for an unmasked
+# contract and a copied one would tell the next reader these rows are masked when they are not.
+#
+# NO CREDENTIAL IS INVOLVED AND NONE MAY BE ADDED. The DSN never leaves the extraction host --
+# it is read from OPL_POSTGRES_DSN there and reaches nothing in this workspace. There is no
+# secret scope reference in this file and there must never be one.
+resources:
+  jobs:
+    bronze_merchant:
+      name: opl-bronze-merchant
+      parameters:
+        - name: month
+          # The month this run ingests from; the default is a value the tasks refuse
+          # (opl.config.SENTINEL_MONTH), because a real month here re-ingests that month
+          # against an EMPTY month-scoped checkpoint and silently doubles the row counts --
+          # the promote's idempotence is keyed on _batch_id and cannot see it.
+          # Estabelecimentos' job carries the full argument.
+          default: "REQUIRED-PASS-A-MONTH"
+        - name: revision
+          # The revision this run is launched for; the default is a value the guard below
+          # refuses, so a run launched without --params stops instead of checking nothing.
+          # Estabelecimentos' job carries the full argument.
+          default: "REQUIRED-PASS-A-REVISION"
+      tasks:
+        # FIRST, AND NOTHING BEFORE IT (ADR 0009). Compares the revision above -- the
+        # operator's HEAD when the run was submitted -- against the revision the deployed
+        # wheel was built from. It matters here for a reason no other job has: this is the
+        # first job whose input was produced by a DIFFERENT artefact on a different machine,
+        # so the wheel that reads the file and the code that wrote it can disagree without
+        # anything in this workspace noticing. The landed file's own contract version and
+        # `_pg_snapshot` are what a reader checks afterwards; this is what stops the run.
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        - task_key: ingest
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/bronze_merchant_ingest.py
+            parameters: ["merchant", "{{job.run_id}}", "{{job.parameters.month}}"]
+
+        - task_key: dq_gate_batch
+          depends_on: [{ task_key: ingest }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/dq_gate_batch.py
+            parameters: ["merchant", "{{job.run_id}}"]
+
+        - task_key: check_bad_rows
+          depends_on: [{ task_key: dq_gate_batch }]
+          condition_task:
+            op: EQUAL_TO
+            left: "{{tasks.dq_gate_batch.values.bad_row_count}}"
+            right: "0"
+
+        - task_key: promote
+          depends_on: [{ task_key: check_bad_rows, outcome: "true" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/promote_batch.py
+            # --in-flow declares "this batch_id is the run executing this task", which is the
+            # ONLY caller that can say so truthfully. It is what lets a run whose batch is
+            # empty (both snapshots already landed and already ingested) succeed as a no-op
+            # instead of being refused.
+            parameters: ["merchant", "{{job.run_id}}", "--in-flow"]
+
+        - task_key: fail_on_dq
+          depends_on: [{ task_key: check_bad_rows, outcome: "false" }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/fail_on_dq.py
+            # The TABLE, not a quarantine name -- and no quarantine string is spelled in this
+            # file at all, which is the point rather than a style. fail_on_dq derives it from
+            # the registry, so the one value that could be stale here does not exist.
+            parameters: ["merchant"]
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

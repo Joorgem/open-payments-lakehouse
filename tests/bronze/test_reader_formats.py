@@ -59,6 +59,10 @@ _EXPECTED = {
     "payments": JSON_FORMAT,
     # The PTAX record: one JSON object per quote, built from a validated response.
     "ptax": JSON_FORMAT,
+    # The Postgres merchant snapshot: one JSON object per row, rendered by the database
+    # under pinned GUCs. JSON rather than CSV because `trade_name` is nullable and the
+    # source emits both NULL and '' -- a distinction CSV loses by default.
+    "merchant": JSON_FORMAT,
 }
 
 

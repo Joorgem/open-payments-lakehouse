@@ -60,9 +60,21 @@ naturally and is unstable: a key absent in July and back in August would be "aft
 last observation" while July is the end of the data and something else once August
 lands, so a row already written would change meaning as new months arrived. Comparing
 each month against the key's FIRST observation only can never be revised by a later
-load. (`_snapshot_month` is `YYYY-MM`, so a string comparison is a chronological one
--- that is a property of the format, and `opl.config.is_month` is what holds the
-format.)
+load. (The comparison is a STRING one being used as a chronological one, which is a
+property of the axis's FORMAT rather than of this module: `_snapshot_month` is
+`YYYY-MM`, and the fixed-width UTC instant beside it in `opl.bronze.snapshot_axis`
+sorts the same way. That module holds both formats and the argument for why each has
+the property.)
+
+THE AXIS IS THE SOURCE'S, NOT THIS MODULE'S, SINCE F-DB. It used to be the module
+constant `_snapshot_month`, which was true of every source this lakehouse had and
+false the moment one was observed TWICE INSIDE ONE CALENDAR MONTH: both observations
+carry one month value, the fold below collapses them, and a key present in the first
+and gone from the second reads `observed` rather than `absent_after_observation` --
+the only state the vault's end-dating path acts on. A `BronzeTable` declares its axis,
+`grain_for` carries it onto the grain, and every read below asks the grain. The five
+states, the branch order, the grid and the fold are UNCHANGED; what changed is which
+column they are taken over.
 
 THE STATES ARE RELATIVE TO THE WINDOW, AND FOR NARROWING THE LEDGER CANNOT WARN YOU. A
 key observed in 2026-05 and asked about over `["2026-06", "2026-07"]` reads as
@@ -87,10 +99,16 @@ WHAT THIS MODULE DELIBERATELY DOES NOT DO:
     because our own gate rejected it must never reach a satellite as a departure from
     the registry, and the way to make that hard to get wrong is to make the wrong
     thing require typing.
-  - **It does not hash.** The ledger is keyed on the raw business-key columns, so a
-    caller can consult it before or after applying `opl.vault.hashing.hash_key`. A
+  - **It does not hash.** The ledger is keyed on business-key columns in the clear, so
+    a caller can consult it before or after applying `opl.vault.hashing.hash_key`. A
     Spark-side spelling of that standard would be a SECOND spelling of it, and this
-    module is not where that gets decided.
+    module is not where that gets decided. **A DECLARED PREFIX IS NOT AN EXCEPTION TO
+    THIS.** Since F-DB Task 5's correction a grain may declare a `KeyPrefix`, and the
+    ledger then keys on the first `width` characters of that column -- which is the
+    value the link hashes, and without it the ledger is FINER than the link it gates.
+    Everything the sentence above is for survives a prefix: the value stays readable,
+    reconcilable against the source by eye, and joinable without the digest. What is
+    refused is a hash, not a projection.
   - **It does not carry `_snapshot_ref_date`.** For an absent (key, month) there is no
     row on either side to take one from, so it would have to be asserted from the
     month -- a claim about a key that has no row. The month-to-ref-date mapping is one
@@ -116,12 +134,23 @@ from enum import Enum
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
+from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT, SnapshotAxis
 from opl.config import DEFAULT
 from opl.vault.months import validated_months
+from opl.vault.specs import KeyPrefix
 
-# Carried through from bronze verbatim, not renamed, because the ledger has to join
-# back to the rows it describes.
-MONTH_COLUMN = "_snapshot_month"
+# THE DEFAULT AXIS'S COLUMN, DERIVED AND NOT RESTATED, kept as a name because TESTS read
+# it and because it is genuinely the column every source in this lakehouse carried before
+# F-DB. (This said "the CNPJ domain and its tests"; `grep -rn MONTH_COLUMN src/ databricks/`
+# finds only this definition, so the domain does not read it and the tests are the whole
+# reason the name survives.) It is NOT what this module reads: every site
+# below asks the GRAIN, because the axis is now the source's declaration and this
+# constant is only the default one's spelling. A grain-dependent path that reaches for
+# this name instead is the bug `ObservationGrain.snapshot_column` exists to prevent --
+# it would answer correctly for all six registered tables today and silently wrongly
+# for the first one that is not monthly -- `bronze_merchant`, which Task 4 adds. (This
+# read "six of the seven" before that table existed; the registry holds SIX.)
+MONTH_COLUMN = MONTHLY_SNAPSHOT.column
 
 # THE EVIDENCE, kept beside the verdict. These three are output columns rather than
 # internals: the state is a label derived from them, and an operator (or the query
@@ -181,15 +210,57 @@ class ObservationGrain:
       - A BARE `str` satisfies `Sequence[str]` structurally, so no type checker
         catches `key_columns="cnpj_basico"` -- it iterates to twelve one-character
         column names and fails inside Spark, naming a column called `c`.
-      - `_snapshot_month` in the key makes every key present in exactly the month it
+      - THE SNAPSHOT AXIS in the key makes every key present in exactly the snapshot it
         names and absent in every other: a complete ledger of nonsense, no error.
       - A REPEATED column produces duplicate output columns, which every downstream
-        `select` then has to disambiguate."""
+        `select` then has to disambiguate.
+
+    `snapshot_axis` IS DEFAULTED, AND THAT DEFAULT IS WHAT MAKES THIS FIELD FREE TO ADD.
+    Every grain this repository declares -- the three in `opl/vault/domains/cnpj.py` --
+    is over a monthly RFB snapshot, so all three keep their exact construction and the
+    ledger keeps its exact answer over the two real months. What the field buys is that
+    the refusal above and the eleven reads below stop being about a module constant: a
+    source observed twice inside one month declares a finer axis on its `BronzeTable`,
+    `grain_for` carries it here, and the SAME code path derives the SAME five states
+    over it. See `opl.bronze.snapshot_axis` for why the declaration lives on the source.
+
+    IT IS CARRIED, NOT RE-DECIDED. Nothing constructs a grain by hand in a job: both
+    `grain_for` functions take the axis off the `BronzeTable` they were already given.
+    A grain whose axis disagreed with its bronze table's would read a column the table
+    does not have -- which `_side` refuses by name rather than answering.
+
+    `key_prefixes` IS THE OTHER HALF OF THE KEY, AND WITHOUT IT A GRAIN CAN ONLY NAME THE
+    COLUMN IT READS AND NOT THE VALUE IT KEYS ON. `link_merchant_empresa` is identified by
+    `substring(cnpj, 1, 8)` and its identity COLUMN is `cnpj`, fourteen characters; that
+    map is many-to-one, so a grain keyed on the name alone is strictly finer than the link
+    it gates, and `opl.vault.effectivity` states what finer costs -- it closes windows
+    that never departed. Measured before this field existed: one merchant that kept its
+    root and changed its full `cnpj` got an ACTIVE row and a CLOSING row on the same
+    `applied_date` for the same hash key, with `appended=3, closed=1` reading ordinary.
+
+    EMPTY FOR EVERY GRAIN DECLARED BEFORE F-DB TASK 5's CORRECTION, which is what makes it
+    free to add: the three in `opl/vault/domains/cnpj.py` read every key component under
+    its own name, so all three keep their exact construction and the ledger keeps its
+    exact answer over the two real months. It is derived from the link spec by
+    `registry.identity_derivations_of` rather than restated, exactly as `key_columns` is
+    derived by `identity_columns_of`, and `effectivity._refuse_a_mismatched_link_grain`
+    compares BOTH against the link."""
 
     name: str
     bronze_table: str
     quarantine_table: str
     key_columns: Sequence[str]
+    snapshot_axis: SnapshotAxis = MONTHLY_SNAPSHOT
+    key_prefixes: Sequence[KeyPrefix] = ()
+
+    @property
+    def snapshot_column(self) -> str:
+        """The bronze column this grain's ledger is derived against.
+
+        A property rather than eleven `grain.snapshot_axis.column` spellings: the two
+        are the same read, and the short one is what makes the diff against the module
+        constant it replaced legible."""
+        return self.snapshot_axis.column
 
     def __post_init__(self) -> None:
         if isinstance(self.key_columns, str):
@@ -205,11 +276,15 @@ class ObservationGrain:
                 "least one, or every row of the table folds into a single group that "
                 "identifies nothing and reports itself observed"
             )
-        if MONTH_COLUMN in columns:
+        # THE GRAIN'S OWN AXIS, NOT THE DEFAULT ONE. Read as a module constant this
+        # guard would keep refusing `_snapshot_month` for a source that does not have
+        # that column, and would WAVE THROUGH the axis of a source that has another --
+        # a guard that has silently stopped guarding while still passing its own test.
+        if self.snapshot_column in columns:
             raise ValueError(
-                f"grain {self.name!r} names {MONTH_COLUMN} as a business-key column. "
-                "It is the ledger's other axis: keying on it makes every key present "
-                "in exactly the month it names and absent in all the others"
+                f"grain {self.name!r} names {self.snapshot_column} as a business-key "
+                "column. It is the ledger's other axis: keying on it makes every key "
+                "present in exactly the snapshot it names and absent in all the others"
             )
         if len(set(columns)) != len(columns):
             raise ValueError(
@@ -217,10 +292,43 @@ class ObservationGrain:
                 "which would put duplicate columns in the ledger"
             )
         object.__setattr__(self, "key_columns", columns)
+        object.__setattr__(
+            self, "key_prefixes", _validated_prefixes(self.key_prefixes, self.name, columns)
+        )
+
+    def key_expression(self, column: str) -> Column:
+        """One key column, READ THE WAY THE GRAIN SAYS IT IS READ: the column itself, or
+        its first `width` characters where a prefix is declared for it.
+
+        ALIASED BACK TO THE SOURCE COLUMN'S OWN NAME, which is a decision and not an
+        accident. The ledger's `cnpj` then holds eight characters where bronze holds
+        fourteen -- the value is the LINK's identity component and the name is the column
+        it was read from, exactly as `loading.hash_key_over` is "the same standard, read
+        somewhere else". Renaming it to the hub's `cnpj_basico` would be the more honest
+        label and would cost a SECOND hash expression in `effectivity._departures`, which
+        today keys the ledger with the very expression that keyed bronze; a prefix is
+        idempotent (`substring(substring(x, 1, w), 1, w) == substring(x, 1, w)`), so
+        re-applying it to an already-derived value is a no-op and the one spelling
+        survives. This module's `hash_key` bullet is not violated either: a prefix is not
+        a hash, the value stays readable and reconcilable against the source by eye."""
+        prefix = self._prefix_for(column)
+        if prefix is None:
+            return F.col(column)
+        return F.substring(F.col(column), 1, prefix.width).alias(column)
+
+    def _prefix_for(self, column: str) -> KeyPrefix | None:
+        """The declared prefix on `column`, or None. At most one -- `_validated_prefixes`
+        refuses a second, and `__post_init__` has already refused a repeated key column."""
+        for prefix in self.key_prefixes:
+            if prefix.column == column:
+                return prefix
+        return None
 
     @classmethod
     def in_default_schema(
-        cls, *, name: str, bronze: str, quarantine: str, key_columns: Sequence[str]
+        cls, *, name: str, bronze: str, quarantine: str, key_columns: Sequence[str],
+        snapshot_axis: SnapshotAxis = MONTHLY_SNAPSHOT,
+        key_prefixes: Sequence[KeyPrefix] = (),
     ) -> ObservationGrain:
         """A grain over two tables in the configured catalog and schema.
 
@@ -234,10 +342,48 @@ class ObservationGrain:
             bronze_table=DEFAULT.table(bronze),
             quarantine_table=DEFAULT.table(quarantine),
             key_columns=tuple(key_columns),
+            snapshot_axis=snapshot_axis,
+            key_prefixes=tuple(key_prefixes),
         )
 
 
-def _validated_months(months: Sequence[str] | None) -> tuple[str, ...] | None:
+def _validated_prefixes(
+    prefixes: Sequence[KeyPrefix], name: str, columns: tuple[str, ...]
+) -> tuple[KeyPrefix, ...]:
+    """`prefixes` frozen, having refused the two ways a derivation goes silently unapplied.
+
+    `KeyPrefix` HAS ALREADY REFUSED A BLANK COLUMN AND A NON-POSITIVE WIDTH, at its own
+    construction, so what is left here is the pairing against THIS grain:
+
+      - A PREFIX ON A COLUMN THIS GRAIN IS NOT KEYED ON derives nothing. The ledger would
+        be keyed on the raw column, i.e. exactly the finer-than-the-link grain the
+        declaration was added to prevent, and the declaration would sit in the spec
+        looking like it had taken effect.
+      - TWO PREFIXES ON ONE COLUMN cannot both apply. `key_expression` takes the first,
+        which would make the ledger's grain depend on declaration order silently."""
+    frozen = tuple(prefixes)
+    unkeyed = sorted({prefix.column for prefix in frozen} - set(columns))
+    if unkeyed:
+        raise ValueError(
+            f"grain {name!r} declares a key prefix on {unkeyed}, which is not among its "
+            f"key columns {columns}. A prefix names the column it TRUNCATES, so one "
+            "naming a column the grain is not keyed on derives nothing and leaves the "
+            "ledger keyed on the raw value -- finer than the link, which closes windows "
+            "that never departed"
+        )
+    seen = [prefix.column for prefix in frozen]
+    if len(set(seen)) != len(seen):
+        raise ValueError(
+            f"grain {name!r} declares more than one key prefix on the same column "
+            f"({sorted(seen)}). Only one can apply and which one would depend on "
+            "declaration order"
+        )
+    return frozen
+
+
+def _validated_months(
+    months: Sequence[str] | None, axis: SnapshotAxis
+) -> tuple[str, ...] | None:
     """The window, or `None` for "every month the tables hold".
 
     DELEGATED TO `opl.vault.months` since the F2 Task 3 review, and the delegation is
@@ -248,7 +394,7 @@ def _validated_months(months: Sequence[str] | None) -> tuple[str, ...] | None:
     ledger rather than an error, and an empty ledger reads as "nothing departed"."""
     return validated_months(
         months,
-        column=MONTH_COLUMN,
+        axis=axis,
         consequence=(
             "An empty or unmatched window yields an empty ledger, which reads as "
             "'nothing was rejected and nothing departed'"
@@ -264,10 +410,19 @@ def _side(
 
     Projected to the key columns and the month and nothing else, which is what keeps
     the derivation's cost proportional to the KEY space rather than to the payload --
-    bronze carries thirty columns and the ledger reads three of them."""
+    bronze carries thirty columns and the ledger reads three of them.
+
+    THROUGH `grain.key_expression`, WHICH IS WHERE A DECLARED PREFIX IS APPLIED, and it
+    is the whole of the F-DB Task 5 correction. A `select` by NAME reads the column the
+    link is keyed FROM rather than the value it is keyed ON, and where the two differ --
+    `cnpj` at fourteen characters against the eight the link hashes -- the ledger is
+    strictly finer than the link. The missing-column check above is unchanged and still
+    covers it: a prefix may only name a column this grain is already keyed on."""
     frame = spark.read.table(table)
     missing = [
-        column for column in (*grain.key_columns, MONTH_COLUMN) if column not in frame.columns
+        column
+        for column in (*grain.key_columns, grain.snapshot_column)
+        if column not in frame.columns
     ]
     if missing:
         raise ValueError(
@@ -276,9 +431,12 @@ def _side(
             "with separate schemas, so a column present on one side can be absent on "
             "the other -- and the ledger's answer depends on both"
         )
-    frame = frame.select(*grain.key_columns, MONTH_COLUMN)
+    frame = frame.select(
+        *(grain.key_expression(column) for column in grain.key_columns),
+        grain.snapshot_column,
+    )
     if months is not None:
-        frame = frame.filter(F.col(MONTH_COLUMN).isin(list(months)))
+        frame = frame.filter(F.col(grain.snapshot_column).isin(list(months)))
     return (frame
             .withColumn(IN_BRONZE_COLUMN, F.lit(from_bronze))
             .withColumn(IN_QUARANTINE_COLUMN, F.lit(not from_bronze)))
@@ -307,10 +465,11 @@ def _window(
     THE COST IS PAID ONLY BY A CALLER WHO NAMES MONTHS. With `months=None` the window
     IS the distinct months of the data, so it cannot contain one the data has not
     seen, and this returns that frame lazily without collecting anything."""
-    loaded = presence.select(MONTH_COLUMN).distinct()
+    axis = grain.snapshot_column
+    loaded = presence.select(axis).distinct()
     if months is None:
         return loaded
-    unloaded = sorted(set(months) - {row[MONTH_COLUMN] for row in loaded.collect()})
+    unloaded = sorted(set(months) - {row[axis] for row in loaded.collect()})
     if unloaded:
         raise ValueError(
             f"months names {unloaded}, which no row of {grain.bronze_table!r} or "
@@ -320,7 +479,7 @@ def _window(
             "whole table, conjured out of a typo or an ingest that did not run. A "
             "month present on only ONE side is not this and is accepted"
         )
-    return spark.createDataFrame([(month,) for month in months], f"{MONTH_COLUMN} string")
+    return spark.createDataFrame([(month,) for month in months], f"{axis} string")
 
 
 def _grid(
@@ -338,7 +497,7 @@ def _grid(
     actually provides. It rides in on the grid so the fold below needs no second pass
     over the data and no join back onto the business key."""
     universe = presence.groupBy(*grain.key_columns).agg(
-        F.min(MONTH_COLUMN).alias(FIRST_OBSERVED_COLUMN)
+        F.min(grain.snapshot_column).alias(FIRST_OBSERVED_COLUMN)
     )
     window = _window(spark, presence, grain, months)
     return (universe.crossJoin(window)
@@ -346,8 +505,16 @@ def _grid(
             .withColumn(IN_QUARANTINE_COLUMN, F.lit(False)))
 
 
-def _state_column() -> Column:
+def _state_column(axis: str) -> Column:
     """The five states. Read in this order, and the order is INERT -- see below.
+
+    `axis` IS THE GRAIN'S SNAPSHOT COLUMN, AND THE COMPARISON AGAINST IT IS A STRING
+    COMPARISON BEING USED AS A CHRONOLOGICAL ONE. That is a property of the axis's
+    FORMAT, not of this function: `YYYY-MM` sorts chronologically, and so does the
+    fixed-width UTC instant `opl.bronze.snapshot_axis` declares beside it -- which is
+    why both qualifiers are pinned there rather than left to a source to get right.
+    An axis whose values did not sort that way would put every absence on the wrong
+    side of the split below, with no error.
 
     QUARANTINE IS CONSULTED BEFORE THE ABSENCE SPLIT, AND THAT BUYS NOTHING. An
     earlier version of this docstring claimed it did: that a key we reject on its
@@ -381,7 +548,7 @@ def _state_column() -> Column:
         .when(F.col(IN_BRONZE_COLUMN), F.lit(ObservationState.OBSERVED.value))
         .when(F.col(IN_QUARANTINE_COLUMN), F.lit(ObservationState.REJECTED_BY_OUR_GATE.value))
         .when(
-            F.col(MONTH_COLUMN) < F.col(FIRST_OBSERVED_COLUMN),
+            F.col(axis) < F.col(FIRST_OBSERVED_COLUMN),
             F.lit(ObservationState.ABSENT_BEFORE_FIRST_OBSERVATION.value),
         )
         .otherwise(F.lit(ObservationState.ABSENT_AFTER_OBSERVATION.value))
@@ -409,7 +576,7 @@ def observation_ledger(
     both sides and the all-keys-by-all-months grid are UNIONED and folded by
     `groupBy`, which treats NULL as a value that equals itself. The one join here is
     the `crossJoin` that builds the grid, and it has no condition to get wrong."""
-    window = _validated_months(months)
+    window = _validated_months(months, grain.snapshot_axis)
     presence = (_side(spark, grain, grain.bronze_table, window, from_bronze=True)
                 .unionByName(_side(spark, grain, grain.quarantine_table, window,
                                    from_bronze=False)))
@@ -423,11 +590,11 @@ def observation_ledger(
         FIRST_OBSERVED_COLUMN, F.lit(None).cast("string")
     ).unionByName(_grid(spark, presence, grain, window))
     return (
-        everything.groupBy(*grain.key_columns, MONTH_COLUMN)
+        everything.groupBy(*grain.key_columns, grain.snapshot_column)
         .agg(
             F.max(IN_BRONZE_COLUMN).alias(IN_BRONZE_COLUMN),
             F.max(IN_QUARANTINE_COLUMN).alias(IN_QUARANTINE_COLUMN),
             F.max(FIRST_OBSERVED_COLUMN).alias(FIRST_OBSERVED_COLUMN),
         )
-        .withColumn(STATE_COLUMN, _state_column())
+        .withColumn(STATE_COLUMN, _state_column(grain.snapshot_column))
     )

@@ -20,6 +20,44 @@ jobs:
       - name: Unit tests (incl. version smoke + delta roundtrip)
         run: uv run pytest -v
 
+  # THE LIVE POSTGRES PATH, VERIFIED SOMEWHERE OTHER THAN ONE WINDOWS BOX (plan T2b).
+  # ADDITIVE: the `test` job's command is untouched. `addopts` deselects both `integration`
+  # and `postgres` by default, and a second `-m` on the command line replaces that term
+  # rather than intersecting it -- so this job selects exactly the three files that one
+  # container can satisfy, where `-m integration` would also pull in Redpanda and two
+  # live-WebDAV modules and turn red on them.
+  #
+  # PUBLISHED ON 5433, NOT THE DEFAULT MAPPING. `tests/integration/test_postgres.py`
+  # hardcodes `port=5433`, and `probe_postgres_session.dsn()`'s compose fallback names it
+  # too; a service container on 5432 would fail to connect while looking correctly
+  # configured. The port is the one thing here that must match docker-compose.yml.
+  #
+  # NO JAVA STEP. Nothing selected by `-m postgres` starts a Spark session, and the pinned
+  # GUC assertions are the point of the job -- `POSTGRES_*` below must stay in step with
+  # docker-compose.yml's service, because the DSN's user/password/dbname are all `opl`.
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: opl
+          POSTGRES_PASSWORD: opl
+          POSTGRES_DB: opl
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U opl"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.12" }
+      - run: uv sync --all-groups --all-extras
+      - name: Live Postgres tests (the container-only slice)
+        run: uv run pytest -m postgres -v
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:

@@ -79,7 +79,7 @@ from opl.vault import domains
 from opl.vault.effectivity import load_effectivity_satellite
 from opl.vault.job_params import required_load_date, required_months, required_spec
 from opl.vault.observation import ObservationGrain
-from opl.vault.registry import EffectivitySatellite, Link
+from opl.vault.registry import EffectivitySatellite, Link, identity_derivations_of
 
 # The narrowest window in which a key can be absent from a month the ledger reports on:
 # one month to be seen in, one later month to be missing from. Named rather than
@@ -96,12 +96,30 @@ def grain_for(link: Link, source: BronzeTable) -> ObservationGrain:
     report no departure and the window would stay open forever
     (`opl.vault.effectivity`). `domains.link_identity_columns` derives the columns from
     the link's own spec, in hash order, which is exactly what
-    `_refuse_a_mismatched_link_grain` compares against."""
+    `_refuse_a_mismatched_link_grain` compares against.
+
+    AND `identity_derivations_of` DERIVES HOW THOSE COLUMNS ARE READ, which the columns
+    alone cannot say. `link_merchant_empresa` is keyed on `substring(cnpj, 1, 8)` and its
+    identity column is `cnpj`; without the prefix this job would build a ledger one
+    many-to-one map FINER than the link and close windows on merchants that never
+    departed. It needs no registry lookup -- a derivation is declared on the end -- which
+    is why it is not spelled `domains.link_identity_derivations`."""
     return ObservationGrain.in_default_schema(
         name=link.name,
         bronze=source.bronze,
         quarantine=source.quarantine,
         key_columns=domains.link_identity_columns(link),
+        key_prefixes=identity_derivations_of(link),
+        # THE AXIS IS THE SOURCE'S OWN DECLARATION, CARRIED RATHER THAN CHOSEN. This is
+        # the derivation T7 put the field on `BronzeTable` for: the ledger reads
+        # (business key, snapshot axis), the axis is a property of what was observed and
+        # not of the grain a caller happens to want, and every grain this repository has
+        # is built right here from a `(spec, BronzeTable)` pair. Declaring it on the
+        # grain instead would mean deciding it at each of these two call sites, where a
+        # source observed twice in one month could be paired with a monthly axis and
+        # produce a ledger that folds both observations into one and reports the
+        # departure as `observed`.
+        snapshot_axis=source.snapshot_axis,
     )
 
 
@@ -134,7 +152,11 @@ def main(argv: list[str] | None = None) -> None:
         args[0] if args else "", EffectivitySatellite, loader="vault_load_effectivity"
     )
     source = bronze_table_spec(args[1] if len(args) > 1 else "")
-    months = required_months(args[2] if len(args) > 2 else "", action=f"load {spec.name}")
+    months = required_months(
+        args[2] if len(args) > 2 else "",
+        action=f"load {spec.name}",
+        axis=source.snapshot_axis,
+    )
     _refuse_a_window_that_cannot_close(months, spec.name)
     load_date = required_load_date(args[3] if len(args) > 3 else "")
     link = domains.parent_link(spec)

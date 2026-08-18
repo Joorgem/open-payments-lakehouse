@@ -39,7 +39,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TypeVar
 
-from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN
+from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT, SnapshotAxis
 from opl.config import SENTINEL_MONTH
 from opl.vault import domains
 from opl.vault.months import validated_months
@@ -72,23 +72,48 @@ LOAD_DATE_REFERENCE = "{{job.start_time.iso_datetime}}"
 _FLAG_VALUES = {"true": True, "false": False}
 
 
-def required_months(value: str | None, *, action: str) -> tuple[str, ...]:
+# WHY THE ARGUMENT FOR `required_months` IS HERE AND NOT IN ITS DOCSTRING. F-DB Task 2
+# grew that docstring to 32 lines and pushed the function to 61 against this project's
+# `< 50 lines INCLUDING comments` cap (master protocol §4.9) -- a cap no test enforces,
+# which is why it was reported as compliant on a docstring-excluded measure and caught by
+# the controller instead. `opl.bronze.rules` did exactly this at its own line 413 for the
+# same reason. The prose is the value; the placement is what keeps the function readable.
+#
+# `axis` IS WHAT DECIDES WHETHER A WINDOW VALUE IS WELL-FORMED, AND IT RUNS BEFORE SPARK.
+# That placement is the whole value of this function and it is what made the hardcoded
+# month rule blocking rather than cosmetic: a source whose snapshot axis is an instant
+# would have had every value of its window rejected here as "not YYYY-MM", at the one
+# refusal that fires before a serverless session is paid for, and no amount of correctness
+# further in would have been reached. The entry points take it off the `BronzeTable` they
+# have already resolved from `args[1]`, so it is the source's own declaration rather than a
+# third place the shape is decided.
+#
+# THE PARAMETER IS STILL CALLED `months`, deliberately rather than by oversight: it is the
+# name in every vault job YAML, in the documented launch command, and in
+# `MONTH_SEPARATOR`'s own worked example. Renaming a live job parameter to generalise a
+# validator would break every YAML for a vocabulary change; what a non-monthly source needs
+# is for its values to be ACCEPTED, which is what this now does.
+#
+# ABSENCE IS REFUSED, NOT DEFAULTED, for `opl.config.require_month`'s reason and not for its
+# consequence. A vault loader handed no window would read the whole of bronze and report
+# success, which is not wrong in the data -- it is the widest correct answer -- and that is
+# precisely why it must not be the silent one: it is indistinguishable in the log from the
+# window the operator meant to pass, and it grows without bound as months accumulate.
+#
+# THE SENTINEL IS THE SHAPE AN OPERATOR ACTUALLY HITS. `SENTINEL_MONTH` is what the vault
+# job YAMLs default `months` to, so reaching here with it means the run was launched without
+# `--params months=...`. It is refused as an ABSENCE rather than as a malformed value --
+# which is the truth of it -- so the message names the missing parameter instead of
+# explaining what a month looks like. Its wording is singular because it is ONE sentinel
+# shared with the four bronze ingestion jobs, and a second spelling of a sentinel is a
+# default that drifts into a value nobody checked.
+def required_months(
+    value: str | None, *, action: str, axis: SnapshotAxis = MONTHLY_SNAPSHOT
+) -> tuple[str, ...]:
     """The window `action` will load, or refuse. Never `None`, never empty.
 
-    ABSENCE IS REFUSED, NOT DEFAULTED, for `opl.config.require_month`'s reason and not
-    for its consequence. A vault loader handed no window would read the whole of
-    bronze and report success, which is not wrong in the data -- it is the widest
-    correct answer -- and that is precisely why it must not be the silent one: it is
-    indistinguishable in the log from the window the operator meant to pass, and it
-    grows without bound as months accumulate.
-
-    THE SENTINEL IS THE SHAPE AN OPERATOR ACTUALLY HITS. `SENTINEL_MONTH` is what the
-    vault job YAMLs default `months` to, so reaching here with it means the run was
-    launched without `--params months=...`. It is refused as an ABSENCE rather than as
-    a malformed value -- which is the truth of it -- so the message names the missing
-    parameter instead of explaining what a month looks like. Its wording is singular
-    because it is ONE sentinel shared with the four bronze ingestion jobs, and a second
-    spelling of a sentinel is a default that drifts into a value nobody checked."""
+    `axis` decides whether a window value is well-formed, and it runs before Spark.
+    See the comment block above this function for why each of those matters."""
     candidate = (value or "").strip()
     if not candidate or candidate == SENTINEL_MONTH:
         raise ValueError(
@@ -106,7 +131,7 @@ def required_months(value: str | None, *, action: str) -> tuple[str, ...]:
     # is `tuple(months)`, which is `window` itself, so nothing usable is discarded here.
     validated_months(
         window,
-        column=SNAPSHOT_MONTH_COLUMN,
+        axis=axis,
         consequence=(
             "An empty or unmatched window makes this load write nothing and report "
             "success, and a vault table that gained no rows looks exactly like a vault "

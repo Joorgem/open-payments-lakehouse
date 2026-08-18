@@ -44,7 +44,19 @@ fixtures per test would multiply the suite's slowest operation by the number of
 assertions for no isolation gain, and a shared fixture that some test mutated would
 be a defect in that test rather than in the fixture. All four are real Delta tables;
 the `tables` fixture records what a temp-view alternative was measured to cost, and
-why it lost."""
+why it lost.
+
+`ObservationGrain`'s OWN CONSTRUCTION REFUSALS ARE `test_observation_grain.py`, split
+out by F-DB Task 1 at exactly 800 lines, BEFORE Task 2's snapshot axis (T7), which has
+since landed -- this said "still to come" and ADR 0010 names why that matters: a claim
+that something has not happened yet is the first thing a reader trusts and the last
+thing anyone revisits. The seam was already here and undrawn: those were the only
+CONSTRUCTION-TIME refusals in this module, because a grain that refuses its
+arguments never reaches a table. What is left here is the LEDGER -- its derivation over
+the four fixtures, and its own argument guards, three of which run against real data and
+one of which is worth an eager Spark job. Read together they say "this grain, over these
+tables"; alone neither is a claim about the ledger, which is why each file's docstring
+points at the other."""
 from __future__ import annotations
 
 from datetime import date
@@ -53,7 +65,6 @@ from uuid import uuid4
 
 import pytest
 
-from opl.config import DEFAULT
 from opl.vault.observation import (
     FIRST_OBSERVED_COLUMN,
     IN_BRONZE_COLUMN,
@@ -123,7 +134,8 @@ def tables(spark, tmp_path_factory):
     DELTA FOR ALL FOUR, AND THAT WAS MEASURED RATHER THAN ASSUMED -- twice, in both
     directions. A Delta `saveAsTable` costs ~22 s on this box against ~0 for a temp
     view, so the EIGHT of them here put ~137 s of setup in front of tests that only ever
-    read (25 of them when this was measured at Task 2, 28 now; the counts read "ten" and
+    read (25 of them when this was measured at Task 2, 22 now that the grain refusals
+    live in `test_observation_grain.py`; the counts read "ten" and
     "25" until Task 7's pass, and every TIMING below is a Task-2 measurement rather than
     a current one). Converting the two property fixtures (`empresas`, `returning`) to temp
     views did cut setup to 92 s exactly as predicted. It also made every test that
@@ -662,68 +674,6 @@ def test_the_ledger_carries_the_evidence_its_state_was_derived_from(spark, table
     assert row[0][IN_QUARANTINE_COLUMN] is True
     assert row[0][FIRST_OBSERVED_COLUMN] == JUN
     assert row[0][STATE_COLUMN] == REJECTED
-
-
-def test_a_grain_with_no_key_columns_is_refused():
-    """A grain with no business key would group the whole table into one row and
-    report it `observed`, which is a plausible-looking answer to a question nobody
-    asked. Same family as `hash_key`'s empty-components refusal, and refused at
-    construction so it never reaches Spark."""
-    with pytest.raises(ValueError, match="at least one"):
-        ObservationGrain(name="x", bronze_table="b", quarantine_table="q", key_columns=())
-
-
-def test_a_bare_string_key_column_is_refused():
-    """`key_columns="cnpj_basico"` is a `Sequence[str]` structurally, so a type
-    checker cannot catch it, and iterating it yields the twelve CHARACTERS of the
-    column name. The failure downstream would be an `AnalysisException` naming a
-    column called `c`, which points nowhere near the mistake."""
-    with pytest.raises(TypeError, match="bare str"):
-        ObservationGrain(
-            name="x", bronze_table="b", quarantine_table="q", key_columns="cnpj_basico"
-        )
-
-
-def test_the_month_column_is_refused_as_a_business_key_column():
-    """`_snapshot_month` is the ledger's other axis. Naming it as part of the
-    business key would make every key trivially present in exactly the month it
-    names and absent in all the others -- a full ledger of nonsense, with no error."""
-    with pytest.raises(ValueError, match=MONTH_COLUMN):
-        ObservationGrain(
-            name="x", bronze_table="b", quarantine_table="q",
-            key_columns=("cnpj_basico", MONTH_COLUMN),
-        )
-
-
-def test_a_repeated_key_column_is_refused():
-    with pytest.raises(ValueError, match="more than once"):
-        ObservationGrain(
-            name="x", bronze_table="b", quarantine_table="q",
-            key_columns=("cnpj_basico", "cnpj_basico"),
-        )
-
-
-def test_the_key_columns_are_frozen_into_a_tuple():
-    """A list handed in stays a list on a frozen dataclass -- mutable, unhashable,
-    and shared with whatever the caller does to it next."""
-    grain = ObservationGrain(
-        name="x", bronze_table="b", quarantine_table="q", key_columns=["a", "b"]
-    )
-
-    assert grain.key_columns == ("a", "b")
-    with pytest.raises(AttributeError):
-        grain.name = "y"
-
-
-def test_a_grain_can_be_built_against_the_configured_catalog_and_schema():
-    """Table names come from `opl.config`, never from a literal in this layer."""
-    grain = ObservationGrain.in_default_schema(
-        name="hub_empresa", bronze="bronze_cnpj_empresas",
-        quarantine="bronze_cnpj_empresas_quarantine", key_columns=("cnpj_basico",),
-    )
-
-    assert grain.bronze_table == DEFAULT.table("bronze_cnpj_empresas")
-    assert grain.quarantine_table == DEFAULT.table("bronze_cnpj_empresas_quarantine")
 
 
 def test_a_key_column_missing_from_one_side_is_refused_by_name(spark, tables):

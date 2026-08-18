@@ -14,7 +14,7 @@ define a registry guard, and refuses a guard `registry.py` calls that no matchin
 module defines. A split named `landing.py` would contribute no definitions, land its
 call in `called` anyway, and pass in silence.
 
---- THE FOUR MODES ----------------------------------------------------------------
+--- THE FIVE MODES ----------------------------------------------------------------
 
 `zips` and `local` describe two ways the SAME producer delivers: the RFB ships
 monthly archives, and the extraction host either PUTs the archive for the cluster to
@@ -48,14 +48,31 @@ WebDAV share, and a fabricated one would make `extract_cnpj` go looking for
 `Payments.zip` on a server that has never held it -- an under-ingest that reports
 success, which is the exact class this registry exists to refuse.
 
---- THE THREE ROOTS ---------------------------------------------------------------
+`postgres` is the fifth (F-DB Task 4), and it is a fourth kind. Its bytes are produced by
+an operational database THIS PROJECT RUNS, and -- uniquely so far -- nothing inside the
+workspace produces or fetches them at all: the extractor runs on the EXTRACTION HOST and
+PUTs a verified file through the Files API. Plan T1 is why, and the reason is a direction
+rather than a firewall: the database is a container bound to `localhost:5433`, and egress
+OUT of Databricks creates no route INTO a laptop behind a home NAT. `LANDING_API` was
+considered and REJECTED for it -- that mode's own sentence is "somebody else's bytes,
+fetched over HTTP, by a task inside the workspace", and all three clauses are false here;
+`API_RECORD_SOURCE` is `bcb_olinda_ptax`, which would attribute this project's own database
+to the Banco Central in the one column that answers who produced a row.
+
+THE VISIBLE CONSEQUENCE IS IN THE JOB YAML, and it is what makes this a mode rather than a
+detail. Every other ingestion job has a task that FILLS the landing directory --
+`unzip_table`, `generate_payments`, `fetch_ptax` -- and this one has none, because that
+step happens off Databricks before the job is launched.
+
+--- THE FOUR ROOTS ----------------------------------------------------------------
 
 A file-fed table lands under `cnpj/<month>/<subdir>`, a generated one under
-`generated/<month>/<subdir>`, and an api-fed one under `api/<month>/<subdir>`
+`generated/<month>/<subdir>`, an api-fed one under `api/<month>/<subdir>` and a
+database-fed one under `postgres/<month>/<subdir>`
 (`opl.config`, which documents why each new root beat renaming an old one).
 `landing_dir` below is the ONE place that mapping is made, so a consumer asks the
 landing mode rather than knowing the layout -- which is what lets
-`opl.bronze.autoloader`'s source-directory guard stay total across all three roots
+`opl.bronze.autoloader`'s source-directory guard stay total across all four roots
 without learning about any particular table.
 """
 from __future__ import annotations
@@ -73,8 +90,13 @@ LANDING_GENERATED = "generated"
 # an HTTP endpoint and writes a record built from the validated response. See the module
 # docstring for why this is a fourth mode rather than a reuse of the third.
 LANDING_API = "api"
+# F-DB Task 4: bytes read out of an operational database by a HOST-SIDE extractor. See the
+# module docstring for why this is a fifth mode rather than a reuse of the fourth.
+LANDING_POSTGRES = "postgres"
 
-LANDING_MODES = frozenset({LANDING_ZIPS, LANDING_LOCAL, LANDING_GENERATED, LANDING_API})
+LANDING_MODES = frozenset(
+    {LANDING_ZIPS, LANDING_LOCAL, LANDING_GENERATED, LANDING_API, LANDING_POSTGRES}
+)
 
 # --- THE CLASSIFICATION, WHICH IS A DECLARATION AND IS GUARDED AS ONE ----------------
 #
@@ -126,9 +148,26 @@ FILE_FED_LANDING_MODES = frozenset({LANDING_ZIPS, LANDING_LOCAL})
 # is the half where a `FILE_GROUPS` entry or a `prefix` is a false sentence rather than a
 # requirement. `api` was added here by the fix pass; it was in neither half before, and
 # the mirror caught it only because that guard's skip is a literal complement.
-NON_FILE_FED_LANDING_MODES = frozenset({LANDING_GENERATED, LANDING_API})
+NON_FILE_FED_LANDING_MODES = frozenset({LANDING_GENERATED, LANDING_API, LANDING_POSTGRES})
 
 
+# --- WHY THE `postgres` BRANCH BELOW RESOLVES A TMP DIR NOTHING EVER WRITES TO ---------
+#
+# Module level for the reason the two comment blocks further down are: this function is a
+# dispatch and two refusals, and a fifth branch's argument put it past the project's
+# 50-line limit.
+#
+# The tmp half is returned anyway rather than left to raise, because the value of ONE
+# dispatch is that a landing dir and its staging twin can never come from two different
+# roots -- and a mode that answered the first question and not the second would be exactly
+# the drift this function exists to remove, re-entered as a hole.
+#
+# `opl.config.landing_postgres_tmp` carries why nothing stages there: every other mode's
+# producer runs ON Databricks and stages inside the Volume so `os.replace` can make the
+# file appear whole (one UC Volume is one FUSE mount, which is what makes that rename
+# atomic). This source's producer runs on the extraction HOST -- it writes and verifies a
+# LOCAL file and PUTs it through the Files API -- so there is no Volume-side staging step
+# to point anywhere. It is on the standing unexercised list rather than absent.
 def _landing_and_tmp(cfg: OplConfig, spec, month: str) -> tuple[str, str]:
     """`spec`'s landing directory for `month` AND its staging twin. THE one mapping.
 
@@ -163,6 +202,11 @@ def _landing_and_tmp(cfg: OplConfig, spec, month: str) -> tuple[str, str]:
         return (
             cfg.landing_api_table(spec.subdir, month),
             cfg.landing_api_tmp(spec.subdir, month),
+        )
+    if spec.landing == LANDING_POSTGRES:
+        return (
+            cfg.landing_postgres_table(spec.subdir, month),
+            cfg.landing_postgres_tmp(spec.subdir, month),
         )
     raise ValueError(
         f"{spec.name} names landing mode {spec.landing!r}, which no landing root "

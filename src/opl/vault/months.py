@@ -16,28 +16,40 @@ the one where an impossible month became a delete boundary. The stakes are lower
 (a window that selects nothing rather than a containment guard that passes vacuously)
 and the shape is identical, so it is worth removing while it is still cheap.
 
-THE RULE ITSELF IS NOT HERE EITHER. `opl.config.is_month` is the one spelling of
-"YYYY-MM naming a real month" in this repository and this module asks it. What is
-here is only the three refusals around it.
+THE RULE ITSELF IS NOT HERE EITHER, AND SINCE F-DB IT IS NOT ONE RULE. It arrives on
+a `SnapshotAxis` -- the source's own answer to "what does one value of my snapshot
+column look like" -- and the monthly axis asks `opl.config.is_month`, which stays the
+one spelling of "YYYY-MM naming a real month" in this repository. What is here is only
+the three refusals around whichever predicate the axis carries.
 
-`consequence` AND `column` ARE PARAMETERS BECAUSE THE CALLERS REALLY DO DIFFER, and
-that difference is worth keeping rather than flattening into one generic message.
-An empty window makes the ledger say "nothing was rejected and nothing departed" and
-makes a loader say "success, zero rows"; those are different wrong answers and an
-operator reading one of them needs to be told which. Same idiom as
-`opl.config.require_month`'s `action`.
+WHY THE AXIS AND NOT A `column` STRING, which is what this parameter was. The column
+name alone makes the refusal MESSAGE right and the refusal itself wrong: a source
+observed at instants rather than months would have every one of its window values
+rejected here as "not YYYY-MM", at three call sites, one of them before Spark starts.
+The name and the shape rule are one fact about one source and they have to travel
+together; `opl.bronze.snapshot_axis` is where that is argued.
 
-PURE, AND DELIBERATELY: `opl.config` is the only import, so `opl.vault.observation`
-takes on no new dependency by asking, and neither does anything else."""
+`consequence` IS STILL A PARAMETER BECAUSE THE CALLERS REALLY DO DIFFER, and that
+difference is worth keeping rather than flattening into one generic message. An empty
+window makes the ledger say "nothing was rejected and nothing departed" and makes a
+loader say "success, zero rows"; those are different wrong answers and an operator
+reading one of them needs to be told which. Same idiom as `opl.config.require_month`'s
+`action`.
+
+STILL PURE, AND DELIBERATELY: the axis module imports `re`, `dataclasses` and
+`opl.config` and nothing else, so `opl.vault.observation` takes on no Spark dependency
+by asking and neither does anything else. The function name is unchanged because every
+caller in the tree still passes months; it is the TYPE of the window that has been
+generalised, not the vocabulary of the jobs that pass one."""
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from opl.config import is_month
+from opl.bronze.snapshot_axis import SnapshotAxis
 
 
 def validated_months(
-    months: Sequence[str] | None, *, column: str, consequence: str
+    months: Sequence[str] | None, *, axis: SnapshotAxis, consequence: str
 ) -> tuple[str, ...] | None:
     """`months` as a frozen tuple, or `None` for "every month the data holds".
 
@@ -64,11 +76,11 @@ def validated_months(
             "months is empty -- name at least one month, or pass None for every month "
             f"the data holds. {consequence}"
         )
-    not_months = [value for value in window if not is_month(value)]
+    not_months = [value for value in window if not axis.accepts(value)]
     if not_months:
         raise ValueError(
-            f"months contains {not_months} -- every value must be YYYY-MM with MM in "
-            f"01-12, matching {column} exactly, or it selects no rows at all. "
+            f"months contains {not_months} -- every value must be {axis.shape}, "
+            f"matching {axis.column} exactly, or it selects no rows at all. "
             f"{consequence}"
         )
     return window
