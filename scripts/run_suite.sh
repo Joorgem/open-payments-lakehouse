@@ -2,7 +2,7 @@
 # scripts/run_suite.sh -- run the whole test suite as a reconciled partition, and
 # print ONE summary a run-evidence document can quote.
 #
-# WHY THIS EXISTS. The suite is ~1,460 s of work and the agent shell kills a single
+# WHY THIS EXISTS. The suite was ~1,460 s of work and the agent shell kills a single
 # command at 600 s, so "the suite passes" had become four hand-stitched pytest
 # invocations pasted into a document. Four numbers with four timestamps invite exactly
 # the "which run was that from?" ambiguity the evidence format exists to remove: a
@@ -17,10 +17,35 @@
 #      three still sums correctly.
 #   2. The chunk pass counts are summed and compared against the suite's own
 #      --collect-only selected count. Disagreement exits non-zero.
-#   3. A chunk that outgrows the 600 s cap fails LOUDLY, naming itself, rather than
+#   3. A chunk that outgrows the cap fails LOUDLY, naming itself, rather than
 #      being discovered as a mysterious kill with no output. The partition is a
 #      property of today's runtimes and it will need re-splitting; this is how that
 #      becomes visible on the day it happens instead of three tasks later.
+#
+# AND THAT DAY HAS ARRIVED, WHICH THIS HEADER NOW SAYS OUT LOUD RATHER THAN LEAVING THE
+# ARRAY TO CONTRADICT IT. Two chunks below are SINGLE FILES measured at or past the
+# 600 s cap, so `run_suite.sh` exits 1 naming them:
+#
+#   tests/vault/test_observation.py    785.71 s alone   (chunk `vault-observation`)
+#   tests/vault/test_merchant_vault.py 574.77 s alone, 603.47 s on a re-run at F-DB's
+#                                      final HEAD       (chunk `vault-merchant`)
+#
+# THE CAP IS NOT RAISED, AND THAT IS THE DECISION RATHER THAN AN OVERSIGHT. Raising a
+# cap so a check passes is how a guard stops guarding -- and this cap has already been
+# right once, when it fired at 632 s and produced the `vault-estab`/`vault-socios`
+# split recorded below. A 600 that a chunk cannot meet is a true statement about the
+# suite; a 900 that every chunk meets says nothing about anything.
+#
+# WHAT A PARTITION CAN AND CANNOT FIX, because the two cases above are not the same. A
+# chunk of several files that is too slow is a PARTITION problem and splitting it is the
+# repair -- that is what `vault-estab`/`vault-socios` was, and what pulling
+# `test_observation.py` out of `vault-ledger-registry` is below. A chunk of ONE file that
+# is too slow is not: no arrangement of pytest path arguments makes a 785 s module take
+# less than 785 s. The repair for those two is a SOURCE split of the module, exactly as
+# `test_observation_grain.py` was already split out of `test_observation.py` and as
+# `test_socios_vault.py` was split from `test_estabelecimento_vault.py`. That is a task,
+# not an edit to this line, and it is booked here with its number attached so the next
+# person meets the debt rather than a green tick.
 #
 # EXIT CODES, because a green exit here is meant to be quotable:
 #   0  every chunk ran, every chunk passed, and the reconciliation closed.
@@ -118,6 +143,15 @@ WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
 # because it starts no Spark session at all -- that is the "one module import" claim,
 # measured rather than argued.
 #
+# AND THE 785.71 s IN THAT MEASUREMENT IS WHAT LATER SEPARATED THEM ANYWAY. The sentence
+# above says no other chunk would keep the grain file beside its parent; the F-DB review
+# pass moved the PARENT instead, into `vault-observation` below, because one file over the
+# cap makes its whole chunk unquotable however cheap the chunk's other members are. The
+# grain file's placement argument is untouched -- it still costs one module import and it
+# still sits in the chunk with room -- but "beside the module it was split out of" is no
+# longer true of it, and this file does not leave a sentence standing that the array
+# contradicts.
+#
 # AND A SEVENTH, IN F-DB TASK 5, ON EXACTLY THAT PRECEDENT. `test_link_key_derivation.py`
 # is `LinkEnd.key_from` and the `build_registry` guard that checks a declared derivation
 # against the hub it claims to key -- specs and whole-set refusals, all of which run
@@ -135,7 +169,10 @@ WARN_SECONDS="${SUITE_CHUNK_WARN:-480}"
 # chunks that could take it, `vault-estab` and `vault-socios` are the pair under the
 # standing split warning (519, 555, 454, 632, 1,197 s on unchanged code) and
 # `vault-ledger-registry` carries the suite's single largest vault module at 785 s
-# alone; `test_satellite_diagnostics.py` is already here on that same "which chunk can
+# alone (it no longer does -- that module is `vault-observation` below since the F-DB
+# review pass; the decision this sentence supports is unaffected, so it is corrected
+# rather than deleted, which is what this file does with every superseded number);
+# `test_satellite_diagnostics.py` is already here on that same "which chunk can
 # afford it" argument. It writes NO Delta table -- temp views only -- so what it adds is
 # a Spark module setup and no I/O. MEASURED ALONE ON THE BOX:
 #   tests/vault/test_observation_axis.py    3 passed in 79.97s (0:01:19)
@@ -161,7 +198,24 @@ CHUNKS=(
   # 574.77s. That is the second-slowest chunk in this list, so it does not go anywhere
   # near the two under the standing split warning.
   "vault-merchant|tests/vault/test_merchant_vault.py"
-  "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation.py tests/vault/test_observation_grain.py tests/vault/test_registry.py tests/vault/test_reference_vault.py tests/vault/test_effectivity_window.py tests/vault/test_link_key_derivation.py"
+  # SPLIT OUT OF `vault-ledger-registry` BY THE F-DB REVIEW PASS, on the
+  # `vault-estab`/`vault-socios` precedent: a chunk carrying a member that alone exceeds
+  # the cap cannot meet it, so the partition was claiming a budget the array could not
+  # deliver. This is the half a partition CANNOT fix -- one file at 785.71 s -- and
+  # isolating it is what makes the other half's compliance a real statement instead of
+  # one masked by a chunk-mate that was going to fail anyway.
+  "vault-observation|tests/vault/test_observation.py"
+  # THE RESIDUAL IS BOUNDED BY A MEASUREMENT RATHER THAN ESTIMATED, which matters because
+  # running this script on this box takes the parent process down and the split therefore
+  # cannot be verified here. At F2 wave 1's final commit the chunk ran **115 passed in
+  # 396 s WITH `test_observation.py` still in it** (docs/f2-wave-1-workspace-run-evidence
+  # .md §5.5). Everything added to it since is Spark-free -- `test_observation_grain.py`
+  # at 0.20 s and `test_link_key_derivation.py` at 0.11 s -- so these six are bounded
+  # above by that 396 s, under the 480 s warn band, and strictly below it by whatever
+  # `test_observation.py` was costing then. A BOUND, not a prediction: the socios chunk
+  # ran 454 and then 1,197 s on unchanged code, so contention can still put this over,
+  # and the script saying so is the script working.
+  "vault-ledger-registry|tests/vault/test_loading.py tests/vault/test_observation_grain.py tests/vault/test_registry.py tests/vault/test_reference_vault.py tests/vault/test_effectivity_window.py tests/vault/test_link_key_derivation.py"
 )
 
 chunk_name() { printf '%s' "${CHUNKS[$1]%%|*}"; }
@@ -310,7 +364,11 @@ report() {
     [ "$rc" -ne 0 ] && bad=1
     local flag=''
     if [ "$elapsed" -ge "$CAP_SECONDS" ]; then
-      flag='  !! OVER THE 600s CAP -- SPLIT THIS CHUNK'; over=1; bad=1
+      # The cap is INTERPOLATED, not typed. This read `OVER THE 600s CAP` while the
+      # threshold it fires on is `$CAP_SECONDS` -- so a run with `SUITE_CHUNK_CAP` set
+      # printed a number that was not the one it had just compared against, in the one
+      # line of this script's output that exists to be pasted into an evidence document.
+      flag="  !! OVER THE ${CAP_SECONDS}s CAP -- SPLIT THIS CHUNK"; over=1; bad=1
     elif [ "$elapsed" -ge "$WARN_SECONDS" ]; then
       flag='  !  within 2 min of the cap'
     fi
