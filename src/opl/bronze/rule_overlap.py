@@ -71,10 +71,16 @@ THEN 1 ELSE 0 END)` versus `COUNT(CASE WHEN p THEN 1 END)` versus `SUM(int(p))` 
 spellings that differ precisely on NULL.
 
 COUNTS, NOT PAIRS. This reports how many rows each rule matches and how many match two or
-more; it does not report WHICH two. A pairwise table is 435 columns at the merchant
-contract's 30 rules, for an answer nobody needs until the >= 2 count is non-zero
-somewhere -- at which point the per-rule counts already narrow it to the rules whose
-counts can overlap, and a follow-up query answers it against one table and one batch.
+more; it does not report WHICH two. A pairwise table is 190 columns at the merchant
+contract's 20 rules -- the widest rule set in the registry -- for an answer nobody needs
+until the >= 2 count is non-zero somewhere, at which point the per-rule counts already
+narrow it to the rules whose counts can overlap and a follow-up query answers it against
+one table and one batch. (This paragraph read "435 columns at ... 30 rules" until F4's
+correction pass. 435 is C(30,2) and the 30 was estabelecimentos' COLUMN count borrowed
+into a sentence about merchant's RULES: NO CONTRACT IN THIS REPOSITORY HAS 30 RULES --
+lookup 3, empresas 6, estabelecimentos 7, socios 7, ptax 10, payments 11, merchant 20,
+64 in total, which is the 50 distinct reason names the 2026-08-18 sweep printed plus the
+duplicates shared across contracts.)
 
 WHAT IT DOES NOT DO: write anything. See `databricks/src/measure_rule_overlap.py` for why
 its product is a printed number rather than a table."""
@@ -93,10 +99,44 @@ ROW_COUNT = "rows"
 RULES_MATCHED_2_OR_MORE = "rules_matched_2_or_more"
 RESCUED_AND_A_RULE = "rescued_and_at_least_one_rule"
 
-# What the report prints before the per-rule numbers, in this order. `RESCUED_REASON` is
-# in this group and NOT among the rules, which is the module docstring's point made as
-# data: it comes from `opl.bronze.dq`, not from any `rules_for` set.
-HEADLINE_KEYS = (ROW_COUNT, RESCUED_REASON, RULES_MATCHED_2_OR_MORE, RESCUED_AND_A_RULE)
+# The two headline numbers DERIVED FROM THE RULES, named as a group because they are the
+# two that must not be reported when no rule ran -- see `headline_keys`.
+RULE_DERIVED_KEYS = (RULES_MATCHED_2_OR_MORE, RESCUED_AND_A_RULE)
+
+# What the report prints before the per-rule numbers, IN THIS ORDER -- and the order is
+# this tuple's rather than merely described by it: `aggregate_columns` aliases its
+# headline aggregates by looking each key up here, so reordering this line reorders the
+# report and deleting a key from it deletes the number. Until F4's correction pass this
+# comment claimed an order nothing read; the tuple's only consumer was a length
+# assertion, so renaming or reordering an alias turned nothing red.
+# `RESCUED_REASON` is in this group and NOT among the rules, which is the module
+# docstring's point made as data: it comes from `opl.bronze.dq`, not from any `rules_for`
+# set.
+HEADLINE_KEYS = (ROW_COUNT, RESCUED_REASON, *RULE_DERIVED_KEYS)
+
+
+def headline_keys(conditions: tuple[tuple[str, Column], ...]) -> tuple[str, ...]:
+    """The headline keys for a frame on which exactly `conditions` will run.
+
+    EVERY key when at least one rule runs; the two `RULE_DERIVED_KEYS` are DROPPED when
+    none does, and that is this module's own principle applied to its headline counter
+    rather than an exception carved out for it. A rule the gate skips is absent from this
+    report rather than printed as 0 (`rule_conditions`, and the test that pins it), for
+    the reason `dq.skip_notice` exists: "this control was measured and found nothing" and
+    "this control never ran" must not be the same line. A `rules_matched_2_or_more` of 0
+    over a frame where NO rule ran is exactly that sentence about every control at once --
+    and it is the sentence ADR 0006's reversal condition 1 is settled by.
+
+    Absence over a `skipped` sentinel because absence is already how this module says it:
+    a frame with 6 of 7 rules skipped prints one rule column and no zeros for the other
+    six, so a 7-of-7 frame answering with a sentinel instead would be a second idiom for
+    the same fact, reachable only in the degenerate case. LATENT, NOT LIVE:
+    `rules.REQUIRES_COLUMN` holds exactly one entry today (`unprovable_snapshot_ref_date`),
+    so no registered contract -- the smallest is lookup's 3 rules -- can empty its
+    condition set on any frame."""
+    if conditions:
+        return HEADLINE_KEYS
+    return tuple(key for key in HEADLINE_KEYS if key not in RULE_DERIVED_KEYS)
 
 
 def rule_conditions(df: DataFrame, rules: Rules) -> tuple[tuple[str, Column], ...]:
@@ -130,9 +170,12 @@ def _hits(condition: Column) -> Column:
 def _matches_per_row(conditions: tuple[tuple[str, Column], ...]) -> Column:
     """How many RULES each row matches, as one row-wise sum of indicators.
 
-    `F.lit(0)` as the base rather than the first condition, so a rule set that is empty
-    on this frame -- every rule skipped -- yields 0 rather than raising, and the >= 2
-    count is then correctly zero instead of absent."""
+    `F.lit(0)` as the base rather than the first condition, so an empty condition set is
+    a total of 0 rather than an IndexError. THAT TOTAL IS NOT THEN REPORTED: the docstring
+    here used to call the resulting zero "correctly zero instead of absent", which was
+    this module exempting its own headline counter from the rule it applies to every
+    other control. `headline_keys` drops the two rule-derived counters when nothing ran,
+    so the 0 this returns for an empty set reaches no report."""
     total = F.lit(0)
     for _, condition in conditions:
         total = total + _hits(condition)
@@ -143,17 +186,28 @@ def aggregate_columns(df: DataFrame, rules: Rules) -> list[Column]:
     """Every number this module reports, as one projection: no rule is scanned twice.
 
     ONE AGGREGATE PASS, which is the shape rather than an optimisation. The alternative
-    -- a filter and a count per rule -- is 30 scans of a 72M-row table, and worse, it is
-    30 chances for the rule set the counts describe to differ from the rule set that
-    produced any one of them."""
+    -- a filter and a count per rule -- is 7 scans of the 72,318,968-row estabelecimentos
+    staging table, one per rule of that contract, and worse, it is 7 chances for the rule
+    set the counts describe to differ from the rule set that produced any one of them.
+    (This read "30 scans" until F4's correction pass, borrowing merchant's rule count --
+    itself misstated as 30 -- into a sentence about the widest TABLE. The two are
+    unrelated quantities: estabelecimentos is the widest table and has 7 rules; merchant
+    has the widest rule set at 20 and is nowhere near the largest.)
+
+    The headline aliases are ORDERED BY `HEADLINE_KEYS` and looked up in it, so that
+    tuple's "in this order" is a fact about this projection rather than a comment beside
+    it, and a key it does not name cannot reach the report."""
     conditions = rule_conditions(df, rules)
     rescued = rescued_condition(df)
     matched = _matches_per_row(conditions)
+    headline = {
+        ROW_COUNT: F.count(F.lit(1)),
+        RESCUED_REASON: F.sum(_hits(rescued)),
+        RULES_MATCHED_2_OR_MORE: F.sum(_hits(matched >= F.lit(2))),
+        RESCUED_AND_A_RULE: F.sum(_hits(rescued & (matched >= F.lit(1)))),
+    }
     return [
-        F.count(F.lit(1)).alias(ROW_COUNT),
-        F.sum(_hits(rescued)).alias(RESCUED_REASON),
-        F.sum(_hits(matched >= F.lit(2))).alias(RULES_MATCHED_2_OR_MORE),
-        F.sum(_hits(rescued & (matched >= F.lit(1)))).alias(RESCUED_AND_A_RULE),
+        *(headline[key].alias(key) for key in headline_keys(conditions)),
         *(F.sum(_hits(condition)).alias(reason) for reason, condition in conditions),
     ]
 

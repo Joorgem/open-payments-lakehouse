@@ -70,6 +70,21 @@ resources:
         # manufacture a dependency that does not exist -- and would make a view failure
         # swallow a measurement that had nothing to do with it. It depends on the guard
         # for the reason every task in this file does.
+        #
+        # THE DIRECTION THE PARAGRAPH ABOVE ARGUES ONLY ONE WAY, recorded because it is
+        # the one this job pays for: sharing a job also means a FAILED MEASUREMENT fails
+        # a run whose purpose was refreshing views. The two tasks run in parallel off the
+        # guard, so `create_views` can have succeeded and the run still reports FAILED,
+        # and `max_retries: 0` means it stays that way -- an operator refreshing a
+        # dashboard stopped by a count nothing branches on.
+        #
+        # IT IS COUPLING AND NOT EXPENSE, and that is measured rather than assumed: on
+        # job run 80788495253423 this task's execution_duration was 89 s for all
+        # 337,776,032 staged rows across 15 (table, batch) pairs, against 40 s for
+        # `create_views`. Accepted because the alternative is a second job YAML
+        # duplicating the revision guard this one already carries, and because a
+        # measurement that fails is a wheel-or-staging problem an operator wants stopping
+        # a run. Revisit if the sweep grows to where a views refresh has to wait on it.
         - task_key: measure_rule_overlap
           depends_on: [{ task_key: assert_deployed_revision }]
           max_retries: 0

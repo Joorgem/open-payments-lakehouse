@@ -479,9 +479,36 @@ archaeology session. **Two have moved. The decision has not, and cannot on these
    and **zero matching rules**, which says F1b's injected drift adds a field and damages
    no contract column — nothing is hidden underneath it.
 
-   These were taken by executing the shipped projection against the SQL warehouse
-   read-only, ahead of the job task's first workspace run; the run and its statement ids
-   belong to `docs/f4-run-evidence.md`.
+   **That 5,593 is a count of ROWS only because both overlap counters are zero**, and the
+   dependency is easy to state backwards. The figure is a sum of per-reason counts plus
+   the rescued count; a row carrying two reasons is counted twice by that sum, so with a
+   non-zero `rules_matched_2_or_more` anywhere it would be a count of (row, reason) pairs
+   and would exceed the quarantine's row count by construction rather than by defect. The
+   reconciliation therefore **rests on the counters this task shipped** — it is not merely
+   a second number taken on the same pass, and it stops being comparable to a quarantine
+   row count on the day the overlap stops being zero.
+
+   **Provenance: job run `80788495253423`** (task `measure_rule_overlap`, task run
+   `880229908911460`, SUCCESS, 89 s execution over the 337,776,032 rows), behind the
+   `dataops_views` job's deployed-revision guard, with `docs/f4-run-evidence.md` holding
+   the run's evidence. **No statement ids, and that is not an omission**: this ADR
+   previously said these numbers were taken by executing the shipped projection against
+   the SQL warehouse read-only "ahead of the job task's first workspace run", and promised
+   statement ids that document deliberately does not carry — its preamble rules that a
+   statement id is not a durable handle in this workspace:
+   `GET /api/2.0/sql/statements/<id>` returns `Not Found` for a statement seconds old,
+   measured against a control. The numbers are unchanged; the shipped path has since
+   reproduced every one of them.
+
+   The retired pre-run route is worth recording for what it could have hidden. Rendering
+   `aggregate_columns` against a frame that lacks a table's **metadata** columns fails
+   SILENTLY: with no `_rescued_data`, `dq.rescued_condition` falls back to `F.lit(None)`
+   and the projection renders `sum(CASE WHEN (NULL IS NOT NULL) THEN 1 ELSE 0 END) AS
+   rescued_data_present` — a constant 0 where `payments` reads 2,000, every other number
+   on the row unchanged and nothing to look wrong — and with no `_snapshot_ref_date` the
+   `unprovable_snapshot_ref_date` column is dropped from the report entirely, for four of
+   the seven contracts. Reading the staging tables themselves, as the job task does,
+   retires both.
 2. **NOT SHIPPED, AND NO CODE CAN SHIP IT.** This condition is evidentiary: it asks for
    at least six monthly observations per table with a reject count ≥ 10. empresas'
    numerator is 1 and estabelecimentos' is 0 for the family a threshold would tolerate,

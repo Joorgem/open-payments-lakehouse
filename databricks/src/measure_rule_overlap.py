@@ -44,6 +44,8 @@ argv: [] -- this task takes none. It is total over `REGISTRY` at every grain it 
 so there is no table and no batch to hand it and no coordinate for a parameter to get
 wrong."""
 import sys
+from collections.abc import Sequence
+from typing import Any
 
 from pyspark.sql import SparkSession
 
@@ -56,10 +58,40 @@ from opl.config import DEFAULT
 
 TASK = "measure_rule_overlap"
 
+# The batch coordinate for a line that belongs to a TABLE rather than to one of its
+# batches. Every ingest job passes `{{job.run_id}}` as the batch id, so a live one is a
+# run id's digits and this is not a value a reader will mistake for one -- though nothing
+# ENFORCES that shape (`require_batch_id` refuses only a blank and the sentinel), which is
+# why this is a legible placeholder and not a claim about uniqueness.
+NO_BATCH = "-"
+
 
 def _emit(table: str, batch: str, key: str, value: object) -> None:
     """One number, one line, one shape. Tab-separated so a log is a table."""
     print(f"{TASK}\t{table}\t{batch}\t{key}\t{value}")
+
+
+def _emit_rows(table: str, rows: Sequence[Any], keys: Sequence[str]) -> int:
+    """Every line for one table, from the collected aggregate. Returns the rows read.
+
+    SEPARATE FROM `_measure` SO IT CAN BE DRIVEN WITHOUT SPARK: it needs only indexing by
+    column name, which a `Row` and a dict both do, and the empty case below is otherwise
+    reachable in a test only by creating an empty staging table.
+
+    AN EMPTY STAGING TABLE GROUPS INTO NO ROWS. Left alone, the loop prints nothing at
+    all for it, and the table is missing from the log for exactly the reason the header
+    refuses to omit a zero-count reason: absence and "nobody measured it" are the same
+    line to a reader. So the table gets one line saying it read no rows -- the same
+    `table batch key value` shape as every other, with a batch coordinate that is not a
+    batch, because there is no batch to name."""
+    if not rows:
+        _emit(table, NO_BATCH, ROW_COUNT, 0)
+    read = 0
+    for row in rows:
+        for key in keys:
+            _emit(table, row[BATCH_COLUMN], key, row[key])
+        read += row[ROW_COUNT]
+    return read
 
 
 def _measure(spark: SparkSession, spec: BronzeTable) -> int:
@@ -76,16 +108,11 @@ def _measure(spark: SparkSession, spec: BronzeTable) -> int:
     if notice is not None:
         print(notice)
     frame = overlap_frame(df, rules, group_by=(BATCH_COLUMN,))
-    # The projection's own order -- the four headline numbers, then one column per rule
-    # that ran -- rather than a second list built here. A report ordered by a list this
-    # file maintains would drift from the aggregate it describes.
+    # The projection's own order -- the headline numbers, then one column per rule that
+    # ran -- rather than a second list built here. A report ordered by a list this file
+    # maintains would drift from the aggregate it describes.
     keys = [column for column in frame.columns if column != BATCH_COLUMN]
-    read = 0
-    for row in frame.collect():
-        for key in keys:
-            _emit(spec.name, row[BATCH_COLUMN], key, row[key])
-        read += row[ROW_COUNT]
-    return read
+    return _emit_rows(spec.name, frame.collect(), keys)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -97,8 +124,15 @@ def main(argv: list[str] | None = None) -> None:
             "something -- see the header's argv line."
         )
     spark = SparkSession.builder.getOrCreate()
-    total = sum(_measure(spark, spec) for spec in REGISTRY.values())
-    print(f"{TASK}: {len(REGISTRY)} tables, {total} staged rows read")
+    # ONE ELEMENT PER TABLE ACTUALLY MEASURED, and the summary counts THAT rather than
+    # `len(REGISTRY)`. The two are equal only while this loop is total over the registry,
+    # which is precisely the property the line is quoted as evidence for: the shipped
+    # version printed the registry's length, so a sweep narrowed to three tables printed
+    # "7 tables" with every per-rule number below it still correct, and the published
+    # "fifteen pairs, seven contracts" would have been false with nothing to contradict
+    # it. A summary that can only report what it saw cannot say that.
+    measured = [_measure(spark, spec) for spec in REGISTRY.values()]
+    print(f"{TASK}: {len(measured)} tables, {sum(measured)} staged rows read")
 
 
 if __name__ == "__main__":

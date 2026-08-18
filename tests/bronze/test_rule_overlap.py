@@ -215,6 +215,56 @@ def test_batch_grain_partitions_the_frame_and_keeps_the_overlap_with_its_batch(s
     )
 
 
+def test_the_report_leads_with_the_headline_keys_in_the_order_that_tuple_declares(spark):
+    """`HEADLINE_KEYS` says "in this order", and this is what makes that a fact.
+
+    Until F4's correction pass the tuple's only consumer was a length assertion, while
+    `aggregate_columns` hand-wrote its four aliases and the job task derived its key list
+    from `frame.columns` -- so the tuple described an order nothing read. It now supplies
+    the order, and this pins the projection against it: the headline numbers first, in
+    that sequence, then one column per running rule."""
+    df = _lookup(spark, [("01", "clean")])
+    columns = overlap_frame(df, rules_for("lookup")).columns
+    assert columns[: len(HEADLINE_KEYS)] == list(HEADLINE_KEYS)
+    assert set(columns[len(HEADLINE_KEYS) :]) == {r for r, _ in rules_for("lookup")}
+
+
+def test_no_rule_running_omits_the_overlap_counters_rather_than_reporting_zero(spark):
+    """The module's own principle, applied to its own headline counter.
+
+    `test_a_skipped_rule_is_absent_from_the_report_rather_than_reported_as_zero` above
+    refuses to print 0 for one control that never ran. `rules_matched_2_or_more` = 0 over
+    a frame where NO rule ran says exactly that sentence about every control at once --
+    and it is the number ADR 0006's reversal condition 1 is settled by, so it is the
+    worst one to be able to read as a measurement. Both rule-derived counters are
+    therefore absent, and the two that do not depend on a rule stay.
+
+    LATENT, NOT LIVE, and driven through the shipped path rather than asserted of it: an
+    empty rule set is the only way to reach this today, because `rules.REQUIRES_COLUMN`
+    holds one entry and the smallest registered contract has three rules."""
+    df = _lookup(spark, [("01", "clean")])
+    assert overlap_frame(df, []).columns == [ROW_COUNT, RESCUED_REASON]
+    running = overlap_frame(df, rules_for("lookup")).columns
+    assert RULES_MATCHED_2_OR_MORE in running, "the control: a real rule set reports both"
+    assert RESCUED_AND_A_RULE in running
+
+
+def test_no_contract_can_name_a_rule_after_a_headline_alias():
+    """Reason strings and the four headline aliases share ONE column namespace.
+
+    Nothing asserted they were disjoint, and a collision is silent in the direction this
+    project keeps finding: `aggregate_columns` would alias two columns `rows`, the job
+    task's `row[key]` would read one of them, and a report would carry a rule's count
+    under a headline name or the reverse. 54 distinct keys in the 2026-08-18 sweep -- 50
+    reason names and 4 aliases -- so this is insurance, not a repair. Also pins that a
+    contract cannot name the same rule twice, which collides the same way."""
+    for table, spec in REGISTRY.items():
+        names = [reason for reason, _ in rules_for(spec.contract)]
+        clash = sorted(set(names) & set(HEADLINE_KEYS))
+        assert not clash, f"{table}: rule reason(s) {clash} collide with a headline alias"
+        assert len(names) == len(set(names)), f"{table}: a reason string is repeated"
+
+
 def test_every_rule_of_every_contract_gets_its_own_aggregate_column(spark):
     """No contract's rule set can be silently half-measured.
 
