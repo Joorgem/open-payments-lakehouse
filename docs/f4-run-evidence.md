@@ -223,6 +223,39 @@ carried out.** That is this project's second recurring species — a guard whose
 distinguish *passed* from *never ran* — showing up in the tooling rather than the code. Every
 `result_from_cache` figure taken through that helper is unverified.
 
+**So the reader was written rather than fixed** (`.plans/cache_flag.sh` + `.plans/cache_flag.py`,
+git-ignored like the rest of the operator tooling). It polls until the flag is non-null, exits
+non-zero on a flag that never fills, and prints `DISCARD … This is NOT a False` rather than a number.
+**It failed closed twice while being built** — two shell-quoting bugs turned the parser into a
+`SyntaxError`, and both times the wrapper printed `DISCARD` instead of a reading, which is the
+behaviour being bought. The parser moved out of the heredoc for that reason.
+
+**Five readings taken with it, controller-verified 2026-08-18. Two of the audit's three claims
+reproduce exactly; the third did not reproduce, and one number moved that was said not to.**
+
+| run | statement | `result_from_cache` | metric keys | `read_bytes` |
+|---|---|---|---|---|
+| A | `amount_brl > 0.0000031`, read after settling | **False** | 30 | **386,515** |
+| B | **byte-identical re-run of A**, read immediately | **True** | 26 | **0** |
+| C | fresh varied literal, read immediately | **False** | 29 | **386,504** |
+| D–F | three further varied literals | **False** ×3 | — | **386,504 ×3** |
+
+- **The cache behaviour reproduces exactly.** An identical statement returns `True` with
+  `read_bytes 0`, `read_files_count 0` and 375 ms against 917 ms — which is precisely how a "268 ms
+  baseline" gets published. **Varying a literal defeats the cache**, five times out of five.
+- **The transient-`null` race did NOT reproduce.** Run C was uncached and read immediately, and its
+  metrics were already populated at 29 keys on the **first** poll. The audit measured the race and a
+  race is a race, so one non-reproduction refutes nothing — but the poll's justification rests on a
+  reported measurement this controller could not reproduce in one attempt, and that is recorded
+  rather than glossed. **The poll costs nothing and the failure it guards against is silent**, which
+  is why it stays.
+- **`read_bytes` is not quite the invariant T5 wants to denominate in.** Four of five uncached runs
+  read **386,504** exactly; run A read **386,515**, eleven bytes more. Eleven bytes on 386 KB is
+  0.003% and irrelevant to a 7.2 GB before/after — but the claim T5 inherits is *"byte-identical
+  within a batch"*, and the honest version is **"byte-identical in four of five readings, with one
+  11-byte excursion on the session's first touch of the table"**. The mechanism for the excursion is
+  **unmeasured**; a first-touch metadata read is a guess, not a finding.
+
 ### 0.8 SYSTEM-TABLE RETENTION: A MEASURED FLOOR, NOT AN UNKNOWN
 
 **Reported** (platform lens): all seven system tables this phase reads have their earliest row within
