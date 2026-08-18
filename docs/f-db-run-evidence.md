@@ -125,10 +125,15 @@ RFB retains baixadas"*, whose statement id is the first row of §0.1 and no long
 So it was re-measured, today, over `bronze_cnpj_empresas`. Statement
 **`01f1986b-af6c-1eb4-8585-f5edb3e11638`**, `from_cache: None`.
 
-**The query is quoted in full, and §0.1 is why.** A statement id is the only handle a reader
-has on a published measurement, the API does not return statement text, and §0.1 has just
-established that the handle dies somewhere inside a day and a half. A number published against an
-id alone is therefore unverifiable almost immediately — so the method goes in the document:
+**The query is quoted in full, and §0.1 is why.** A statement id is the only handle a reader has
+on a published measurement, and the API does not return statement text. ~~§0.1 has just
+established that the handle dies somewhere inside a day and a half.~~ **That clause quoted a
+bound §0.1 had ALREADY retracted one section above it, and then §0.1's later amendment withdrew
+the replacement bound too** — a retracted number surviving two doors down from its own
+retraction, found by grepping for it rather than by anyone reading the sentence. What §0.1
+supports is weaker and enough: **an id is not a durable handle**, by some mechanism the four
+readings do not settle. A number published against an id alone is therefore unverifiable — so
+the method goes in the document:
 
 ```sql
 SELECT COUNT(*)                                                     AS keys_total,
@@ -391,8 +396,9 @@ measurement) and **none about Databricks egress toward a laptop behind NAT** —
 ### 0.5 THE SECOND GUARD THIS PROJECT RELIES ON THAT NOBODY HAD CHECKED, and this one never fired at all
 
 **Controller-verified**, measured 2026-08-17 during Task 6. §0.1 found that a published
-statement id **expires**. This is the other half, and it is worse: the flag published beside
-those ids was never read.
+statement id ~~**expires**~~ **is not a durable handle** *(its expiry reading was withdrawn
+later that night; the id being unreliable is what survives)*. This is the other half, and it is
+worse: the flag published beside those ids was never read.
 
 This repository carries a standing rule, in `.plans/HANDOFF.md` and in `.plans/sql.sh`'s own
 header: *"never publish a number whose `from_cache` you did not read"* — because the DBSQL
