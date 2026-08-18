@@ -26,6 +26,7 @@ import pytest
 from opl.vault import domains
 from opl.vault.registry import (
     BusinessKeyColumn,
+    EffectivitySatellite,
     Hub,
     KeyPrefix,
     Link,
@@ -197,6 +198,63 @@ def test_the_links_grain_is_the_source_columns_and_not_the_hubs_names():
     registry = _registry(link, _OWN_HUB, _ROOT_HUB)
 
     assert identity_columns_of(link, linked_hubs(registry, link)) == ("own_id", "cnpj")
+
+
+def _two_ends_on_one_hub() -> Link:
+    """A link whose two IDENTIFYING ends read ONE source column.
+
+    Distinct roles, so the reference columns are `left_hub_own_hk` and `right_hub_own_hk`
+    and `build_registry`'s collision guard has nothing to say -- these tests must reach
+    the identity guard rather than be caught on the way to it. Both ends still read
+    `hub_own`'s business key `own_id`, so the identity is `('own_id', 'own_id')`."""
+    return Link(
+        name="link_own_own",
+        hash_key="link_own_own_hk",
+        hubs=(LinkEnd(hub=_OWN_HUB.name, role="left"),
+              LinkEnd(hub=_OWN_HUB.name, role="right")),
+    )
+
+
+def test_a_link_gating_an_effectivity_satellite_may_not_repeat_an_identity_column():
+    """AT `build_registry`, NOT SEVERAL TASKS INTO A JOB.
+
+    `identity_columns_of` concatenates the identifying ends' source columns with no dedup,
+    because neither end knows about the other. That tuple is the observation ledger's key,
+    `ObservationGrain.__post_init__` refuses a repeated key column, and
+    `effectivity._refuse_a_mismatched_link_grain` requires the grain to be exactly that
+    tuple -- so the pair is unsatisfiable and the satellite can never be loaded. Found at
+    grain-construction time the message names the GRAIN; found here it names the LINK,
+    which is the table someone has to change."""
+    eff = EffectivitySatellite(name="eff_x", parent="link_own_own", entry_column="opened")
+    domain = VaultDomain(name="probe", tables=(_OWN_HUB, _two_ends_on_one_hub(), eff))
+
+    with pytest.raises(ValueError, match="takes its identity over 'own_id' twice"):
+        build_registry([domain])
+
+
+def test_the_same_repeat_is_ALLOWED_on_a_link_with_no_effectivity_satellite():
+    """THE CONTROL, and it is a shipped table rather than a hypothetical.
+
+    The obvious form of the guard above -- no link may repeat an identity column, which is
+    what the review that prompted it asked for -- is WRONG, and wrong against this
+    repository: `link_empresa_estabelecimento` is HIERARCHICAL,
+    `hub_estabelecimento`'s business key CONTAINS `hub_empresa`'s, and its identity is
+    legitimately `('cnpj_basico', 'cnpj_basico', 'cnpj_ordem', 'cnpj_dv')`. Hashing the
+    parent's key and then the child's compound key that contains it is what a hierarchy
+    IS. Nothing keys a ledger on it, so the repeat costs nothing.
+
+    Both halves are asserted because the permission has to be pinned rather than inferred
+    from a missing test: without this, the guard tightens to the blanket form on the next
+    edit and refuses a registered, correct table."""
+    link = _two_ends_on_one_hub()
+    registry = _registry(link, _OWN_HUB)
+
+    assert identity_columns_of(link, linked_hubs(registry, link)) == ("own_id", "own_id")
+
+    real = domains.table_spec("link_empresa_estabelecimento")
+    assert domains.link_identity_columns(real) == (
+        "cnpj_basico", "cnpj_basico", "cnpj_ordem", "cnpj_dv"
+    ), "the hierarchical link this permission exists for no longer has the shape claimed"
 
 
 def test_the_two_links_written_before_this_field_declare_nothing():

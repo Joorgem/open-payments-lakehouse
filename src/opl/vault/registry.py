@@ -381,6 +381,91 @@ def _assert_every_declared_key_derivation_fits_its_hub(
                 _refuse_a_derivation_that_does_not_fit(table, end, hub)
 
 
+# --- THE IDENTITY COLUMNS OF A GATED LINK, AND WHY THE GUARD IS SCOPED ----------------
+#
+# Module level for the reason `opl.bronze.snapshot` states above `ref_date_from_instant`:
+# this is the reasoning, and inside the docstring it puts the function past the project's
+# 50-line cap.
+#
+# `identity_columns_of` concatenates each identifying end's source columns and then the
+# dependent-child keys, with no dedup, because none of those lists knows about the others.
+# Two identifying ends reading ONE source column therefore yield a tuple with a repeat.
+#
+# WHAT THE REPEAT COSTS, AND ONLY WHERE. That tuple is the OBSERVATION LEDGER'S KEY:
+# `effectivity._refuse_a_mismatched_link_grain` requires the gating grain's key columns to
+# be exactly this list, and `ObservationGrain.__post_init__` refuses a repeated key column
+# outright -- so the pair is unsatisfiable and the satellite can never be loaded. Without
+# this guard that is discovered at GRAIN-CONSTRUCTION time, deep inside a job, in a message
+# naming the grain rather than the link that made it impossible.
+#
+# SCOPED TO EFFECTIVITY PARENTS, WHICH IS THE CORRECTION AND NOT A WEAKENING. The obvious
+# guard -- no link may repeat an identity column, which is what the review asked for -- is
+# WRONG, and measured wrong against this very registry: `link_empresa_estabelecimento` is
+# HIERARCHICAL, `hub_estabelecimento`'s business key CONTAINS `hub_empresa`'s, and its
+# identity is legitimately `('cnpj_basico', 'cnpj_basico', 'cnpj_ordem', 'cnpj_dv')`.
+# Hashing the parent's key and then the child's compound key that contains it is what a
+# hierarchy IS; the link is correct, and the blanket form would have refused a shipped
+# table to close a hypothetical. It has no effectivity satellite, so its repeat costs
+# nothing. `test_the_same_repeat_is_ALLOWED_on_a_link_with_no_effectivity_satellite` pins
+# the permission, so the tightening cannot happen quietly later.
+#
+# HERE FOR THIS FILE'S STANDING REASON, the one `identifying_hubs`' docstring already names
+# for a different function: an end names its hub by STRING and a satellite names its link
+# by STRING, so this is only knowable once the whole set resolves. Import time is where a
+# registry defect belongs -- every registry in this repository is built at import.
+#
+# NOT LIVE TODAY: `link_company_partner` and `link_merchant_empresa` are the two links with
+# effectivity satellites and both have distinct identity columns. Wave 2's `link_payment`
+# is the next two-identifying-end shape, which is why the guard lands before that link does
+# rather than after.
+
+
+def _refuse_a_repeated_identity_column(
+    satellite: EffectivitySatellite, link: Link, columns: Sequence[str]
+) -> None:
+    """The identity columns of a link an EFFECTIVITY SATELLITE hangs off must be distinct.
+
+    See the comment block above for what the repeat costs, and for why a link with no
+    effectivity satellite is allowed to have one."""
+    seen: dict[str, int] = {}
+    for position, column in enumerate(columns):
+        if column in seen:
+            raise ValueError(
+                f"link {link.name!r} takes its identity over {column!r} twice (hash "
+                f"positions {seen[column]} and {position} of {tuple(columns)}), and "
+                f"effectivity satellite {satellite.name!r} hangs off it. Those columns "
+                "are the observation ledger's key, and ObservationGrain refuses a "
+                "repeated key column -- so the grain that satellite requires cannot be "
+                "built at all and the load would fail inside the job. Give the two ends "
+                "distinct source columns (a LinkEnd.key_from names the column it reads), "
+                "or drop the end that is not actually identifying. A link with no "
+                "effectivity satellite may repeat: link_empresa_estabelecimento is "
+                "hierarchical and does"
+            )
+        seen[column] = position
+
+
+def _assert_no_gated_link_takes_its_identity_over_one_column_twice(
+    tables: Mapping[str, VaultTable]
+) -> None:
+    """Refuse an unsatisfiable link/ledger grain at import rather than inside a job.
+
+    Runs AFTER `_assert_every_effectivity_satellite_hangs_off_a_link`, so a parent that is
+    missing or is not a link is already refused there with that message rather than here
+    with a worse one."""
+    for table in tables.values():
+        if not isinstance(table, EffectivitySatellite):
+            continue
+        link = tables[table.parent]
+        if not isinstance(link, Link):
+            # Unreachable: the guard above raised on exactly this. Written as a narrow
+            # rather than an `assert`, which `-O` strips.
+            continue
+        _refuse_a_repeated_identity_column(
+            table, link, identity_columns_of(link, _link_hubs(tables, link))
+        )
+
+
 def _assert_every_effectivity_satellite_hangs_off_a_link(
     tables: Mapping[str, VaultTable]
 ) -> None:
@@ -434,6 +519,7 @@ def build_registry(domains: Iterable[VaultDomain]) -> Mapping[str, VaultTable]:
     _assert_every_link_joins_registered_hubs(tables)
     _assert_every_declared_key_derivation_fits_its_hub(tables)
     _assert_every_effectivity_satellite_hangs_off_a_link(tables)
+    _assert_no_gated_link_takes_its_identity_over_one_column_twice(tables)
     return MappingProxyType(tables)
 
 
