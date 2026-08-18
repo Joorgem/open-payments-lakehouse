@@ -162,7 +162,10 @@ and socios batch `1121645114029617` = 2026-06 over 10 files, estabelecimentos ba
 (`docs/f1.4a-migration-evidence.md:472`).
 
 `retention.files_of_batch` reads **bronze**, so for the two 2026-06 batches it returns those twenty
-files **today**. **The standing 8.21 GB is not a backlog needing a bespoke operator delete; it is one
+files **today**. *(Written at Task 0. **`files_of_batch` no longer exists** — Task 2 replaced it with
+`file_accounts_of_batch`, whose proof is strictly stronger; the sentence is left as measured and
+corrected here rather than rewritten, and §1.3 records that the two proofs admit the same twenty
+files on these two batches.)* **The standing 8.21 GB is not a backlog needing a bespoke operator delete; it is one
 job run away**, and the audit finding that said otherwise reasoned from *future* batches, whose
 checkpoints are indeed consumed, rather than from the original batch, which is still in bronze.
 
@@ -325,7 +328,35 @@ reconciliation and not a test for "the gate fired".
 `reclaimable`, and the stranded payments file is **not** (8,000 unaccounted). Socios' two batches
 carry 1,797 and 1,786 rejected rows spread over 20 files and every one of those files is
 reclaimable — because a rejected row **is** an accounted-for row once it is in quarantine, which is
-exactly the distinction `retention.files_of_batch`'s current proof cannot make.
+exactly the distinction `retention.files_of_batch`'s proof could not make. *(It no longer has to:
+Task 2 deleted that function and put this predicate on the delete path — §1.3.)*
+
+### 1.3 Task 2 — the reclaim reaches the triage path, and the proof is repaired in the same change
+
+**Built, and reviewed by an agent that did not write it.** The wiring is a third task on
+`repromote_triaged_batch`; the proof is not a wiring change at all. `files_of_batch` returned
+`DISTINCT _source_file FROM <bronze>` — that is, **`promoted(f) > 0`** — and its docstring called it
+*"the whole safety argument"*. That is airtight only under an all-or-nothing gate. It is **deleted**,
+not deprecated, and replaced by
+
+> `promoted(f) > 0 AND promoted(f) + quarantined(f) = staged(f)`
+
+whose first conjunct **is** the old predicate, so `new ⇒ old` and the delete set is a **subset** of
+what shipped before. A retention control is allowed to move in that direction and no other.
+
+**Controller-verified on the live warehouse, independently of the implementer and of the reviewer**,
+2026-08-18 — the two proofs compared over the batches the acceptance run will use:
+
+| batch | files | repaired proof admits | old proof admits | staged | promoted | quarantined |
+|---|---|---|---|---|---|---|
+| empresas `321750543973966` | 10 | **10** | **10** | 68,629,148 | 68,629,147 | 1 |
+| socios `1121645114029617` | 10 | **10** | **10** | 27,838,448 | 27,836,651 | 1,797 |
+
+**The strengthening costs nothing on the batches it was written for** — which is the right result and
+not a disappointing one: socios' 1,797 rejected rows are spread across those same ten files, and
+every file still reconciles, because a rejected row *is* an accounted-for row once quarantine holds
+it. The predicate refuses a different case, and the phase has one: the stranded payments file, where
+8,000 rows reached neither table.
 
 ### 1.2 THE DECISION ON `592660596679630`: DO NOT PROMOTE, and the reason is measurable
 
@@ -415,11 +446,23 @@ than diagnosed after it. Controller-verified 2026-08-18:**
 section must be re-derived after every change to `rules_for`, or discarded"* — applied to its own
 2026-08-03 measurement before that measurement is leaned on again.
 
-**What would falsify the prediction, and each is a real outcome rather than a hedge:** a non-zero `refused` means
-`LandingScope`'s containment rejected a path that bronze names — which would be a defect in the
-month derivation, not in the delete; a non-zero `already_absent` means something removed files this
-document listed; and `deleted < 10` on either table means `files_of_batch` does not return what the
-Volume holds, which would falsify §0.5's central claim.
+**What would falsify the prediction, and each is a real outcome rather than a hedge.** Restated
+against the code that actually ships, because the first version of this criterion named
+`files_of_batch`, which Task 2 deleted — **a falsification criterion phrased against a function that
+no longer exists cannot falsify anything**, and it was caught by the independent reviewer rather than
+by its author:
+
+- a non-zero **`refused`** means `LandingScope`'s containment rejected a path bronze names — a defect
+  in the month derivation, not in the delete;
+- a non-zero **`held_back`** means a file whose rows do not reconcile, which is the outcome the old
+  proof **could not produce at all** and is a finding rather than a failure — the controller measured
+  `held_back = 0` for both batches before the run, so a non-zero one contradicts a published number;
+- a non-zero **`already_absent`** means something removed files this document listed;
+- **`deleted < 10`** on either table means `file_accounts_of_batch` does not return what the Volume
+  holds, which would falsify §0.5's and §1.3's central claim;
+- and a **red run before any delete** is the likeliest non-zero-risk outcome, not a wrong number:
+  `spark.sql(..., args={...})` named-parameter binding is unexercised on serverless, and it is called
+  before the month is resolved and before anything is unlinked.
 
 ### 2.2 The all-matching-rules sweep
 
