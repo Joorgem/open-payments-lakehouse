@@ -197,13 +197,44 @@ used has since been deleted. **It was caught by an audit reading the PR's own te
   granted per service principal.** There is no group in this workspace that can be both.
 - **Removing a principal from a group does not close the mask promptly** — a measured fail-open
   window of **> 3 m 50 s, ≤ ~17 min**, with a fresh OAuth token on each read, so it is server-side
-  membership caching. Addition propagates immediately; removal does not, which is the unsafe
-  direction.
+  membership caching. ~~Addition propagates immediately; removal does not, which is the unsafe
+  direction.~~
+  > **THE ASYMMETRY DID NOT REPRODUCE, AND IT WAS THIS PARAGRAPH'S ONLY CONSOLING HALF.** Task 5
+  > re-measured **both** directions on the SQL warehouse, fresh OAuth token and varied literal on
+  > every read: **removal effective at ~3 m 54 s (12 consecutive reads), addition at ~5 m 18 s (14
+  > reads)**. Both lag, and the slower of the two is the one that *grants* access.
+  >
+  > That is a different shape of risk from the one first recorded — not *"a control that closes
+  > late"* but **"a control whose membership is slow in both directions"** — and it removes the
+  > sentence a reader would have leaned on. The two figures come from different sources (the first
+  > **reported** by the platform lens, the second **measured** by Task 5) and **ADR 0008 assumes
+  > neither direction is instant**.
+  >
+  > **What is not in doubt, and is the operational point: `REVOKE` bites on the very next statement**
+  > — `INSUFFICIENT_PERMISSIONS`, SQLSTATE 42501, measured **while the principal was still in the
+  > group**. So the fast-closing control here is the **grant**, not the membership, and that is what
+  > the two-principal differential is built on.
 
 **Unbacked and not to be cited without a re-run:** the two-principal transcript (principal deleted),
-the ABAC demonstration (policy removed), and the "70 governed tag policies" (no endpoint named, and
+the ABAC demonstration (policy removed), and ~~the "70 governed tag policies" (no endpoint named, and
 the provenance lens could reach none of `/api/2.0/tag-policies`, `/api/2.1/tag-policies`,
-`/api/2.0/account/tag-policies`).
+`/api/2.0/account/tag-policies`)~~.
+
+> **THE TAG CLAIM IS BACKED, AND THE ENDPOINT IS NOW ON THE RECORD.** Task 5 found it:
+> `GET /api/2.1/tag-policies?page_size=200` returns **`tag_policies: 70`** with
+> `next_page_token: null`, including `class.name`, `class.br_cpf` and `class.br_cnpj`. The
+> provenance lens reached nothing because it queried the path without the page size and because
+> `/api/2.0/tag-policies` answers only that it is deprecated — **while naming the 2.1 path in its own
+> reply**. So the number was right and its provenance was recoverable; what was missing was one
+> parameter.
+>
+> **And the thing worth knowing costs more than the count.** Those policies' allowed-value lists are
+> **empty**, measured: `SET TAGS ('class.name' = 'personal_name')` is **refused** and
+> `SET TAGS ('class.name' = '')` **succeeds** and reads back from
+> `information_schema.column_tags`. A bespoke `opl.pii` key is refused outright — *"Tag key contains
+> reserved characters"* — so the governed keys are the only dotted ones available. **A classification
+> whose only legal value is the empty string carries its meaning entirely in the key**, which is a
+> real limit on what tagging buys here and belongs beside the count rather than under it.
 
 ### 0.7 THE CACHE FLAG HAS THE SAME DISEASE AS THE MANIFEST, BIASED AGAINST THE RUNS THAT MATTER
 
