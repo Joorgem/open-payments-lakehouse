@@ -346,6 +346,52 @@ measurement) and **none about Databricks egress toward a laptop behind NAT** —
 
 ---
 
+### 0.5 THE SECOND GUARD THIS PROJECT RELIES ON THAT NOBODY HAD CHECKED, and this one never fired at all
+
+**Controller-verified**, measured 2026-08-17 during Task 6. §0.1 found that a published
+statement id **expires**. This is the other half, and it is worse: the flag published beside
+those ids was never read.
+
+This repository carries a standing rule, in `.plans/HANDOFF.md` and in `.plans/sql.sh`'s own
+header: *"never publish a number whose `from_cache` you did not read"* — because the DBSQL
+result cache defeats comment nonces, time travel and aliases, so a measurement that cannot say
+whether the cache answered it is not a measurement. **The rule is right. It was unsatisfiable
+through the path it documents.**
+
+`.plans/sql.sh` reads the flag as `manifest.get("result_from_cache")` off the
+`/api/2.0/sql/statements` response. **That manifest carries only `chunks`, `format`, `schema`,
+`total_chunk_count`, `total_row_count` and `truncated`. There is no `result_from_cache` key in
+it at all.** So the `None` printed beside every statement id this project has ever published is
+a **missing key**, not a measured `False` — and `sql.sh`'s header recorded that `None` as the
+normal reading, which is how it survived three phases.
+
+**Every `from_cache: None` in this repository is therefore a structural absence wearing the
+shape of a measurement**: F3's evidence, F-API's (a dozen of them), and this document's own
+§0.2 and §0.3. The guard printed a value on every run and never once consulted the thing it
+claimed to.
+
+**The flag is served — one endpoint away.** `/api/2.0/sql/history/queries?include_metrics=true`
+carries it as `metrics.result_from_cache`. Task 6 read it there for **all eight ids it
+publishes, and every one came back `False`.**
+
+**So nothing published is retracted.** No number in this phase was served from cache. **What is
+retracted is the claim that anyone had checked** — and that distinction is the whole of it,
+because a guard believed to be running is worse than one known to be absent. It is the same
+species as §0.4's `[]`-that-could-not-have-been-non-empty, and as F-API's `_GUARD_MODULES`
+blind spot: **a check whose output is indistinguishable between "it passed" and "it never
+ran".**
+
+`.plans/sql.sh` now prints `ABSENT` with the endpoint that answers, rather than `None`. It was
+**not** re-pointed at the history API, deliberately: it was corrected while a run was in flight
+and using it, and changing what a tool queries mid-run is how a measurement acquires a second
+explanation.
+
+> **Read §0.2's and §0.3's `from_cache: None` under this section.** Both statements were
+> genuinely run and their numbers stand — §0.2's departure count was independently reproduced
+> against the table, and §0.3's pool is pinned by a committed sha256 anyone can re-derive
+> offline. The annotation those two lines needed was never "this number is suspect"; it was
+> "this flag was not consulted."
+
 ## 1. Predictions — published before the run that tests them
 
 **Written before `scripts/seed_merchant_db.py` existed and before any row was seeded**
@@ -991,6 +1037,120 @@ and abandoned both times: it was pacing at **~7 hours** on this box, which is wh
 `satellites._refuse_a_mismatched_grain` crossing to **53** lines under this pass's own edit, which
 is what `_refuse_a_prefixed_hub_grain` was split out of.
 
+### 2.6 THE RUN OF RECORD — 2026-08-17/18, and the first end-dating this lakehouse has written
+
+**The two snapshots were TAKEN on two different calendar days**, which is T8's requirement and
+the one constraint in this phase that no code could satisfy: `2026-08-17T21:51:37.226296Z` and
+`2026-08-18T00:00:56.258041Z`. All five jobs ran against wheel `670afb3e…` at revision
+`7d164dce…`, **verified by artefact three ways** — digest, the revision stamped inside the
+wheel, and `postgres_source.py` inside the wheel byte-identical to the tree — never by a
+success line.
+
+#### 2.6.1 The tautology, before the number
+
+**Six of the change classes are written by `scripts/seed_merchant_db.py` — chosen, not
+discovered.** The 32 inserts, the 48 trigger-moving updates, the 24 silent ones, the 16
+deletes, the 8 `watermark_advance` touches and **the count 8** of out-of-order commits are all
+authored. Reporting any of them as a finding would be the defect F3's audit caught in its own
+150-duplicate acceptance.
+
+**The out-of-order commit is the exception, and it is why the headline is worth publishing.**
+It was produced with the `BEFORE UPDATE` trigger — the correct fix for the other two watermark
+classes — **already armed**, and the row escaped anyway, because `updated_at` orders by
+transaction START and visibility orders by transaction COMMIT. Its count is arranged; its
+existence is not.
+
+#### 2.6.2 The headline, computed rather than typed
+
+**`diff_caught − incremental` = 128 − 80 = 48**, decomposing **16 deletes + 24 silent
+updates + 8 out-of-order commits.**
+
+The **80** is the committed `WHERE updated_at > :since` run **inside snapshot 2's own
+`REPEATABLE READ READ ONLY` transaction** — the extractor's own output, not a re-query at a
+third instant. The **128** is the lakehouse diff over the nine payload columns. **The
+decomposition is by the measured position of `updated_at`, not by class membership**: silent
+updates still carry their seed stamp below `t1`, and out-of-order rows carry `t1 ≤ u ≤ t2`. So
+the split is a property of the data rather than a re-reading of the script that made it.
+
+#### 2.6.3 Every §1 prediction, marked
+
+| §1.1 predicted | measured | |
+|---|---|---|
+| snapshot 1 merchants **1,088** / distinct CNPJs **1,024** | 1,088 / 1,024 | ✅ |
+| INSERT 32 / UPDATE moving 48 / not moving 24 / DELETE 16 | 32 / 48 moved / 24 with **0** moved / 16 | ✅ |
+| out-of-order 8 | 8 rows, 8 moved | ✅ |
+| snapshot 2 merchants **1,104** | 1,104 | ✅ |
+| **rows a watermark extract MISSES — 48** | **48** = 16 + 24 + 8 | ✅ |
+| link rows 1,088 → 1,104 over **1,024** empresas | 1,088 → 1,104 observed, **1,120 cumulative**, 1,024 empresas | ✅ |
+| **departures at link grain — 16** | **16**, `closed_by='absent_after_observation'` | ✅ |
+
+**Nine of nine confirmed, none falsified.** That is a weaker result than a falsification would
+have been, and it is stated as such: this phase's most useful rows have been the ones that came
+back wrong.
+
+**§1.3's three falsifiers all failed to fire**, which is the check that the confirmations mean
+something: the miss is **48 and not 40**, so the out-of-order rows were produced; `departed` is
+**16**, so the snapshot axis distinguishes the two observations; and **the derivation is not
+per-class** — `sat_merchant_dados` independently landed **+112 = 32 inserted + 80
+payload-changed** from one `hash_diff` pass, with no branch per class anywhere.
+
+**The trap behaved exactly as §2.1 warned and is not the departure count.** Distinct CNPJ roots
+fell **1,024 → 1,011**, because thirteen of the sixteen deleted merchants were their company's
+only merchant. **The number at link grain is 16.**
+
+#### 2.6.4 Controller-verified, against the workspace, after the agent reported
+
+**Measured by the controller** — `01f19a99-422e-17ce-a127-116c90e6a4c8` and
+`01f19a99-50a5-1683-9f98-24e80adf7705`:
+
+| | value |
+|---|---|
+| `sat_eff_merchant_empresa` rows / **closed** | 1,136 / **16** |
+| distinct `closed_by` values / the value | **1** / `absent_after_observation` |
+| `bronze_merchant` rows | **2,192** (= 1,088 + 1,104) |
+| distinct `_snapshot_at` | **2** |
+| **distinct `_snapshot_ref_date`** | **2 — the two calendar days T8 requires** |
+| `link_merchant_empresa` / `hub_merchant` / `sat_merchant_dados` | 1,120 / 1,120 / 1,200 |
+
+**The `_snapshot_ref_date` count of 2 is the row this phase would have died on.** At 1, the
+satellite's `groupBy(hash_key, applied_date)` fold collapses both observations into one,
+`absent_after_observation` has no producer, and every other number above would still have been
+correct.
+
+#### 2.6.5 The vault job FAILED once, correctly, and that refusal is a finding
+
+`opl_vault_merchant` run `538180370794134` **failed on purpose** against a window holding one
+instant: `_refuse_a_window_that_cannot_close` refused rather than reporting **0 closes**, which
+would have been indistinguishable from a clean load. **It is a launch-ordering constraint the
+job YAML cannot express** — the effectivity task needs *both* instants in one window, so
+per-snapshot incremental vault runs are impossible for this table. The record run,
+`860362013299637`, then landed hub +32, link +32, satellite +112 and effectivity +1,136 of
+which **16 close**.
+
+**Satellite idempotence held under a genuine re-run**: snapshot 1 was loaded twice and
+contributed **0** duplicate rows, with `0 source rows folded` on both the satellite's and the
+effectivity's dedup — the fold `satellites.py` calls the worst it performs, exercised and
+measured at zero rather than assumed.
+
+**And `refuse_unloaded_hubs` is an existence test only, so the thing it cannot check was
+checked separately:** all **1,024** merchant CNPJ roots resolve to real `hub_empresa` keys.
+The link points at real companies rather than at nothing — which is the integration claim this
+project has never been able to make, Files (CNPJ) and Databases (Postgres) meeting on one hub.
+
+#### 2.6.6 Statement ids, with `from_cache` READ — the first time in this repository
+
+Nine ids, all checked at **00:07Z while the phase was running** and all resolving, with
+`result_from_cache` read from `/api/2.0/sql/history/queries?include_metrics=true` because
+§0.5 established the manifest has no such key: **`False` for every one.**
+
+`01f19a98-cb01…` counts · `01f19a98-d965…` diff · `01f19a98-dc09…` the miss ·
+`01f19a98-de14…` link · `01f19a98-e029…` departures · `01f19a98-f3be…` census ·
+`01f19a86-ecdd…` roots↔hub · `01f19a86-caba…` `hub_empresa` at 69,062,849 ·
+`01f19a88-5bbf…` ref_date.
+
+**The oldest resolved at 2 h 15 m**, which is consistent with §0.1's 8–35 h band and does not
+narrow it.
+
 ## 3. What ships UNEXERCISED
 
 **Standing decision §4.6: a path that ran zero rows through it is not a path that works.**
@@ -1157,3 +1317,35 @@ be inferred**, because a ledger that only grows stops being read:
   link in this vault with a declared derivation on an identifying end, so the three CNPJ-domain
   grains and the merchant domain's own HUB grain all carry `()` and take the pre-existing path
   byte for byte. The field's second consumer arrives with wave 2 or not at all.
+
+### Added by the run of record, 2026-08-17/18
+
+**The run closed several of the entries above and opened these.** Standing decision §4.6 in its
+sharpest form: a path that ran zero rows through it is not a path that works — **and a refusal
+that passed rather than fired has not been exercised either.**
+
+- **THREE REFUSALS PASSED RATHER THAN FIRED, and passing is not evidence about them.**
+  `_refuse_a_since_before_t2`, `_refuse_a_watermark_before_t2` and
+  `_refuse_an_incremental_run_without_the_hand_off` were all satisfied by a correct run. Each is
+  proven able to fail — by a test that patches it out and watches an unprotected extract complete
+  — but **none has refused a real race**, because the run was correct. That is the intended
+  outcome and it is not the same sentence as "the guard works in production".
+- **`fail_on_dq` AND THE `check_bad_rows` FALSE BRANCH NEVER RAN.** All three ingests landed
+  **0 bad rows**, so the gate's rejecting path moved nothing. **`bronze_merchant_quarantine` has
+  never held a row**, and `_rescued_data` was never populated — which means the highest-precedence
+  DQ rule this repository has is unexercised for this source.
+- **`closed_by` HAS EXACTLY ONE VALUE.** All sixteen closes are `absent_after_observation`.
+  `rejected_by_our_gate` — the other half of ADR 0010's whole subject, and the confusion ADR 0011
+  prices at 1,781 sócio keys per month — **has never been written by this source**, and cannot be
+  until a merchant row is quarantined.
+- **THE HUB-GRAIN VERSUS LINK-GRAIN DIVERGENCE IS NOT REACHABLE BY THIS DATA.** Task 5's fixture
+  measured 1 against 2; the run measures **16 against 16**, because every merchant holds exactly
+  one link row. The divergence is real and demonstrated, and **this run does not demonstrate it**.
+  The 1,024 → 1,011 root collapse is a *different axis* and must never be read as a departure count.
+- **`mutate --release-after`, the extractor's `--no-upload`, and `report_diagnostics=false`** were
+  not exercised in the run of record.
+- **THE NEW CI JOB HAS NOT RUN ON GITHUB, and this is the honest version of a claim that would
+  otherwise read as done.** Its **command** is verified locally — `uv run pytest -m postgres` →
+  **21 passed, 2,460 deselected, 17.2 s** — and `psycopg[binary]` ships manylinux wheels, so no
+  system libpq is needed. **The service container on port 5433 is unverified.** Until a push
+  exercises it, the claim is *"the command is verified, the job is not."*
