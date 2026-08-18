@@ -290,6 +290,31 @@ def test_a_file_whose_rows_are_all_rejected_is_refused_though_it_reconciles(
     assert account.reclaimable is False
 
 
+def _old_proof(spark, spec, batch, config) -> set[str]:
+    """`files_of_batch` as it SHIPPED, re-executed here rather than reconstructed.
+
+    The deleted function's whole body was this query, and running it is what makes
+    the comparison below a cross-implementation one. Reading `promoted > 0` out of
+    the new query's own output would have compared the repaired proof against a
+    projection of itself: a bronze leg scoped to the wrong batch, or joined at the
+    wrong grain, moves BOTH sides together and the implication still holds
+    vacuously. This side reads bronze directly and knows nothing about staging,
+    the quarantine or `RECLAIMABLE_SQL`."""
+    from pyspark.sql.functions import col
+
+    from opl.bronze.autoloader import SOURCE_FILE_COLUMN
+    from opl.bronze.promote import BATCH_COLUMN
+
+    return {
+        row[SOURCE_FILE_COLUMN]
+        for row in spark.read.table(config.table(spec.bronze))
+        .filter(col(BATCH_COLUMN) == batch)
+        .select(SOURCE_FILE_COLUMN)
+        .distinct()
+        .collect()
+    }
+
+
 def test_the_repaired_proof_admits_only_files_the_old_one_admitted(
         spark, tables, repromoted):
     """THE IMPLICATION, asserted rather than argued in a docstring.
@@ -299,15 +324,71 @@ def test_the_repaired_proof_admits_only_files_the_old_one_admitted(
     one, so the new delete set is a SUBSET of the old: this control can only ever
     unlink fewer files than it did before, never one more. A repair to a retention
     guard that could admit a file the previous version refused would need an
-    argument of its own, and this asserts there is none to make."""
+    argument of its own, and this asserts there is none to make.
+
+    The old side is COMPUTED by `_old_proof`, which runs the shipped query, rather
+    than read back out of the new one -- see there for what that would have made
+    this assertion worth."""
     spec, batch = repromoted
     accounts = _accounts(spark, spec, batch, tables)
-    old_proof = {name for name, account in accounts.items() if account.promoted > 0}
+    old_proof = _old_proof(spark, spec, batch, tables)
     repaired = {name for name, account in accounts.items() if account.reclaimable}
 
     assert repaired < old_proof, "the repaired proof must be strictly stronger here"
     assert old_proof == {"f_clean", "f_rejected", "f_stranded"}
     assert repaired == {"f_clean", "f_rejected"}
+
+
+def test_a_row_that_names_no_file_is_dropped_and_the_drop_is_printed(
+        spark, tables, repromoted, capsys):
+    """THE SILENT DROP. A NULL `_source_file` names no path, so it can be neither
+    unlinked nor evidence about a file and it is dropped -- but the task's five
+    counters (deleted, already_absent, failed, refused, held_back) total over what
+    SURVIVED the drop, so those rows leave every printed number balanced and
+    appeared nowhere at all.
+
+    The rows below are written to look RECLAIMABLE on purpose -- two staged, two
+    promoted, so `promoted > 0 AND promoted + quarantined = staged` holds for their
+    group. That makes the drop, and not the predicate, the thing that keeps them out
+    of the delete list, which is exactly the case a reader has no way to see without
+    the line this asserts."""
+    spec, batch = repromoted
+    _write(spark, tables, spec.staging, [(batch, None), (batch, None)])
+    _write(spark, tables, spec.bronze, [(batch, None), (batch, None)])
+
+    accounts = _accounts(spark, spec, batch, tables)
+    out = capsys.readouterr().out
+
+    assert set(accounts) == {"f_clean", "f_quarantined", "f_rejected", "f_stranded"}
+    assert "DROPPED (names no file)" in out
+    assert "2 staged, 2 promoted and 0 quarantined" in out
+    assert batch in out
+    # And the four real files are decided exactly as they were before those rows
+    # existed: SQL keys NULL as a group of its own, so it takes nothing from theirs.
+    assert accounts["f_clean"].reclaimable is True
+    assert accounts["f_stranded"].reclaimable is False
+
+
+def test_a_file_that_lost_the_column_on_one_row_is_held_back_rather_than_deleted(
+        spark, tables):
+    """THE FAIL-CLOSED HALF, verified rather than asserted in prose.
+
+    A row whose `_source_file` went missing between staging and bronze does not
+    merely vanish from the report -- it leaves the NAMED group short by one leg, so
+    that group's `promoted + quarantined = staged` breaks and the file is held back.
+    The drop can therefore never be the reason a file is unlinked: in every
+    arrangement of the three tables it either changes nothing or refuses more."""
+    from opl.bronze.registry import table_spec
+
+    spec = table_spec("estabelecimentos")
+    _write(spark, tables, spec.staging, [("b", "f_split"), ("b", "f_split")])
+    _write(spark, tables, spec.bronze, [("b", "f_split"), ("b", None)])
+
+    account = _accounts(spark, spec, "b", tables)["f_split"]
+
+    assert (account.staged, account.promoted) == (2, 1)
+    assert account.unaccounted == 1
+    assert account.reclaimable is False
 
 
 def test_the_accounts_are_scoped_to_the_batch_they_were_asked_about(

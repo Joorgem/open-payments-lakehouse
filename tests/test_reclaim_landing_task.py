@@ -169,6 +169,32 @@ def test_a_month_that_contradicts_the_stamp_stops_the_task_before_any_delete(
     assert deleted == []
 
 
+def test_a_contradicting_month_is_refused_even_when_the_batch_proves_no_file(
+        monkeypatch, capsys):
+    """WHERE THE GUARD ABOVE COULD NOT SEE, until this pass.
+
+    The cross-check used to sit inside `resolve_month`, which `main` reaches only
+    AFTER the empty-proof return -- so on a batch where nothing is proven the
+    contradiction was never detected and the run exited 0 printing the
+    three-cause message about typos and rebuilt tables. That is the wrong message
+    for this fact and it is the likeliest shape of the defect: a batch id and a
+    month that do not belong together usually prove nothing at all.
+
+    Nothing is deleted either way, which is why this is about the LOG rather than
+    about the bytes -- and a control whose only output on a real defect is a
+    message about something else is one nobody can act on."""
+    _stub_session(monkeypatch, months=("2026-06",))
+    _stub_proof(monkeypatch, [])
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError, match="2026-05") as excinfo:
+        task.main(["estabelecimentos", "999", "2026-05"])
+
+    assert "2026-06" in str(excinfo.value), "the message must name BOTH months"
+    assert deleted == []
+    assert "rebuilt after the promote" not in capsys.readouterr().out
+
+
 def test_with_no_stamp_a_wrong_month_still_refuses_every_file(monkeypatch, capsys):
     """What stands when nothing can be cross-checked -- a pre-F1.4a staging shape
     has no `_snapshot_month` column, so the passed month is all there is.
@@ -377,6 +403,31 @@ def test_a_batch_that_stamps_no_month_refuses_rather_than_falling_back(monkeypat
     assert deleted == []
 
 
+def test_a_malformed_stamp_is_refused_by_the_same_guard_a_passed_month_meets(
+        monkeypatch):
+    """THE DERIVED MONTH IS VALIDATED TOO, and nothing exercised that until now.
+
+    Every other test of this path stamps a well-formed month or none at all, so
+    deleting the `require_month(` call in `resolve_month` turned nothing red --
+    while the value goes straight into `landing_table(subdir, month)`, which
+    interpolates it raw. `2026-06/zips` is the probe for the same reason it is on
+    the passed-month side: the containment root would become the zips directory
+    itself, and every zip under it would read as INSIDE the dir this task may
+    delete from. Coming out of the data rather than out of an operator's typing
+    changes nothing about that -- `_snapshot_month` is a string column and nothing
+    between the ingest and here constrains what a backfill may have written into
+    it."""
+    _stub_session(monkeypatch, months=("2026-06/zips",))
+    _stub_proof(monkeypatch, [f"{_ZIPS}/Estabelecimentos1.zip"])
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError, match="month") as excinfo:
+        task.main(["estabelecimentos", "999"])
+
+    assert "refusing to reclaim" in str(excinfo.value)
+    assert deleted == []
+
+
 def test_a_batch_stamped_with_two_months_refuses_rather_than_picking_one(monkeypatch):
     """One ingest run takes ONE month, so this state has no explanation -- which is
     why it must not be answered by taking the first. A delete boundary chosen out
@@ -504,6 +555,27 @@ def test_a_table_with_no_zip_is_a_green_no_op_when_the_job_serves_every_table(
     out = capsys.readouterr().out
     assert deleted == []
     assert "NO ARCHIVE" in out and "single copy" in out
+
+
+def test_the_flag_makes_a_no_op_green_and_still_does_not_excuse_a_missing_batch_id(
+        monkeypatch):
+    """The flag suppresses ONE refusal, and it used to suppress a second by
+    accident.
+
+    `--any-table` says "a table with no archive is a legitimate no-op for this
+    caller". It never said an invocation naming no batch is one --
+    `reclaim_landing.py payments "" --any-table` exited 0 green, so a flag added
+    for one guard was silencing another's message. Unreachable through the job
+    (the promote refuses the sentinel batch id two tasks earlier and this one
+    never starts) and closed anyway: the reachable caller is an operator running
+    this file by hand, which is the caller every other guard here is written for."""
+    spark = _stub_session(monkeypatch)
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(PromoteRefused, match="refusing to reclaim"):
+        task.main(["payments", "", "--any-table"])
+
+    assert spark.asked == [] and deleted == []
 
 
 def test_the_any_table_flag_does_not_change_what_a_zips_table_reclaims(

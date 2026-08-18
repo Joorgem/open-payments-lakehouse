@@ -116,18 +116,32 @@ resources:
         # CSVs, deliberately left in the Volume so the debt stayed visible, against
         # a ~48 GB/month floor and no published quota.
         #
-        # ADR 0006 named the fix and the reason it is safe: "`reclaim_landing` is
-        # already guarded independently of the gate ... its real precondition is
-        # 'these rows are persisted', and `repromote_triaged_batch` satisfies that
-        # at exactly the point the in-flow promote does. Wiring it there restores
-        # the control on both paths without loosening the gate on either."
+        # ADR 0006 named the fix and the reason it is safe, quoted WHOLE because
+        # the middle clause is the part this change had to replace:
+        # "`reclaim_landing` is already guarded independently of the gate: IT
+        # DELETES ONLY THE INNER FILES BRONZE PROVES IT HOLDS ROWS OF, for that
+        # batch, and refuses with a message naming the three reasons it might not.
+        # Its real precondition is 'these rows are persisted', and
+        # `repromote_triaged_batch` satisfies that at exactly the point the in-flow
+        # promote does. Wiring it there restores the control on both paths without
+        # loosening the gate on either."
         #
-        # DEPENDS ON `promote`, exactly as the four ingestion jobs do, and that is
-        # what carries the precondition. Note what the dependency is worth for the
-        # batch this task was written for: an already-promoted batch does not
-        # re-append, it returns ALREADY_PROMOTED from `plan_promotion` (bronze_rows
-        # == staged_promotable) and exits 0 -- so the reclaim runs. A promote that
-        # REFUSES raises, and this task never starts.
+        # THE CAPITALISED CLAUSE NO LONGER DESCRIBES THE CODE, and an ellipsis over
+        # it would have shown an ADR endorsing this wiring while hiding the one
+        # sentence the wiring falsified. "Bronze holds rows of this file" is exactly
+        # the proof a repromote breaks -- clean rows in bronze, rejected rows only
+        # in quarantine -- so it was replaced by `reconcile.RECLAIMABLE_SQL` (every
+        # staged row accounted for AND at least one in bronze) in the same change
+        # that reached it. The ADR's conclusion survives; its stated reason is a
+        # strictly weaker proof than the one that now runs.
+        #
+        # DEPENDS ON `promote`, exactly as the three CNPJ ingestion jobs that run
+        # this task do, and that is what carries the precondition. Note what the
+        # dependency is worth for the batch this task was written for: an
+        # already-promoted batch does not re-append, it returns ALREADY_PROMOTED
+        # from `plan_promotion` (bronze_rows == staged_promotable) and exits 0 --
+        # so the reclaim runs. A promote that REFUSES raises, and this task never
+        # starts.
         #
         # NO MONTH PARAMETER, deliberately, where the ingestion jobs pass one. In a
         # repromote nobody has the ingest run's month in hand -- the reconciliation
@@ -136,6 +150,27 @@ resources:
         # refuses every file and frees nothing. `reclaim_landing` derives it from
         # `_snapshot_month`, which the ingest stamped from its own validated month
         # parameter; see `resolve_month` there.
+        #
+        # THE DERIVATION CANNOT OUTLIVE THE PROOF, which is why deriving it is not
+        # a new way for this task to fail. The stamp is read from STAGING, and
+        # staging is where the proof's denominator comes from: the only way the
+        # month goes missing while a file is still proven would be a staging table
+        # dropped after the promote -- and that same drop zeroes `staged`, so
+        # `promoted + quarantined = staged` fails for every file, nothing is proven,
+        # and `resolve_month` is never reached. The two become unavailable together.
+        #
+        # WHAT THIS TASK STILL DOES NOT CHECK IS PATH IDENTITY, recorded here
+        # because this is the wiring that made it matter. The delete target is a
+        # `_source_file` STRING, and nothing verifies that the object at that path
+        # today is the object the batch read. In flow that gap was minutes wide; a
+        # repromote runs hours or days later, and the documented recovery for a
+        # parse defect is to re-land the SAME filenames from the zips -- so a file
+        # re-landed for a fix and not yet re-ingested is deletable by a repromote of
+        # the old batch. ADR 0006's precondition is about the ROWS and holds; it
+        # says nothing about the bytes at the path. Not closed here because closing
+        # it needs a per-file identity the ingest does not record today (no size, no
+        # digest, no modification time on the row), which is a change to what the
+        # stream writes rather than to what this task reads.
         #
         # `--any-table` says this job serves EVERY registered table, so one whose
         # files have no zip in the Volume (payments, ptax, merchant, lookup) is a

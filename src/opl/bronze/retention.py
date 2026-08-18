@@ -183,12 +183,14 @@ def file_accounts_of_batch(
     nothing -- the same answer, and the same delete-nothing action, as a table that
     does not exist; which of those happened is the job task's to tell apart.
 
-    A NULL `_source_file` is dropped: it names no path, so it can neither be
-    unlinked nor be evidence about one."""
-    accounts = spark.sql(
+    A NULL `_source_file` is dropped AND SAID SO -- it names no path, so it can
+    neither be unlinked nor be evidence about one, but see `_report_unnamed_rows`
+    for why a drop nobody prints is the wrong half of that sentence."""
+    rows = spark.sql(
         file_accounts_sql(spec, config, skip=_absent_roles(spark, spec, config)),
         args={"batch_id": batch_id},
     ).collect()
+    _report_unnamed_rows(rows, batch_id)
     return tuple(
         sorted(
             (
@@ -199,12 +201,46 @@ def file_accounts_of_batch(
                     row["quarantined"],
                     bool(row["reclaimable"]),
                 )
-                for row in accounts
+                for row in rows
                 if row["source_file"]
             ),
             key=lambda account: account.source_file,
         )
     )
+
+
+def _report_unnamed_rows(rows: Iterable, batch_id: str) -> None:
+    """Say when this batch holds rows whose `_source_file` names no path.
+
+    THE SILENT DROP. A row with a NULL (or empty) `_source_file` cannot be unlinked
+    and cannot be evidence about a file, so it is dropped -- and the task's five
+    printed counters (deleted, already_absent, failed, refused, held_back) are
+    totals over the accounts that SURVIVED the drop, so the dropped rows leave
+    every printed number balanced and appear nowhere at all. That is a silent
+    failure preserving every other number, in miniature, and it is the shape this
+    module's own caller invented `HELD BACK` to avoid.
+
+    REPORTED RATHER THAN RAISED, because the drop is fail-closed in both
+    directions and nothing is at risk -- only unexplained. SQL keys NULL as a group
+    of its own, so those rows never join a real file's counts; and a file with rows
+    on both sides of that split fails `promoted + quarantined = staged` on the
+    named side, so it is held back rather than unlinked. Nothing is deleted BECAUSE
+    of a dropped row, in any arrangement of the three tables.
+
+    Not produced by the ingest at all: `autoloader.add_common_audit_columns` writes
+    `_metadata.file_path`, which is never null for a file-fed stream. So a line here
+    means a hand-written insert or a backfill that did not carry the column."""
+    unnamed = [row for row in rows if not row["source_file"]]
+    for row in unnamed:
+        print(f"  DROPPED (names no file): batch {batch_id} has {row['staged']} staged, "
+              f"{row['promoted']} promoted and {row['quarantined']} quarantined row(s) "
+              "whose _source_file is NULL or empty. They are in NO count below -- "
+              "nothing was deleted for them and nothing can be, because _source_file "
+              "is how this reclaim names a delete target. No file is left unreclaimed "
+              "by this: rows split across the named and unnamed groups make the named "
+              "group fail its own arithmetic, so it is held back. Find them with "
+              "SELECT * FROM <staging> WHERE _batch_id = "
+              f"'{batch_id}' AND _source_file IS NULL")
 
 
 def months_of_batch(spark: SparkSession, staging_table: str, batch_id: str) -> tuple[str, ...]:

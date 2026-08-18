@@ -65,8 +65,8 @@ observation ledger means for those keys. The recommendation is recorded in
 bypass wearing a dashboard.
 
 FILE GRAIN IS NOT A SECOND FEATURE, IT IS `reclaim_landing`'s SAFETY ARGUMENT.
-`retention.files_of_batch` returns the distinct `_source_file` values BRONZE holds
-rows of, and its docstring calls that query "the whole safety argument -- what it
+`retention.files_of_batch` returned the distinct `_source_file` values BRONZE held
+rows of, and its docstring called that query "the whole safety argument -- what it
 returns is exactly what may be removed". That is airtight only under an
 all-or-nothing gate, where bronze holding *a* row of a file implies bronze holds
 *every* row of it. The moment a batch reaches bronze through a repromote it stops
@@ -121,6 +121,18 @@ OVER_PROMOTED = "over_promoted"
 # The `promoted > 0` conjunct is NOT redundant beside the equation: a file whose rows
 # are ALL rejected satisfies `promoted + quarantined = staged` with `promoted = 0`, and
 # nothing of it is in the system of record. The quarantine is not persistence.
+#
+# NONE OF THE THREE COUNTS CAN BE NULL, and if one ever were this predicate would fail
+# CLOSED rather than admit a file. Cannot: every leg of `_counts_sql`'s union emits
+# either a literal `0` or a `COUNT(*)`, neither of which is nullable, and a grouped row
+# exists here only because some leg produced it -- so the outer `SUM` always runs over
+# at least one non-null value. Would fail closed: SQL's three-valued logic makes a
+# comparison against NULL neither true nor false, `AND` propagates that, and
+# `retention.file_accounts_of_batch` reads the column through `bool(row["reclaimable"])`
+# -- `bool(None)` is `False`. So the file is held back and reported with its counts,
+# which is the direction that loses nothing.
+# Written down rather than left to be re-derived: "it cannot happen" and "and if it did
+# nothing would be deleted" are two claims, and only the second is a safety property.
 RECLAIMABLE_SQL = "promoted > 0 AND promoted + quarantined = staged"
 
 # First-match-wins, like `dq._reject_reason` and for the same reason -- the arms are

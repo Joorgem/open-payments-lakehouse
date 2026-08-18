@@ -121,9 +121,12 @@ resources:
           environment_key: opl_env
           spark_python_task:
             python_file: ../src/reclaim_landing.py
-            # Deletes only the inner files bronze proves it holds rows of, for
-            # THIS batch. Depends on promote and nothing else: a file may go only
-            # after the rows are persisted. The zips in the sibling zips/ dir are
+            # Deletes only the inner files of THIS batch whose every staged row
+            # is accounted for -- in bronze or in quarantine -- and at least one of
+            # them in bronze. That wording is F4's and it replaced "the files bronze
+            # proves it holds rows of", which is a strictly weaker proof: it admits
+            # a file one of whose rows reached NEITHER table. Depends on promote and
+            # nothing else: a file may go only after the rows are persisted. The zips in the sibling zips/ dir are
             # never touched -- they are the only way back to the source when a
             # parse defect is found after ingestion, which happened twice in F1.3.
             # This table lands as zips (registry: LANDING_ZIPS), so that way back

@@ -55,7 +55,7 @@ from job_yaml import (
 )
 
 from opl.bronze.masking import MASKED_COLUMNS
-from opl.bronze.registry import REGISTRY, table_spec
+from opl.bronze.registry import LANDING_ZIPS, REGISTRY, table_spec
 from opl.contracts import payments
 from opl.generator.profiles import PROFILES
 
@@ -351,6 +351,178 @@ def test_the_gate_verdict_routes_promotion_to_true_and_the_failure_to_false(tabl
     assert tasks["fail_on_dq"]["depends_on"] == [
         {"task_key": "check_bad_rows", "outcome": "false"}
     ]
+
+
+# --- the reclaim task, on both paths that promote ---------------------------------
+#
+# WHY THIS SIDE OF THE SPLIT. The seam `test_job_yaml_launch_guards.py`'s docstring
+# draws is "everything left there asks WHICH TABLE a job hands its tasks, and
+# everything here asks what stops a run". Nothing below stops a run: the reclaim is
+# the last thing either job does, and `--any-table` turns a refusal into a green
+# no-op rather than refusing anything. What is asserted is which tasks a job
+# DECLARES and which arguments it HANDS them, which is this file's whole subject and
+# the same subject as the paste lock and the two shape locks above.
+_RECLAIM = "reclaim_landing"
+_REPROMOTE_JOB = "repromote_batch_job.yml"
+
+# The flag, read out of the script rather than spelled a second time here -- the same
+# treatment `_first_argument_of` gives the argv contract, and for the sharper reason:
+# this module must not IMPORT `reclaim_landing.py`, which imports pyspark at module
+# scope, and nothing here starts Spark.
+_ANY_TABLE_FLAG = re.compile(r'^ANY_TABLE_FLAG = "([^"]+)"', re.M)
+
+
+def _any_table_flag() -> str:
+    source = (SRC / f"{_RECLAIM}.py").read_text(encoding="utf-8")
+    found = _ANY_TABLE_FLAG.findall(source)
+    assert len(found) == 1, (
+        f"{_RECLAIM}.py declares {len(found)} ANY_TABLE_FLAG constants, expected exactly "
+        "1 -- this lock compares the job YAML against the script's own spelling, and "
+        "without it the comparison would be against a literal typed here"
+    )
+    return found[0]
+
+
+def _assert_the_reclaim_is_declared_exactly_where_an_archive_exists(
+    table: str, root: Path = RESOURCES
+) -> None:
+    tasks = tasks_of(JOB_OF[table], root)
+    expected = table_spec(table).landing == LANDING_ZIPS
+    assert (_RECLAIM in tasks) is expected, (
+        f"{JOB_OF[table]} {'has no' if expected else 'declares a'} {_RECLAIM} task and "
+        f"{table} lands as {table_spec(table).landing!r}. The zip in the sibling zips/ "
+        "dir is this task's whole safety argument: where one exists the reclaim is a "
+        "control that must run, and where none does the task must not be here at all"
+    )
+    if not expected:
+        return
+    assert tasks[_RECLAIM].get("depends_on") == [{"task_key": "promote"}], (
+        f"{JOB_OF[table]}:{_RECLAIM} waits on {tasks[_RECLAIM].get('depends_on')} rather "
+        "than exactly the promote. The promote's success IS the precondition -- the rows "
+        "are persisted -- and a reclaim that no longer waits for it deletes landed files "
+        "on the strength of a proof that has not been written yet"
+    )
+
+
+@pytest.mark.parametrize("table", sorted(JOB_OF))
+def test_the_reclaim_is_wired_exactly_where_a_zip_survives_and_waits_for_the_promote(
+    table,
+):
+    """WHERE the one task that DELETES is declared, derived from the registry.
+
+    Three of the seven ingestion jobs carry it, and the three are exactly the tables
+    that land as zips -- not a count typed here. `bronze_job.yml` has none and says
+    why: a `local`-landed table's zip never reaches the Volume, so its landed file is
+    the single copy in the workspace. Both directions are asserted because both are
+    silent. A missing reclaim leaves consumed CSVs accumulating against a Volume with
+    no published quota, which is how 8,212,278,423 B of 2026-06 sat there; a reclaim
+    copied into a job whose table has no archive would delete the last copy."""
+    _assert_the_reclaim_is_declared_exactly_where_an_archive_exists(table)
+
+
+def _assert_the_repromote_reclaims_after_its_promote(root: Path = RESOURCES) -> None:
+    tasks = job_of(_REPROMOTE_JOB, root)["tasks"]
+    assert [task["task_key"] for task in tasks] == [REVISION_GUARD, "promote", _RECLAIM], (
+        f"{_REPROMOTE_JOB} declares {[task['task_key'] for task in tasks]}. The reclaim "
+        "is the third task and the point of F4: this is the one path that promotes a "
+        "GATED batch, and without it a gate that fires every month leaves the reclaim "
+        "unreachable for the life of the project (ADR 0006)"
+    )
+    reclaim = tasks[-1]
+    assert reclaim.get("depends_on") == [{"task_key": "promote"}], (
+        f"{_REPROMOTE_JOB}:{_RECLAIM} waits on {reclaim.get('depends_on')} rather than "
+        "exactly the promote. That edge is what carries the precondition ADR 0006 named "
+        "-- these rows are persisted -- and on the guard instead it would delete landed "
+        "files of a batch this run never promoted"
+    )
+    assert reclaim["spark_python_task"]["parameters"] == [
+        "{{job.parameters.table}}", "{{job.parameters.batch_id}}", _any_table_flag(),
+    ], (
+        f"{_REPROMOTE_JOB}:{_RECLAIM} is handed "
+        f"{reclaim['spark_python_task']['parameters']}. Three arguments, in this order: "
+        "the table this job's promote just appended for, the batch it appended, and the "
+        "flag saying this job serves EVERY registered table. Without the flag a "
+        "repromote of payments, ptax, merchant or lookup ends RED on its last task after "
+        "a promote that worked -- which is how an operator learns to read red as noise. "
+        "A month is deliberately absent; see the task's own comment"
+    )
+
+
+def test_the_repromote_job_reclaims_after_its_promote_for_whatever_table_it_was_given():
+    """THE WIRING F4 EXISTS TO ADD, LOCKED.
+
+    It had no lock at all until this pass: deleting the task, dropping the flag or
+    re-pointing the dependency at the revision guard each left the whole suite green,
+    because every shape lock in this file iterates `JOB_OF` -- the seven per-table
+    ingestion jobs -- and the operator job is in none of them. That is the exact
+    defect the commit that added this task invokes twice: a control that cannot be
+    told from one that never ran, applied to the wiring rather than to a guard."""
+    _assert_the_repromote_reclaims_after_its_promote()
+
+
+def test_the_reclaim_lock_catches_the_task_being_deleted_again(tmp_path):
+    """Proves the lock above can fail, in the shape it was written for: the state
+    `repromote_batch_job.yml` was in for the life of the project. Nothing errors,
+    the repromote still succeeds, and the landing files of every gated batch stay."""
+    root = mutated(
+        _REPROMOTE_JOB,
+        tmp_path,
+        "        - task_key: reclaim_landing\n"
+        "          depends_on: [{ task_key: promote }]\n",
+        "",
+    )
+    with pytest.raises(AssertionError, match="reclaim is the third task"):
+        _assert_the_repromote_reclaims_after_its_promote(root=root)
+
+
+def test_the_reclaim_lock_catches_a_dependency_moved_off_the_promote(tmp_path):
+    """Proves the SECOND assertion can fail. Re-pointed at the revision guard the
+    reclaim runs beside the promote rather than after it -- both tasks present, run
+    still green, and the deletes are taken against whatever bronze held before this
+    run appended anything."""
+    root = mutated(
+        _REPROMOTE_JOB,
+        tmp_path,
+        "depends_on: [{ task_key: promote }]",
+        f"depends_on: [{{ task_key: {REVISION_GUARD} }}]",
+    )
+    with pytest.raises(AssertionError, match="rather than exactly the promote"):
+        _assert_the_repromote_reclaims_after_its_promote(root=root)
+
+
+def test_the_registry_derived_reclaim_lock_catches_an_ingestion_job_losing_its_reclaim(
+    tmp_path,
+):
+    """Proves the OTHER lock can fail, on the side the repromote's does not cover.
+    Estabelecimentos still lands as zips, so the task is still required -- and the
+    job without it ingests, gates, promotes and exits 0, leaving every consumed CSV
+    of the batch in the Volume with nothing in the log naming them."""
+    root = mutated(
+        "bronze_estabelecimentos_job.yml",
+        tmp_path,
+        "        - task_key: reclaim_landing\n"
+        "          depends_on: [{ task_key: promote }]\n",
+        "",
+    )
+    with pytest.raises(AssertionError, match="has no reclaim_landing task"):
+        _assert_the_reclaim_is_declared_exactly_where_an_archive_exists(
+            "estabelecimentos", root=root
+        )
+
+
+def test_the_reclaim_lock_catches_the_any_table_flag_being_dropped(tmp_path):
+    """Proves the THIRD assertion can fail, and this is the one a reader would call
+    cosmetic. Without the flag the reclaim RAISES for the four tables that have no
+    zip in the Volume, so the remedy the reconciliation view prints for the stranded
+    payments batch ends red on a repromote that promoted perfectly."""
+    root = mutated(
+        _REPROMOTE_JOB,
+        tmp_path,
+        ', "--any-table"]',
+        "]",
+    )
+    with pytest.raises(AssertionError, match="Three arguments"):
+        _assert_the_repromote_reclaims_after_its_promote(root=root)
 
 
 def test_the_payments_job_names_every_declared_profile_and_invents_none():

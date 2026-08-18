@@ -17,10 +17,19 @@ anything is deleted: an unknown table (`table_spec`), a batch id that names no
 batch (`require_batch_id`) or a malformed month (`require_month`) each mean this
 task does not know WHICH files it would be reclaiming, and reclaiming under a
 guess is how the wrong table's landing dir gets emptied. So does a month that
-CONTRADICTS the one the ingest stamped -- see `resolve_month`. What never raises
-is the deletion itself -- past that point the rows are already in bronze, so a
-file that cannot be removed is a quota problem, not a data problem, and must not
-turn a green ingestion red.
+CONTRADICTS the one the ingest stamped -- see `refuse_month_disagreement`, which
+runs before the empty-proof return so that it fires on the batches whose month or
+batch id is the very thing that is wrong. What never raises is the deletion itself
+-- past that point the rows are already in bronze, so a file that cannot be
+removed is a quota problem, not a data problem, and must not turn a green
+ingestion red.
+
+WHAT IS NOT PART OF THE PROOF IS PATH IDENTITY. The delete target is a
+`_source_file` STRING, and nothing here checks that the object at that path today
+is the object the batch read. In flow the gap was minutes; through
+`repromote_triaged_batch` it is hours or days, and the documented recovery for a
+parse defect is to re-land the SAME filenames. Recorded in full beside the wiring
+that made it matter -- see `repromote_batch_job.yml`'s reclaim task.
 
 argv: [table, batch_id, month?, --any-table?]
 
@@ -31,8 +40,15 @@ run for another month. The alternative now is the value the INGEST stamped into
 `_snapshot_month` for this very batch, which is that run's own
 `{{job.parameters.month}}` after it passed `require_month` -- data, not a guess,
 and not read off the `_source_file` paths this month is used to judge. When a
-month IS passed it is still validated before Spark AND cross-checked against the
-stamp, so the four ingestion jobs gain a control rather than losing one.
+month IS passed it is still validated before Spark and cross-checked against the
+stamp WHERE THERE IS ONE, so the three CNPJ ingestion jobs that run this task
+gain a control rather than losing one.
+
+WHERE THERE IS NONE, THE CROSS-CHECK DOES NOT FIRE, and that is the honest width
+of the control rather than a caveat: a pre-F1.4a staging shape has no
+`_snapshot_month` column, so a passed month is returned unchecked and
+`retention.scope_to_landing_dir`'s containment is the whole guard. See
+`refuse_month_disagreement` for why that was not widened.
 
 WHY THE TRIAGE PATH NEEDED THAT. `repromote_triaged_batch` runs hours or days
 after the ingest, from a reconciliation row that names a table and a batch id and
@@ -93,12 +109,14 @@ def _cannot_reclaim(spec: BronzeTable) -> str:
     measured at ~50% transient 500s.
 
     Refused rather than left to the operator's judgement because the caller that
-    can reach it by name is an operator: the four ingestion job YAMLs run this task
-    only for tables that land as zips, and the recorded procedure invokes this file
-    by hand with a positional table name. `bronze_ingest.py` and `unzip_table.py`
-    already refuse the same way; this task, the only one that DELETES, was the one
-    that did not. The one job that reaches it for ANY table says so with
-    `ANY_TABLE_FLAG` and gets this same text as a green no-op.
+    can reach it by name is an operator: the THREE ingestion job YAMLs that run
+    this task at all (empresas, estabelecimentos, socios) run it only for tables
+    that land as zips -- `bronze_job.yml` declares no such task and says why -- and
+    the recorded procedure invokes this file by hand with a positional table name.
+    `bronze_ingest.py` and `unzip_table.py` already refuse the same way; this task,
+    the only one that DELETES, was the one that did not. The one job that reaches it
+    for ANY table says so with `ANY_TABLE_FLAG` and gets this same text as a green
+    no-op.
 
     Compares against LANDING_ZIPS rather than for LANDING_LOCAL, so a third landing
     mode added later is refused by default instead of inheriting a delete."""
@@ -122,41 +140,68 @@ def main(argv: list[str] | None = None) -> None:
     # anywhere else -- the table decides both which rows are read as proof AND
     # which directory the deletes are confined to.
     spec = table_spec(positional[0] if positional else "")
-    if spec.landing != LANDING_ZIPS:
-        # Before the batch id and before Spark, because it is not a fact about this
-        # run: no batch of this table may ever be reclaimed, so nothing after this
-        # point needs to be resolved to know that.
-        if ANY_TABLE_FLAG in args:
-            print(f"reclaim_landing: {_cannot_reclaim(spec)}")
-            return
-        raise ValueError(_cannot_reclaim(spec))
+    no_archive = _refuse_a_table_with_no_archive(spec, args)
+    # AFTER that refusal and BEFORE the green no-op it allows. `--any-table` says a
+    # table with no archive is a legitimate no-op for this caller; it never said an
+    # invocation naming no batch is one. Until F4's review it suppressed both, and
+    # `reclaim_landing.py payments "" --any-table` exited 0 green -- a flag added
+    # for one guard silencing another.
     batch_id = require_batch_id(positional[1] if len(positional) > 1 else "", action="reclaim")
+    if no_archive:
+        print(f"reclaim_landing: {_cannot_reclaim(spec)}")
+        return
     # Validated HERE when it is given, so a malformed one still never reaches a
-    # serverless session; `resolve_month` owns absence and disagreement, both of
-    # which need the batch's own rows to answer.
+    # serverless session; the two functions below own absence and disagreement,
+    # both of which need the batch's own rows to answer.
     given = require_month(positional[2], action="reclaim") if len(positional) > 2 else None
     spark = SparkSession.builder.getOrCreate()
     bronze = DEFAULT.table(spec.bronze)
     if not spark.catalog.tableExists(bronze):
         _report_no_bronze(bronze, batch_id)
         return
+    staging = DEFAULT.table(spec.staging)
     accounts = file_accounts_of_batch(spark, spec, batch_id)
     proven = tuple(account for account in accounts if account.reclaimable)
     held = tuple(account for account in accounts if not account.reclaimable)
+    stamped = months_of_batch(spark, staging, batch_id)
+    # Read ONCE and cross-checked BEFORE the empty-proof return below, which is
+    # where the check could not see: a batch proving no file returned green several
+    # lines above it, so a contradicting month went undetected on exactly the runs
+    # whose batch id or month is the thing that is wrong.
+    refuse_month_disagreement(given, stamped, batch_id, staging)
     if not proven:
         _report_nothing_proven(bronze, batch_id, spec.name, held)
         return
-    month = resolve_month(spark, DEFAULT.table(spec.staging), batch_id, given=given)
+    month = resolve_month(given, stamped, batch_id, staging)
     landing_dir = DEFAULT.landing_table(spec.subdir, month)
     scope = scope_to_landing_dir([account.source_file for account in proven], landing_dir)
     outcome = delete_files(scope.inside)
     _report(outcome, scope, held, batch_id=batch_id, table=spec.name, landing_dir=landing_dir)
 
 
+def _refuse_a_table_with_no_archive(spec: BronzeTable, args: list[str]) -> bool:
+    """Whether this table's landed files may never go -- raising unless told otherwise.
+
+    ANSWERED BEFORE THE BATCH ID AND BEFORE SPARK, because it is not a fact about
+    this run: no batch of this table may ever be reclaimed, so nothing after this
+    point needs to be resolved to know that. `True` is the flagged caller's green
+    no-op, which `main` still puts BEHIND `require_batch_id` -- see there."""
+    if spec.landing == LANDING_ZIPS:
+        return False
+    if ANY_TABLE_FLAG in args:
+        return True
+    raise ValueError(_cannot_reclaim(spec))
+
+
 def resolve_month(
-    spark: SparkSession, staging: str, batch_id: str, *, given: str | None
+    given: str | None, stamped: tuple[str, ...], batch_id: str, staging: str
 ) -> str:
     """The month that is half the delete boundary: stamped by the ingest, or agreed.
+
+    TAKES THE STAMP RATHER THAN READING IT, so `main` queries `_snapshot_month`
+    once and the two things done with it happen at the two points they belong at:
+    the contradiction is `refuse_month_disagreement`, called before the
+    empty-proof return, while this runs only once a file is going to be unlinked.
 
     DERIVED WHEN NOTHING WAS PASSED, from `_snapshot_month` on this batch's staging
     rows -- see `retention.months_of_batch` for why that column and not the file
@@ -165,21 +210,9 @@ def resolve_month(
     predates the column, more than one means a batch spanning months, and neither
     is a directory this task may guess at.
 
-    CROSS-CHECKED WHEN ONE WAS PASSED, and this is the half that is new for the
-    four ingestion jobs, which have always passed `{{job.parameters.month}}`. A
-    month that disagrees with the stamp used to produce the WORST log this task can
-    emit: every proven file outside the scope, `REFUSED (left untouched)` on each
-    one telling the operator to investigate how a row of this table came from
-    there, zero bytes freed, exit 0. It now raises, naming both months, before a
-    single unlink.
-
-    An empty stamp is not a disagreement -- a pre-F1.4a staging shape has no such
-    column -- so a passed month still works there, which is what keeps this a
-    strictly added control rather than a new way to fail."""
-    stamped = months_of_batch(spark, staging, batch_id)
+    A PASSED MONTH COMES BACK AS IT CAME, because everything that can refuse it has
+    already run: `require_month` in `main` before Spark, and the cross-check."""
     if given is not None:
-        if stamped and (given,) != stamped:
-            raise ValueError(_month_disagreement(given, stamped, batch_id, staging))
         return given
     if len(stamped) != 1:
         raise ValueError(_month_underivable(stamped, batch_id, staging))
@@ -187,6 +220,36 @@ def resolve_month(
     # into `landing_table`, so it is half OF the delete path rather than something
     # the path checks, and where it came from does not change that.
     return require_month(stamped[0], action="reclaim")
+
+
+def refuse_month_disagreement(
+    given: str | None, stamped: tuple[str, ...], batch_id: str, staging: str
+) -> None:
+    """Raise when a passed month disagrees with the one the INGEST stamped.
+
+    THE CONTROL THE THREE CNPJ INGESTION JOBS GAIN, since they have always passed
+    `{{job.parameters.month}}`. A month that disagrees with the stamp used to
+    produce the WORST log this task can emit: every proven file outside the scope,
+    `REFUSED (left untouched)` on each one telling the operator to investigate how
+    a row of this table came from there, zero bytes freed, exit 0. It raises now,
+    naming both months, before a single unlink.
+
+    AN EMPTY STAMP IS NOT A DISAGREEMENT, AND THAT IS THE WIDTH OF THIS CONTROL
+    rather than a caveat on it. A pre-F1.4a staging shape has no `_snapshot_month`
+    column and a batch whose staging rows are gone stamps nothing, so a passed
+    month is returned unchecked there and containment is the whole guard.
+    REJECTED: treating an absent stamp as a refusal. It would turn every reclaim
+    over such a shape red while freeing not one byte more, and the rebuild that
+    leaves those shapes is documented and expected -- so this raises only where
+    two answers actually contradict, and says so here rather than letting a flat
+    'it raises now' stand as the claim.
+
+    NOT REACHED AT ALL WHEN BRONZE IS MISSING, which is deliberate and is the one
+    return that still stands ahead of it: without the authority the batch cannot be
+    judged on any question, and a message about the month would misreport where the
+    run stopped. `_report_no_bronze` says the harder fact instead."""
+    if stamped and given is not None and (given,) != stamped:
+        raise ValueError(_month_disagreement(given, stamped, batch_id, staging))
 
 
 def _month_disagreement(
