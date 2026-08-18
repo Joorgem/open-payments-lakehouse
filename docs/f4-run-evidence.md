@@ -634,9 +634,13 @@ three task-starts and buys a number ADR 0006 has wanted since 2026-08-03.
 > published in ADR 0006 and in this document — would have become quietly false**. Both species at
 > once: a guard that cannot fail, and a silent failure that preserves every other number.
 >
-> Closed in the correction pass by asserting the **visited set** and printing the count **actually
-> measured**. Recorded here rather than only in a commit because the claim it threatened is one this
-> document makes.
+> Closed in the correction pass (`ebeb721`) by asserting the **visited set** — ordered, so an extra
+> table and a missing one both fail — and printing the count **actually measured**. Recorded here
+> rather than only in a commit because the claim it threatened is one this document makes.
+>
+> **And the numbers above were re-taken afterwards**, because the correction changed the code that
+> produced them. See the re-run below: a measurement whose code moved under it is a measurement
+> nobody has taken.
 
 ### 2.2 The all-matching-rules sweep
 
