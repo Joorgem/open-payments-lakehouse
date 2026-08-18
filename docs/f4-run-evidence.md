@@ -294,14 +294,47 @@ carry 1,797 and 1,786 rejected rows spread over 20 files and every one of those 
 reclaimable — because a rejected row **is** an accounted-for row once it is in quarantine, which is
 exactly the distinction `retention.files_of_batch`'s current proof cannot make.
 
-**The recommendation on `592660596679630`, recorded here because a stranding reported and left
-unowned is not closed: DO NOT PROMOTE.** Its 2,000 `rescued_data_present` rows are F1b's
-deliberately injected schema drift and are the proof the gate catches drift; the 8,000 clean rows
-beside them are that experiment's other half. Promoting them would also change what the observation
-ledger means for those keys — the ledger classifies 1,781 socios link keys as `rejected_by_our_gate`
-today, and a promote is the one action that rewrites such a classification retroactively. **The
-owner of that decision is Jorge**; the command is printed by the view, and nothing automated will
-ever run it.
+### 1.2 THE DECISION ON `592660596679630`: DO NOT PROMOTE, and the reason is measurable
+
+**A stranding reported and left unowned is not closed**, so the decision is recorded here rather
+than left implicit. It was taken by the controller on 2026-08-18 with Jorge's delegation, and the
+argument is not the one that looked strongest at first.
+
+**The weak argument, stated so it is not mistaken for the reason.** The 2,000
+`rescued_data_present` rows are F1b's deliberately injected schema drift and the 8,000 clean rows
+are that experiment's other half — so promoting them "spoils an experiment". That is a preference,
+not a mechanism, and this project does not decide on preferences.
+
+**The decisive argument is that a promote falsifies committed documents, and the arithmetic says by
+how much. Controller-verified**, 2026-08-18:
+
+| | rows |
+|---|---|
+| `bronze_payments` | **40,150** |
+| `fact_payment` | **40,000** |
+| `COUNT(DISTINCT transaction_id)` in `bronze_payments` | **40,000** |
+
+The 150-row gap between bronze and the fact is documented at `gold_load_fact.py:125-143` as the
+legitimate repeats removed by deduplication, and it is the same 150 F1b published as its injected
+duplicate count — `40,150 − 40,000`, computed two independent ways and agreeing. **A promote makes
+bronze 48,150 against a fact still at 40,000**, because the gold fact loader is append-only and
+refuses a target it did not write in the same run. The documented 150 becomes an undocumented 8,150,
+and the rule that explains it stops explaining it. Restoring agreement would mean a gold rebuild and
+a correction pass across F1b's, F3's and F-API's published counts — for rows nobody needs.
+
+**Second, and independently:** the observation ledger classifies keys as `rejected_by_our_gate`, and
+a promote is the one act that rewrites such a classification retroactively, underneath the
+effectivity satellites F-DB's headline rests on. Today's repromote path does **not** flip it — it
+re-applies the rules and re-rejects the same rows — which is precisely why this is a decision about
+the 8,000 clean rows and not about the 2,000 rejected ones.
+
+**Third, and it is the one this phase should say out loud:** the stranding is F4's only live
+acceptance case. A phase that builds a finder, points it at the one defect it has, and then deletes
+the defect has tested nothing that survives the phase.
+
+**What would reverse it:** a use for those 8,000 rows that a fifth generated stream cannot serve
+more cheaply. There is none today — the generator is deterministic and another profile costs one
+run. **The command stays printed by the view, and nothing automated will ever run it.**
 
 **What Task 1 does NOT do, said plainly:** it writes no table, so nothing turns red when a batch
 strands. It is a view an operator or a dashboard reads. Making a stranding fail a run is a
