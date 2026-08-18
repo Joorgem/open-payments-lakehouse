@@ -358,6 +358,75 @@ every file still reconciles, because a rejected row *is* an accounted-for row on
 it. The predicate refuses a different case, and the phase has one: the stranded payments file, where
 8,000 rows reached neither table.
 
+#### The run, and the prediction it tested
+
+**Deployed and run 2026-08-18. Controller-verified**, deployed wheel downloaded and hashed:
+sha256 `d2628a98fadc65c76db5cdfa99e46b4ca529ef3fd82b8f33b0cacd10776943a4` on both sides, stamped
+revision `eb7c6fab1d948c110d7392a52c6f763559157ba6` equal to the revision each run was launched for.
+
+**Before the delete, the recovery path was verified present** — because it is the whole safety
+argument and a control nobody checks is not a control: `cnpj/2026-06/zips/` held **10 zips per
+group**, 1,352,336,436 B (empresas), 680,600,148 B (socios), 5,259,919,847 B (estabelecimentos).
+
+| run | job output, quoted verbatim |
+|---|---|
+| **`945043269742472`** SUCCESS | `promote_batch: batch 321750543973966 is ALREADY in workspace.default.bronze_cnpj_empresas with all 68629147 of its promotable rows -- append skipped` · `1 rejected row(s) … stay in quarantine` · **`reclaim_landing: batch=321750543973966 table=empresas deleted=10 already_absent=0 failed=0 refused=0 held_back=0`** |
+| **`163880365790949`** SUCCESS | `promote_batch: batch 1121645114029617 is ALREADY in workspace.default.bronze_cnpj_socios with all 27836651 of its promotable rows -- append skipped` · `1797 rejected row(s) … stay in quarantine` · **`reclaim_landing: batch=1121645114029617 table=socios deleted=10 already_absent=0 failed=0 refused=0 held_back=0`** |
+
+**Every one of §2.1's predictions is CONFIRMED**, including the two that were written to be falsifiable
+and were not: `refused=0` and `held_back=0` on both. **The Volume, verified after — by listing it,
+not by the success line:**
+
+| path | before | after |
+|---|---|---|
+| `cnpj/2026-06/empresas` | 10 files / 5,359,720,597 B | **0 files** |
+| `cnpj/2026-06/socios` | 10 files / 2,852,557,826 B | **0 files** |
+| `cnpj/2026-06/zips/{empresas,socios,estabelecimentos}` | 10 / 10 / 10 zips | **10 / 10 / 10, byte-identical** |
+
+**8,212,278,423 bytes freed, and the way back to the source untouched.** ADR 0006's *"the defect
+this decision must not leave standing"* — booked on 2026-08-03 with an 8.21 GB standing residue and
+a ~48 GB/month projected floor — **is discharged**, by the wiring ADR 0006 itself named and deferred
+*"as its own change"*.
+
+**A control, because a delete that also moved data would be a much worse outcome than a delete that
+failed.** Read back through `dataops_reconciliation` after both runs: **14 reconciled, 1
+`stranded_gated`**, 337,766,032 staged / 337,762,443 promoted / 3,589 quarantined — unchanged. The
+reclaim touched the Volume and nothing else.
+
+**What this did NOT do, stated because the audit that found the residue got this wrong in the other
+direction:** it does not make future months self-clearing on the in-flow path. `reclaim_landing`
+still hangs off `promote` there, and the gate still blocks empresas and socios every month. What
+changed is that the **triage** path — the one an operator actually runs after a gated batch — now
+reclaims, so the residue stops accumulating at the point a human already has to act.
+
+#### How this task was reviewed, because the chain is the finding
+
+Implementer → independent reviewer (**10 findings**) → correction → **review of the correction** →
+correction 2. The second review is the one that earned its place, and what it found is what this
+phase predicted about itself: **the bug count was low, the code was right, and the defects were all
+in NEW CLAIMS the correction had written.** The worst was a safety argument on the headline wiring —
+*"the derivation cannot outlive the proof"* — which is **false**, and which **a passing test already
+in this repository falsifies**: `months_of_batch` returns empty when a staging table lacks
+`_snapshot_month`, while the counting query grains on `(_batch_id, _source_file)` and never reads it,
+so that table yields full `staged` counts and its files reconcile. Month gone, proof intact, and the
+consequence inverts the paragraph's conclusion — a repromote there goes **red after a promote that
+worked**.
+
+**Controller-measured, which is what turned it from an argument into a scope:** all **seven** live
+staging tables carry `_snapshot_month` and `_source_file` today, so it is **latent, not reachable**
+in this workspace. The claim was false either way.
+
+**The structural fact is worth more than the finding.** `months_of_batch`'s own pre-existing
+docstring states the narrow version *correctly*; the correction pass escalated it into a false
+universal and shipped it as a safety argument on the wiring. That is the third instance of this
+project's correction-passes-overshoot pattern, and it was caught by the only mechanism that has ever
+caught it: someone who did not write it reading it against the code.
+
+**And the chain ran in both directions.** Correction 2 refused to write the replacement sentence this
+controller proposed, because it was *also* over-general; and it corrected two of the reviewer's own
+numbers — the claim that a code path previously did no Spark work at all (it did), and a 68M-row
+table that is in fact 144,193,416 rows.
+
 ### 1.2 THE DECISION ON `592660596679630`: DO NOT PROMOTE, and the reason is measurable
 
 **A stranding reported and left unowned is not closed**, so the decision is recorded here rather
