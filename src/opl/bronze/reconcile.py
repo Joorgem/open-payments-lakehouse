@@ -340,9 +340,8 @@ def create_view_ddl(view: str, body: str, config: OplConfig = DEFAULT) -> str:
     return f"CREATE OR REPLACE VIEW {config.table(view)} AS\n{body}"
 
 
-def view_ddls(config: OplConfig = DEFAULT) -> tuple[str, ...]:
-    """Both views, in the order the task issues them."""
-    return (
-        create_view_ddl(BATCH_GRAIN_VIEW, batch_grain_sql(config), config),
-        create_view_ddl(FILE_GRAIN_VIEW, file_grain_sql(config), config),
-    )
+# `view_ddls` USED TO LIVE HERE AND WAS MOVED TO `opl.dataops.views` BY F4 TASK 4, which
+# added two more views. Not a tidy-up: a second list of views in a second module is a set
+# the `dataops_` collision lock does not range over, and "an object in no registry is
+# policed by nothing" is the exact gap the prefix and that lock exist to close. There is
+# one list now, it is what the job task loops over, and it is what the lock reads.

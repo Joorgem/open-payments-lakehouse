@@ -36,7 +36,6 @@ from opl.bronze.reconcile import (
     create_view_ddl,
     file_accounts_sql,
     file_grain_sql,
-    view_ddls,
 )
 from opl.bronze.registry import REGISTRY
 from opl.config import OplConfig
@@ -216,21 +215,18 @@ def test_every_registered_table_is_reconciled():
         assert f"'{spec.name}' AS source" in sql
 
 
-def test_the_view_names_collide_with_nothing_any_registry_owns():
-    """The guard the flat schema forces, for objects NO registry can hold.
+def test_the_two_view_names_this_module_owns_are_prefixed_so_something_polices_them():
+    """The `dataops_` prefix, which is the whole of what makes these names checkable.
 
     Free Edition ships one catalog and one schema, and the three collision guards range
     over the bronze, vault and gold registries -- so an object in none of them is checked
-    by nothing at all. These two views are in none of them by construction, which makes
-    this the only place the question can be asked."""
-    from opl.gold.registry import REGISTRY as GOLD
-    from opl.vault.domains import REGISTRY as VAULT
-
-    occupied = {name.casefold() for name in GOLD} | {name.casefold() for name in VAULT}
-    for spec in REGISTRY.values():
-        occupied |= {spec.staging.casefold(), spec.bronze.casefold(), spec.quarantine.casefold()}
-    for view in (BATCH_GRAIN_VIEW, FILE_GRAIN_VIEW):
-        assert view.casefold() not in occupied, f"{view} is a name another layer owns"
+    by nothing at all. THE COLLISION LOCK ITSELF MOVED to
+    `tests/dataops/test_views.py::test_no_dataops_view_collides_with_a_name_any_registry
+    _owns` when F4 Task 4 added two more views: a lock over two of four is a lock that
+    reports green about the half nobody added to it. What stays here is the naming rule,
+    beside the module that names them."""
+    assert BATCH_GRAIN_VIEW.startswith("dataops_")
+    assert FILE_GRAIN_VIEW.startswith("dataops_")
 
 
 def test_the_view_ddl_replaces_rather_than_skipping():
@@ -238,12 +234,10 @@ def test_the_view_ddl_replaces_rather_than_skipping():
 
     The opposite of the rule for a TABLE, and for the opposite reason: a table must not
     lose rows, a view has none, and `IF NOT EXISTS` on a view leaves an older wheel's
-    definition standing while the run that was meant to replace it reports SUCCESS."""
-    ddls = view_ddls(_CONFIG)
-    assert len(ddls) == 2
-    for ddl in ddls:
-        assert ddl.startswith("CREATE OR REPLACE VIEW ")
-        assert "IF NOT EXISTS" not in ddl
+    definition standing while the run that was meant to replace it reports SUCCESS.
+
+    Over `create_view_ddl` alone: the list of views it is applied to is
+    `opl.dataops.views` now, and the four-view version of this assertion is beside it."""
     assert create_view_ddl("x", "SELECT 1", _CONFIG).startswith(
         f"CREATE OR REPLACE VIEW {_CONFIG.catalog}.{_SCHEMA}.x AS"
     )

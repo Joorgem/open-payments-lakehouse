@@ -1,6 +1,13 @@
 # databricks/src/create_dataops_views.py
 """Job task: (re)create the DataOps views. Derives; writes no row anywhere.
 
+WHAT IT CREATES IS `opl.dataops.views.DATAOPS_VIEWS` AND NOTHING ELSE, which is why F4
+Task 4 added two views here and no job, no task and no guard-list entry. The two it added
+-- `dataops_task_telemetry` over `system.lakeflow`/`system.query`, and `dataops_freshness`
+over bronze -- are the same kind of thing as Task 1's reconciliation: derived, idempotent,
+total over a registry, and worth nothing unless the wheel that produced them is the wheel
+somebody reviewed. This task's argument covers them unchanged.
+
 WHY A JOB AND NOT A HAND-RUN STATEMENT. There is no `tables` resource and no `View`
 resource in a Databricks Asset Bundle -- measured against `databricks bundle schema`
 on CLI 1.8.0, whose complete resource list carries Schema and Volume and neither of
@@ -36,8 +43,8 @@ import sys
 
 from pyspark.sql import SparkSession
 
-from opl.bronze.reconcile import view_ddls
 from opl.config import DEFAULT
+from opl.dataops.views import all_view_ddls
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -49,7 +56,7 @@ def main(argv: list[str] | None = None) -> None:
             "configuring something -- see the header's argv line."
         )
     spark = SparkSession.builder.getOrCreate()
-    ddls = view_ddls(DEFAULT)
+    ddls = all_view_ddls(DEFAULT)
     for ddl in ddls:
         # Printed before it is issued, so a failure names the statement that failed
         # rather than leaving which of the two to be inferred from the traceback.

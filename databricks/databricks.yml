@@ -28,6 +28,28 @@ targets:
 # reverted with the job resource it existed for -- see
 # docs/f1.4a-migration-evidence.md -- because the permanent jobs should not carry
 # that layout indirection for a one-off that has already run.
+# THE ONE BUNDLE VARIABLE, added by F4 Task 4 for the dashboard resource.
+#
+# A warehouse id is workspace-scoped platform state. `databricks bundle generate
+# dashboard` hardcodes it into the resource YAML, and committing it makes this
+# repository's "reproducible from GitHub" claim false for exactly the artefact a
+# reviewer is most likely to try redeploying into their own workspace -- the id resolves
+# to nothing there, and the failure is at deploy time with no hint of why.
+#
+# `lookup:` asks the workspace for the id of the warehouse with this NAME, at validate
+# time. Measured 2026-08-18: `databricks bundle validate -t free -o json` renders
+# `"wh": {"lookup": {"warehouse": "..."}, "value": "13cf10c85b0f189d"}`, so the name is
+# what lives in git and the id is resolved per workspace on every deploy. It is also why
+# `bundle validate` now needs credentials for this bundle, which costs nothing here: CI
+# runs ruff and pytest and has never run `bundle validate`.
+variables:
+  wh:
+    description: >-
+      The SQL warehouse the dashboard runs on, resolved from its name so no
+      workspace-scoped id is committed. See the comment above.
+    lookup:
+      warehouse: Serverless Starter Warehouse
+
 include:
   - resources/*.yml
 
