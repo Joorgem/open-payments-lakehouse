@@ -160,8 +160,14 @@ def test_a_readiness_file_that_never_arrives_is_REFUSED_and_not_waited_out(tmp_p
 
 
 def test_a_half_written_readiness_file_is_waited_THROUGH_and_not_read_as_a_signal(tmp_path):
-    """The file is written by another process, so a poller can observe it between create
-    and close -- half of it is "not yet".
+    """Half a readiness file is "not yet", whatever wrote it.
+
+    THE TRUNCATED FILE HERE IS A STAND-IN FOR A WRITER THIS REPOSITORY DOES NOT OWN, and
+    that is the whole standing of the case since 1418270: `seed_merchant_db.
+    _announce_readiness` stages a `.tmp` and `os.replace`s it, so the real producer
+    publishes atomically and cannot leave a partial file behind. `--wait-for` takes an
+    operator-supplied path, so the reader still may not assume its writer -- which is what
+    this test is about, rather than about a create-then-close window that no longer exists.
 
     The wait is proved to have HAPPENED rather than been skipped: the file is truncated
     when the wait starts and is completed by the poll callback, so a reader that accepted

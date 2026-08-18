@@ -547,11 +547,18 @@ def test_a_whole_readiness_file_yields_both_stamps():
     "partial", ["", "t1=", "t1=2026-08-16T22:10:46.710500+00:00\n", "t1=x\nt2=\n", "junk"]
 )
 def test_a_partial_readiness_file_is_NOT_a_signal(partial):
-    """THE FILE IS WRITTEN WITH A PLAIN `write_text`, so a poller can observe it between
-    create and close. Half a file is "not yet" -- and the caller must never treat a timeout
-    as readiness either, because a snapshot taken before t2 records a watermark below t1
-    and deletes the one number in this phase's headline that nothing authored, while every
-    other count stays exactly right."""
+    """HALF A FILE IS "NOT YET", whatever wrote it.
+
+    This used to say the file is written with a plain `write_text` and can therefore be
+    observed between create and close. That stopped being true at 1418270:
+    `seed_merchant_db._announce_readiness` stages a `.tmp` and `os.replace`s it, so through
+    THAT writer the path is atomic. The parser stays tolerant anyway, because `--wait-for`
+    names an operator-supplied path and the reader's correctness must not depend on a
+    writer it does not control -- so this is now the ONLY place the tolerance is exercised.
+
+    The caller must never treat a timeout as readiness either, because a snapshot taken
+    before t2 records a watermark below t1 and deletes the one number in this phase's
+    headline that nothing authored, while every other count stays exactly right."""
     assert readiness_stamps(partial) is None
 
 

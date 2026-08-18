@@ -37,9 +37,11 @@ t2, the watermark lands below t1, and the out-of-order rows become perfectly vis
 other count stays correct.
 
 So this waits, it REFUSES a timeout rather than proceeding, and it re-checks its own
-watermark against `t2` afterwards. A partial read of the readiness file is expected (it is
-written with a plain `write_text`, so a poller can observe it mid-write) and is treated as
-"not yet", never as a signal.
+watermark against `t2` afterwards. A partial read of the readiness file is treated as "not
+yet", never as a signal -- not because the writer is careless (`seed_merchant_db.
+_announce_readiness` stages a `.tmp` and `os.replace`s it, so through that producer the
+path is atomic and a partial read cannot happen) but because `--wait-for` names an
+OPERATOR-SUPPLIED path and a reader does not get to assume its writer.
 
 `--since` AND `--wait-for` ARE NOT INDEPENDENT FLAGS, and treating them as two was the
 third appearance of that species in this phase. `--since` IS the incremental run, and the

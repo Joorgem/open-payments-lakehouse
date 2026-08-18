@@ -659,11 +659,28 @@ def filename_for(instant: str) -> str:
 # So `seed_merchant_db.py mutate --ready-on PATH` writes a file once its own `t2 > t1`
 # refusal has passed, carrying both stamps, and the extractor waits for THAT.
 #
-# THE PARSE IS TOLERANT AND THE VERDICT IS NOT. The file is written by a plain
-# `write_text`, so a reader polling `exists()` can observe it between create and close and
-# read a truncated `t1=`. Half a file is not a signal: this returns `None` for anything that
-# does not yield BOTH stamps, and the caller keeps waiting. What it must never do is treat a
-# timeout as readiness -- see `scripts/extract_merchant_snapshot.py`, which refuses.
+# THE PARSE IS TOLERANT AND THE VERDICT IS NOT. Half a file is not a signal: this returns
+# `None` for anything that does not yield BOTH stamps, and the caller keeps waiting.
+#
+# THE REASON GIVEN FOR THAT WENT STALE, and correcting the reason is worth more than
+# deleting the guard. It said the file is written by a plain `write_text`, so a reader
+# polling `exists()` could observe it between create and close and read a truncated `t1=`.
+# True when this was written; untrue since `seed_merchant_db._announce_readiness` was
+# extracted (1418270), because that writes a staged `.tmp` beside the target and
+# `os.replace`s it -- atomic within a directory, so through THAT writer the path is either
+# absent or complete.
+#
+# THE TOLERANCE STAYS, ON A DIFFERENT ARGUMENT. `--wait-for` names an OPERATOR-SUPPLIED
+# path, so the writer is not this repository's to assume: atomic publish is a property of
+# one producer at one commit, and a reader that leans on it has made its own correctness
+# depend on a file it does not control. Checking here removes the dependency rather than
+# documenting it, which is `snapshot.ref_date_column`'s move against a parser policy.
+# HONEST SCOPE, as that one states too: through `seed_merchant_db` this branch is now
+# unreachable, so no end-to-end path triggers it and
+# `test_a_partial_readiness_file_is_NOT_a_signal` exercises the parser directly.
+#
+# What it must never do is treat a timeout as readiness -- see
+# `scripts/extract_merchant_snapshot.py`, which refuses.
 _READY_LINE = re.compile(r"^(t1|t2)=(.+)$")
 
 
