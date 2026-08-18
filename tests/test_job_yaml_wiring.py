@@ -372,8 +372,8 @@ _REPROMOTE_JOB = "repromote_batch_job.yml"
 _ANY_TABLE_FLAG = re.compile(r'^ANY_TABLE_FLAG = "([^"]+)"', re.M)
 
 
-def _any_table_flag() -> str:
-    source = (SRC / f"{_RECLAIM}.py").read_text(encoding="utf-8")
+def _any_table_flag(src: Path = SRC) -> str:
+    source = (src / f"{_RECLAIM}.py").read_text(encoding="utf-8")
     found = _ANY_TABLE_FLAG.findall(source)
     assert len(found) == 1, (
         f"{_RECLAIM}.py declares {len(found)} ANY_TABLE_FLAG constants, expected exactly "
@@ -505,6 +505,83 @@ def test_the_registry_derived_reclaim_lock_catches_an_ingestion_job_losing_its_r
         "",
     )
     with pytest.raises(AssertionError, match="has no reclaim_landing task"):
+        _assert_the_reclaim_is_declared_exactly_where_an_archive_exists(
+            "estabelecimentos", root=root
+        )
+
+
+def test_the_flag_reader_catches_a_second_declaration_of_the_constant(tmp_path):
+    """Proves the ASSERTION INSIDE the reader can fail, which nothing probed.
+
+    `_any_table_flag` exists so the YAML lock compares against the script's OWN
+    spelling rather than a literal typed here, and `len(found) == 1` is what makes
+    that comparison well-defined. With two declarations the regex returns the first,
+    which is the one Python then overwrites -- so the lock would assert the YAML
+    against a constant the module does not use, and pass while the deployed flag was
+    the other one. The probe writes the second declaration rather than deleting the
+    first, because zero already fails loudly at `found[0]`."""
+    src = tmp_path / "src"
+    src.mkdir()
+    source = (SRC / f"{_RECLAIM}.py").read_text(encoding="utf-8")
+    flag = _any_table_flag()
+    (src / f"{_RECLAIM}.py").write_text(
+        source.replace(
+            f'ANY_TABLE_FLAG = "{flag}"',
+            f'ANY_TABLE_FLAG = "{flag}"\nANY_TABLE_FLAG = "--every-table"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AssertionError, match="declares 2 ANY_TABLE_FLAG constants"):
+        _any_table_flag(src=src)
+
+
+def test_the_registry_derived_reclaim_lock_catches_a_reclaim_where_no_zip_survives(
+    tmp_path,
+):
+    """Proves the OTHER DIRECTION of the registry-derived lock, which had no probe.
+
+    The `is expected` assertion covers two failures and only the missing-task one was
+    exercised. This is the worse half: the lookup lands LOCAL, so its six landed CSVs
+    are the only copy in this workspace, and a reclaim task pasted into its job from a
+    CNPJ one -- the exact way every other task in these files arrived -- would hand
+    `reclaim_landing.py` a table it refuses. The job would go RED on its last task
+    with the delete refused, which is the recoverable direction; what the lock
+    protects is that the refusal never becomes a green no-op, since `--any-table` is
+    one paste away."""
+    root = mutated(
+        JOB_OF["lookup"],
+        tmp_path,
+        "      environments:\n",
+        "        - task_key: reclaim_landing\n"
+        "          depends_on: [{ task_key: promote }]\n"
+        "          max_retries: 0\n"
+        "          environment_key: opl_env\n"
+        "          spark_python_task:\n"
+        "            python_file: ../src/reclaim_landing.py\n"
+        '            parameters: ["lookup", "{{job.run_id}}", "{{job.parameters.month}}"]\n'
+        "      environments:\n",
+    )
+    with pytest.raises(AssertionError, match="declares a reclaim_landing task"):
+        _assert_the_reclaim_is_declared_exactly_where_an_archive_exists("lookup", root=root)
+
+
+def test_the_ingestion_reclaim_lock_catches_a_dependency_moved_off_the_promote(tmp_path):
+    """Proves the ingestion jobs' SECOND assertion can fail on its own terms.
+
+    The only probe this lock had deleted the whole task, which trips the FIRST
+    assertion and leaves the dependency check unexercised. Re-pointed at `ingest` the
+    reclaim runs beside the gate rather than after the promote: the deletes are taken
+    against whatever bronze held before this run appended anything, on a batch whose
+    rows may still be about to be rejected."""
+    root = mutated(
+        JOB_OF["estabelecimentos"],
+        tmp_path,
+        "depends_on: [{ task_key: promote }]",
+        "depends_on: [{ task_key: ingest }]",
+    )
+    with pytest.raises(AssertionError, match="rather than exactly the promote"):
         _assert_the_reclaim_is_declared_exactly_where_an_archive_exists(
             "estabelecimentos", root=root
         )

@@ -151,13 +151,39 @@ resources:
         # `_snapshot_month`, which the ingest stamped from its own validated month
         # parameter; see `resolve_month` there.
         #
-        # THE DERIVATION CANNOT OUTLIVE THE PROOF, which is why deriving it is not
-        # a new way for this task to fail. The stamp is read from STAGING, and
-        # staging is where the proof's denominator comes from: the only way the
-        # month goes missing while a file is still proven would be a staging table
-        # dropped after the promote -- and that same drop zeroes `staged`, so
-        # `promoted + quarantined = staged` fails for every file, nothing is proven,
-        # and `resolve_month` is never reached. The two become unavailable together.
+        # THE DERIVATION IS A NEW WAY FOR THIS TASK TO FAIL, and the paragraph that
+        # stood here said the opposite. It claimed the month and the proof become
+        # unavailable together -- so deriving the month could never refuse a batch
+        # the proof had already admitted. That is true of ONE way the month goes
+        # missing: a staging table dropped after the promote, which also zeroes
+        # `staged`, so `promoted + quarantined = staged` fails for every file and
+        # nothing is proven. It is not the only way, and the narrow version is what
+        # `retention.months_of_batch`'s own docstring says.
+        #
+        # THE COUNTER-EXAMPLE SHIPS IN THIS REPOSITORY, PASSING. `months_of_batch`
+        # returns `()` when the staging table has no `_snapshot_month` COLUMN -- the
+        # pre-F1.4a 35-column shape the documented rebuild leaves -- while the proof
+        # grains on `(_batch_id, _source_file)` and never reads `_snapshot_month` at
+        # all, so that same table yields full `staged` counts and its files
+        # reconcile normally. Month gone, proof intact. `tests/bronze/
+        # test_retention.py::test_a_staging_shape_without_the_column_derives_nothing_
+        # rather_than_guessing` builds exactly that table, and `_month_underivable`'s
+        # own message names the cause. A third path: the column present but NULL or
+        # empty on this batch's rows, which `months_of_batch` filters out.
+        #
+        # SO THE FAILURE MODE IS THE ONE THE PARAGRAPH BELOW EXISTS TO PREVENT, for
+        # a different cause: a repromote of such a batch ends RED on its last task
+        # after a promote that worked perfectly.
+        #
+        # LATENT, NOT REACHABLE IN THIS WORKSPACE. Measured 2026-08-18 against
+        # `workspace.information_schema.columns`: all SEVEN live staging tables
+        # carry `_snapshot_month` AND `_source_file`, so no registered table can
+        # take that path today. Recorded rather than guarded because the recovery is
+        # already written and needs no code: `_month_underivable` prints it, and
+        # `reclaim_landing.py` takes the month as its third positional argument, so
+        # an operator re-runs it by hand with the month the ingest was given. What
+        # would NOT fix it is passing a month from this job -- that is the value
+        # nobody has on the triage path, which is the paragraph above.
         #
         # WHAT THIS TASK STILL DOES NOT CHECK IS PATH IDENTITY, recorded here
         # because this is the wiring that made it matter. The delete target is a

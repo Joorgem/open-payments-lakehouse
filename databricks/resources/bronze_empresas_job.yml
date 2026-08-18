@@ -126,17 +126,33 @@ resources:
             # them in bronze. That wording is F4's and it replaced "the files bronze
             # proves it holds rows of", which is a strictly weaker proof: it admits
             # a file one of whose rows reached NEITHER table. Depends on promote and
-            # nothing else: a file may go only after the rows are persisted. The zips in the sibling zips/ dir are
-            # never touched -- they are the only way back to the source when a
-            # parse defect is found after ingestion, which happened twice in F1.3.
+            # nothing else: a file may go only after the rows are persisted. The
+            # zips in the sibling zips/ dir are never touched -- they are the only
+            # way back to the source when a parse defect is found after ingestion,
+            # which happened twice in F1.3.
             # This table lands as zips (registry: LANDING_ZIPS), so that way back
             # exists; reclaim_landing refuses any table that does not.
             #
-            # The month is NOT optional here and is not decoration. It is half of
-            # the delete boundary: `landing_table(subdir, month)` is the only dir
-            # the deletes are confined to, so omitting it would silently fall back
-            # to DEFAULT.month and scope the reclaim at a month this run never
-            # ingested. reclaim_landing refuses anything that is not YYYY-MM
+            # WHY THE MONTH IS STILL PASSED, and this is not the reason that stood
+            # here. It was "omitting it would silently fall back to DEFAULT.month",
+            # which stopped being true when F4 wired the triage path: an omitted
+            # month is now DERIVED from the `_snapshot_month` the ingest stamped and
+            # REFUSED if the batch does not name exactly one -- `_month_underivable`
+            # says outright that there is no default to fall back on.
+            #
+            # The present-day reason is the other half. A month that IS passed is
+            # the input to `refuse_month_disagreement`, so handing over the value
+            # this job already validated cross-checks the delete boundary against
+            # the data the ingest wrote. A month that CONTRADICTS the stamp used to
+            # put every proven file outside the scope, free nothing and exit 0 -- a
+            # log indistinguishable from the containment guard catching a real
+            # F1.3-style incident. It raises now, naming both months, before a
+            # single unlink. That control is what this parameter buys, and it exists
+            # only where a month is passed.
+            #
+            # It is still half of the delete boundary either way:
+            # `landing_table(subdir, month)` is the only dir these deletes are
+            # confined to, and reclaim_landing refuses anything that is not YYYY-MM
             # before Spark starts, so a run_id passed here raises instead.
             parameters:
               ["empresas", "{{job.run_id}}", "{{job.parameters.month}}"]

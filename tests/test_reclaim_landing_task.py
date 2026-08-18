@@ -606,3 +606,57 @@ def test_the_flag_is_not_a_positional_argument(monkeypatch):
     task.main(["estabelecimentos", "999", "--any-table"])
 
     assert deleted == [_PART]
+
+
+def test_an_argument_this_task_does_not_read_is_refused_rather_than_discarded(
+        monkeypatch):
+    """THE ARGUMENT THAT WAS SILENTLY THROWN AWAY WHILE THE DELETE WENT AHEAD.
+
+    `positional = [arg for arg in args if arg != ANY_TABLE_FLAG]` then reads `[0]`,
+    `[1]` and `[2]`, so a fourth argument reached nothing at all. An operator who
+    typed `--dry-run` -- a flag this task has never had -- got a run that ignored it
+    and unlinked every proven file, which is the worst arrangement available: the
+    one invocation whose author believed nothing would be deleted is the one that
+    deletes. `create_dataops_views.main`, this same phase's other task, already
+    refuses the same shape and says why.
+
+    BEFORE SPARK AND BEFORE THE TABLE, because it is a fact about the argv line and
+    needs nothing resolved to be answered."""
+    spark = _stub_session(monkeypatch)
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError, match="takes .table, batch_id, month"):
+        task.main(["estabelecimentos", "999", "2026-06", "--dry-run"])
+
+    assert spark.asked == [] and deleted == []
+
+
+def test_a_repeated_any_table_flag_is_refused_rather_than_read_as_one(monkeypatch):
+    """A switch is not a count, and the duplicate that matters is not a typed one.
+
+    `--any-table --any-table` filters to the same positionals as one, so nothing
+    could tell them apart -- and the way a second one arrives is a paste over the
+    argument that was in that slot. `["estabelecimentos", "999", "--any-table",
+    "--any-table"]` is one paste away from `[..., "2026-06", "--any-table"]`, so the
+    silent reading loses a delete boundary an operator did pass."""
+    spark = _stub_session(monkeypatch)
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError, match="was passed 2 times"):
+        task.main(["estabelecimentos", "999", "--any-table", "--any-table"])
+
+    assert spark.asked == [] and deleted == []
+
+
+def test_three_positionals_and_one_flag_is_still_the_accepted_shape(monkeypatch):
+    """The floor under both refusals above: the widest LEGAL invocation must stay
+    legal. Without this, a length check off by one would refuse the shape the three
+    CNPJ jobs would use if they ever gained the flag, and both tests above would
+    still be green."""
+    _stub_session(monkeypatch, months=("2026-06",))
+    _stub_proof(monkeypatch, [_PART])
+    deleted = _record_deletes(monkeypatch)
+
+    task.main(["estabelecimentos", "999", "2026-06", "--any-table"])
+
+    assert deleted == [_PART]

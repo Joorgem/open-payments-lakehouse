@@ -16,7 +16,9 @@ same as "never raise". The argument guards still raise, before Spark and before
 anything is deleted: an unknown table (`table_spec`), a batch id that names no
 batch (`require_batch_id`) or a malformed month (`require_month`) each mean this
 task does not know WHICH files it would be reclaiming, and reclaiming under a
-guess is how the wrong table's landing dir gets emptied. So does a month that
+guess is how the wrong table's landing dir gets emptied. So does an argument this
+task does not read (`_positional_arguments`), because the reclaim then runs having
+ignored what its operator believed they were configuring. So does a month that
 CONTRADICTS the one the ingest stamped -- see `refuse_month_disagreement`, which
 runs before the empty-proof return so that it fires on the batches whose month or
 batch id is the very thing that is wrong. What never raises is the deletion itself
@@ -134,7 +136,7 @@ def _cannot_reclaim(spec: BronzeTable) -> str:
 
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
-    positional = [arg for arg in args if arg != ANY_TABLE_FLAG]
+    positional = _positional_arguments(args)
     # Table first and before Spark, like every other task here: a mistyped table
     # is refused by the registry naming the valid ones. It matters more here than
     # anywhere else -- the table decides both which rows are read as proof AND
@@ -179,13 +181,57 @@ def main(argv: list[str] | None = None) -> None:
     _report(outcome, scope, held, batch_id=batch_id, table=spec.name, landing_dir=landing_dir)
 
 
+def _positional_arguments(args: list[str]) -> list[str]:
+    """The positional arguments, with everything this task does not read REFUSED.
+
+    A FOURTH ARGUMENT USED TO BE DISCARDED AND THE FILES DELETED ANYWAY. The header's
+    `argv:` line is the whole surface, and stripping the flag then reading `[0]`,
+    `[1]`, `[2]` reads a mistyped `--dry-run` as nothing at all -- an operator who
+    assumed this task has one gets a run that ignores it and unlinks every proven
+    file. `create_dataops_views.main`, this same phase's other task, already refuses
+    exactly this: a task given a parameter it does not read is a job YAML that
+    believes it is configuring something.
+
+    A REPEATED FLAG IS REFUSED TOO, because `--any-table --any-table` reads
+    identically to one today. The duplicate that matters is not a typed one: it is a
+    paste that put the flag where the month was meant, which silently drops a delete
+    boundary an operator did pass."""
+    repeats = args.count(ANY_TABLE_FLAG)
+    if repeats > 1:
+        raise ValueError(
+            f"refusing to reclaim: {ANY_TABLE_FLAG} was passed {repeats} times "
+            f"({args!r}). It is a switch and not a count, so a second one is a paste "
+            "over an argument this task DOES read -- most likely the month. NOTHING "
+            "WAS DELETED"
+        )
+    positional = [arg for arg in args if arg != ANY_TABLE_FLAG]
+    if len(positional) > 3:
+        raise ValueError(
+            f"refusing to reclaim: this task takes [table, batch_id, month?] and was "
+            f"handed {positional!r}. NOTHING WAS DELETED. Nothing here reads a fourth "
+            f"argument, so a flag this task does not have -- a --dry-run, say -- would "
+            f"otherwise be discarded in silence while every proven file was unlinked. "
+            f"The only flag is {ANY_TABLE_FLAG}; see the header's argv line"
+        )
+    return positional
+
+
 def _refuse_a_table_with_no_archive(spec: BronzeTable, args: list[str]) -> bool:
     """Whether this table's landed files may never go -- raising unless told otherwise.
 
     ANSWERED BEFORE THE BATCH ID AND BEFORE SPARK, because it is not a fact about
     this run: no batch of this table may ever be reclaimed, so nothing after this
     point needs to be resolved to know that. `True` is the flagged caller's green
-    no-op, which `main` still puts BEHIND `require_batch_id` -- see there."""
+    no-op, which `main` still puts BEHIND `require_batch_id` -- see there.
+
+    THE SPLIT IS BY ASYMMETRY OF RECOVERABILITY, and that is the reason the two
+    halves of this one answer sit on opposite sides of `require_batch_id`. The
+    REFUSAL is a fact about the TABLE that no later value can change, so resolving
+    anything first would only delay a raise that is already certain. The NO-OP is a
+    fact about THIS INVOCATION -- "for this caller, that refusal is expected" -- and
+    an invocation that names no batch has not established that it IS the invocation
+    the flag was meant for. Green is the answer that can be wrong, so it is the one
+    that waits for the guards."""
     if spec.landing == LANDING_ZIPS:
         return False
     if ANY_TABLE_FLAG in args:
@@ -318,15 +364,23 @@ def _report_nothing_proven(
               "quarantine and at least one is in bronze")
         _report_held_back(held, batch_id)
         return
-    print(f"reclaim_landing: {bronze} holds no row of batch {batch_id} -- nothing is "
-          "proven persisted, so NOTHING WAS DELETED and the landed files stay. One of: "
+    # NOT "bronze holds no row of this batch", which this line said until F4's second
+    # correction pass and which the DROPPED line above can contradict outright: a batch
+    # whose rows all carry a NULL `_source_file` yields no account at all, so the green
+    # message claimed bronze was empty while handing the operator a count that comes
+    # back non-zero. What is true in every case here is that no FILE is proven.
+    print(f"reclaim_landing: no file of batch {batch_id} is proven persisted in "
+          f"{bronze}, so NOTHING WAS DELETED and the landed files stay. One of: "
           f"(a) this run's ingest found no new file for {table}, the flow's legitimate "
           "no-op, and there is genuinely nothing to reclaim; (b) the batch id names no "
           "batch this table ever ingested -- a well-formed id passed by hand is "
           "indistinguishable from a typo here, and require_batch_id only refuses a "
           "blank or the sentinel; (c) bronze was rebuilt after the promote, which "
-          "destroyed the proof while leaving the files. Only (a) needs nothing done: "
-          f"check with SELECT count(*) FROM {bronze} WHERE _batch_id = '{batch_id}'")
+          "destroyed the proof while leaving the files; (d) every row of this batch "
+          "names NO file, in which case a DROPPED line above counted them and the "
+          "query below comes back NON-ZERO -- rows exist, no delete target does. Only "
+          f"(a) needs nothing done: check with SELECT count(*) FROM {bronze} WHERE "
+          f"_batch_id = '{batch_id}'")
 
 
 def _report_held_back(held: tuple[FileAccount, ...], batch_id: str) -> None:

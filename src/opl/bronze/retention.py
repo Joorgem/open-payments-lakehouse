@@ -56,7 +56,7 @@ the module is a weaker proof somebody calls.
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -150,7 +150,10 @@ def _absent_roles(spark: SparkSession, spec: BronzeTable, config: OplConfig) -> 
 
     Asked here rather than handled by a `try` around the query: an
     AnalysisException naming a missing table cannot be told apart from one naming
-    a missing COLUMN, and the second is a schema drift a reclaim must not swallow."""
+    a missing COLUMN, and the second is a schema drift a reclaim must not swallow.
+
+    ALL THREE IS A REFUSAL, RAISED BY `reconcile._counts_sql` and not here, because
+    that is where the empty union would otherwise have become a Spark parse error."""
     return tuple(
         role
         for role, table in (
@@ -209,38 +212,54 @@ def file_accounts_of_batch(
     )
 
 
-def _report_unnamed_rows(rows: Iterable, batch_id: str) -> None:
+def _report_unnamed_rows(rows: Sequence, batch_id: str) -> None:
     """Say when this batch holds rows whose `_source_file` names no path.
+
+    A `Sequence` AND NOT AN `Iterable`, which is not a style choice here: the caller
+    iterates the SAME rows again after this returns, so a generator would be
+    exhausted here and leave `file_accounts_of_batch` building zero accounts -- zero
+    deleted, five balanced counters, no line saying why. Literally the species this
+    function was added to close, arriving through its own signature.
 
     THE SILENT DROP. A row with a NULL (or empty) `_source_file` cannot be unlinked
     and cannot be evidence about a file, so it is dropped -- and the task's five
-    printed counters (deleted, already_absent, failed, refused, held_back) are
-    totals over the accounts that SURVIVED the drop, so the dropped rows leave
-    every printed number balanced and appear nowhere at all. That is a silent
-    failure preserving every other number, in miniature, and it is the shape this
-    module's own caller invented `HELD BACK` to avoid.
+    printed counters (deleted, already_absent, failed, refused, held_back) total
+    over the accounts that SURVIVED the drop, so the dropped rows leave every
+    printed number balanced and appear nowhere at all. A silent failure preserving
+    every other number, in miniature, and the shape this module's own caller
+    invented `HELD BACK` to avoid.
 
-    REPORTED RATHER THAN RAISED, because the drop is fail-closed in both
-    directions and nothing is at risk -- only unexplained. SQL keys NULL as a group
-    of its own, so those rows never join a real file's counts; and a file with rows
-    on both sides of that split fails `promoted + quarantined = staged` on the
-    named side, so it is held back rather than unlinked. Nothing is deleted BECAUSE
-    of a dropped row, in any arrangement of the three tables.
+    REPORTED RATHER THAN RAISED, because nothing is at risk -- only unexplained. SQL
+    keys NULL as a group of its own, so an unnamed row joins no named file's counts
+    and moves no file's verdict: the delete list is the same list with these rows and
+    without them. Where the column went missing BETWEEN tables -- staged under a
+    name, promoted under none -- the named group is left short, the arithmetic breaks
+    and the file is held back (driven out of real tables, both directions). What a
+    dropped row costs is ATTRIBUTION and not safety: one that reached neither bronze
+    nor quarantine leaves no file to hold back for it, which is why all three counts
+    are printed rather than a total.
 
-    Not produced by the ingest at all: `autoloader.add_common_audit_columns` writes
-    `_metadata.file_path`, which is never null for a file-fed stream. So a line here
-    means a hand-written insert or a backfill that did not carry the column."""
+    Not produced by the ingest at all: `_source_file` is `_metadata.file_path` and
+    `autoloader.bronze_stream` is the one place it is written -- every bronze stream,
+    the lookup's included, goes through that function, and the value is never null
+    for a file-fed stream. NOT `add_common_audit_columns`, which writes exactly
+    `_ingested_at`, `_record_source`, `_batch_id`, `_snapshot_month`: the F1b split
+    that created it exists to keep SOURCE-derived columns out, so it is the
+    counter-example. A line here means a hand-written insert or a backfill."""
     unnamed = [row for row in rows if not row["source_file"]]
     for row in unnamed:
         print(f"  DROPPED (names no file): batch {batch_id} has {row['staged']} staged, "
-              f"{row['promoted']} promoted and {row['quarantined']} quarantined row(s) "
-              "whose _source_file is NULL or empty. They are in NO count below -- "
-              "nothing was deleted for them and nothing can be, because _source_file "
-              "is how this reclaim names a delete target. No file is left unreclaimed "
-              "by this: rows split across the named and unnamed groups make the named "
-              "group fail its own arithmetic, so it is held back. Find them with "
+              f"{row['promoted']} promoted and {row['quarantined']} quarantined ROW(s) "
+              "whose _source_file is NULL or empty. Those are ROW counts and the five "
+              "counters below are FILE counts, so the two do not add. Nothing was "
+              "deleted for these rows and nothing can be, because _source_file is how "
+              "this reclaim names a delete target. Nothing is wrongly DELETED because "
+              "of them either -- they join no named file's counts, so no file's "
+              "verdict differs for their existing. What they cost is ATTRIBUTION: if "
+              "any of them staged a row that reached neither bronze nor quarantine, "
+              "there is no file to hold back for it. Find them with "
               "SELECT * FROM <staging> WHERE _batch_id = "
-              f"'{batch_id}' AND _source_file IS NULL")
+              f"'{batch_id}' AND (_source_file IS NULL OR _source_file = '')")
 
 
 def months_of_batch(spark: SparkSession, staging_table: str, batch_id: str) -> tuple[str, ...]:
@@ -255,14 +274,30 @@ def months_of_batch(spark: SparkSession, staging_table: str, batch_id: str) -> t
     `_source_file` values it is used to judge.
 
     Staging and not bronze, because staging is where the proof's denominator comes
-    from: a batch whose staged rows are gone reclaims nothing anyway, so the month
-    and the proof become unavailable together rather than one outliving the other.
+    from: a batch whose staged ROWS are gone reclaims nothing anyway, so those two
+    become unavailable together rather than one outliving the other. THAT IS A
+    STATEMENT ABOUT THE ROWS AND NOT ABOUT THE COLUMN, and F4's first correction pass
+    escalated it into a false universal in `repromote_batch_job.yml`. The column can
+    go missing on its own: the `()` two lines below is returned for a staging table
+    that has full `staged` counts and files that reconcile perfectly, because the
+    proof grains on `(_batch_id, _source_file)` and never reads this column at all.
+    See that YAML's derivation paragraph for what it costs and why it is latent.
 
-    A TUPLE AND NOT A STRING, because the caller has to see "not exactly one".
-    Empty for a missing table or a staging shape with no such column (the
-    pre-F1.4a rebuild leaves those), more than one for a batch that somehow spans
-    months -- and both are refusals, made by the caller, which is where the
-    fallback to `DEFAULT.month` would otherwise be written."""
+    WHAT IT COSTS, ON THE PATH NOBODY LOOKS AT. `reclaim_landing.main` calls this
+    BEFORE its empty-proof return so the month cross-check fires on the batches whose
+    batch id or month is the very thing that is wrong -- so this DISTINCT now runs on
+    every reclaim, the ingest's own no-new-file no-op included, where until F4's
+    correction pass the derivation ran only once a file was going to be unlinked. A
+    second pass over staging after `reconcile.file_accounts_sql`'s, and staging is not
+    small: `bronze_cnpj_estab_staging` is 144,193,416 rows (measured 2026-08-18). A
+    cost and not a defect, written here because the quiet path is where nobody looks
+    for a new query.
+
+    A TUPLE AND NOT A STRING, because the caller has to see "not exactly one". Empty
+    for a missing table, a staging shape with no such column, or a batch whose rows
+    all stamp NULL; more than one for a batch that somehow spans months -- and both
+    are refusals, made by the caller, which is where the fallback to `DEFAULT.month`
+    would otherwise be written."""
     if not spark.catalog.tableExists(staging_table):
         return ()
     staged = spark.read.table(staging_table)

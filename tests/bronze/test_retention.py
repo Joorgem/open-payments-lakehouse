@@ -1,9 +1,17 @@
-"""A landed file is deleted only when bronze PROVES it holds that file's rows.
+"""A landed file goes only when every row it staged is accounted for.
+
+THAT IS F4's PROOF, and this line said the old one until F4's second correction
+pass: "deleted only when bronze PROVES it holds that file's rows" is
+`files_of_batch`, which is gone. It was airtight only under an all-or-nothing
+gate; a repromote leaves a file's clean rows in bronze and its rejected row only
+in quarantine, so the shipped predicate is `reconcile.RECLAIMABLE_SQL` --
+`promoted + quarantined = staged` at file grain AND `promoted > 0`. It implies
+the old one, so the delete set can only shrink.
 
 The invariant is not decoration. F1.3 ingests incrementally -- several batches
 per month -- so "delete the table's directory after promote" would destroy parts
-that are landed but not yet ingested. The unit is the FILE, and the authority is
-bronze, not staging: only what is provably persisted goes.
+that are landed but not yet ingested. The unit is the FILE, and the denominator
+is staging: only what is provably accounted for goes.
 
 The proof set is read out of a Delta table, so it is DATA, and the second half of
 this module is about what happens when that data names something it should not.
@@ -433,6 +441,29 @@ def test_a_missing_staging_table_refuses_every_file_rather_than_admitting_it(
     assert accounts["f"].reclaimable is False
 
 
+def test_all_three_tables_absent_is_a_named_refusal_and_not_a_spark_parse_error(
+        spark, tables):
+    """The third omission, which nothing covered and which did not fail honestly.
+
+    `_absent_roles` can return all three -- a table registered but never ingested in
+    this catalog -- and every leg of the union was then skipped, leaving
+    `file_accounts_sql` to wrap `FROM (\\n\\n)`. Spark answered with a PARSE ERROR,
+    which reads as a defect in the SQL this repository generates rather than as the
+    fact that none of the three tables exists. Unreachable through
+    `reclaim_landing.main`, which returns on a missing bronze one check earlier, and
+    `file_accounts_of_batch` is public and reached by hand.
+
+    Nothing is at risk either way -- there is no delete on this path -- so what the
+    refusal buys is a message that names the cause, which is the standard every other
+    guard in this module is held to."""
+    from opl.bronze.registry import table_spec
+
+    spec = table_spec("estabelecimentos")
+
+    with pytest.raises(ValueError, match="every leg was skipped"):
+        _accounts(spark, spec, "b", tables)
+
+
 def test_a_batch_that_touched_nothing_has_no_accounts(spark, tables, repromoted):
     """The flow's legitimate no-op: an ingest that found no new file. Empty, not an
     error -- the job task is what tells that apart from a typed batch id."""
@@ -495,9 +526,11 @@ def test_a_wrong_month_puts_every_proven_file_outside_the_delete_boundary(tmp_pa
     still there afterwards.
 
     This is the containment half of the month guard. The task refuses earlier and
-    harder when it can -- `reclaim_landing.resolve_month` raises on a month that
-    contradicts the stamp -- but this is what stands when nothing can be
-    cross-checked, and no test exercised it against a file that actually existed."""
+    harder when it can -- `reclaim_landing.refuse_month_disagreement` raises on a
+    month that contradicts the stamp, which is where that raise moved in F4's first
+    correction pass; `resolve_month` now returns a passed month unchanged -- but
+    this is what stands when nothing can be cross-checked, and no test exercised it
+    against a file that actually existed."""
     landed = tmp_path / "cnpj" / _MONTH / "estabelecimentos"
     landed.mkdir(parents=True)
     part = landed / "K3241.ESTABELE"

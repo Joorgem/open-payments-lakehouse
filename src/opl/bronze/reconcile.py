@@ -206,10 +206,18 @@ def _counts_sql(
     refused. The view builders never pass it (all 21 objects exist, and a missing one
     must fail the deploy loudly); `retention` does, because a reclaim must decide from
     whatever exists rather than raise an AnalysisException over a table that never had
-    a reason to be created."""
+    a reason to be created.
+
+    SKIPPING ALL THREE IS REFUSED BY NAME rather than left to Spark. It emitted an
+    empty union, so the caller wrapped `FROM (\\n\\n)` and Spark raised a PARSE ERROR
+    -- a syntax complaint over SQL this module generated, where the fact is that none
+    of the three tables exists. Unreachable through `reclaim_landing.main`, which
+    returns on a missing bronze first, and reachable through
+    `retention.file_accounts_of_batch`, which is public and whose `_absent_roles` can
+    return all three."""
     keys = ", ".join(grain)
     clause = f"WHERE {where} " if where else ""
-    return "\n  UNION ALL ".join(
+    legs = tuple(
         f"SELECT {keys}, {this} FROM {config.table(table)} {clause}GROUP BY {keys}"
         for role, table, this in (
             ("staging", spec.staging, "COUNT(*) AS staged, 0 AS promoted, 0 AS quarantined"),
@@ -217,6 +225,20 @@ def _counts_sql(
             ("quarantine", spec.quarantine, "0 AS staged, 0 AS promoted, COUNT(*) AS quarantined"),
         )
         if role not in skip
+    )
+    if not legs:
+        raise ValueError(_no_legs(spec, skip))
+    return "\n  UNION ALL ".join(legs)
+
+
+def _no_legs(spec: BronzeTable, skip: tuple[str, ...]) -> str:
+    return (
+        f"cannot count {spec.name}: every leg was skipped ({sorted(skip)}), so there is "
+        "no union to select from and no count to take. This means staging, bronze AND "
+        "quarantine are all absent -- the table has never been ingested in this "
+        "workspace -- which is a fact about the catalog and not a defect in this query. "
+        "A caller deciding what to do about a batch of it has nothing to decide from: "
+        "no row was staged, so no file can be proven and none may be reclaimed."
     )
 
 
