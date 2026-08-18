@@ -533,6 +533,76 @@ by its author:
   `spark.sql(..., args={...})` named-parameter binding is unexercised on serverless, and it is called
   before the month is resolved and before anything is unlinked.
 
+### 1.4 Task 3 — every rule that matches, not the first, and the overlap is still zero
+
+**ADR 0006 lists three conditions that would reverse its refusal of a per-reason DQ tolerance.**
+Condition 1 is per-reason counts derived from **all** matching rules, and it *"must ship BEFORE any
+per-reason tolerance, never with it"*. **This task ships condition 1 and nothing else** — no gate
+change, no tolerance, no new column on any table. Condition 3 shipped as Task 2. **Condition 2 —
+≥6 monthly observations per table at reject count ≥10 — is evidentiary and no code closes it**;
+empresas' numerator is 1 and estabelecimentos' is 0, and more months of "1" and "0" will not move
+them.
+
+**Run in the workspace on the shipped entry point.** Job run **`80788495253423`**, task run
+**`880229908911460`**, SUCCESS; wheel sha256 `5cb7c36b6b0a5665376994cc91a2001e7663b7f26fd6aa18f40f8dae36f54319`,
+stamped revision equal to the revision the run was launched for, both verified by downloading the
+artefact. **Controller-verified** by parsing the task's own output:
+
+| | |
+|---|---|
+| (table, batch) pairs swept | **15** |
+| staged rows read | **337,776,032** |
+| distinct rule columns evaluated | **50**, across all seven contracts |
+| `rules_matched_2_or_more` | printed **15 times, every one 0** |
+| `rescued_and_at_least_one_rule` | printed **15 times, every one 0** |
+
+**Every non-zero number in the entire sweep:**
+
+| table | batch | reason | rows |
+|---|---|---|---|
+| estabelecimentos | `128878829411613` | `encoding_replacement_char` | **4** |
+| estabelecimentos | `118868417561350` | `encoding_replacement_char` | **4** |
+| empresas | `321750543973966` | `null_or_empty_razao_social` | 1 |
+| empresas | `371067950667703` | `null_or_empty_razao_social` | 1 |
+| socios | `409962018634322` | `null_or_empty_nome_socio_razao_social` | 1,786 |
+| socios | `1121645114029617` | `null_or_empty_nome_socio_razao_social` | 1,797 |
+| payments | `592660596679630` | `rescued_data_present` | **2,000**, and **zero rule matches** |
+
+**§2.2's published prediction is CONFIRMED**, and it is now a stronger statement than the one it
+extends: ADR 0006 measured the overlap on **2026-08-03** over **three** contracts in **six** cells
+with three hand-written columns. This is **seven** contracts, **fifteen** pairs, **fifty** rule
+columns, evaluated by **the deployed rule set itself** rather than by a query someone wrote beside
+it. *"The hole is latent, not open"* now holds where it had never been asked.
+
+**The corpus is staging, and that is the ruling that removed an ordering problem three of the four
+audits had imposed.** They concluded this task must wait on a Unity Catalog mask repair, because
+3,583 of the 5,589 quarantined rows turn on a column that reads `***`. `masking.py` covers bronze
+and quarantine and **deliberately never staging** — and the implementer verified it rather than
+taking it from the controller: `bronze_cnpj_socios_staging` holds **55,830,826 rows, none reading
+`***`**, and 55,830,826 = 55,827,243 promoted + 3,583 quarantined. Staging is complete and unmasked.
+A test pins it so a later edit cannot silently re-point the sweep at the masked table.
+
+**A by-product that re-derives a question ADR 0006 left open.** The sweep implies **5,593** rejects
+against **5,589** rows in quarantine. The difference is **4** — the four 2026-06 estabelecimentos
+rows that the *narrower* gate of the day promoted un-flagged, and which today's rules reject. ADR
+0006 records that as an open policy question (*"whether the system of record is re-gated when a rule
+widens"*) and did not answer it. **Nothing here answers it either.** What is new is that the number
+now falls out of a measurement instead of being remembered — and that both estabelecimentos batches
+report **4**, which is ADR 0006's footnote re-derived from the deployed rules rather than from a
+hand query.
+
+**What makes the fifteen zeros worth anything is that the counter can count.** A counter that reports
+zero fifteen times is otherwise indistinguishable from one that cannot report anything else — this
+project's second recurring species, now found six times. The implementer's demanded test builds a row
+that is **both** blank in a required column **and** carrying U+FFFD and asserts the counter reads
+exactly 1; ten mutations of shipped code were each caught by named tests, including `when/otherwise`
+→ `cast("int")`, the NULL-propagating spelling that would have made the overlap vanish for precisely
+the rows carrying a NULL.
+
+**What this task deliberately does not do:** adopt a threshold. Two of ADR 0006's three conditions
+now hold and the third cannot be closed by code, so the refusal stands — and the ADR says which is
+which rather than leaving a reader to infer it.
+
 ### 2.2 The all-matching-rules sweep
 
 **Published 2026-08-18, before any run.** Over all seven contracts and every staging batch, evaluating
@@ -541,6 +611,11 @@ everywhere**, extending ADR 0006's six measured cells from three contracts to se
 
 **A non-zero count anywhere falsifies ADR 0006's "the hole is latent, not open" for a contract it
 never covered**, and is the more valuable outcome of the two.
+
+> **CONFIRMED, 2026-08-18** — run `80788495253423`, 15 pairs, 337,776,032 rows, 50 rule columns,
+> **zero everywhere**, and the counter is shown able to report otherwise. The less valuable of the
+> two outcomes, and it is recorded as the prediction that held rather than quietly folded into the
+> narrative. §1.4.
 
 ### 2.3 The compaction benchmark
 
