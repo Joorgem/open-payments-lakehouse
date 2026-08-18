@@ -591,6 +591,20 @@ now falls out of a measurement instead of being remembered — and that both est
 report **4**, which is ADR 0006's footnote re-derived from the deployed rules rather than from a
 hand query.
 
+**The independent reviewer derived that difference without the shipped code**, from the quarantine
+grouped by table, reason and batch plus a hand-written U+FFFD count over estab staging, and located
+it precisely: batch `118868417561350` is the 2026-06 cell, holds **4** U+FFFD rows and **0** in
+quarantine, so those four are in bronze un-flagged; `128878829411613` is 2026-07 and its 4 *are*
+quarantined. It is the only cell where "the gate of the day" and "the rules today" differ.
+
+> **AND THE RECONCILIATION RESTS ON THE VERY COUNTERS THIS TASK SHIPPED, which is a better argument
+> than the one first written here.** Summing per-rule counts and adding the rescued count is a count
+> of **rows** only because both overlap counters are zero — otherwise any row carrying two reasons is
+> counted twice and 5,593 is a count of *reason hits*, not of rows. So "5,593 versus 5,589, a
+> difference of 4" is a claim that depends on `rules_matched_2_or_more = 0`, and stating it without
+> that dependency would have been arithmetic resting on an unstated premise. Found by the reviewer;
+> neither the commit message nor ADR 0006 said it.
+
 **What makes the fifteen zeros worth anything is that the counter can count.** A counter that reports
 zero fifteen times is otherwise indistinguishable from one that cannot report anything else — this
 project's second recurring species, now found six times. The implementer's demanded test builds a row
@@ -602,6 +616,27 @@ the rows carrying a NULL.
 **What this task deliberately does not do:** adopt a threshold. Two of ADR 0006's three conditions
 now hold and the third cannot be closed by code, so the refusal stands — and the ADR says which is
 which rather than leaving a reader to infer it.
+
+**Cost, measured rather than estimated:** the whole sweep — seven scans, 337,776,032 rows — ran in
+**89 s**. The per-task floor this phase argued about is 15–30 s, so the measurement costs roughly
+three task-starts and buys a number ADR 0006 has wanted since 2026-08-03.
+
+> **THE SIXTH INSTANCE OF THIS PHASE'S SECOND SPECIES WAS IN THIS TASK'S OWN TESTS, and it threatened
+> the sentence two paragraphs above.** `test_it_is_total_over_the_registry_rather_than_a_hand_written_list`
+> asserted `"REGISTRY" in <the entry point's source>` — and the string `REGISTRY` appears in that
+> file's **module docstring**, so the test held with the import and the loop both deleted. The
+> reviewer proved it instead of arguing it: narrowing the sweep to three tables left **all four tests
+> in the file green**.
+>
+> **And the one line that could have contradicted a narrowed sweep printed `len(REGISTRY)`** — the
+> registry's size, not the number of tables actually measured. So a three-table sweep would print
+> *"7 tables"*, every per-rule number would stay correct, and **"fifteen pairs, seven contracts" —
+> published in ADR 0006 and in this document — would have become quietly false**. Both species at
+> once: a guard that cannot fail, and a silent failure that preserves every other number.
+>
+> Closed in the correction pass by asserting the **visited set** and printing the count **actually
+> measured**. Recorded here rather than only in a commit because the claim it threatened is one this
+> document makes.
 
 ### 2.2 The all-matching-rules sweep
 
