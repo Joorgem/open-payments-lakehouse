@@ -96,6 +96,44 @@ resources:
             # table nor a batch to hand it.
             parameters: []
 
+        # F4 Task 5: the OTHER HALF of the socios column mask -- who may open the tables
+        # at all, and what the catalog says their columns hold. It lives in THIS job for
+        # the same three reasons `measure_rule_overlap` does: it is imperative SQL a
+        # bundle cannot express (there is no `tables` resource and `grants` is a field on
+        # Catalog/Schema/Volume/RegisteredModel/ExternalLocation/VectorSearchIndex, never
+        # on a table), it is total over the registry and takes no coordinate, and a NEW
+        # job YAML would have to be classified in `tests/test_job_yaml_launch_guards.py`'s
+        # exact list for a revision guard this job already carries.
+        #
+        # AND THE GUARD'S QUESTION HAS ITS SHARPEST ANSWER HERE. The two tasks above
+        # write no row and create a view whose name a stale wheel would take. This one
+        # REVOKES: its roster is a constant in `opl.bronze.pii_governance`, and anything
+        # holding SELECT outside that roster loses it. A wheel from another revision
+        # therefore issues a different set of revokes against the three tables holding
+        # 55.8M rows of personal data, reports SUCCESS, and leaves an access state nobody
+        # reviewed.
+        #
+        # NO `depends_on` ON THE OTHER TWO, deliberately, and for the reason
+        # `measure_rule_overlap` states: it reads neither view and neither measurement, so
+        # ordering it behind them would manufacture a dependency that does not exist and
+        # would let a view failure swallow a governance change that had nothing to do with
+        # it. It depends on the guard for the reason every task in this file does.
+        #
+        # THE COUPLING RUNS THE OTHER WAY TOO, recorded because this is the task that pays
+        # for it: a governance failure now fails a run whose purpose was refreshing a
+        # dashboard. Accepted for the same trade the block above accepts -- and here the
+        # direction is the right one, because a run that could not settle who reads
+        # personal data is a run an operator wants stopping.
+        - task_key: apply_pii_governance
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/apply_pii_governance.py
+            # No parameters, and the task refuses any. What it governs is total over the
+            # contracts that declare a mask, so there is no table to hand it.
+            parameters: []
+
       environments:
         - environment_key: opl_env
           spec:

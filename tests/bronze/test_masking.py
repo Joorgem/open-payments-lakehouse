@@ -2,7 +2,7 @@
 """The UC column mask for bronze tables that carry a natural person's name.
 
 WHAT CAN BE TESTED HERE AND WHAT CANNOT. No DDL in this module reaches Unity
-Catalog -- `is_account_group_member`, `SET MASK` and a three-part catalog name
+Catalog -- `is_member`, `SET MASK` and a three-part catalog name
 exist only on Databricks, and the live application is a later task. So the tests
 below are of two kinds, and the split is deliberate:
 
@@ -54,16 +54,38 @@ def test_no_other_contract_declares_a_mask():
 
 
 def test_the_mask_reveals_only_to_a_named_group_and_fails_closed():
-    """`is_account_group_member` returns FALSE for a group that does not exist, so a
-    workspace where the group was never created shows every reader the masked
-    value. That is the correct direction to fail."""
+    """`is_member` returns FALSE for a group that does not exist, so a workspace
+    where the group was never created shows every reader the masked value. That is
+    the correct direction to fail, and it is the property the F4 substitution had to
+    preserve -- measured inside a serverless job session, as the user and as a
+    `run_as` service principal, for a group that does not exist."""
     ddl = mask_function_ddl("workspace.default.mask_personal_name")
-    assert f"is_account_group_member('{PII_READER_GROUP}')" in ddl
+    assert f"is_member('{PII_READER_GROUP}')" in ddl
     assert "ELSE '***'" in ddl
     # The qualified name the caller chose, not a name this module invents: the
     # function has to live in the same catalog.schema as the table, and
     # `DEFAULT.table(MASK_FUNCTION)` is what decides that.
     assert ddl.startswith("CREATE OR REPLACE FUNCTION workspace.default.mask_personal_name(")
+
+
+def test_the_predicate_is_not_the_one_this_workspace_cannot_open():
+    """THE F4 REPAIR, pinned from the other side so a revert is a red test.
+
+    `is_account_group_member` reads ACCOUNT groups. In this workspace it answers
+    false for a workspace-local group the reader demonstrably belongs to, exactly one
+    account group resolves at all (`account users`, i.e. everyone), and account SCIM
+    is not served from a workspace host -- so the group this predicate named could
+    not be created from here and the mask could not be opened by anyone, ever, over
+    55,827,243 rows. The positive assertion above would already fail on a revert,
+    because `is_account_group_member` does not contain `is_member` as a substring;
+    this one exists so the failure NAMES the defect instead of reporting a missing
+    string."""
+    ddl = mask_function_ddl("workspace.default.mask_personal_name")
+    assert "is_account_group_member" not in ddl, (
+        "the mask predicate is back on is_account_group_member, which cannot return "
+        "true in this workspace for any group that can be created from it -- the "
+        "control would be unopenable rather than merely closed. See ADR 0008."
+    )
 
 
 def test_every_masked_column_exists_in_its_contract():

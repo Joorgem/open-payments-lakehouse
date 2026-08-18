@@ -49,9 +49,25 @@ MASKED_COLUMNS: dict[str, tuple[str, ...]] = {
 
 
 def mask_function_ddl(qualified_function: str) -> str:
-    """The masking function. FAILS CLOSED: `is_account_group_member` returns false
-    for a group that does not exist, so a workspace where `opl_pii_readers` was
-    never created shows every reader the masked value rather than the name.
+    """The masking function. FAILS CLOSED: `is_member` returns false for a group
+    that does not exist, so a workspace where `opl_pii_readers` was never created
+    shows every reader the masked value rather than the name.
+
+    `is_member` AND NOT `is_account_group_member`, WHICH IS A REPAIR AND NOT A
+    PREFERENCE. This predicate read `is_account_group_member` from F1.4b until F4,
+    and in this workspace that function CANNOT BE MADE TO RETURN TRUE: it answers
+    false for a workspace-local group the reader demonstrably belongs to, exactly
+    one account group resolves at all (`account users`, i.e. everyone, which cannot
+    be a control), and account SCIM is not served from a workspace host, so the
+    account group this predicate names could not be created from here. The old
+    docstring's promise that the control "becomes correct the moment
+    `opl_pii_readers` exists" therefore named a moment that could not arrive, over
+    55,827,243 rows, hiding from the owner as well. `is_member` reads the
+    WORKSPACE-LOCAL group, which can be created (F4 created it), and it was measured
+    inside a serverless job session -- as the user and as a `run_as` service
+    principal -- to return true for a group the principal is in and FALSE FOR A GROUP
+    THAT DOES NOT EXIST. So the substitution trades an unopenable control for an
+    openable one with the same floor, and the paragraph above survives it verbatim.
 
     `CREATE OR REPLACE` rather than `CREATE IF NOT EXISTS`, and it is safe on a
     re-run: replacing a function that a column mask already references is the
@@ -60,7 +76,7 @@ def mask_function_ddl(qualified_function: str) -> str:
     return (
         f"CREATE OR REPLACE FUNCTION {qualified_function}(name STRING) "
         "RETURNS STRING "
-        f"RETURN CASE WHEN is_account_group_member('{PII_READER_GROUP}') "
+        f"RETURN CASE WHEN is_member('{PII_READER_GROUP}') "
         "THEN name ELSE '***' END"
     )
 
@@ -170,8 +186,11 @@ def masked_table_ddls(
 
     So the mask on staging is not a smaller version of the mask on bronze; it is a
     control that silently disables another control and corrupts the system of record.
-    It becomes correct the moment `opl_pii_readers` exists AND the job's run-as
-    principal is a member of it, which is F4's work. See ADR 0008."""
+    It becomes correct only once the job's run-as principal is a member of
+    `opl_pii_readers` -- the group now EXISTS (F4 created it) and is deliberately
+    EMPTY, so the precondition is still unmet and staging is still excluded here.
+    Staging is not ungoverned: `opl.bronze.pii_governance` grants and tags it, which
+    is what a mask cannot do for a table `promote_batch` reads. See ADR 0008."""
     return (
         (bronze, create_table_ddl(bronze, contract)),
         (quarantine, create_quarantine_ddl(quarantine, contract)),
