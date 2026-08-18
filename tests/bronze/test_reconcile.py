@@ -34,6 +34,7 @@ from opl.bronze.reconcile import (
     STRANDED_UNEXPLAINED,
     batch_grain_sql,
     create_view_ddl,
+    file_accounts_sql,
     file_grain_sql,
     view_ddls,
 )
@@ -170,7 +171,7 @@ def test_the_remedy_is_printed_for_a_stranding_and_withheld_otherwise(probe):
 def test_reclaimable_needs_every_row_of_the_file_accounted_for_and_one_in_bronze(probe):
     """`reclaim_landing`'s repaired safety proof, at the grain the delete happens at.
 
-    `retention.files_of_batch` asks "does bronze hold a row of this file", which is
+    `retention.files_of_batch` asked "does bronze hold a row of this file", which is
     equivalent to "every row" only under an all-or-nothing gate. The moment a batch
     reaches bronze through a repromote the two come apart: socios' 3,583 rejected rows
     span 20 distinct `_source_file` values whose clean rows ARE in bronze. `fa` below is
@@ -246,3 +247,79 @@ def test_the_view_ddl_replaces_rather_than_skipping():
     assert create_view_ddl("x", "SELECT 1", _CONFIG).startswith(
         f"CREATE OR REPLACE VIEW {_CONFIG.catalog}.{_SCHEMA}.x AS"
     )
+
+
+def test_the_view_and_the_reclaim_decide_the_same_files(probe):
+    """ONE predicate, executed twice, and the two answers compared.
+
+    `file_accounts_sql` is what `retention.file_accounts_of_batch` runs on the
+    DELETE path -- one table, one batch, no scan of the other twenty objects --
+    while `file_grain_sql` is what an operator reads. If those could disagree, the
+    dashboard would say `reclaimable = true` about a file the task refused, or
+    worse, the other way round. `RECLAIMABLE_SQL` is the single spelling that stops
+    it, and this asserts the two queries actually agree rather than that the
+    constant appears in both.
+
+    The batch is `b5`, whose three files are deliberately one of each: accounted
+    for, nothing in bronze, and a row in neither."""
+    spec = REGISTRY["payments"]
+    narrow = {
+        row["source_file"]: row["reclaimable"]
+        for row in probe.sql(
+            file_accounts_sql(spec, _CONFIG), args={"batch_id": "b5"}
+        ).collect()
+    }
+    wide = {
+        row["source_file"]: row["reclaimable"]
+        for row in probe.sql(file_grain_sql(_CONFIG)).collect()
+        if row["source"] == "payments" and row["batch_id"] == "b5"
+    }
+
+    assert narrow == wide
+    assert narrow == {"fa": True, "fb": False, "fc": False}
+
+
+def test_the_batch_id_is_bound_as_a_parameter_and_not_spliced_into_the_query(probe):
+    """The one value in that query an operator types.
+
+    `require_batch_id` refuses a blank and the sentinel and says nothing about
+    quoting, and this query reaches Spark from a job task whose `batch_id` is a
+    job parameter. Bound through `args=`, a batch id that is all punctuation
+    matches nothing and returns nothing; spliced in, it would end the string. The
+    probe below is the shape that closes the literal and appends a second
+    statement -- it must be inert, not a syntax error and not a second query."""
+    spec = REGISTRY["payments"]
+    hostile = "b5' OR '1'='1"
+    rows = probe.sql(
+        file_accounts_sql(spec, _CONFIG), args={"batch_id": hostile}
+    ).collect()
+
+    assert rows == [], "a batch id that names nothing must match nothing"
+
+
+def test_a_skipped_leg_leaves_its_count_at_zero_and_the_file_unreclaimable(probe):
+    """`skip` exists so a reclaim can decide from whatever tables exist rather than
+    raise on a quarantine that was never created. Every omission has to fail
+    CLOSED, and the two that matter are asserted here: without staging there is no
+    denominator, without bronze there is nothing persisted, and `fa` -- the one
+    file that is otherwise reclaimable -- must go false in both."""
+    spec = REGISTRY["payments"]
+    for skipped in (("staging",), ("bronze",)):
+        rows = {
+            row["source_file"]: row["reclaimable"]
+            for row in probe.sql(
+                file_accounts_sql(spec, _CONFIG, skip=skipped), args={"batch_id": "b5"}
+            ).collect()
+        }
+        assert rows["fa"] is False, f"skipping {skipped} must not admit a file"
+    kept = {
+        row["source_file"]: row["reclaimable"]
+        for row in probe.sql(
+            file_accounts_sql(spec, _CONFIG, skip=("quarantine",)),
+            args={"batch_id": "b5"},
+        ).collect()
+    }
+    # The one omission that is a true answer rather than a refusal: a table no
+    # reject has ever reached has no quarantine, and `fb`'s two rows then look like
+    # rows that reached nothing -- which is still a refusal.
+    assert kept["fa"] is False and kept["fb"] is False

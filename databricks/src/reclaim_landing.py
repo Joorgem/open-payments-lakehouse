@@ -1,26 +1,46 @@
 # databricks/src/reclaim_landing.py
 """Job task (runs after promote): delete the inner files THIS batch put in bronze.
 
-Depends on promote, and only on its success: a file may go only once bronze
-proves it holds that file's rows. The zips are never touched -- they live in a
-sibling `zips/<table>` dir and are the only way back to the source if a parse
-defect is found after ingestion, which is exactly what happened twice in F1.3.
+Depends on promote, and only on its success: a file may go only once the rows it
+staged are accounted for and some of them are in bronze. The zips are never
+touched -- they live in a sibling `zips/<table>` dir and are the only way back to
+the source if a parse defect is found after ingestion, which is exactly what
+happened twice in F1.3.
 
 THAT ARGUMENT ASSUMES A ZIP EXISTS IN THE VOLUME, which is true only for a table
 whose landing mode is `zips`, so this task refuses every other one -- see
-`_cannot_reclaim`.
+`_cannot_reclaim` and `ANY_TABLE_FLAG`.
 
 WHAT THIS TASK IS ALLOWED TO FAIL ON, because "never fail the job" is not the
 same as "never raise". The argument guards still raise, before Spark and before
 anything is deleted: an unknown table (`table_spec`), a batch id that names no
-batch (`require_batch_id`) or an absent/malformed month (`require_month`) each
-mean this task does not know WHICH files it would be reclaiming, and reclaiming
-under a guess is how the wrong table's landing dir gets emptied. What never
-raises is the deletion itself -- past that point the rows are already in bronze,
-so a file that cannot be removed is a quota problem, not a data problem, and must
-not turn a green ingestion red.
+batch (`require_batch_id`) or a malformed month (`require_month`) each mean this
+task does not know WHICH files it would be reclaiming, and reclaiming under a
+guess is how the wrong table's landing dir gets emptied. So does a month that
+CONTRADICTS the one the ingest stamped -- see `resolve_month`. What never raises
+is the deletion itself -- past that point the rows are already in bronze, so a
+file that cannot be removed is a quota problem, not a data problem, and must not
+turn a green ingestion red.
 
-argv: [table, batch_id, month] -- all three REQUIRED, none defaulted."""
+argv: [table, batch_id, month?, --any-table?]
+
+THE MONTH IS NOW OPTIONAL AND THAT IS NOT A RELAXATION OF `require_month`. It was
+required because the alternative on the table was `DEFAULT.month`, a pinned guess
+that equalled the job YAMLs' own default and so stayed invisible until the first
+run for another month. The alternative now is the value the INGEST stamped into
+`_snapshot_month` for this very batch, which is that run's own
+`{{job.parameters.month}}` after it passed `require_month` -- data, not a guess,
+and not read off the `_source_file` paths this month is used to judge. When a
+month IS passed it is still validated before Spark AND cross-checked against the
+stamp, so the four ingestion jobs gain a control rather than losing one.
+
+WHY THE TRIAGE PATH NEEDED THAT. `repromote_triaged_batch` runs hours or days
+after the ingest, from a reconciliation row that names a table and a batch id and
+nothing else. Requiring a month there would put the delete boundary in a value an
+operator retypes from memory, whose wrong-but-well-formed shape refuses every
+proven file and exits GREEN -- a log that reads exactly like the containment guard
+catching a real F1.3-style incident.
+"""
 import sys
 
 from pyspark.sql import SparkSession
@@ -28,13 +48,31 @@ from pyspark.sql import SparkSession
 from opl.bronze.promote import require_batch_id
 from opl.bronze.registry import LANDING_ZIPS, BronzeTable, table_spec
 from opl.bronze.retention import (
+    FileAccount,
     LandingScope,
     RetentionOutcome,
     delete_files,
-    files_of_batch,
+    file_accounts_of_batch,
+    months_of_batch,
     scope_to_landing_dir,
 )
 from opl.config import DEFAULT, require_month
+
+# Declares "I am a job task wired into a job that serves EVERY registered table",
+# which today is exactly one caller: `repromote_batch_job.yml`. Modelled on
+# `promote_batch.py`'s `--in-flow` and for the identical reason -- the same fact
+# is an operator error in one context and a legitimate no-op in the other, and the
+# caller is the only one that can say which.
+#
+# WHAT IT DOES NOT DO IS LOOSEN THE DELETE. A table with no archive in the Volume
+# deletes nothing either way; the flag changes whether that is red or green. A
+# repromote of `payments` -- the stranded batch the reconciliation view prints a
+# remedy for right now -- would otherwise end RED on its last task having promoted
+# perfectly, which trains an operator to read red as noise.
+#
+# Fail-closed by absence: a hand invocation omits it and still gets the refusal,
+# which is the caller `_cannot_reclaim` was written for.
+ANY_TABLE_FLAG = "--any-table"
 
 
 def _cannot_reclaim(spec: BronzeTable) -> str:
@@ -54,12 +92,13 @@ def _cannot_reclaim(spec: BronzeTable) -> str:
     of a monthly snapshot the RFB may have rotated -- from a share ADR 0003
     measured at ~50% transient 500s.
 
-    Refused rather than left to the operator's judgement because the ONE caller
-    that can reach it is an operator: no job YAML runs this task for such a table
-    (bronze_job.yml deliberately has no reclaim task), and the recorded procedure
-    invokes this file by hand with a positional table name. `bronze_ingest.py` and
-    `unzip_table.py` already refuse the same way; this task, the only one that
-    DELETES, was the one that did not.
+    Refused rather than left to the operator's judgement because the caller that
+    can reach it by name is an operator: the four ingestion job YAMLs run this task
+    only for tables that land as zips, and the recorded procedure invokes this file
+    by hand with a positional table name. `bronze_ingest.py` and `unzip_table.py`
+    already refuse the same way; this task, the only one that DELETES, was the one
+    that did not. The one job that reaches it for ANY table says so with
+    `ANY_TABLE_FLAG` and gets this same text as a green no-op.
 
     Compares against LANDING_ZIPS rather than for LANDING_LOCAL, so a third landing
     mode added later is refused by default instead of inheriting a delete."""
@@ -77,63 +116,145 @@ def _cannot_reclaim(spec: BronzeTable) -> str:
 
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
+    positional = [arg for arg in args if arg != ANY_TABLE_FLAG]
     # Table first and before Spark, like every other task here: a mistyped table
     # is refused by the registry naming the valid ones. It matters more here than
     # anywhere else -- the table decides both which rows are read as proof AND
     # which directory the deletes are confined to.
-    spec = table_spec(args[0] if args else "")
+    spec = table_spec(positional[0] if positional else "")
     if spec.landing != LANDING_ZIPS:
         # Before the batch id and before Spark, because it is not a fact about this
         # run: no batch of this table may ever be reclaimed, so nothing after this
         # point needs to be resolved to know that.
+        if ANY_TABLE_FLAG in args:
+            print(f"reclaim_landing: {_cannot_reclaim(spec)}")
+            return
         raise ValueError(_cannot_reclaim(spec))
-    batch_id = require_batch_id(args[1] if len(args) > 1 else "", action="reclaim")
-    # NO DEFAULT, by the same guard the two ingest tasks use -- it has to be the
-    # SAME month the ingest was given, because the files this batch proved were read
-    # out of that month's landing dir, and a WRONG-but-well-formed month puts every
-    # proven file outside the scope and reclaims nothing.
-    #
-    # What makes it worth a crash rather than a fallback is specific to this task:
-    # `DEFAULT.month` equals the job YAML's own default, so an omission stayed
-    # invisible until the first run for another month -- and then this task printed
-    # REFUSED for every proven file and exited green, a log that reads exactly like
-    # the containment guard catching a real F1.3-style incident. `require_month`
-    # carries the rest of the argument, including why a malformed month is half of
-    # the delete boundary rather than something the boundary checks.
-    month = require_month(args[2] if len(args) > 2 else None, action="reclaim")
+    batch_id = require_batch_id(positional[1] if len(positional) > 1 else "", action="reclaim")
+    # Validated HERE when it is given, so a malformed one still never reaches a
+    # serverless session; `resolve_month` owns absence and disagreement, both of
+    # which need the batch's own rows to answer.
+    given = require_month(positional[2], action="reclaim") if len(positional) > 2 else None
     spark = SparkSession.builder.getOrCreate()
     bronze = DEFAULT.table(spec.bronze)
     if not spark.catalog.tableExists(bronze):
-        # Split out from the empty proof set below because it means something
-        # else entirely: the authority this task defers to does not exist. A
-        # reader who saw only "nothing is proven persisted" could conclude the
-        # batch was already reclaimed; the files are landed and bronze is gone.
-        print(f"reclaim_landing: {bronze} does not exist, so nothing can be proven "
-              f"persisted and nothing is deleted. The landed files of batch {batch_id} "
-              "are still in the Volume, which is the recoverable direction -- re-run "
-              "the ingest and promote for this month before reclaiming anything")
+        _report_no_bronze(bronze, batch_id)
         return
-    proven = files_of_batch(spark, bronze, batch_id)
+    accounts = file_accounts_of_batch(spark, spec, batch_id)
+    proven = tuple(account for account in accounts if account.reclaimable)
+    held = tuple(account for account in accounts if not account.reclaimable)
     if not proven:
-        _report_nothing_proven(bronze, batch_id, spec.name)
+        _report_nothing_proven(bronze, batch_id, spec.name, held)
         return
+    month = resolve_month(spark, DEFAULT.table(spec.staging), batch_id, given=given)
     landing_dir = DEFAULT.landing_table(spec.subdir, month)
-    scope = scope_to_landing_dir(proven, landing_dir)
+    scope = scope_to_landing_dir([account.source_file for account in proven], landing_dir)
     outcome = delete_files(scope.inside)
-    _report(outcome, scope, batch_id=batch_id, table=spec.name, landing_dir=landing_dir)
+    _report(outcome, scope, held, batch_id=batch_id, table=spec.name, landing_dir=landing_dir)
 
 
-def _report_nothing_proven(bronze: str, batch_id: str, table: str) -> None:
-    """Bronze exists and holds no file of this batch: delete nothing, say why.
+def resolve_month(
+    spark: SparkSession, staging: str, batch_id: str, *, given: str | None
+) -> str:
+    """The month that is half the delete boundary: stamped by the ingest, or agreed.
+
+    DERIVED WHEN NOTHING WAS PASSED, from `_snapshot_month` on this batch's staging
+    rows -- see `retention.months_of_batch` for why that column and not the file
+    paths. Refused when the batch does not name exactly ONE month, which is the
+    only shape a derivation may take: zero means the proof's own source is gone or
+    predates the column, more than one means a batch spanning months, and neither
+    is a directory this task may guess at.
+
+    CROSS-CHECKED WHEN ONE WAS PASSED, and this is the half that is new for the
+    four ingestion jobs, which have always passed `{{job.parameters.month}}`. A
+    month that disagrees with the stamp used to produce the WORST log this task can
+    emit: every proven file outside the scope, `REFUSED (left untouched)` on each
+    one telling the operator to investigate how a row of this table came from
+    there, zero bytes freed, exit 0. It now raises, naming both months, before a
+    single unlink.
+
+    An empty stamp is not a disagreement -- a pre-F1.4a staging shape has no such
+    column -- so a passed month still works there, which is what keeps this a
+    strictly added control rather than a new way to fail."""
+    stamped = months_of_batch(spark, staging, batch_id)
+    if given is not None:
+        if stamped and (given,) != stamped:
+            raise ValueError(_month_disagreement(given, stamped, batch_id, staging))
+        return given
+    if len(stamped) != 1:
+        raise ValueError(_month_underivable(stamped, batch_id, staging))
+    # Validated even though it came from the data: this value is interpolated raw
+    # into `landing_table`, so it is half OF the delete path rather than something
+    # the path checks, and where it came from does not change that.
+    return require_month(stamped[0], action="reclaim")
+
+
+def _month_disagreement(
+    given: str, stamped: tuple[str, ...], batch_id: str, staging: str
+) -> str:
+    return (
+        f"refusing to reclaim: month={given!r} was passed, but batch {batch_id} was "
+        f"ingested under _snapshot_month={list(stamped)} according to {staging}. The "
+        "month is half the delete boundary -- landing_table(subdir, month) is the ONLY "
+        "directory these deletes are confined to -- so the two cannot both be right and "
+        "this task will not pick one. NOTHING WAS DELETED. Either the month parameter "
+        "of this run is wrong (pass the SAME month the ingest was given, or pass none "
+        "at all and it is taken from the stamp), or this batch id belongs to a "
+        "different run than the one intended."
+    )
+
+
+def _month_underivable(stamped: tuple[str, ...], batch_id: str, staging: str) -> str:
+    return (
+        f"refusing to reclaim: no month was passed and batch {batch_id} does not name "
+        f"exactly one in {staging} -- _snapshot_month is {list(stamped)}. NOTHING WAS "
+        "DELETED and the landed files stay, which is the recoverable direction. Zero "
+        "means the staging rows of this batch are gone, or that this staging table "
+        "predates the _snapshot_month column (the documented rebuild leaves such "
+        "shapes); more than one means a single batch id spans months, which one "
+        "ingest run cannot produce and is worth understanding before anything is "
+        "unlinked. There is no default to fall back on: opl.config's pinned month is "
+        "the worst guess available, and substituting it is how a delete boundary lands "
+        "on a month this run never ingested. Check what the batch was ingested under "
+        f"(SELECT DISTINCT _snapshot_month FROM {staging} WHERE _batch_id = "
+        f"'{batch_id}'); if the answer is nothing, this file takes the month as its "
+        "third positional argument and an operator can run it by hand with the month "
+        "the ingest was given."
+    )
+
+
+def _report_no_bronze(bronze: str, batch_id: str) -> None:
+    """Bronze itself is missing: the authority this task defers to does not exist.
+
+    Split out from the empty proof set below because it means something else
+    entirely. A reader who saw only "nothing is proven persisted" could conclude
+    the batch was already reclaimed; the files are landed and bronze is gone."""
+    print(f"reclaim_landing: {bronze} does not exist, so nothing can be proven "
+          f"persisted and nothing is deleted. The landed files of batch {batch_id} "
+          "are still in the Volume, which is the recoverable direction -- re-run "
+          "the ingest and promote for this month before reclaiming anything")
+
+
+def _report_nothing_proven(
+    bronze: str, batch_id: str, table: str, held: tuple[FileAccount, ...]
+) -> None:
+    """No file of this batch reconciles: delete nothing, say why, per file.
 
     THE DECISION: return green having deleted nothing, and name the causes rather
-    than shrug. The safe action is the same for every cause -- an empty proof set
+    than shrug. The safe action is the same for every cause -- an unproven file
     proves nothing, so nothing may go -- but the causes are not the same event and
-    the operator's next move differs, so a bare "nothing to do" would hide two of
+    the operator's next move differs, so a bare "nothing to do" would hide most of
     them. It does not raise, because the first cause below is the pipeline's own
-    legitimate quiet path and failing it would turn every no-new-file run red;
-    and because in all three cases the bytes simply stay, which is the direction
-    that loses nothing."""
+    legitimate quiet path and failing it would turn every no-new-file run red; and
+    because in all cases the bytes simply stay, which is the direction that loses
+    nothing."""
+    if held:
+        print(f"reclaim_landing: batch {batch_id} touched {len(held)} file(s) and NOT ONE "
+              "of them is accounted for, so NOTHING WAS DELETED and the landed files "
+              "stay. A file may go only when every row it staged is in bronze or in "
+              "quarantine and at least one is in bronze")
+        _report_held_back(held, batch_id)
+        return
     print(f"reclaim_landing: {bronze} holds no row of batch {batch_id} -- nothing is "
           "proven persisted, so NOTHING WAS DELETED and the landed files stay. One of: "
           f"(a) this run's ingest found no new file for {table}, the flow's legitimate "
@@ -145,25 +266,47 @@ def _report_nothing_proven(bronze: str, batch_id: str, table: str) -> None:
           f"check with SELECT count(*) FROM {bronze} WHERE _batch_id = '{batch_id}'")
 
 
+def _report_held_back(held: tuple[FileAccount, ...], batch_id: str) -> None:
+    """The files the repaired proof refused, with the counts that refused them.
+
+    NEW IN F4 AND THE POINT OF THE REPAIR. The old proof asked "does bronze hold a
+    row of this file", so it had no such category to report: every file it named
+    was deleted. This one can hold a file back, and a control that declines
+    silently is one nobody can tell from a control that never ran. Each line is
+    also directly checkable against `dataops_reconciliation_by_file`, which runs
+    the same predicate."""
+    for account in held:
+        print(f"  HELD BACK (left untouched): {account.source_file} -- staged="
+              f"{account.staged} promoted={account.promoted} "
+              f"quarantined={account.quarantined} unaccounted={account.unaccounted}. "
+              "Not every row of this file is accounted for, so bronze holding some of "
+              "them does not prove the file may go. Read it in "
+              "workspace.default.dataops_reconciliation_by_file WHERE batch_id = "
+              f"'{batch_id}'")
+
+
 def _report(
     outcome: RetentionOutcome,
     scope: LandingScope,
+    held: tuple[FileAccount, ...],
     *,
     batch_id: str,
     table: str,
     landing_dir: str,
 ) -> None:
-    """What the run log says happened. Four outcomes, none of them collapsed.
+    """What the run log says happened. Five outcomes, none of them collapsed.
 
     Modelled on `landing._discard_remote`, which reports deleted / already-absent
     / STILL THERE apart for the reason this task needs too: an operator told
     nothing assumes the file is gone, and a file that could not be removed still
     holds Volume quota nobody knows about. The fourth -- refused -- is this task's
     own and is the loudest, because it says bronze holds rows sourced from outside
-    the dir this table's stream reads."""
+    the dir this table's stream reads. The fifth -- held back -- says the file is
+    this table's own and its rows do not add up."""
     print(f"reclaim_landing: batch={batch_id} table={table} "
           f"deleted={len(outcome.deleted)} already_absent={len(outcome.absent)} "
-          f"failed={len(outcome.failed)} refused={len(scope.outside)}")
+          f"failed={len(outcome.failed)} refused={len(scope.outside)} "
+          f"held_back={len(held)}")
     for path, reason in outcome.failed:
         print(f"  STILL THERE: {path} -- {reason}")
     for path in scope.outside:
@@ -176,6 +319,7 @@ def _report(
               "only files in the dir this table's Auto Loader reads, so the zips and "
               "every other table's files are out of reach by construction. Investigate "
               "how a row of this table came from there before reclaiming anything else")
+    _report_held_back(held, batch_id)
     if outcome.deleted or not outcome.absent:
         return
     # Every single file already gone. That is the expected shape of an idempotent

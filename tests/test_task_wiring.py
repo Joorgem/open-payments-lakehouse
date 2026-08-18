@@ -449,42 +449,39 @@ def test_the_one_surviving_promote_appends_a_batch_for_every_table():
     assert 'mode("overwrite")' not in source
 
 
-def test_the_reclaim_proves_persistence_from_bronze_and_deletes_only_under_landing():
-    """The one task that DELETES, so the two coordinates it binds are the two that
-    decide whether a file survives.
+def test_the_reclaim_proves_persistence_from_three_tables_and_deletes_under_one_dir():
+    """The one task that DELETES, so the coordinates it binds are what decides
+    whether a file survives.
 
-    WHICH TABLE PROVES IT: `spec.bronze`, never `spec.staging`. Staging holds rows
-    that have been read but not yet promoted, so a file whose rows are only there
-    has not been proven persisted -- and once its bytes are gone the only way back
-    is re-unzipping the source. `spec.staging` for `spec.bronze` is a
-    one-identifier edit that leaves `table_spec(` in the source and every other
-    test in this file green, which is exactly the class of edit this module was
-    written for.
+    WHICH TABLES PROVE IT, and this is what F4 changed. It used to be `spec.bronze`
+    ALONE -- `files_of_batch` returned the distinct `_source_file` values bronze
+    held for the batch -- and that is a sound proof only under an all-or-nothing
+    gate. `repromote_triaged_batch` breaks it by design: a file with one rejected
+    row has its clean rows in bronze and that row only in quarantine, so "bronze
+    holds a row of this file" stopped implying "bronze holds every row of it". The
+    proof is now `reconcile.RECLAIMABLE_SQL` over all three tables, which is why
+    the call takes the WHOLE spec: the three coordinates are resolved from it
+    together, so they cannot be a staging of one table beside a bronze of another.
 
     WHICH DIRECTORY IS IN REACH: `spec.subdir`, this table's own landing dir. Its
     sibling `zips/<table>` holds the only copies of the source, and the last
-    assertion is what keeps them unreachable: bronze is the only coordinate this
-    task qualifies at all."""
+    assertion is what keeps them unreachable -- bronze (the existence check) and
+    staging (the month stamp that is half the delete boundary) are the only
+    coordinates this task qualifies, and the quarantine it now reads is qualified
+    off the same spec inside `file_accounts_sql` rather than named here."""
     main = main_of("reclaim_landing")
     scope = locals_of(main, "reclaim_landing")
     _resolved_spec(main, scope, "reclaim_landing")
-    proof = sole_call(main, "files_of_batch", "reclaim_landing")
-    assert len(proof.args) >= 2, "files_of_batch() no longer takes the table positionally"
-    bound = {
-        "proof": _spec_field(
-            _table_arg(
-                _deref(proof.args[1], scope, "reclaim_landing files_of_batch table"),
-                "reclaim_landing files_of_batch table",
-            ),
-            "reclaim_landing files_of_batch table",
-        ),
-        "deletes_under": _spec_field(
-            sole_call(main, "landing_table", "reclaim_landing").args[0],
-            "reclaim_landing landing_table",
-        ),
-    }
-    assert bound == {"proof": "bronze", "deletes_under": "subdir"}
-    assert _qualified_spec_fields(main, "reclaim_landing") == ["bronze"]
+    proof = sole_call(main, "file_accounts_of_batch", "reclaim_landing")
+    assert len(proof.args) >= 2, (
+        "file_accounts_of_batch() no longer takes the spec positionally"
+    )
+    _whole_spec_arg(proof.args[1], "reclaim_landing file_accounts_of_batch spec")
+    assert _spec_field(
+        sole_call(main, "landing_table", "reclaim_landing").args[0],
+        "reclaim_landing landing_table",
+    ) == "subdir"
+    assert _qualified_spec_fields(main, "reclaim_landing") == ["bronze", "staging"]
 
 
 @pytest.mark.parametrize("script", ["dq_gate_batch", "promote_batch"])

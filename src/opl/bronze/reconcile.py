@@ -76,6 +76,12 @@ proof phrased as "bronze holds rows of this file" would unlink a file bronze doe
 hold every row of. `reclaimable` below is the repaired proof -- every staged row of
 the file is accounted for, in bronze or in quarantine -- and it is a strengthening,
 not a relaxation: it implies the old condition and refuses cases the old one passed.
+
+IT IS NOW THE PROOF ITSELF AND NOT A REPORT OF ONE. When this file shipped, `reclaimable`
+was a column a human could read beside a delete that was still taken on the old
+condition. `RECLAIMABLE_SQL` and `file_accounts_sql` exist so that
+`opl.bronze.retention` executes the same predicate on the delete path: `files_of_batch`
+is gone, and the view and the reclaim can no longer disagree about which file may go.
 """
 from __future__ import annotations
 
@@ -97,6 +103,25 @@ RECONCILED = "reconciled"
 STRANDED_GATED = "stranded_gated"
 STRANDED_UNEXPLAINED = "stranded_unexplained"
 OVER_PROMOTED = "over_promoted"
+
+# `reclaim_landing`'s repaired proof, over the three counts at FILE grain, and the
+# only spelling of it: the file-grain view publishes it and `retention` executes it,
+# so the number a dashboard shows and the predicate a delete is taken on cannot drift.
+#
+# IT IS A STRENGTHENING OF `promoted > 0`, NOT A REPLACEMENT FOR IT, and the
+# implication is the point. `promoted > 0` is the whole of the proof `files_of_batch`
+# used to offer -- bronze holds a row of this file -- and it survives here as the first
+# conjunct, so every file this predicate admits was already admitted by the old one.
+# The second conjunct only ever removes files, never adds one: the delete set is a
+# SUBSET of what shipped before, which is the direction a retention control is allowed
+# to move in. What it removes is exactly the case a repromote creates -- clean rows in
+# bronze, rejected rows only in quarantine, and possibly rows in neither -- where the
+# old proof read "bronze holds a row of this file" as "bronze holds every row of it".
+#
+# The `promoted > 0` conjunct is NOT redundant beside the equation: a file whose rows
+# are ALL rejected satisfies `promoted + quarantined = staged` with `promoted = 0`, and
+# nothing of it is in the system of record. The quarantine is not persistence.
+RECLAIMABLE_SQL = "promoted > 0 AND promoted + quarantined = staged"
 
 # First-match-wins, like `dq._reject_reason` and for the same reason -- the arms are
 # not disjoint and the order is what decides. `over_promoted` FIRST because it is the
@@ -145,31 +170,59 @@ def remedy_sql() -> str:
     )
 
 
-def _counts_sql(spec: BronzeTable, grain: tuple[str, ...], config: OplConfig) -> str:
+def _counts_sql(
+    spec: BronzeTable,
+    grain: tuple[str, ...],
+    config: OplConfig,
+    *,
+    where: str = "",
+    skip: tuple[str, ...] = (),
+) -> str:
     """One table's three counts, at the given grain, as a UNION ALL rather than a join.
 
     A three-way outer join would have to coalesce the key from whichever side is
     present; this shape has no key to coalesce and includes a batch that exists in any
     of the three tables -- including one that exists ONLY in bronze, which is what makes
-    `over_promoted` observable rather than merely declared."""
+    `over_promoted` observable rather than merely declared.
+
+    `skip` OMITS A LEG WHOSE TABLE DOES NOT EXIST, and every omission is fail-closed by
+    construction rather than by a branch that has to remember to be: dropping staging
+    leaves `staged = 0`, dropping bronze leaves `promoted = 0`, and `RECLAIMABLE_SQL`
+    refuses both. Dropping quarantine leaves `quarantined = 0`, which is the true answer
+    for a table no reject has ever reached -- and if a quarantine that HELD rows is
+    dropped instead, the same 0 makes the batch fail to reconcile and the files are
+    refused. The view builders never pass it (all 21 objects exist, and a missing one
+    must fail the deploy loudly); `retention` does, because a reclaim must decide from
+    whatever exists rather than raise an AnalysisException over a table that never had
+    a reason to be created."""
     keys = ", ".join(grain)
+    clause = f"WHERE {where} " if where else ""
     return "\n  UNION ALL ".join(
-        f"SELECT {keys}, {this} FROM {config.table(table)} GROUP BY {keys}"
-        for table, this in (
-            (spec.staging, "COUNT(*) AS staged, 0 AS promoted, 0 AS quarantined"),
-            (spec.bronze, "0 AS staged, COUNT(*) AS promoted, 0 AS quarantined"),
-            (spec.quarantine, "0 AS staged, 0 AS promoted, COUNT(*) AS quarantined"),
+        f"SELECT {keys}, {this} FROM {config.table(table)} {clause}GROUP BY {keys}"
+        for role, table, this in (
+            ("staging", spec.staging, "COUNT(*) AS staged, 0 AS promoted, 0 AS quarantined"),
+            ("bronze", spec.bronze, "0 AS staged, COUNT(*) AS promoted, 0 AS quarantined"),
+            ("quarantine", spec.quarantine, "0 AS staged, 0 AS promoted, COUNT(*) AS quarantined"),
         )
+        if role not in skip
     )
 
 
-def _source_sql(spec: BronzeTable, grain: tuple[str, ...], config: OplConfig) -> str:
+def _source_sql(
+    spec: BronzeTable,
+    grain: tuple[str, ...],
+    config: OplConfig,
+    *,
+    where: str = "",
+    skip: tuple[str, ...] = (),
+) -> str:
     """One table's row of the union, summed to the grain and named."""
     keys = ", ".join(grain)
     return (
         f"SELECT '{spec.name}' AS source, {keys}, "
         "SUM(staged) AS staged, SUM(promoted) AS promoted, SUM(quarantined) AS quarantined\n"
-        f"FROM (\n  {_counts_sql(spec, grain, config)}\n) GROUP BY {keys}"
+        f"FROM (\n  {_counts_sql(spec, grain, config, where=where, skip=skip)}\n)"
+        f" GROUP BY {keys}"
     )
 
 
@@ -196,11 +249,10 @@ def batch_grain_sql(config: OplConfig = DEFAULT) -> str:
 def file_grain_sql(config: OplConfig = DEFAULT) -> str:
     """The same arithmetic one grain down, and `reclaim_landing`'s repaired proof.
 
-    `reclaimable` is what `retention.files_of_batch` should be asking: not "does bronze
-    hold a row of this file" but "is every row this file staged accounted for". The
-    `promoted > 0` conjunct keeps the old precondition -- a file whose rows are ALL in
-    quarantine has nothing persisted in the system of record and must not be unlinked
-    on the strength of the quarantine alone."""
+    `reclaimable` is what the reclaim's proof asks -- not "does bronze hold a row of
+    this file" but "is every row this file staged accounted for" -- and it is
+    `RECLAIMABLE_SQL`, the same string `retention.file_accounts_of_batch` runs, so what
+    this view reports and what a delete is taken on are one predicate."""
     grain = (BATCH_COLUMN, SOURCE_FILE_COLUMN)
     counted = "\n  UNION ALL\n  ".join(
         _source_sql(spec, grain, config) for spec in REGISTRY.values()
@@ -210,8 +262,37 @@ def file_grain_sql(config: OplConfig = DEFAULT) -> str:
         f"SELECT source, {BATCH_COLUMN} AS batch_id, {SOURCE_FILE_COLUMN} AS source_file,\n"
         "  staged, promoted, quarantined,\n"
         "  staged - promoted - quarantined AS unaccounted,\n"
-        "  (promoted > 0 AND promoted + quarantined = staged) AS reclaimable\n"
+        f"  ({RECLAIMABLE_SQL}) AS reclaimable\n"
         "FROM counted"
+    )
+
+
+def file_accounts_sql(
+    spec: BronzeTable, config: OplConfig = DEFAULT, *, skip: tuple[str, ...] = ()
+) -> str:
+    """ONE table's file-grain accounts for ONE batch, as parameterised SQL.
+
+    The same three counts, the same grain and the same `RECLAIMABLE_SQL` the file-grain
+    view publishes -- narrowed to a single spec and a single batch because a reclaim
+    reads this on the delete path, and the view's `GROUP BY` over 21 objects and 144M
+    rows is not what a job task should scan to decide about twenty files.
+
+    `:batch_id` IS A NAMED PARAMETER MARKER, not an interpolation. The batch id reaches
+    this from a job parameter an operator typed, and it is the one value in the query
+    that is not derived from the registry; `require_batch_id` refuses a blank and the
+    sentinel and says nothing about quoting. `spark.sql(..., args={...})` binds it as a
+    literal, so there is no spelling of it that can end the string early.
+
+    A CALLER THAT KNOWS A TABLE IS ABSENT PASSES IT IN `skip` -- see `_counts_sql` for
+    why every omission fails closed."""
+    grain = (BATCH_COLUMN, SOURCE_FILE_COLUMN)
+    counted = _source_sql(
+        spec, grain, config, where=f"{BATCH_COLUMN} = :batch_id", skip=skip
+    )
+    return (
+        f"SELECT {SOURCE_FILE_COLUMN} AS source_file, staged, promoted, quarantined,\n"
+        f"  ({RECLAIMABLE_SQL}) AS reclaimable\n"
+        f"FROM (\n{counted}\n)"
     )
 
 

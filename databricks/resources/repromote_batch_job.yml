@@ -17,11 +17,15 @@
 # own reader had manufactured, not dirty source data (ADR 0005; the reader now
 # sets multiLine=true).
 #
-# This job re-runs the promote step alone against an explicitly named batch,
-# for use AFTER a human has read the quarantine table and accepted the
-# rejects. It is not a gate bypass: promote_batch re-applies the same DQ rules
-# and appends only the rows that pass, so rejected rows stay out of bronze and
-# remain in quarantine.
+# This job re-runs the promote step against an explicitly named batch, for use
+# AFTER a human has read the quarantine table and accepted the rejects. It is not
+# a gate bypass: promote_batch re-applies the same DQ rules and appends only the
+# rows that pass, so rejected rows stay out of bronze and remain in quarantine.
+#
+# AND THEN IT RECLAIMS, since F4. "The promote step alone" is what this comment
+# said and what ADR 0006 called the defect: the in-flow path reclaims its landing
+# files after the promote and this path did not, so a gate that fires every month
+# left the reclaim unreachable for the life of the project. See the third task.
 #
 # HOW AN OPERATOR RUNS IT, now that promote_batch takes the table first and the
 # run must name the revision it expects to be running (ADR 0009):
@@ -99,6 +103,52 @@ resources:
           spark_python_task:
             python_file: ../src/promote_batch.py
             parameters: ["{{job.parameters.table}}", "{{job.parameters.batch_id}}"]
+
+        # THE CONTROL ADR 0006 FOUND MISSING, AND THIS TASK IS F4's HEADLINE.
+        #
+        # `reclaim_landing` has never deleted a byte through a wired path: it
+        # depends on `promote`, `promote` depends on `check_bad_rows outcome:
+        # "true"`, and a batch with ONE reject never reaches it -- while THIS job,
+        # the one that actually promotes a gated batch, had no reclaim task at all.
+        # empresas and socios reject persistent source dirt every month, so a gate
+        # that always fires silently disabled a different control for the life of
+        # the project. Residue as this task shipped: 8,212,278,423 B of 2026-06
+        # CSVs, deliberately left in the Volume so the debt stayed visible, against
+        # a ~48 GB/month floor and no published quota.
+        #
+        # ADR 0006 named the fix and the reason it is safe: "`reclaim_landing` is
+        # already guarded independently of the gate ... its real precondition is
+        # 'these rows are persisted', and `repromote_triaged_batch` satisfies that
+        # at exactly the point the in-flow promote does. Wiring it there restores
+        # the control on both paths without loosening the gate on either."
+        #
+        # DEPENDS ON `promote`, exactly as the four ingestion jobs do, and that is
+        # what carries the precondition. Note what the dependency is worth for the
+        # batch this task was written for: an already-promoted batch does not
+        # re-append, it returns ALREADY_PROMOTED from `plan_promotion` (bronze_rows
+        # == staged_promotable) and exits 0 -- so the reclaim runs. A promote that
+        # REFUSES raises, and this task never starts.
+        #
+        # NO MONTH PARAMETER, deliberately, where the ingestion jobs pass one. In a
+        # repromote nobody has the ingest run's month in hand -- the reconciliation
+        # view's remedy names a table and a batch id -- and a month retyped from
+        # memory is the one wrong value whose failure mode is a GREEN run that
+        # refuses every file and frees nothing. `reclaim_landing` derives it from
+        # `_snapshot_month`, which the ingest stamped from its own validated month
+        # parameter; see `resolve_month` there.
+        #
+        # `--any-table` says this job serves EVERY registered table, so one whose
+        # files have no zip in the Volume (payments, ptax, merchant, lookup) is a
+        # green no-op that prints why, not a red run on a repromote that worked.
+        # It loosens no delete: those tables reclaim nothing either way.
+        - task_key: reclaim_landing
+          depends_on: [{ task_key: promote }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/reclaim_landing.py
+            parameters:
+              ["{{job.parameters.table}}", "{{job.parameters.batch_id}}", "--any-table"]
 
       environments:
         - environment_key: opl_env
