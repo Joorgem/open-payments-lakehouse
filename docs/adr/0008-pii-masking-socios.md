@@ -117,6 +117,32 @@ Delta refuses a mistyped column rather than casting it.
 
 ### Fail-closed, and why that is the right direction
 
+> **MEASURED 2026-08-18, during F4's measurement pass: THE PERMISSIVE HALF CANNOT BE OPENED AS
+> WRITTEN, and this is stronger than "untested".** `is_account_group_member` resolves **account**
+> groups only. Measured on this workspace: a workspace-local group was created, the user was
+> added to it via SCIM, and `is_account_group_member('<that group>')` returned **false** while
+> `is_member('<that group>')` returned **true**. Of the account-level groups, exactly one
+> resolves — `account users`, i.e. everyone — and `databricks account groups list` returns
+> `Error: Not Found`, because the workspace host is not an account host and account SCIM is not
+> reachable with this token.
+>
+> **So `opl_pii_readers` cannot be created in a form that satisfies this predicate from this
+> box.** `src/opl/bronze/masking.py:173`'s *"it becomes correct the moment `opl_pii_readers`
+> exists"* names a moment that cannot arrive here.
+>
+> **THE FAIL-CLOSED ARGUMENT BELOW IS UNAFFECTED AND IS WHY THIS IS A CORRECTION AND NOT A
+> RETRACTION** — the mask hides, always, and has hidden 55,827,243 rows. What is wrong is the
+> claim that the control is merely dormant. **The repair is F4's decision** — switch the
+> predicate to `is_member`, which was measured working, or state that the control is
+> permanently closed here — and it is deliberately not taken in this note, because measuring a
+> fact and choosing a fix are different acts and this project separates them.
+>
+> **AND THE REVEALING HALF IS NOW MEASURED ANYWAY**, by a route this ADR did not contemplate: a
+> **service principal** with an OAuth secret, which Free Edition does allow. Two principals read
+> the same column of the same table at the same moment — one got cleartext, the other `***`.
+> The sentence below about the permissive branch being untested by construction was true when
+> written and is no longer.
+
 `is_account_group_member` returns **false** for a group that does not exist. So in
 a workspace where `opl_pii_readers` was never created — which is the current state
 of this one — *every* reader sees `***`, including the table owner's own queries.

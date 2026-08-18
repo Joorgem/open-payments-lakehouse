@@ -169,11 +169,33 @@ Task durations, **reported**: generate 27 s, ingest 31 s, gate 24 s, promote 33 
 35 s. **Under a minute per task at 10,000 events.**
 
 **Cost was NOT measured** — these are durations and stored bytes, not compute or storage
-price, and Free Edition exposes no billing figure this project has ever read. The earlier
+price, and ~~Free Edition exposes no billing figure this project has ever read~~. The earlier
 wording called this source "free" against the vault's 33.13 GB and ~7.7 h, which is a price
 claim drawn from a duration; review of PR #16 was right to refuse it. What can be said is
 narrower and still useful: **three orders of magnitude less data and two fewer of wall
-clock than the vault**. That is the argument for 10,000 events rather than 50,000: generation
+clock than the vault**.
+
+> **THE STRUCK CLAUSE WAS FALSE WHEN IT WAS WRITTEN, AND THE DISPROOF WAS ALREADY IN THIS
+> FOLDER.** Corrected 2026-08-18, during F4's measurement pass. Free Edition **does** expose
+> billing figures and this project **had already read them**:
+> `docs/f1.4b-pr-b-run-evidence.md` quotes `ESTIMATED_DBU` values off
+> `system.billing.usage` and `system.storage.predictive_optimization_operations_history`,
+> measured **2026-07-30** — before this document was written.
+>
+> Re-measured now: `system.billing.usage` holds **1,329 rows** over 2026-07-23 → 2026-08-18,
+> with `PREMIUM_JOBS_SERVERLESS_COMPUTE` **93.4172 DBU**, `PREMIUM_SERVERLESS_SQL_COMPUTE`
+> **78.2649 DBU** and `PREMIUM_DATABRICKS_STORAGE` **95.5245 DSU**.
+>
+> **The sentence around it survives and is why this is a correction rather than a retraction:**
+> cost was not measured *for this phase*, and refusing to draw a price claim from a duration
+> was right — PR #16's review was right to refuse it. What was wrong was the reason given, and
+> it was wrong in the direction that closes an avenue: it said the figure could not be had.
+>
+> **This is the species F-DB's Task 0 was explicitly warned about** — *"F-API published a
+> 'first' that was false with the disproof eleven days old in the same folder. Do not inherit a
+> first."* Same shape, one document over, and it stood for six days because nobody grepped a
+> sibling evidence file before asserting a capability was absent. **A claim that something
+> cannot be measured is itself a measurement, and it needs the same evidence as any other.** That is the argument for 10,000 events rather than 50,000: generation
 is pure driver-side Python, measured at 50 s per profile at 50,000, and 10,000 at a 5 s
 interval preserves the same 13.9-hour span and thirteen one-hour windows that make lateness
 mean something.
