@@ -310,8 +310,11 @@ def test_the_day_does_not_move_with_the_SESSION_TIMEZONE(spark):
     it: every assertion above is a positive case or a malformed shape, and all of them pass
     just as happily over an implementation that casts through a timestamp.
 
-    `ref_date_from_instant` reads the first ten ISO CHARACTERS and hands them to `to_date`,
-    never casting to `timestamp`, so `spark.sql.session.timeZone` cannot reach it. The
+    `ref_date_from_instant` reads the first ten ISO CHARACTERS and parses THOSE, never the
+    instant's time-of-day or its `Z`, so `spark.sql.session.timeZone` cannot reach it. It
+    does go through `try_to_timestamp(...).cast("date")` -- see snapshot.py for why that
+    and not `to_date` -- but the parse and the narrowing use the SAME session zone and
+    therefore cancel; this test is what says so rather than the reasoning. The
     established bar for saying so is `tests/gold/test_conformed.py`'s
     `day_of` test: set a hostile zone, and pin BOTH the right answer and the wrong one a
     naive cast produces -- because a test that only pinned the right answer would pass on a
@@ -353,8 +356,47 @@ def test_an_impossible_day_inside_a_well_formed_instant_is_null(spark):
     """The gap `snapshot_axis._is_instant` deliberately leaves open, closed HERE.
 
     That predicate checks the SHAPE and not the calendar -- it runs on a job parameter
-    before Spark exists, and `2026-02-31T00:00:00.000000Z` passes it. Here the slice goes
-    through `to_date`, which returns NULL for a day that does not exist, so the impossible
-    day that reaches bronze is rejected rather than stamped."""
+    before Spark exists, and `2026-02-31T00:00:00.000000Z` passes it. Here the slice is
+    parsed by `try_to_timestamp`, which returns NULL for a day that does not exist, so the
+    impossible day that reaches bronze is rejected rather than stamped."""
     assert _is_instant("2026-02-31T00:00:00.000000Z")
     assert _from_instant(spark, "2026-02-31T00:00:00.000000Z") is None
+
+
+def test_an_impossible_day_is_null_under_ANSI_MODE_TOO_and_does_not_RAISE(spark):
+    """THE ANSWER IS THE SAME UNDER BOTH `spark.sql.ansi.enabled` SETTINGS, which is the
+    actual claim the rejection design rests on.
+
+    `ref_date_from_instant` promises an impossible day reaches `rules._unprovable_ref_date`
+    and is refused as ONE ROW by the DQ gate. That promise is only worth something if the
+    expression returns NULL rather than throwing: a raise kills the whole ingest over a
+    single bad row, which is the opposite of the designed behaviour.
+
+    It used to call `to_date`, and under ANSI mode `to_date` RAISES rather than returning
+    NULL. Measured on pyspark 3.5.9 while writing this -- `ansi=true` + `to_date` over
+    `2026-02-31` throws from `collectToPython`, `ansi=false` returns NULL. So the guarantee
+    held only under local Spark's default, and nothing in this repository set the flag
+    either way, which is why nothing caught it. The repair is `try_to_timestamp`, which
+    returns NULL under both.
+
+    PINNED UNDER BOTH RATHER THAN JUST THE HOSTILE ONE, deliberately: an ANSI-only
+    assertion would pass over an implementation that had merely swapped one setting's
+    behaviour for the other's. The claim is that the setting does not matter, so both
+    halves are asserted, and the good path is asserted under ANSI too -- a change that
+    NULLed everything would otherwise hide behind the impossible-day assertion.
+
+    ANSI is a CLUSTER setting, not ours, exactly like `spark.sql.legacy.timeParserPolicy`
+    above; restored in a `finally` because the session is shared across this module."""
+    impossible = "2026-02-31T00:00:00.000000Z"
+    previous = spark.conf.get("spark.sql.ansi.enabled", "false")
+    try:
+        for ansi in ("true", "false"):
+            spark.conf.set("spark.sql.ansi.enabled", ansi)
+            assert _from_instant(spark, impossible) is None, (
+                f"an impossible day did not go NULL under spark.sql.ansi.enabled={ansi}"
+            )
+            assert _from_instant(spark, "2026-08-16T23:13:13.521147Z") == dt.date(
+                2026, 8, 16
+            ), f"the good path stopped parsing under spark.sql.ansi.enabled={ansi}"
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)

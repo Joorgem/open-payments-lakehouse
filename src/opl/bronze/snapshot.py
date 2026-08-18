@@ -167,9 +167,20 @@ def token_month_column(source_file: Column) -> Column:
 #
 # AND IT CLOSES A GAP `_is_instant` DELIBERATELY LEAVES OPEN. That predicate checks the
 # SHAPE and not the calendar -- it runs on a job parameter before Spark exists, and
-# `2026-02-31T00:00:00.000000Z` passes it. Here the slice goes through `to_date`, which
-# returns NULL for a day that does not exist, so the impossible day that reaches bronze is
-# rejected rather than stamped.
+# `2026-02-31T00:00:00.000000Z` passes it. Here the slice goes through
+# `try_to_timestamp`, which returns NULL for a day that does not exist, so the impossible
+# day that reaches bronze is rejected as ONE ROW by the DQ gate rather than stamped.
+#
+# WHY `try_to_timestamp` AND NOT `to_date`, WHICH IS WHAT THIS USED TO CALL. Under
+# `spark.sql.ansi.enabled=true` `to_date` RAISES on an unparseable date instead of
+# returning NULL -- measured on pyspark 3.5.9, not assumed -- so the sentence above was
+# true only under one engine setting, and the ingest would have died on a single bad row
+# instead of handing it to `rules._unprovable_ref_date`. `try_to_timestamp` returns NULL
+# under BOTH settings, which is why the repair is the function and not a config
+# assertion: what serverless defaults to today is not a thing this guarantee should
+# depend on. The `.cast("date")` is a timestamp->date narrowing, unaffected by ANSI, and
+# it does NOT reintroduce the session-timezone hazard below -- parse and cast use the
+# same session zone, so they cancel (pinned by the hostile-zone test).
 
 
 def ref_date_from_instant(instant: Column) -> Column:
@@ -184,7 +195,9 @@ def ref_date_from_instant(instant: Column) -> Column:
     Without the width here, the gate and the predicate the job's window PARAMETER is
     validated by would give two answers about one string."""
     well_formed = instant.rlike(INSTANT_PATTERN) & (F.length(instant) == INSTANT_WIDTH)
-    day = F.to_date(F.substring(instant, 1, _INSTANT_DATE_WIDTH), _ISO_DATE_FORMAT)
+    day = F.try_to_timestamp(
+        F.substring(instant, 1, _INSTANT_DATE_WIDTH), F.lit(_ISO_DATE_FORMAT)
+    ).cast("date")
     return F.when(well_formed, day)
 
 
