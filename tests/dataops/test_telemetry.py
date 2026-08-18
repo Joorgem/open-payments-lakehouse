@@ -72,9 +72,12 @@ _TIMELINE = (
     ("r_flip", "j1", "jr5", "promote", "18:25:00", "18:30:00", "FAILED", 1, 600, 0),
     # A job that is no longer in `system.lakeflow.jobs`.
     ("r_orphan", "j_gone", "jr4", "smoke", "19:00:00", "19:00:20", "SUCCEEDED", 1, 20, 0),
-    # CONSTRUCTED. Ends AFTER the newest statement `history` holds, which is the shape of
-    # every task run that finished inside `system.query.history`'s ingestion lag --
-    # measured minutes to tens of minutes, and never zero.
+    # CONSTRUCTED AS A FIXTURE ROW, BUT NO LONGER WITHOUT A COUNTERPART. Ends AFTER the
+    # newest statement `history` holds. Observed live 2026-08-18 22:31:14Z: `create_views`
+    # and `measure_rule_overlap`, ended 22:24:39Z and 22:25:22Z, carried this exact label
+    # in the deployed view, and read `measured` with 4 and 7 statements by 22:35:12Z with
+    # nothing having run. The label is transient by construction -- see the module header's
+    # "A ZERO IN `not_yet_attributed`" for why a zero in it is not evidence.
     ("r_recent", "j1", "jr6", "create_views", "19:59:00", "20:00:00", "SUCCEEDED", 1, 41, 0),
     # CONSTRUCTED as a fixture row, but the CASE is live: 10 task runs in this workspace
     # already end before `system.query.history`'s oldest row.
@@ -210,7 +213,14 @@ def test_a_run_the_statement_record_has_not_reached_yet_is_not_a_run_that_issued
     that finished inside that window carries no attribution YET and acquires one with
     nothing having run -- which already happened to this view's own `create_views` example.
     `ds_task_runs` is `ORDER BY started_at DESC LIMIT 200`, so those rows are the ones a
-    reader sees FIRST."""
+    reader sees FIRST.
+
+    AND IT HAS SINCE BEEN WATCHED HAPPEN END TO END on the deployed view: 2026-08-18
+    22:31:14Z two task runs held this label with `statements` NULL, and 22:35:12Z the same
+    two read `measured` with 4 and 7 statements. What this fixture asserts is that arm; the
+    module header records why a ZERO in it is not the negation -- its reachability depends
+    on which of the two system tables' watermarks is ahead, and both orders were measured
+    four minutes apart."""
     rows = _by_run(probe)
     assert rows["r_recent"]["sql_telemetry"] == NOT_YET_ATTRIBUTED
     assert rows["r_recent"]["statements"] is None

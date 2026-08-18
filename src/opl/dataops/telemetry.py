@@ -79,7 +79,9 @@ SQL" -- the failure the whole column was added to prevent, one level further out
                               conservative in the right direction: `ended_at > watermark`
                               proves the record cannot yet cover the run, while
                               `ended_at <= watermark` only makes coverage likely, since
-                              ingestion is not strictly ordered.
+                              ingestion is not strictly ordered. IT IS LIVE AND IT IS
+                              TRANSIENT, and a ZERO in it is not evidence -- see "A ZERO
+                              IN `not_yet_attributed`", below.
   * `older_than_history`   -- the run ended BEFORE the oldest statement `query.history`
                               holds, so whatever it issued is outside the window the table
                               retains. The retention figures for the two system tables are
@@ -95,11 +97,75 @@ SQL" -- the failure the whole column was added to prevent, one level further out
                               still holds nothing for it. This is the only one of the four
                               that is evidence about the task.
 
+A ZERO IN `not_yet_attributed` IS NOT EVIDENCE THAT NO RUN WAS TOO RECENT. The arm's
+reachability is a RACE BETWEEN TWO WATERMARKS, not a property of this workspace: it can
+fire only while the timeline's `MAX(period_end_time)` is AHEAD of `query.history`'s
+`MAX(end_time)`. No row here ends later than the first, so once the second overtakes it,
+nothing can satisfy `ended_at > newest_statement` and the arm reads zero for a structural
+reason rather than an observed one. BOTH ORDERINGS WERE MEASURED ON 2026-08-18, four
+minutes apart, against the deployed view:
+
+  * 22:31:14Z -- the arm HELD TWO ROWS: `create_views` and `measure_rule_overlap` of an
+    `opl-dataops-views` run, ended 22:24:39Z and 22:25:22Z, `statements` NULL. The two
+    watermarks, read 16 s later at 22:31:30Z: timeline 22:25:22Z, statement 21:57:57Z --
+    timeline ahead by 1,645 s.
+  * 22:34:47Z -- statement watermark 22:26:15Z, timeline watermark still 22:25:22Z. The
+    order had REVERSED, and at 22:35:12Z the arm held ZERO: those same two runs now read
+    `measured`, having acquired their statements with nothing having run. That transition
+    is exactly what the label exists to describe, and it took under four minutes.
+
+SO `now - MAX(watermark)` IS NOT A LAG, AND IT IS WHAT MADE THIS ARM LOOK DEAD. The figure
+that suggested so -- a timeline "lagging" 7,455 s against `query.history`'s 1,780 s, four
+times slower, therefore an arm that can never fire -- reproduces here (7,550 s at 22:29:13Z
+and 1,883 s at 22:29:20Z, the same two rows simply aged) and is not measuring ingestion at
+all. `now - MAX(period_end_time)` is time since
+the newest EVENT the table holds: ingestion delay PLUS however long the source has been
+idle. The timeline's source is idle for hours -- no job had run since 20:23:23Z, so almost
+all of those 7,550 s were an empty workspace. `query.history`'s source is never idle here,
+since every statement of every operator session feeds it including the ones taking these
+measurements, so for that table alone the subtraction approximates a lag. Measured the
+other way, on one event: a 22:25:22Z timeline row was ABSENT at 22:29:13Z and PRESENT at
+22:31:14Z, so the timeline carried it within 231-352 s while `query.history` was still
+2,013 s behind at 22:31:30Z. On that evidence the timeline is the FASTER table. Neither
+reading is a bound; both tables ingest in bursts, and one sample of either is one sample.
+
+WHAT NO ARM CAN SAY: THE RUN THIS VIEW CANNOT SEE AT ALL. Every label above is a property
+of a ROW, and a task run the timeline has not ingested has no row to carry one. Measured,
+not hypothetical: the `opl-dataops-views` run above started 22:23:50Z, and at 22:29:13Z the
+timeline's newest event was still 20:23:23Z -- so this view could not have held those runs
+then. It stood at the 274 rows this header's 21:53-21:58Z figures carry, and read 276 at
+22:31:14Z and 277 at 22:34:47Z, with nothing new having run in between. A consumer reading
+at 22:29 saw a complete-looking record missing its three most recent task runs, and no
+value of `sql_telemetry` says so.
+
+THE VIEW ALREADY CARRIES THAT BOUND, WHICH IS WHY NO COLUMN IS ADDED FOR IT. The edge is
+the timeline's own watermark, and `MAX(ended_at)` OVER THIS VIEW IS THAT WATERMARK: the
+view folds the timeline with `MAX(period_end_time)`, so the largest `ended_at` it can
+report is the largest the table holds. Measured 22:34:47Z, the two read the same
+2026-08-18T22:25:22.514Z. The rule is therefore evaluable from the output alone -- THIS
+VIEW KNOWS NOTHING ABOUT A TASK RUN THAT ENDED AFTER ITS OWN `MAX(ended_at)` -- and
+`ds_task_runs` orders by `started_at DESC`, so that value sits at the top of the page.
+
+WHAT IS REFUSED HERE, AND WHY, SINCE ALL THREE ARE OBVIOUS ADDITIONS:
+
+  1. A per-row `timeline_watermark`: 277 copies of a number recoverable from the rows
+     beside it.
+  2. A per-row pair of `query.history` watermarks. This one nearly went the other way,
+     because a Unity Catalog view runs with its OWNER's privileges -- a principal holding
+     `SELECT` on this view cannot generally read `system.query.history` itself, so those
+     two timestamps are NOT recoverable outside the view the way `MAX(ended_at)` is. They
+     are still not published: the CASE already spends both of them on every row, so a
+     reader gains no branch it did not have.
+  3. A `staleness_seconds` or `lag_seconds` on either table. REFUSED HARDEST, for the
+     paragraph above: that subtraction cannot separate a slow ingest from a quiet
+     workspace, and printed as a number it reads as the first. It is the number that
+     produced a two-hour lag out of two hours of nobody running a job.
+
 WHY THE WINDOW AND NOT A COLUMN. The two bounds are constant across every row, so
-publishing them per row is 274 copies of two timestamps; the label is the part a consumer
-branches on. `ds_task_runs` is `ORDER BY started_at DESC LIMIT 200`, so the rows a reader
-looks at FIRST are exactly the ones most exposed to the lag -- which is the whole reason
-this cannot stay a footnote in a docstring.
+publishing them per row is a copy of the same two timestamps on every one; the label is the
+part a consumer branches on. `ds_task_runs` is `ORDER BY started_at DESC LIMIT 200`, so the
+rows a reader looks at FIRST are exactly the ones most exposed to the lag -- which is the
+whole reason this cannot stay a footnote in a docstring.
 
 ONE ROW PER ATTEMPT, NOT PER TASK, AND `attempt` IS HOW A CONSUMER SEES IT. `max_retries:
 0` does not prevent a retry: 24 (job run, task key) pairs in this workspace hold two
@@ -303,6 +369,13 @@ def _sql_telemetry_case() -> str:
     BEFORE the bare `NO_SQL_ATTRIBUTED` else -- reversing that would let a run the record
     cannot reach be reported as a run the record reached and found empty, which is the
     exact substitution `sql_telemetry` exists to refuse.
+
+    THE `NOT_YET_ATTRIBUTED` ARM IS REACHABLE ONLY WHILE THE TIMELINE'S WATERMARK IS AHEAD
+    OF `w.newest_statement`, because no `t.ended_at` exceeds the former. Both orderings
+    were measured four minutes apart on 2026-08-18 and the arm went two rows to zero
+    across them, so a zero here dates faster than a reader will assume -- see the header's
+    "A ZERO IN `not_yet_attributed`". The arm is kept for the ordering it does not
+    currently hold, which is the direction in which being wrong is safe.
 
     `newest_statement IS NULL` (an empty or unreadable `query.history`) folds into
     `NOT_YET_ATTRIBUTED` rather than into the ELSE. With no statement recorded anywhere,
