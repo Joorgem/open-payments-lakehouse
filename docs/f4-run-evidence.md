@@ -776,6 +776,63 @@ every other number preserved. The module docstring had already conceded that the
 *"disagree the moment a run reports two terminal states"* — and the one tuple that would prove it was
 never added. Closed in the correction pass.
 
+#### The run, and the acceptance case the plan named
+
+**Job run `618271424244463`, SUCCESS**, wheel sha256
+`7cb59d8f479c41553bd227aa76b81253f42ef39b2863c84a15346f00dbb40460`, stamped revision `5f7a5b0`,
+verified by downloading the artefact. **Four views created** (`create_dataops_views: 4 views in
+workspace.default`), and the Lakeview dashboard deployed **ACTIVE** as
+`01f19b5350fa1b689ba796f3d221d7ef`.
+
+**`dataops_freshness`, read back through the view. The acceptance case the plan demanded holds:**
+
+| source | last_snapshot_month | source_age_days | cadence_kind | status |
+|---|---|---|---|---|
+| `lookup` | **2026-06** | **66** | `paused` | **`paused_by_decision`** |
+| empresas / estabelecimentos / socios | 2026-07 | 38 | `declared` (45) | `within_cadence` |
+| merchant | 2026-08 | 0 | `undeclared` | `no_declared_cadence` |
+| payments / ptax | 2026-08 | NULL | `no_source_axis` | `no_source_axis` |
+
+**Lookup is two months behind its siblings and the view says it is a recorded decision, not a
+fault** — carrying the `docs/f1.4b-pr-b-run-evidence.md 25.5` citation in the row. That was the
+plan's stated acceptance: *"a dashboard that does not surface that today has not been tested"*, and
+the trap it names — the alert an operator mutes in week one — is what `paused_by_decision` avoids.
+All **three** tiers are visible, not the two the plan first described. And the two tables that
+structurally lack a source date read `no_source_axis` rather than an unexplained NULL.
+
+**`dataops_task_telemetry`: NULL is never rendered as a zero, measured.**
+
+| `sql_telemetry` | runs | rows carrying a metric | rows with NULL |
+|---|---|---|---|
+| `measured` | 145 | **145** | 0 |
+| `no_sql_attributed` | 119 | **0** | 119 |
+| `older_than_history` | **10** | 0 | 10 |
+
+**And the 2× duration trap is closed in the shipped view**: task run `99407495289863` reports
+`execution_seconds = 5633`, not the 11,266 a `SUM` would have produced.
+
+#### A FOURTH VALUE THAT CANNOT FIRE — found by the controller, in code a correction pass added to fix the same species
+
+The correction split `sql_telemetry` into four values, and the fourth — `not_yet_attributed`, for a
+run that ended **after** the newest statement `system.query.history` holds — returns **zero rows**.
+The reason is structural, and one statement settles it. **Controller-verified 2026-08-18:**
+
+| table | lag behind `current_timestamp()` |
+|---|---|
+| `system.lakeflow.job_task_run_timeline` | **7,455 s (~2.07 h)** |
+| `system.query.history` | **1,780 s (~30 min)** |
+
+**The timeline is roughly four times slower.** So by the time a task run is visible in the timeline
+at all, `query.history` has long since ingested its statements, and `run_ended_at > MAX(end_time)`
+cannot hold. **The arm is unreachable while the lags stand in this order** — and a reader seeing zero
+there would conclude that no run is ever too recent to attribute, when the truth is that the value
+cannot be produced.
+
+**That is this phase's second species again, in code written to close an instance of it.** The arm is
+fail-safe and stays; what it needed was to say what is true about itself. Handed back for correction
+with the measurement rather than the opinion — and with the caveat that a lag read once is a sample,
+not a bound.
+
 ### 2.2 The all-matching-rules sweep
 
 **Published 2026-08-18, before any run.** Over all seven contracts and every staging batch, evaluating
