@@ -24,6 +24,14 @@ THE VERSIONS THE MEASUREMENT WAS TAKEN UNDER: java.version 17.0.19 (Unicode 13.0
 `.github/workflows/ci.yml` pins temurin 17, the same table) against CPython 3.12.13 (Unicode
 15.0). All forty gained a case mapping in Unicode 14.0.
 
+HOW THE FORTY SPLIT, DERIVED FROM THE SET BELOW RATHER THAN COUNTED BY EYE: five are in
+the BMP (U+2C5F, U+A7C1, U+A7D1, U+A7D7, U+A7D9) and THIRTY-FIVE are astral, being the
+four ranges below at 11 + 15 + 7 + 2. This module and two others quoted "twenty-nine" --
+one wrong number typed once and then copied twice, which is what happens to an arithmetic
+claim that lives only in prose. It is now asserted in
+`tests/bronze/test_merchant_rules.py::test_the_astral_count_the_docstrings_quote_is_
+DERIVED_from_the_set`, so the next edit to the set moves the number or goes red.
+
 THE THREE EXCLUSIONS INSIDE THE SPAN ARE THE PART THAT CANNOT BE WRITTEN FROM MEMORY.
 U+10597-U+105BC is a 38-character range and three of its members -- U+105A2, U+105B2 and
 U+105BA -- do NOT diverge. Prose that says "the U+10597-U+105BC span" without them names
@@ -45,7 +53,7 @@ def _class_body(code_points: frozenset[int]) -> str:
     """`code_points` as the inside of a regex character class, ranges collapsed.
 
     `\\x{...}` RATHER THAN THE LITERAL CHARACTERS, and that is the whole reason this is
-    built instead of typed. Twenty-nine of the forty are ASTRAL (above U+FFFF): written
+    built instead of typed. THIRTY-FIVE of the forty are ASTRAL (above U+FFFF): written
     literally into a pattern they are a SURROGATE PAIR in the pattern string, and a class
     containing a bare surrogate pair is not a class containing that character. Java's
     `\\x{h...h}` names a code point directly, so the class means the same thing whatever

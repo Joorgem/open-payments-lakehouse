@@ -307,11 +307,15 @@ def test_a_replacement_character_in_the_cnpj_is_SHADOWED_by_the_shape_rule(spark
 # --- T10: the forty characters the two hash spellings disagree about ------------------
 #
 # A BMP member and an ASTRAL one, named by code point and then ASSERTED against the pinned
-# set rather than trusted. The astral half is not decoration: twenty-nine of the forty are
+# set rather than trusted. The astral half is not decoration: THIRTY-FIVE of the forty are
 # above U+FFFF, and a character class written with the literal characters instead of
 # `\x{...}` would contain a surrogate pair rather than the code point -- which is why
 # `opl.unicode_case` derives the class from the set. A test using only U+A7C1 would pass
-# over a pattern that could not see the other twenty-nine.
+# over a pattern that could not see the other thirty-five.
+#
+# This comment said "twenty-nine" in both places, as did `unicode_case` and
+# `rule_predicates` -- one wrong number typed once and copied twice. The test below now
+# derives it, which is the only reason the three readings can be trusted to agree.
 _DIVERGENT_BMP = "ꟁ"
 _DIVERGENT_ASTRAL = "\U00010597"
 
@@ -320,6 +324,32 @@ _DIVERGENT_ASTRAL = "\U00010597"
 # prose in `hashing_spark` named forty-three characters until it was corrected, for exactly
 # this reason.
 _INSIDE_THE_SPAN_BUT_AGREEING = "\U000105a2"
+
+
+def test_the_astral_count_the_docstrings_quote_is_DERIVED_from_the_set():
+    """THE NUMBER, TAKEN FROM THE SET INSTEAD OF FROM A SENTENCE.
+
+    `unicode_case._class_body`, `rule_predicates._case_divergence_check` and the comment
+    above all justify the `\\x{...}` spelling by saying how many of the forty are astral,
+    and all three said TWENTY-NINE. Computed from `UNICODE_VERSION_DIVERGENCE` it is
+    thirty-five: five BMP members and four plane-1 ranges of 11 + 15 + 7 + 2. One wrong
+    number typed once and copied twice, which is what an arithmetic claim does when it
+    lives only in prose -- and this file is where the claim decides a FIXTURE, so a reader
+    checking whether `_DIVERGENT_ASTRAL` is representative was being told the wrong size
+    of the thing it represents.
+
+    NO SPARK: this is arithmetic over a frozenset, so it costs its chunk nothing. It is
+    here rather than beside `unicode_case` because `unicode_case` has no test module of
+    its own and this file already imports the set and already quotes the number."""
+    astral = {point for point in UNICODE_VERSION_DIVERGENCE if point > 0xFFFF}
+
+    assert len(UNICODE_VERSION_DIVERGENCE) == 40, "the pinned set is no longer forty"
+    assert len(astral) == 35, (
+        f"{len(astral)} of the {len(UNICODE_VERSION_DIVERGENCE)} pinned characters are "
+        "astral, and three docstrings say thirty-five. Correct them together or the next "
+        "reader gets the same wrong number from three places at once"
+    )
+    assert len(UNICODE_VERSION_DIVERGENCE) - len(astral) == 5
 
 
 @pytest.mark.parametrize("character", [_DIVERGENT_BMP, _DIVERGENT_ASTRAL])

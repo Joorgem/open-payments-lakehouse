@@ -119,7 +119,7 @@ def _case_divergence_check(contract: str) -> Callable[[], Column]:
     DBR upgrade moves onto Java 21 (Unicode 15) the forty start AGREEING and every vault
     row containing one is silently re-keyed.
 
-    A CLASS BUILT FROM THE PINNED SET rather than a literal beside it: twenty-nine of the
+    A CLASS BUILT FROM THE PINNED SET rather than a literal beside it: thirty-five of the
     forty are astral, and `opl.unicode_case` explains why they are spelled `\\x{...}`. The
     fold is total over the contract for `_encoding_check`'s reason -- derived, so a v2
     column arrives covered -- and it is SHADOWED on the columns an earlier rule already
