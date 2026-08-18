@@ -40,6 +40,12 @@ PROBE_SCHEMA = "probe_f_db"
 # The environment variables libpq turns into startup options with no code change.
 LIBPQ_RENDERING_ENV = ("PGTZ", "PGDATESTYLE", "PGCLIENTENCODING", "PGOPTIONS")
 
+# libpq's keyword/value form lets a VALUE be single-quoted, and lets a backslash escape a
+# quote or a backslash inside one. Either means whitespace is no longer a token boundary,
+# so `str.split()` is parsing something other than the DSN it was handed. `redacted_dsn`
+# refuses both rather than guessing where a value ends.
+_QUOTING_CHARACTERS = ("'", "\\")
+
 
 def dsn() -> str:
     """The DSN, from the environment, with the compose default as the fallback."""
@@ -57,15 +63,25 @@ def redacted_dsn(value: str | None = None) -> str:
     a secret in a source file; a redaction that only works on the throwaway one is the same
     hole with a lid on it.
 
-    Splitting on whitespace is enough for libpq keyword/value form, which is what
-    `DEFAULT_DSN` is and what the compose stack hands out. A URI DSN
-    (`postgresql://user:pw@host/db`) does NOT have this shape, so it is refused rather than
-    passed through half-redacted -- returning a string this function cannot promise it
-    cleaned is the failure it exists to prevent.
+    Splitting on whitespace is enough for UNQUOTED libpq keyword/value form, which is what
+    `DEFAULT_DSN` is and what the compose stack hands out. Two shapes are not that, and
+    both are REFUSED rather than passed through half-redacted -- returning a string this
+    function cannot promise it cleaned is the failure it exists to prevent.
+
+      * A URI DSN (`postgresql://user:pw@host/db`), whose password is not in a token at all.
+      * A QUOTED value, which libpq allows and which may contain whitespace. This one had
+        teeth: `password='a b' host=localhost` splits into `["password='a", "b'", ...]`,
+        only the first token starts with `password=`, and `b'` -- half the password --
+        went to stdout in clear, which is exactly the leak the Task 0 review closed for
+        the other half. A backslash is refused alongside the quote because it is how a
+        quote is escaped inside one, so its presence means the same thing: the token
+        boundaries are not where whitespace is.
     """
     raw = dsn() if value is None else value
     if "://" in raw:
         return f"<URI DSN, not rendered: {DSN_ENV_VAR} is set to a URI>"
+    if any(character in raw for character in _QUOTING_CHARACTERS):
+        return f"<quoted DSN, not rendered: {DSN_ENV_VAR} quotes or escapes a value>"
     return " ".join(
         "password=***" if token.lower().startswith("password=") else token
         for token in raw.split()

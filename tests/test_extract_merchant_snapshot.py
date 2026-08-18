@@ -284,3 +284,46 @@ def test_an_empty_table_is_refused_rather_than_compared():
         extractor._refuse_a_watermark_before_t2(
             _Comparing(verdict=True), _observed(watermark=None), {"t1": _T1, "t2": _T2}
         )
+
+
+# --------------------------------------------------------------------------------
+# The DSN this script prints on its own header line
+# --------------------------------------------------------------------------------
+
+
+def test_a_QUOTED_password_is_refused_rather_than_printed_half_redacted():
+    """THE HALF THE WHITESPACE SPLIT COULD NOT SEE.
+
+    `redacted_dsn` -- which `main` calls to print its header, so its output goes to stdout
+    and from there into an evidence document -- blanked every token starting with
+    `password=`. libpq's keyword/value form lets a value be SINGLE-QUOTED and therefore
+    contain whitespace, and `str.split()` does not know that: `password='a b'` becomes
+    `["password='a", "b'"]`, only the first token is blanked, and `b'` is printed in clear.
+
+    Half a password in an evidence document is a leaked password. The function's own
+    contract is that it never returns a string it cannot promise it cleaned, so this is
+    refused the way the URI form already was, rather than redacted better -- writing a
+    libpq quoting parser here would be a second thing to get wrong, in a probe helper.
+
+    A BACKSLASH IS REFUSED FOR THE SAME REASON and asserted separately: it is how a quote
+    is escaped inside a quoted value, so it says the same thing about token boundaries
+    while containing no quote for the first check to catch.
+
+    The last assertion is the control. Without it this test passes over a `redacted_dsn`
+    that refused every DSN it was ever given, including the compose default the probes
+    actually run on -- a refusal that redacts everything is not a fix, it is a broken
+    header line."""
+    quoted = extractor.redacted_dsn("host=localhost password='a b' dbname=opl")
+    assert "not rendered" in quoted, "a quoted DSN was rendered rather than refused"
+    assert "a b" not in quoted and "b'" not in quoted, (
+        f"part of a quoted password survived redaction: {quoted!r}"
+    )
+
+    escaped = extractor.redacted_dsn("host=localhost password=a\\ b dbname=opl")
+    assert "not rendered" in escaped, "a backslash-escaped DSN was rendered rather than refused"
+
+    plain = extractor.redacted_dsn("host=localhost port=5433 dbname=opl user=opl password=s3cret")
+    assert plain == "host=localhost port=5433 dbname=opl user=opl password=***", (
+        "the control: an ordinary unquoted DSN must still RENDER with its password blanked, "
+        "or the refusal above is just a function that refuses everything"
+    )
