@@ -178,9 +178,19 @@ clock than the vault**.
 > **THE STRUCK CLAUSE WAS FALSE WHEN IT WAS WRITTEN, AND THE DISPROOF WAS ALREADY IN THIS
 > FOLDER.** Corrected 2026-08-18, during F4's measurement pass. Free Edition **does** expose
 > billing figures and this project **had already read them**:
-> `docs/f1.4b-pr-b-run-evidence.md` quotes `ESTIMATED_DBU` values off
+> ~~`docs/f1.4b-pr-b-run-evidence.md` quotes `ESTIMATED_DBU` values off
 > `system.billing.usage` and `system.storage.predictive_optimization_operations_history`,
-> measured **2026-07-30** — before this document was written.
+> measured **2026-07-30**~~ — **the table named there is wrong, corrected the same day before
+> this merged.** `grep -i billing docs/f1.4b-pr-b-run-evidence.md` returns **zero hits**: every
+> `ESTIMATED_DBU` in that document comes from
+> `system.storage.predictive_optimization_operations_history` alone, and **nothing had read
+> `system.billing.usage` before 2026-08-18.** The `2026-07-30` is the PO *operation's*
+> timestamp; that section was committed **2026-08-03**.
+>
+> **The retraction survives on the corrected dates and that is why this is a citation fix
+> rather than a withdrawal:** a DBU figure was read and published on **2026-08-03**, and the
+> sentence claiming none had ever been read was written on **2026-08-12**. The disproof still
+> predates the claim by nine days. Caught by the F4 plan's provenance audit.
 >
 > Re-measured now: `system.billing.usage` holds **1,329 rows** over 2026-07-23 → 2026-08-18,
 > with `PREMIUM_JOBS_SERVERLESS_COMPUTE` **93.4172 DBU**, `PREMIUM_SERVERLESS_SQL_COMPUTE`

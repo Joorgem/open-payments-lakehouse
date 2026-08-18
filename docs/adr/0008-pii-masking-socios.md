@@ -137,11 +137,29 @@ Delta refuses a mistyped column rather than casting it.
 > permanently closed here — and it is deliberately not taken in this note, because measuring a
 > fact and choosing a fix are different acts and this project separates them.
 >
-> **AND THE REVEALING HALF IS NOW MEASURED ANYWAY**, by a route this ADR did not contemplate: a
-> **service principal** with an OAuth secret, which Free Edition does allow. Two principals read
-> the same column of the same table at the same moment — one got cleartext, the other `***`.
-> The sentence below about the permissive branch being untested by construction was true when
-> written and is no longer.
+> **A CLAIM PUBLISHED HERE ON 2026-08-18 WAS TOO STRONG AND IS WITHDRAWN THE SAME DAY, BEFORE
+> IT MERGED.** It read: *"the revealing half is now measured anyway … two principals read the
+> same column of the same table at the same moment — one got cleartext, the other `***` … the
+> sentence below about the permissive branch being untested by construction was true when
+> written and is no longer."*
+>
+> **What was actually measured is that A UC column mask can reveal — not that THIS one can.**
+> The experiment ran against a **scratch** mask whose predicate was `is_member(<a scratch
+> group>)`. **The mask installed on `bronze_cnpj_socios` today is still this ADR's**, with
+> `is_account_group_member('opl_pii_readers')` — `information_schema.routines` returns it
+> verbatim, and the owner reads `***` through it right now.
+>
+> **So the withdrawn sentence contradicted the paragraph immediately above it.** That paragraph
+> proves this predicate *cannot* return true here; the sentence claimed its branch had been
+> exercised. Both cannot hold, and the one that holds is the paragraph.
+>
+> **The permissive branch of THIS mask remains untested by construction**, exactly as the
+> section below says. What is new and survives: a service principal with an OAuth secret is
+> available on Free Edition, so a two-principal proof **is buildable** once the predicate is
+> repaired — which is F4's T4, and which must produce a **committed, re-runnable artefact**
+> rather than a session transcript. **The withdrawn claim had none**: no statement id, no
+> timestamp, no SQL, no surviving object. Caught by the F4 plan's provenance audit before this
+> ADR merged.
 
 `is_account_group_member` returns **false** for a group that does not exist. So in
 a workspace where `opl_pii_readers` was never created — which is the current state
