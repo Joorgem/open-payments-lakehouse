@@ -413,7 +413,12 @@ def _announce_readiness(ready: pathlib.Path, t1: object, t2: object) -> None:
     Task 3 reviewer measured it, 53 once this block went in. The controller had just
     corrected Task 2 for reporting cap compliance on a docstring-excluded measure, and
     then broke the same cap in the commit that fixed that review's findings. Neither cap
-    is enforced by any test; only measurement catches this.
+    was enforced by any test at the time, and only measurement caught it -- FOUR wrong cap
+    statements into this phase, `tests/test_size_caps.py` now enforces both by AST against
+    an exact allow-list that fails on a stale entry as well as on a new crossing. This
+    paragraph is kept in the past tense rather than deleted: the reason this function is
+    out here is still the cap, and the sentence that used to end it stopped being true one
+    commit after it was written.
     """
     staged = ready.with_name(f"{ready.name}.{os.getpid()}.tmp")
     staged.write_text(_readiness_text(t1, t2), encoding="utf-8")

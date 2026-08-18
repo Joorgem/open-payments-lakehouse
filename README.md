@@ -65,9 +65,11 @@ before landing, and the Postgres source is a container on a development machine
 behind a home NAT, which no amount of outbound egress reaches. See
 [ADR 0002](docs/adr/0002-two-layer-topology.md).
 
-```
-EXTRACTION & LANDING (off Databricks: local / GitHub Actions — have internet)
+```text
+EXTRACTION & LANDING (off Databricks — the reason is per-source, see above)
   CNPJ WebDAV share --> extractor (resume/retry/checksum) --> local files
+  Postgres  :5433   --> one REPEATABLE READ READ ONLY txn  --> local files
+                        (full snapshot + the instant that read it)
                                                                   |
                                        upload via Databricks SDK (PAT)
                                                                   v
@@ -75,6 +77,11 @@ EXTRACTION & LANDING (off Databricks: local / GitHub Actions — have internet)
                                                                   |
 TRANSFORMATION (Databricks Free Edition: serverless, UC, Jobs)   v
   Bronze (Auto Loader) --> Silver (Data Vault 2.0) --> Gold (Kimball star)
+
+AND ONE SOURCE DOES NOT PASS THROUGH THIS DIAGRAM AT ALL:
+  BCB/Olinda PTAX --> fetched BY A SERVERLESS JOB TASK, in production
+                      (60 HTTPS requests, 52 s) -- which is the measurement
+                      that falsified this section's own former premise
 ```
 
 ## Run locally

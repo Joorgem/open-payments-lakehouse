@@ -169,7 +169,7 @@ because `src/opl/generator/cnpj_pool.py:20-21` deliberately imports no pyspark a
 Extracted once with the generator's own query, statement
 **`01f1986b-c653-17e7-8c1d-807a684b8f45`**, `from_cache: None`:
 
-```
+```sql
 SELECT cnpj_basico FROM workspace.default.hub_empresa
 ORDER BY sha2(concat(cnpj_basico, '20260812'), 256) LIMIT 1024
 ```
@@ -202,7 +202,7 @@ module with no `main()`, and this document first said all three did.)* **Postgre
 The persistence matrix sits behind `--persistence` because it runs `down -v`: an unguarded
 default would delete Task 3's seed. The probe also **broke this repository's own 800-line
 ceiling at 1,032 lines** — the largest **Python** file in the tree, though not the largest file: three evidence
-documents and `scripts/merchant_cnpj_pool.txt`, committed three commits earlier on this same
+documents and `scripts/merchant_cnpj_pool.txt`, committed four commits earlier on this same
 branch at 1,046 lines, were already bigger — in the artefact whose entire argument
 is measuring rather than assuming, and was split on seams already visible in its own output.
 
@@ -599,7 +599,8 @@ ingest, across 29 files and 3,928 insertions.
 | Spark surface (`test_merchant_rules.py`, `test_snapshot.py`) | **113 passed in 278.29 s** |
 | collection | **2,342 / 2,365, 23 deselected** |
 
-**371 tests green, and that is execution rather than review.** ~~No independent pass has read
+~~**371 tests green**~~ **407 tests green (294 + 113 — see the correction below), and that is
+execution rather than review.** ~~No independent pass has read
 this task~~ — **superseded 2026-08-17: four did**, one lens each (buildability, provenance,
 data modelling, PostgreSQL), and §2.4 is what they found.
 
@@ -607,8 +608,19 @@ data modelling, PostgreSQL), and §2.4 is what they found.
 > eleven files this task touched outside the two Spark-backed ones collect **294**, and
 > **294 − 36 = 258** where 36 is `tests/test_job_yaml_wiring.py`, which the enumeration names
 > and the number does not include. All 294 pass, in **6.02 s** — so the correction moves the
-> figure *up* and nothing under it changes. It is the same shape as this document's other two
+> figure *up*. It is the same shape as this document's other two
 > arithmetic defects: a number right about one population printed as the answer about another.
+>
+> > **AND "nothing under it changes" WAS FALSE — THE RETRACTION DID NOT REACH ITS OWN TOTAL.**
+> > Found by the whole-branch docs review. **`371` is `258 + 113`**, so the total is
+> > arithmetically downstream of the very number retracted immediately above it, and the
+> > correction left it standing three lines earlier. **The figure is 294 + 113 = 407.**
+> >
+> > **This is the fifth wrong number this document has published about its author's own work**,
+> > and it is the species this repository names most often: *a retraction is closed by following
+> > the numbers it invalidates, not by the paragraph announcing it.* The clause "nothing under it
+> > changes" is exactly the kind of reassurance that stops the next reader checking — which is
+> > why it is struck here rather than quietly deleted.
 
 **ONE CAP REGRESSION EXISTED AND IT WAS THE CONTROLLER'S, NOT TASK 4'S.** Measured across
 `0054df1..HEAD`, exactly one function crossed the 50-line cap during this phase:
@@ -619,7 +631,10 @@ controller broke that cap **in the commit that fixed the review which had caught
 species in Task 2**, and nothing surfaced it until this handoff measurement — because
 **neither the file cap nor the function cap is enforced by any test in this repository.**
 Repaired by lifting the write into `_announce_readiness`, whose docstring now carries the
-reason.
+reason. *(That last clause was true when written and stopped being true two sections later:
+`tests/test_size_caps.py` now enforces both. Left standing because §2.4's durable item is the
+record of it changing, and because the same sentence survived in `seed_merchant_db.py`'s
+docstring until the CodeRabbit fix pass grepped for it — which is the species, again.)*
 
 > **"EXACTLY ONE" WAS FALSE WHEN IT WAS WRITTEN, AND A SECOND CROSSING WAS OVER THE CAP IN
 > THE TREE AT THAT MOMENT.** Found by the Task 4 review, and measured three times
@@ -694,7 +709,7 @@ seed and nothing else — not the mutation script, not a manual `psql`, not a re
 carrying one of the forty reaches `hash_diff`, the Python and Spark digests disagree on real
 data, and **no test goes red**, because the loaders only ever use the Spark spelling.
 
-#### Three rulings whose decision survives and whose stated mechanism does not
+#### Four rulings whose decision survives and whose stated mechanism does not
 
 This is now four times in one phase, and it is worth naming as a pattern rather than counting
 again: **T3's volatility claim** (falsified by Task 0's implementer), **T4's `extra_float_digits`
@@ -750,7 +765,12 @@ whether it is:
   executed `set_config` — so it cannot distinguish "the pin worked" from "the pin never ran and
   the defaults happened to disagree". **That is verbatim the failure T4's ruling rejects revision
   1's test for**, arriving through a different route.
-- **`ref_date_from_instant` never casts, and its test never says so.** The implementation reads
+- **`ref_date_from_instant` never casts, and its test never says so.** *(Point-in-time: as of
+  the CodeRabbit fix pass it DOES go through a cast —
+  `try_to_timestamp(...).cast("date")` — because `to_date` **raises** rather than returning NULL
+  under ANSI mode, which is a setting no test in this repository pinned. The finding below was
+  correct about the code it was written against, and the repair for a different defect changed
+  that code. See §2.7.)* The implementation reads
   the first ten ISO characters, which is the `gold.conformed.day_of` pattern and structurally
   immune to the session timezone. The test asserts the positive case and malformed shapes; it
   does not set a hostile zone and pin **both** the right answer and the wrong one, which is the
@@ -959,7 +979,7 @@ eight-character root across a change of full `cnpj` (`10000008000199` → `10000
 branch, a check-digit correction, an ordinary `UPDATE` the seeded DDL permits with no
 immutability guard:
 
-```
+```text
 assert [row[IS_ACTIVE] for row in rows] == [True]
 E       assert [True, True, False] == [True]
 E         Left contains 2 more items, first extra item: True
@@ -1151,6 +1171,64 @@ Nine ids, all checked at **00:07Z while the phase was running** and all resolvin
 **The oldest resolved at 2 h 15 m**, which is consistent with §0.1's 8–35 h band and does not
 narrow it.
 
+### 2.7 CodeRabbit's thirteen, triaged against the code rather than taken on its word
+
+**CodeRabbit reported "Review completed" and produced thirteen inline findings.** §A5 treats a
+*rate-limited* bot as **absence**; this was not that. **All thirteen were distinct observations**
+— no two shared a root cause — and each was checked against the source before anything was
+changed, which is the discipline F-API established when the same bot found two real defects that
+two whole-branch reviewers and a consolidation pass had all missed.
+
+**Two were dispositioned without a fix**, and both dispositions are findings in their own right:
+
+- **The snapshot-input gate: FALSE as stated, with a better hazard underneath it.** See §3's
+  entry — an empty landing directory cannot produce the failure described, and the *partial*
+  file can.
+- **`hub_empresa` coverage before the link: ALREADY KNOWN and priced.** `links.py`'s
+  `refuse_unloaded_hubs` docstring says outright that it is an existence test and not
+  referential integrity, and prices the anti-join that would close it at **~2,606 s on every
+  load, forever, for an ordering mistake**. §2.6.5 records that the run checked the coverage
+  separately anyway. A generic reviewer rediscovering a measured decision is not a defect.
+
+**Nine were closed. Three of them turned out to be wider than the finding that surfaced them**,
+and each was widened by grepping for siblings rather than fixing the site that was reported —
+which is the rule this repository wrote after F-API shipped two retractions that never reached
+the code:
+
+| reported | actually |
+|---|---|
+| a stale readiness description in **2** files | **4** — including the test that writes a truncated file, where the false premise was load-bearing |
+| an astral-count arithmetic error in **1** docstring | **3** — one of them justifying a test fixture |
+| a missing guard, "not live today" | **live, and the prescription was wrong** — see below |
+
+**THE MOST CONSEQUENTIAL FIX, and it is a claim that was true only under one engine setting.**
+`ref_date_from_instant`'s docstring promised that an impossible calendar day yields NULL, so the
+DQ gate rejects **one row** rather than the ingest crashing. **Under ANSI mode `to_date` raises
+instead** — measured: `ansi=true` throws on `2026-02-31`, `ansi=false` returns NULL — and
+`grep` for `ansi.enabled` across the tree returned **nothing**, so no test pinned the setting
+either way. The repair is `try_to_timestamp(...).cast("date")`, which returns NULL under **both**,
+and the new test asserts the answer is the same under both rather than asserting one of them.
+**The defect was never the value of Databricks' default; it was a documented safety guarantee
+resting on an engine setting nothing pinned.**
+
+**AND MY OWN PRESCRIPTION WAS REFUSED, CORRECTLY.** I asked for a blanket guard against a
+repeated identity column across two identifying ends. Written that way it **refused
+`link_empresa_estabelecimento`** — a registered, shipped, correct table, whose identity is
+legitimately `('cnpj_basico', 'cnpj_basico', 'cnpj_ordem', 'cnpj_dv')` because the link is
+hierarchical and `hub_estabelecimento`'s business key contains `hub_empresa`'s. The finding's
+"not live today" came from looking at the new link alone. The guard is scoped to where an
+**effectivity satellite** gates the link — the only place the repeat is unsatisfiable — and a
+second test pins the *permission* for the hierarchical case so it cannot quietly tighten later.
+*(My brief also said `build_registry` has three assertions. It has five.)*
+
+**And the `run_suite.sh` chunk was split rather than its cap raised**, on the argument that
+raising a cap so a check passes is how a guard stops guarding — this repository already split
+`vault-estab`/`vault-socios` apart for the same reason. **The split does not achieve compliance
+and the commit says so**: no arrangement of path arguments makes a 785.71 s module finish under
+600 s, so the real repair is a *source* split, booked with its numbers rather than deferred
+silently. The partition was reconciled by collecting node ids: **0 in no chunk, 0 in two
+chunks.**
+
 ## 3. What ships UNEXERCISED
 
 **Standing decision §4.6: a path that ran zero rows through it is not a path that works.**
@@ -1264,6 +1342,12 @@ be inferred**, because a ledger that only grows stops being read:
   comparison it makes was run against the live server, but the race it closes has not been
   run end to end — `mutate --ready-on` and the extractor have not yet been driven in one
   session.
+- **THE ANSI-MODE PATH IS TESTED AND HAS NEVER RUN ON DATABRICKS.** `ref_date_from_instant` now
+  returns NULL for an impossible day under **both** `spark.sql.ansi.enabled` settings, asserted
+  under both — where before the CodeRabbit fix pass it was asserted under neither, because no
+  test in this repository set that flag. **The run of record predates the fix**, so what executed
+  on serverless over 2,192 real rows is the `to_date` form, and every instant it saw was valid.
+  The new guarantee is proven on local Spark and has moved zero rows on Databricks.
 - **`ref_date_from_instant` HAS RUN ON LOCAL SPARK ONLY**, over synthesised instants. No
   Databricks execution, and no run over the 1,088 real rows.
 - **THE INCREMENTAL QUERY'S BOUNDARY WAS EXERCISED AND ITS COMPLEMENT WAS NOT.** Against the
@@ -1347,5 +1431,96 @@ that passed rather than fired has not been exercised either.**
 - **THE NEW CI JOB HAS NOT RUN ON GITHUB, and this is the honest version of a claim that would
   otherwise read as done.** Its **command** is verified locally — `uv run pytest -m postgres` →
   **21 passed, 2,460 deselected, 17.2 s** — and `psycopg[binary]` ships manylinux wheels, so no
-  system libpq is needed. **The service container on port 5433 is unverified.** Until a push
-  exercises it, the claim is *"the command is verified, the job is not."*
+  system libpq is needed. ~~**The service container on port 5433 is unverified.** Until a push
+  exercises it, the claim is *"the command is verified, the job is not."*~~
+
+  > **RETIRED the same night, by the push that opened PR #21.** The `postgres` job **ran on
+  > GitHub and passed**, which is the half that could not be verified from this box: the service
+  > container on 5433 came up and the tests reached it. The entry is struck rather than deleted
+  > because *"the command is verified, the job is not"* was the correct sentence to publish at
+  > the time it was written, and a ledger that quietly erases its own point-in-time entries stops
+  > being readable as a record.
+
+### Added by the CodeRabbit triage — a hazard nobody had recorded
+
+- **A PARTIAL SNAPSHOT READS AS DEPARTURES, AND ONLY THE EXTRACTOR'S OWN PIPELINE GUARDS IT.**
+  CodeRabbit asked for a snapshot-input gate on the argument that an **empty** landing directory
+  would make the vault read absent observations as deleted merchants. **That mechanism does not
+  hold**: an empty directory lands no new `_snapshot_at` at all, so there is no new observation
+  to diff — measured, run `1064752683884456`, *"no new file arrived"*, bronze unchanged at 1,088
+  — and the vault separately **refused** a one-instant window rather than reporting zero closes.
+  **But the adjacent hazard is real and is a better finding than the one asked about.** A
+  *partial* file — not empty, just short — lands fewer rows, and the diff reads every missing one
+  as a hard DELETE that closes a window.
+
+  Three guards stand between the database and the Volume, and **all three belong to
+  `scripts/extract_merchant_snapshot.py`'s own pipeline**: `_refuse_a_truncated_read` reconciles
+  the row count against a `COUNT(*)` taken inside the same transaction; `write_verified` reads
+  the local file back as bytes; `upload_to_volume` compares the remote object's byte count
+  against the local source. **A file placed in the Volume by any other route — a manual
+  `databricks fs cp`, a hand-edited re-upload — has passed through none of them**, and the ingest
+  task performs no independent row-count or manifest check.
+
+  **Recorded rather than fixed, and the reason is the threat model:** this is one operator's own
+  manual write bypassing his own verified extractor, not an adversarial input, and the manifest
+  gate that would close it is the heavy lift CodeRabbit itself labelled it. **The count would
+  not be wrong — the count would be the *lie*.** Every row in a short file is internally
+  consistent; there is nothing for a checksum to catch downstream of the extractor, which is
+  exactly why the guard has to live upstream of the Volume or not at all.
+
+---
+
+## 4. CI, and the walk through protocol §9's six conditions
+
+### 4.1 The first whole-suite verdict for this phase from any process
+
+**PR [#21](https://github.com/Joorgem/open-payments-lakehouse/pull/21), first push, all checks
+green.** Every green result before this one came from test files run one at a time on a Windows
+box, and this project's own rule is to quote CI for *"the suite passes"* — because a single
+local `uv run pytest` paces at **~7 hours** here, measured, and abandoned twice.
+
+**Measured on the FIRST push**, at the revision that opened the PR — before the CodeRabbit fix
+pass added five tests. The figures are labelled with what produced them rather than updated to
+what the branch now holds, because a CI number is a verdict a process emitted at a revision:
+
+| check | result at the opening push | wall |
+|---|---|---|
+| `test` | **2,455 passed, 1 skipped, 26 deselected** | **1,190.94 s (19 m 50 s)** |
+| `postgres` | **21 passed, 2,461 deselected** | 8.01 s |
+| `secret-scan` | pass | 9 s |
+
+**The `postgres` job's count is quoted because "it passed" and "it selected nothing" look
+identical from the outside.** It selected 21 and ran 21 — so the service container on **5433**
+came up and the tests reached a real database. That is the half `docs/f-db-run-evidence.md` §3
+recorded as unverifiable from this box, and it is now retired there.
+
+**Budget for the next phase:** ~20 minutes per CI round trip at 2,455 tests, up from F-API's
+~17 at 2,106 and F3's ~13 at 1,684.
+
+**CodeRabbit reported "Review completed" rather than "Review rate limited"**, and produced a
+walkthrough plus **thirteen inline findings**. §A5 treats a rate-limited bot as **absence**;
+this was not that. Its findings were triaged against the code rather than taken on the bot's
+word — the discipline F-API established when CodeRabbit found two real defects that two
+whole-branch reviewers and a consolidation pass had all missed. **The review of record remains
+the split whole-branch pass**, code and docs as disjoint packages: the code package returned
+**zero blocking** and one defect (an orphaned constant naming two consumers that do not read
+it); the docs package returned **zero blocking** and two, both of them numbers this document
+had published about its own work.
+
+### 4.2 The six conditions
+
+**Protocol §9 says a phase is over when all six hold, and that a controller may not declare it
+otherwise.**
+
+| # | condition | state |
+|---|---|---|
+| 1 | every artefact the phase promised exists, built by its own code | ✅ `bronze_merchant`, `hub_merchant`, `sat_merchant_dados`, `link_merchant_empresa`, `sat_eff_merchant_empresa`, two job YAMLs, ADR 0017 — all built by the code in this branch and counted in §2.6.4 |
+| 2 | every prediction marked confirmed or falsified, **the falsified ones kept** | ✅ §2.6.3 — nine of nine confirmed, and §1.3's three falsifiers each reachable and each failing to fire. **Earlier falsifications in this phase are kept in place**: T3's volatility claim, T4's float-digits reason, T5's loader claim, T11's stated consumer, and five wrong numbers about the controller's own work |
+| 3 | **CI green on the MERGED PR** | ⏳ **the one that is open.** CI is green on PR #21; the merge has not happened. This is the condition F3 had to record as open at its own close |
+| 4 | `docs/<phase>-run-evidence.md`, controller-verified separated from reported | ✅ every claim in this document carries one of the two labels, and §2.6.4 is the controller's own re-measurement of the run agent's headline |
+| 5 | `.plans/HANDOFF.md` updated, **including deleting what the phase made false** | ✅ the death count, the `from_cache` rule and the Task 4/5 state all corrected in place rather than overwritten |
+| 6 | what remains **unexercised** listed as unexercised | ✅ §3, accumulated as the phase ran rather than reconstructed at its end, including three refusals that *passed rather than fired* |
+
+**Five hold. Condition 3 is open until the merge**, and it is recorded as open rather than
+anticipated — which is the distinction F3's evidence had to make about itself and F-API's
+close was the first to satisfy.
