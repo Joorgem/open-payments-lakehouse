@@ -373,6 +373,12 @@ through.
 
 ### The defect this decision must not leave standing: reclaim is unreachable
 
+> **DISCHARGED BY F4, 2026-08-18, ON THE TRIAGE PATH — and still true of the in-flow one.**
+> `repromote_triaged_batch` now carries a `reclaim_landing` task, which is the wiring this
+> section names as the fix. What has NOT changed is the sentence below: the in-flow reclaim
+> still hangs off `promote`, and the gate still blocks empresas and socios every month. Read
+> the section as the argument for a change that has since happened, not as a live defect.
+
 `reclaim_landing` has **never deleted a byte through the wired path** — nine
 task instances hung off the ingestion jobs, two executions, zero bytes
 (`docs/f1.4b-pr-b-run-evidence.md` §16). It has deleted bytes exactly once, and
@@ -394,8 +400,11 @@ correct on a real Volume, on this exact table.**
    the checkpoint already consumed the files, so its reclaim correctly refuses.
 
 So a gate that always fires has silently disabled a *different* control for the
-life of the project. Residue today: 8.21 GB of 2026-06 CSVs, deliberately left
-in the Volume so the debt stays visible. Projected floor: ~48 GB peak per month,
+life of the project. ~~Residue today: 8.21 GB of 2026-06 CSVs, deliberately left
+in the Volume so the debt stays visible.~~ **RECLAIMED 2026-08-18 by F4 Task 2 —
+8,212,278,423 B, `deleted=10 refused=0 held_back=0` on each of the two batches,
+the directories verified empty and the `zips/` siblings byte-identical. The debt
+this sentence kept visible is discharged; see "Where the three stand" below.** Projected floor: ~48 GB peak per month,
 2.18× this Volume's demonstrated high, against no published quota.
 
 **A threshold is not the fix for this, and adopting one to fix it would be the
@@ -438,6 +447,94 @@ checkable:
 3. **The reclaim decoupling shipped first**, so that a threshold, if it is ever
    adopted, is adopted for what it does and not as a workaround for a wiring
    defect.
+
+#### Where the three stand, 2026-08-18 (F4)
+
+Recorded here rather than left to be reassembled from three commits, because the whole
+point of stating checkable conditions is that someone can check them without a git
+archaeology session. **Two have moved. The decision has not, and cannot on these two.**
+
+1. **SHIPPED, F4 Task 3.** `src/opl/bronze/rule_overlap.py` is the all-matching-rules
+   aggregate this condition asks for: one aggregate pass per (table, batch) counting the
+   rows each rule matches **independently**, plus the rows matching two or more, over
+   every registered contract — including `payments`, `ptax`, `merchant` and `lookup`,
+   none of which the six cells above covered. `rescued_data_present` is counted apart
+   from the rules, because it is not one: it lives in `opl.bronze.dq`, above every
+   per-table rule, and it is 2,000 of the 5,589 rows in the live quarantines.
+   `databricks/src/measure_rule_overlap.py` prints the numbers; it is total over
+   `REGISTRY` and takes no parameters.
+
+   **It is a measurement and not a gate change.** The gate still reports the first match
+   (`_dq_reject_reason` is untouched), still fails closed on any reject, and no tolerance
+   of any kind exists. That ordering is this ADR's own requirement — the count "must ship
+   BEFORE any per-reason tolerance, never with it" — so shipping it is compliance with
+   the condition, not progress towards reversing the decision. All three are required.
+
+   **What it measured, 2026-08-18, over all 15 (table, batch) pairs in the workspace —
+   337,776,032 staged rows.** Every rule of every contract counted independently:
+   **`rules_matched_2_or_more` is 0 in all fifteen**, and so is the companion count of
+   rows carrying `rescued_data_present` alongside a matching rule. So the overlap
+   ["measured" above](#rejected-a-per-reason-threshold--and-this-one-fails-structurally)
+   over six cells and three tables now stands over fifteen cells and seven contracts, and
+   **the hole is still latent rather than open** — for `payments`, `ptax`, `merchant` and
+   `lookup` as well, none of which the six cells covered. Three things fell out of the
+   same pass and each is a re-derivation of something on this page rather than a new
+   claim: `empresas` 1 and 1, `socios` 1,797 and 1,786 — unchanged; **`estabelecimentos`
+   `encoding_replacement_char` = 4 in BOTH months**, which is the `†` footnote's
+   correction re-derived from the deployed rule set instead of from a hand-written query;
+   and the fifteen pairs' rejects total 5,593 against 5,589 rows in the live quarantines,
+   the difference being exactly those four 2026-06 rows the narrower gate promoted
+   un-flagged. `payments` batch `592660596679630` carries 2,000 `rescued_data_present`
+   and **zero matching rules**, which says F1b's injected drift adds a field and damages
+   no contract column — nothing is hidden underneath it.
+
+   **That 5,593 is a count of ROWS only because both overlap counters are zero**, and the
+   dependency is easy to state backwards. The figure is a sum of per-reason counts plus
+   the rescued count; a row carrying two reasons is counted twice by that sum, so with a
+   non-zero `rules_matched_2_or_more` anywhere it would be a count of (row, reason) pairs
+   and would exceed the quarantine's row count by construction rather than by defect. The
+   reconciliation therefore **rests on the counters this task shipped** — it is not merely
+   a second number taken on the same pass, and it stops being comparable to a quarantine
+   row count on the day the overlap stops being zero.
+
+   **Provenance: job runs `80788495253423`** (task `measure_rule_overlap`, task run
+   `880229908911460`, SUCCESS, 89 s execution over the 337,776,032 rows) **and
+   `321135201221285`** (task run `600061871178163`), behind the `dataops_views` job's
+   deployed-revision guard, with `docs/f4-run-evidence.md` holding both. **The second run
+   is cited beside the first deliberately**: a correction pass changed the entry point
+   after the first, so the numbers it produced described a wheel that no longer existed;
+   the sweep was re-deployed and re-run at revision `538a966` and the two outputs compared
+   key by key — **208 keys each, zero differences**. A measurement whose code moved under
+   it is a measurement nobody has taken.
+
+   **No statement ids, and the reason first given here was wrong.** This ADR said they
+   were withheld because *"`GET /api/2.0/sql/statements/<id>` returns `Not Found` for a
+   statement seconds old, measured against a control"*. **That control was measuring Git
+   Bash**, which rewrites a leading `/api/...` into a Windows path so the request never
+   leaves the box; `docs/f-db-run-evidence.md` §0.1 and `docs/f4-run-evidence.md`'s
+   preamble — **both corrected in the same phase as this paragraph, and this paragraph was
+   not revisited** — record the two distinguishable messages and the restored 8–35 h band.
+   The real reason there are no statement ids here is simpler: **these numbers come from a
+   job task's stdout, not from a SQL statement.**
+
+   The retired pre-run route is worth recording for what it could have hidden. Rendering
+   `aggregate_columns` against a frame that lacks a table's **metadata** columns fails
+   SILENTLY: with no `_rescued_data`, `dq.rescued_condition` falls back to `F.lit(None)`
+   and the projection renders `sum(CASE WHEN (NULL IS NOT NULL) THEN 1 ELSE 0 END) AS
+   rescued_data_present` — a constant 0 where `payments` reads 2,000, every other number
+   on the row unchanged and nothing to look wrong — and with no `_snapshot_ref_date` the
+   `unprovable_snapshot_ref_date` column is dropped from the report entirely, for four of
+   the seven contracts. Reading the staging tables themselves, as the job task does,
+   retires both.
+2. **NOT SHIPPED, AND NO CODE CAN SHIP IT.** This condition is evidentiary: it asks for
+   at least six monthly observations per table with a reject count ≥ 10. empresas'
+   numerator is 1 and estabelecimentos' is 0 for the family a threshold would tolerate,
+   and the only thing that moves either is the source getting dirtier — which is the
+   event the gate exists to catch. Writing more code cannot close it, and the fact that
+   condition 1 is now closed must not be read as two-thirds of a case for a threshold.
+3. **SHIPPED, F4 Task 2**, which wired `reclaim_landing` onto the triage path. Measured
+   on the 2026-08-18 run: 8,212,278,423 B freed — the 8.21 GB of 2026-06 CSVs this
+   section names as the standing residue.
 
 ### The warning for whoever applies this to a month nobody here has seen
 

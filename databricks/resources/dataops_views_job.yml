@@ -1,0 +1,309 @@
+# databricks/resources/dataops_views_job.yml
+#
+# F4's imperative SQL, which is where governance and observability have to live
+# because a Databricks Asset Bundle cannot express either. Measured against
+# `databricks bundle schema` on CLI 1.8.0: there is no `tables` resource and no
+# `View` resource at all, and `grants` exists only on Catalog, Schema, Volume,
+# RegisteredModel, ExternalLocation and VectorSearchIndex. So a view, a table grant,
+# a column mask and a tag are each "imperative SQL some job must issue" -- and the
+# alternative, a statement an operator runs by hand once, is the documented-manual-
+# state failure mode this phase set out to avoid.
+#
+# WHY THE JOB TAKES NO `table` PARAMETER, unlike every ingestion job. Its output is
+# TOTAL over the registry: `opl.bronze.reconcile` derives one arm per registered table,
+# so a table registered later is reconciled the day it is registered. A `table`
+# parameter here would be a coordinate that can be wrong for no gain -- and the
+# paste-lock this repo runs over the ingestion jobs exists precisely because seven of
+# their task parameter lists CAN be wrong.
+#
+# ONE TASK TAKES A TABLE ANYWAY, and that exception is F4 Task 5b's, argued at the task
+# rather than here: `ensure_masked_table` is per-contract by construction, the repaired
+# mask predicate can reach the workspace by no other path this phase can safely run, and
+# the coordinate it costs is closed by a lock derived from `MASKED_COLUMNS` rather than
+# by the paste lock, which never opens this file.
+#
+# THE GUARD IS HERE FOR A REASON THIS LIST HAS NOT USED BEFORE. Every other guarded
+# job writes rows: a stale wheel appends the wrong ones. This job writes none. What a
+# stale wheel does here is worse in one specific way -- `CREATE OR REPLACE VIEW`
+# takes the NAME the correct definition would have had, so a wheel from another
+# revision leaves a reconciliation that is individually well-formed, that reports
+# verdicts nobody reviewed, and that an operator reads off a dashboard believing it
+# is the reviewed one. Nothing fails and nothing looks wrong.
+resources:
+  jobs:
+    dataops_views:
+      name: opl-dataops-views
+      parameters:
+        - name: revision
+          # The same sentinel every guarded job declares
+          # (opl.bronze.provenance.SENTINEL_REVISION), and the same reason: a job
+          # parameter default cannot validate anything, so its only job is to be a
+          # value the code refuses.
+          #
+          #     databricks bundle run dataops_views -t free \
+          #       --params revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
+      tasks:
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        - task_key: create_views
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/create_dataops_views.py
+            # No parameters, and the task refuses any. See its header's argv line:
+            # the views are total over the registry, so there is no coordinate to
+            # hand it and nothing for a wrong value to reach.
+            parameters: []
+
+        # F4 Task 3: ADR 0006's reversal condition 1, and NOT a gate change -- it reads
+        # staging and prints counts. It lives in THIS job rather than in one of its own
+        # because it is the same kind of thing as the views: imperative, total over the
+        # registry, parameterless, and worth nothing unless the wheel that produced it is
+        # the wheel somebody reviewed. Both facts follow: the revision guard above already
+        # covers it, and a new job YAML would have had to be classified in
+        # `tests/test_job_yaml_launch_guards.py`'s exact list for a guard it would then
+        # duplicate.
+        #
+        # NO `depends_on` ON `create_views`, deliberately. It reads the STAGING TABLES
+        # directly and reads no view, so ordering it after the view creation would
+        # manufacture a dependency that does not exist -- and would make a view failure
+        # swallow a measurement that had nothing to do with it. It depends on the guard
+        # for the reason every task in this file does.
+        #
+        # THE DIRECTION THE PARAGRAPH ABOVE ARGUES ONLY ONE WAY, recorded because it is
+        # the one this job pays for: sharing a job also means a FAILED MEASUREMENT fails
+        # a run whose purpose was refreshing views. The two tasks run in parallel off the
+        # guard, so `create_views` can have succeeded and the run still reports FAILED,
+        # and `max_retries: 0` means it stays that way -- an operator refreshing a
+        # dashboard stopped by a count nothing branches on.
+        #
+        # IT IS COUPLING AND NOT EXPENSE, and that is measured rather than assumed: on
+        # job run 80788495253423 this task's execution_duration was 89 s for all
+        # 337,776,032 staged rows across 15 (table, batch) pairs, against 40 s for
+        # `create_views`. Accepted because the alternative is a second job YAML
+        # duplicating the revision guard this one already carries, and because a
+        # measurement that fails is a wheel-or-staging problem an operator wants stopping
+        # a run. Revisit if the sweep grows to where a views refresh has to wait on it.
+        - task_key: measure_rule_overlap
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/measure_rule_overlap.py
+            # No parameters, and the task refuses any. Its counts are total over the
+            # registry and over every batch in each staging table, so there is neither a
+            # table nor a batch to hand it.
+            parameters: []
+
+        # F4 TASK 5b: THE ONLY PATH BY WHICH THE REPAIRED PREDICATE CAN REACH THIS
+        # WORKSPACE. `opl.bronze.masking.mask_function_ddl` now emits
+        # `is_member('opl_pii_readers')` in place of `is_account_group_member`, which no
+        # group creatable from this workspace can make return true. The DEPLOYED function
+        # still carries the old spelling -- `information_schema.routines`,
+        # `last_altered 2026-08-03T21:31:27Z`, re-measured 2026-08-18 -- and
+        # `ensure_masked_table` is the only thing in this repository that issues
+        # `CREATE OR REPLACE FUNCTION` for it.
+        #
+        # AND IT LIVED IN EXACTLY ONE JOB, THE ONE THAT CANNOT BE RUN TO GET IT.
+        # `bronze_socios_job.yml` runs this task first, ahead of its `unzip` -- and that
+        # unzip re-extracts `cnpj/2026-06/zips/socios` into the landing directory,
+        # re-landing the 2,852,557,826 B F4 Task 2 reclaimed, inside the phase whose
+        # headline artefact is that 8,212,278,423 B were freed. Downstream is worse than
+        # wasteful: the Auto Loader checkpoint has already consumed those files, so the
+        # ingest would stage nothing and the gate and the promote would run over an empty
+        # batch. Deploying a repaired privacy control must not cost a re-landing of the
+        # personal data it protects.
+        #
+        # WHAT THE TASK DOES HERE, STATEMENT BY STATEMENT, because it was written for the
+        # ingestion flow and this is not that flow. `CREATE TABLE IF NOT EXISTS` is INERT:
+        # both socios tables exist and are populated (55,827,243 and 3,583 rows), and the
+        # statement is `IF NOT EXISTS` rather than `OR REPLACE` precisely so a populated
+        # table survives it -- pinned over real Delta by `tests/bronze/test_masking.py`,
+        # which re-issues it over a populated table and asserts the rows are still there.
+        # `CREATE OR REPLACE FUNCTION` IS THE REPAIR, and it repairs all four masks at
+        # once: every one of them already references
+        # `workspace.default.mask_personal_name` (`information_schema.column_masks`, four
+        # rows, measured), and replacing a function a live mask references is the
+        # documented way to modify that mask. The four `SET MASK`s that follow re-apply
+        # masks that are already attached, which was probed against this workspace and
+        # succeeds -- they keep this task's ordering argument whole; they are not what
+        # carries the repair.
+        #
+        # IT MUST NOT, BY ITSELF, REVEAL A SINGLE ROW, and that is the point of running it
+        # rather than a risk of running it. `opl_pii_readers` exists with ZERO members
+        # (SCIM, measured), so `is_member(...)` is false for every principal: measured on
+        # the opl-free warehouse as the owner, 2026-08-18,
+        # `SELECT is_member('opl_pii_readers')` returns FALSE.
+        #
+        # AND THE CHECK THIS BLOCK USED TO PUBLISH FOR THAT COULD NOT FAIL. It said
+        # `SELECT nome_socio_razao_social FROM workspace.default.bronze_cnpj_socios`
+        # returns `***` after this task, and that a NAME there would mean the repair had
+        # failed open. Measured before any run: `***` was ALREADY the answer. Both
+        # predicates are false for every principal, so both `CASE` expressions take the
+        # same `ELSE` branch -- making `***` the answer under all four of: the repair
+        # landed; the repair did not land; this task returned early; this task never ran.
+        # One branch, unreachable for as long as the roster stays empty, which is a
+        # standing decision. The observation that DISCRIMINATES is the deployed function's
+        # BODY, and `assert_mask_predicate` below is the task that reads it -- because an
+        # unasserted deployed predicate is what let this control sit unopenable from
+        # 2026-08-03 to F4 with nothing noticing.
+        #
+        # IT TAKES A TABLE, WHICH EVERY OTHER TASK IN THIS JOB AVOIDS, and the answer is a
+        # lock rather than a second entry point. A wrong value here is the name of a table
+        # that EXISTS and declares no mask, so the task would print "declares no masked
+        # column", return, and the run would be GREEN with the predicate unrepaired -- the
+        # same silence the ingestion jobs' paste lock exists for, and that lock is
+        # parametrized over `JOB_OF` and never opens this file.
+        # `tests/test_governance_job_wiring.py`'s
+        # `test_the_governance_job_masks_every_masked_table_and_hands_it_nothing_else`
+        # holds the tables named here equal to the registered tables whose contract
+        # declares a mask, derived from `MASKED_COLUMNS` -- so a second masked contract
+        # turns CI red here instead of going quietly unrepaired. The alternative, a new
+        # parameterless entry point total over `MASKED_COLUMNS`, was rejected: it would be
+        # a second spelling of an ordering -- every table, then the function, then the
+        # masks -- that `tests/test_ensure_masked_table_task.py` pins for this one, and
+        # the copy that goes stale is the one no job run executes.
+        - task_key: ensure_masked_table
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/ensure_masked_table.py
+            # The TABLE. Everything else -- which columns, which two tables, which
+            # function -- is resolved from the registry and from `opl.bronze.masking`,
+            # so no column name and no qualified table name is spelled here.
+            parameters: ["socios"]
+
+        # F4's CORRECTION PASS: THE OBSERVATION THAT TELLS A REPAIR FROM A NO-OP, and it
+        # is a TASK rather than a paragraph because after this phase's record an unasserted
+        # deployed predicate is the defect and not the documentation. It reads
+        # `information_schema.routines` for `mask_personal_name` and fails the run unless
+        # the deployed body carries `is_member(` -- the predicate `opl.bronze.masking`
+        # emits, which is the only spelling a group creatable from this workspace can make
+        # true. Measured 2026-08-19, before anything in this pass ran: the deployed body is
+        # still `CASE WHEN is_account_group_member('opl_pii_readers') THEN name ELSE '***'
+        # END`, `last_altered 2026-08-03T21:31:27.142Z`.
+        #
+        # WHY IT IS NOT SIMPLY A LINE IN THE EVIDENCE DOCUMENT. Nothing in this repository
+        # read that column: grepping `information_schema.routines`, `routine_definition` and
+        # `DESCRIBE FUNCTION` across `src/`, `databricks/`, `tests/` and `scripts/` returned
+        # exactly one hit, a comment in this file. The predicate it describes was wrong for
+        # three months and no run said so.
+        #
+        # WHY IT IS NOT AN ANCESTOR OF `apply_pii_governance`. It can only report; the
+        # governance task REVOKES reads and writes inert tags, and its GRANT list comes from
+        # a roster that is empty by decision. A stale predicate must therefore not stop the
+        # revokes -- the same direction the block below argues for the mask task itself, one
+        # step further out: a failure state must not disable its own mitigation. The two run
+        # in parallel off `ensure_masked_table`, and `max_retries: 0` means a failure here
+        # fails the RUN, which is the strongest stop any task in this job has.
+        #
+        # WHAT IT COSTS is one task start, which is the same ~15-30 s every other task in
+        # this job pays, against a check whose alternative was a `SELECT` that returns `***`
+        # whether or not the deploy did anything at all.
+        - task_key: assert_mask_predicate
+          depends_on: [{ task_key: ensure_masked_table }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_mask_predicate.py
+            # No parameters, and the task refuses any. There is exactly one mask function
+            # and `opl.bronze.masking` names it, so there is no coordinate to hand it.
+            parameters: []
+
+        # F4 Task 5: the OTHER HALF of the socios column mask -- who may open the tables
+        # at all, and what the catalog says their columns hold. It lives in THIS job for
+        # the same three reasons `measure_rule_overlap` does: it is imperative SQL a
+        # bundle cannot express (there is no `tables` resource and `grants` is a field on
+        # Catalog/Schema/Volume/RegisteredModel/ExternalLocation/VectorSearchIndex, never
+        # on a table), it is total over the registry and takes no coordinate, and a NEW
+        # job YAML would have to be classified in `tests/test_job_yaml_launch_guards.py`'s
+        # exact list for a revision guard this job already carries.
+        #
+        # AND THE GUARD'S QUESTION HAS A SHARP ANSWER HERE, THOUGH NOT THE ONLY ONE.
+        # `create_views` and `measure_rule_overlap` write no row, and the first of them
+        # creates a view whose NAME a stale wheel would take. This one REVOKES: its roster
+        # is a constant in `opl.bronze.pii_governance`, and anything holding a table-level
+        # SELECT outside that roster loses it. A wheel from another revision therefore
+        # issues a different set of revokes against the three tables holding 55.8M rows of
+        # personal data, reports SUCCESS, and leaves an access state nobody reviewed.
+        #
+        # THIS BLOCK USED TO SAY `ensure_masked_table` "ISSUES DDL THAT ONLY EVER TIGHTENS",
+        # AND THAT WAS FALSE IN THE DIRECTION THAT MATTERS. Its middle statement is
+        # `CREATE OR REPLACE FUNCTION mask_personal_name`, and its whole purpose in this job
+        # is to LOOSEN the floor -- from a predicate this workspace can never make true to
+        # one it can. Measured: replacing the body of a function a live mask references
+        # takes effect on the very next `SELECT`. So a stale wheel run through that task
+        # installs a different mask body under an unchanged dependency, all four masks pick
+        # it up, and the run reports SUCCESS -- the same "individually well-formed, nobody
+        # reviewed it" shape this file's header uses to justify the guard for
+        # `CREATE OR REPLACE VIEW`. That task has as sharp a claim on the guard as this one,
+        # and `assert_mask_predicate` above is what makes the body it leaves behind a thing
+        # a run asserts rather than a thing a document remembers.
+        #
+        # AND IT NOW HAS A SECOND WAY TO FAIL, which is deliberate and is the reason the
+        # coupling paragraph below matters more than it did. `ALL PRIVILEGES` on the table
+        # and a `SELECT` inherited from the SCHEMA both confer a read, and a
+        # `REVOKE SELECT ON TABLE` against either SUCCEEDS while removing nothing
+        # (measured). The task cannot close those, so it prints them and RAISES after
+        # applying everything it can -- a governance run that could not settle who reads
+        # personal data must not report a green tick.
+        #
+        # NO `depends_on` ON THE VIEWS OR THE MEASUREMENT, deliberately, and for the
+        # reason `measure_rule_overlap` states: it reads neither view and neither
+        # measurement, so ordering it behind them would manufacture a dependency that does
+        # not exist and would let a view failure swallow a governance change that had
+        # nothing to do with it.
+        #
+        # IT DOES WAIT FOR `ensure_masked_table`, AND THAT DEPENDENCY IS ONE THAT EXISTS.
+        # Three things decide it, none of them tidiness. (1) READ AFTER CREATE: this
+        # task's first statement against each governed table is `SHOW GRANTS ON TABLE`,
+        # which fails on a table that is not there, and the mask task is the only task in
+        # this job that can bring bronze and quarantine into existence -- so for a
+        # contract that gains a mask later, create-then-govern is the only order in which
+        # one run of this job works at all. That is two tables of three: staging is
+        # created by the ingest stream and by neither task, and a first run for such a
+        # contract would still fail on it. (2) THE DIRECTION CAN ONLY BE THIS ONE, which
+        # is the sharp half: this task RAISES `UngovernedRead` when it finds a read it
+        # cannot withdraw, and nothing downstream of a raise runs. With the edge reversed,
+        # an `ALL PRIVILEGES` holder would block the MASK REPAIR -- the very control that
+        # hides those names from that reader. A failure state must not disable its own
+        # mitigation. (3) Both tasks issue `ALTER TABLE ... ALTER COLUMN` against the SAME
+        # two columns of the SAME two tables in one run -- `SET TAGS` here, `SET MASK`
+        # there. Whether UC serialises that pair is NOT measured; declaring the order
+        # costs one line and takes the answer away from the scheduler.
+        #
+        # THE COST OF THAT EDGE, recorded rather than left to be discovered: a failure of
+        # the mask task now stops the revokes. Accepted, and it is the smaller half --
+        # every statement the mask task issues is idempotent and none is a function of
+        # this month's data, so a failure there is a platform error an operator wants to
+        # see before the access state moves underneath it.
+        #
+        # THE COUPLING RUNS THE OTHER WAY TOO, recorded because this is the task that pays
+        # for it: a governance failure now fails a run whose purpose was refreshing a
+        # dashboard. Accepted for the same trade the block above accepts -- and here the
+        # direction is the right one, because a run that could not settle who reads
+        # personal data is a run an operator wants stopping.
+        - task_key: apply_pii_governance
+          depends_on: [{ task_key: ensure_masked_table }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/apply_pii_governance.py
+            # No parameters, and the task refuses any. What it governs is total over the
+            # contracts that declare a mask, so there is no table to hand it.
+            parameters: []
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

@@ -6,14 +6,22 @@ Loaded by path with the same importlib pattern as
 `tests/test_promote_batch_task.py` -- the `databricks/src` scripts are job entry
 points, not part of the opl wheel. No JVM and no workspace: the session is a
 recorder and the proof set is injected, because what is under test here is the
-task's own decision. `files_of_batch` and `delete_files` are tested against a
-real Delta log and a real filesystem in `tests/bronze/test_retention.py`.
+task's own decision. `file_accounts_of_batch`, `months_of_batch` and
+`delete_files` are tested against a real Delta log and a real filesystem in
+`tests/bronze/test_retention.py`.
 
 The properties this file exists for, in order of what they cost if lost:
-1. Nothing is deleted unless BRONZE named it. Staging does not count.
+1. Nothing is deleted unless the batch's rows for that file ADD UP -- every one
+   of them in bronze or in quarantine, and at least one in bronze. The
+   arithmetic itself is driven out of real Delta tables in
+   `tests/bronze/test_retention.py`; what is under test here is that this task
+   deletes the files it admits and REPORTS the ones it held back.
 2. An empty proof set deletes nothing, does not raise, and does not go quiet.
 3. A delete that fails does not fail the job -- but the operator is told.
 4. An argument the task cannot trust is refused BEFORE anything is deleted.
+5. The month -- half the delete boundary -- is the one the INGEST stamped on this
+   batch, and a passed month that contradicts it stops the task instead of
+   quietly reclaiming nothing under a directory that never held these files.
 """
 from __future__ import annotations
 
@@ -25,7 +33,7 @@ import pytest
 
 from opl.bronze.promote import PromoteRefused
 from opl.bronze.registry import UnknownTable
-from opl.bronze.retention import RetentionOutcome
+from opl.bronze.retention import FileAccount, RetentionOutcome
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "databricks" / "src" / "reclaim_landing.py"
 _spec = importlib.util.spec_from_file_location("reclaim_landing_task", _SCRIPT)
@@ -51,23 +59,42 @@ class FakeSpark:
         return self.exists
 
 
-def _stub_session(monkeypatch, exists: bool = True) -> FakeSpark:
+def _stub_session(
+    monkeypatch, exists: bool = True, months: tuple[str, ...] = ("2026-06",)
+) -> FakeSpark:
+    """The session, plus the month stamp every test needs the task to find.
+
+    `months` defaults to the month the tests pass, so a test that says nothing
+    about the month is testing the delete path and not the boundary. The two tests
+    that ARE about the boundary override it, which is what makes the cross-check
+    visible rather than a coincidence of both values being "2026-06"."""
     spark = FakeSpark(exists)
     monkeypatch.setattr(
         task, "SparkSession",
         SimpleNamespace(builder=SimpleNamespace(getOrCreate=lambda: spark)),
     )
+    monkeypatch.setattr(task, "months_of_batch", lambda spark, staging, batch: months)
     return spark
 
 
-def _stub_proof(monkeypatch, files: list[str]) -> dict:
+def _account(source_file: str, staged=1, promoted=1, quarantined=0, reclaimable=True):
+    return FileAccount(source_file, staged, promoted, quarantined, reclaimable)
+
+
+def _stub_proof(monkeypatch, files: list[str], held: tuple = ()) -> dict:
+    """The proof set, as accounts. `files` are admissible, `held` are not.
+
+    Injected because what is under test here is the task's own decision -- which
+    files it hands to `delete_files`, which it names in the log, and in which
+    order it refuses. `reconcile.RECLAIMABLE_SQL` deciding those flags correctly is
+    a property of real tables and is tested against them."""
     seen: dict[str, object] = {}
 
-    def fake_files_of_batch(spark, bronze_table, batch_id):
-        seen.update(bronze_table=bronze_table, batch_id=batch_id)
-        return files
+    def fake_accounts(spark, spec, batch_id):
+        seen.update(spec=spec, batch_id=batch_id)
+        return tuple(_account(path) for path in files) + tuple(held)
 
-    monkeypatch.setattr(task, "files_of_batch", fake_files_of_batch)
+    monkeypatch.setattr(task, "file_accounts_of_batch", fake_accounts)
     return seen
 
 
@@ -90,7 +117,7 @@ def test_it_deletes_the_files_bronze_credits_to_this_batch(monkeypatch, capsys):
 
     task.main(["estabelecimentos", "999", "2026-06"])
 
-    assert seen["bronze_table"] == "workspace.default.bronze_cnpj_estabelecimentos"
+    assert seen["spec"].name == "estabelecimentos"
     assert seen["batch_id"] == "999"
     assert spark.asked == ["workspace.default.bronze_cnpj_estabelecimentos"]
     assert deleted == [_PART]
@@ -116,11 +143,66 @@ def test_a_proven_file_outside_the_landing_dir_is_refused_and_reported(monkeypat
     assert "REFUSED (left untouched)" in out and "Estabelecimentos1.zip" in out
 
 
-def test_the_month_scopes_the_deletes_to_that_month_s_landing_dir(monkeypatch, capsys):
-    """Last month's landed files are still landed and still un-reclaimed, and
-    they are not what THIS batch proved. The month is a parameter for the same
-    reason bronze_ingest.py takes one."""
-    _stub_session(monkeypatch)
+def test_a_month_that_contradicts_the_stamp_stops_the_task_before_any_delete(
+        monkeypatch):
+    """THE MONTH GUARD THIS TASK DID NOT HAVE. A wrong-but-well-formed month used
+    to be answered by containment alone: every proven file falls outside the
+    scope, `REFUSED (left untouched)` is printed for each one telling the operator
+    to investigate how a row of this table came from there, zero bytes are freed
+    and the run exits 0. That log is indistinguishable from the containment guard
+    catching a real F1.3-style incident, while the actual defect -- a month
+    parameter naming a month this batch was never ingested under -- is nowhere in
+    it.
+
+    The batch's own `_snapshot_month` is what settles it, and it is not a second
+    opinion: it is the ingest run's own `{{job.parameters.month}}` after
+    `require_month`, stamped into the rows. So the two cannot both be right, and
+    the task refuses to pick."""
+    _stub_session(monkeypatch, months=("2026-06",))
+    _stub_proof(monkeypatch, [_PART])
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError, match="2026-05") as excinfo:
+        task.main(["estabelecimentos", "999", "2026-05"])
+
+    assert "2026-06" in str(excinfo.value), "the message must name BOTH months"
+    assert deleted == []
+
+
+def test_a_contradicting_month_is_refused_even_when_the_batch_proves_no_file(
+        monkeypatch, capsys):
+    """WHERE THE GUARD ABOVE COULD NOT SEE, until this pass.
+
+    The cross-check used to sit inside `resolve_month`, which `main` reaches only
+    AFTER the empty-proof return -- so on a batch where nothing is proven the
+    contradiction was never detected and the run exited 0 printing the
+    three-cause message about typos and rebuilt tables. That is the wrong message
+    for this fact and it is the likeliest shape of the defect: a batch id and a
+    month that do not belong together usually prove nothing at all.
+
+    Nothing is deleted either way, which is why this is about the LOG rather than
+    about the bytes -- and a control whose only output on a real defect is a
+    message about something else is one nobody can act on."""
+    _stub_session(monkeypatch, months=("2026-06",))
+    _stub_proof(monkeypatch, [])
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError, match="2026-05") as excinfo:
+        task.main(["estabelecimentos", "999", "2026-05"])
+
+    assert "2026-06" in str(excinfo.value), "the message must name BOTH months"
+    assert deleted == []
+    assert "rebuilt after the promote" not in capsys.readouterr().out
+
+
+def test_with_no_stamp_a_wrong_month_still_refuses_every_file(monkeypatch, capsys):
+    """What stands when nothing can be cross-checked -- a pre-F1.4a staging shape
+    has no `_snapshot_month` column, so the passed month is all there is.
+
+    Last month's landed files are still landed and still un-reclaimed, and they
+    are not what THIS batch proved. Containment is the fail-safe direction and it
+    is unchanged: refused, not deleted."""
+    _stub_session(monkeypatch, months=())
     _stub_proof(monkeypatch, [_PART])
     deleted = _record_deletes(monkeypatch)
 
@@ -280,28 +362,84 @@ def test_an_impossible_month_is_refused_before_a_session_is_even_REQUESTED(monke
     assert deleted == []
 
 
-def test_no_month_at_all_is_refused_rather_than_defaulted(monkeypatch):
-    """The task must not answer a missing month with `opl.config`'s pinned one.
+def test_no_month_at_all_is_taken_from_the_batch_and_never_from_the_pinned_one(
+        monkeypatch):
+    """The triage path's month, and the assertion that it is not a fallback.
 
-    Same ruling as `add_audit_columns`' `snapshot_month`, which was deliberately
-    given no default because the pinned month is how F1.2 tied every row to
-    2026-06 silently. Here the stake is higher: this month is half the delete
-    boundary, not a label.
+    `repromote_triaged_batch` runs hours or days after the ingest, from a
+    reconciliation row naming a table and a batch id; nobody there has the ingest
+    run's month in hand. So an absent month is DERIVED from `_snapshot_month`
+    rather than refused -- and the derivation must not be `opl.config`'s pinned
+    month wearing a query.
 
-    THE PROOF SET IS 2026-06 ON PURPOSE. It is what the old fallback would have
-    produced -- `DEFAULT.month` is "2026-06", identical to the job YAML's own
-    default -- so under the fallback this call succeeded, deleted the file and
-    looked correct, and stayed looking correct until the first run for another
-    month. A test that used some other month would have passed against the
-    fallback too, and would be pinning nothing."""
-    spark = _stub_session(monkeypatch)
+    THE STAMP AND THE PART ARE 2026-07 ON PURPOSE. `DEFAULT.month` is "2026-06",
+    so a fallback would scope containment to 2026-06, put this 2026-07 part
+    outside it and reclaim nothing -- the exact green-and-empty run
+    `require_month` was written to prevent. A test stamped 2026-06 would have
+    passed against the fallback too, and would be pinning nothing."""
+    july = "/Volumes/workspace/default/landing/cnpj/2026-07/estabelecimentos/K3241.ESTABELE"
+    _stub_session(monkeypatch, months=("2026-07",))
+    _stub_proof(monkeypatch, [july])
+    deleted = _record_deletes(monkeypatch)
+
+    task.main(["estabelecimentos", "999"])
+
+    assert deleted == [july]
+
+
+def test_a_batch_that_stamps_no_month_refuses_rather_than_falling_back(monkeypatch):
+    """Zero is not "use the default". The staging rows are gone, or the table
+    predates the column -- either way this task does not know which directory it
+    would be deleting under, and reclaiming under a guess is how the wrong
+    month's landing dir gets emptied. Nothing is deleted and the bytes stay,
+    which is the recoverable direction."""
+    _stub_session(monkeypatch, months=())
     _stub_proof(monkeypatch, [_PART])
     deleted = _record_deletes(monkeypatch)
 
-    with pytest.raises(ValueError, match="no month was given"):
+    with pytest.raises(ValueError, match="does not name exactly one"):
         task.main(["estabelecimentos", "999"])
 
-    assert spark.asked == [] and deleted == []
+    assert deleted == []
+
+
+def test_a_malformed_stamp_is_refused_by_the_same_guard_a_passed_month_meets(
+        monkeypatch):
+    """THE DERIVED MONTH IS VALIDATED TOO, and nothing exercised that until now.
+
+    Every other test of this path stamps a well-formed month or none at all, so
+    deleting the `require_month(` call in `resolve_month` turned nothing red --
+    while the value goes straight into `landing_table(subdir, month)`, which
+    interpolates it raw. `2026-06/zips` is the probe for the same reason it is on
+    the passed-month side: the containment root would become the zips directory
+    itself, and every zip under it would read as INSIDE the dir this task may
+    delete from. Coming out of the data rather than out of an operator's typing
+    changes nothing about that -- `_snapshot_month` is a string column and nothing
+    between the ingest and here constrains what a backfill may have written into
+    it."""
+    _stub_session(monkeypatch, months=("2026-06/zips",))
+    _stub_proof(monkeypatch, [f"{_ZIPS}/Estabelecimentos1.zip"])
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError, match="month") as excinfo:
+        task.main(["estabelecimentos", "999"])
+
+    assert "refusing to reclaim" in str(excinfo.value)
+    assert deleted == []
+
+
+def test_a_batch_stamped_with_two_months_refuses_rather_than_picking_one(monkeypatch):
+    """One ingest run takes ONE month, so this state has no explanation -- which is
+    why it must not be answered by taking the first. A delete boundary chosen out
+    of an unexplained state is a delete boundary nobody can check."""
+    _stub_session(monkeypatch, months=("2026-06", "2026-07"))
+    _stub_proof(monkeypatch, [_PART])
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError, match="does not name exactly one"):
+        task.main(["estabelecimentos", "999"])
+
+    assert deleted == []
 
 
 def test_a_table_with_no_zip_in_the_volume_is_refused_before_spark_and_any_delete(
@@ -352,3 +490,173 @@ def test_no_batch_id_at_all_is_refused_by_the_shared_guard(monkeypatch):
         task.main(["estabelecimentos"])
 
     assert spark.asked == [] and deleted == []
+
+
+def test_a_file_held_back_is_named_with_the_counts_that_held_it(monkeypatch, capsys):
+    """A category the old proof could not have: it deleted every file it named.
+
+    A control that declines silently cannot be told from a control that never
+    ran, which is the defect four guards in this repository have already had. So
+    the counts travel with the refusal -- and they are the same three columns
+    `dataops_reconciliation_by_file` publishes, so an operator can check the line
+    against the view without translating anything."""
+    _stub_session(monkeypatch)
+    _stub_proof(monkeypatch, [_PART], held=(_account(
+        f"{_LANDING}/K3241.K03200Y0.D60613.ESTABELE2",
+        staged=2, promoted=1, quarantined=0, reclaimable=False,
+    ),))
+    deleted = _record_deletes(monkeypatch)
+
+    task.main(["estabelecimentos", "999", "2026-06"])
+
+    out = capsys.readouterr().out
+    assert deleted == [_PART], "the file that adds up must still go"
+    assert "held_back=1" in out
+    assert "HELD BACK (left untouched)" in out and "ESTABELE2" in out
+    assert "staged=2 promoted=1 quarantined=0 unaccounted=1" in out
+
+
+def test_a_batch_whose_every_file_is_held_back_deletes_nothing_and_says_why(
+        monkeypatch, capsys):
+    """Distinct from "bronze holds no row of this batch", and the distinction is
+    the operator's next move. Bronze holds rows here -- it is the ARITHMETIC that
+    refused, not the absence of a promote -- so the three-cause message about
+    typos and rebuilt tables would send a triager to the wrong question."""
+    _stub_session(monkeypatch)
+    _stub_proof(monkeypatch, [], held=(_account(
+        _PART, staged=3, promoted=1, quarantined=1, reclaimable=False,
+    ),))
+    deleted = _record_deletes(monkeypatch)
+
+    task.main(["estabelecimentos", "999", "2026-06"])
+
+    out = capsys.readouterr().out
+    assert deleted == []
+    assert "NOT ONE of them is accounted for" in out
+    assert "unaccounted=1" in out
+    assert "rebuilt after the promote" not in out, "that is a different fact"
+
+
+def test_a_table_with_no_zip_is_a_green_no_op_when_the_job_serves_every_table(
+        monkeypatch, capsys):
+    """`repromote_triaged_batch` takes ANY registered table, and four of them land
+    with no archive in the Volume -- payments among them, which is the table the
+    reconciliation view prints a repromote remedy for right now.
+
+    Without this flag that remedy ends RED on its last task, on a repromote that
+    worked perfectly, which is how an operator learns to read red as noise. It
+    loosens no delete: the reason is printed in full and not one byte is touched,
+    exactly as the raise leaves it."""
+    _stub_session(monkeypatch)
+    deleted = _record_deletes(monkeypatch)
+
+    task.main(["payments", "999", "--any-table"])
+
+    out = capsys.readouterr().out
+    assert deleted == []
+    assert "NO ARCHIVE" in out and "single copy" in out
+
+
+def test_the_flag_makes_a_no_op_green_and_still_does_not_excuse_a_missing_batch_id(
+        monkeypatch):
+    """The flag suppresses ONE refusal, and it used to suppress a second by
+    accident.
+
+    `--any-table` says "a table with no archive is a legitimate no-op for this
+    caller". It never said an invocation naming no batch is one --
+    `reclaim_landing.py payments "" --any-table` exited 0 green, so a flag added
+    for one guard was silencing another's message. Unreachable through the job
+    (the promote refuses the sentinel batch id two tasks earlier and this one
+    never starts) and closed anyway: the reachable caller is an operator running
+    this file by hand, which is the caller every other guard here is written for."""
+    spark = _stub_session(monkeypatch)
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(PromoteRefused, match="refusing to reclaim"):
+        task.main(["payments", "", "--any-table"])
+
+    assert spark.asked == [] and deleted == []
+
+
+def test_the_any_table_flag_does_not_change_what_a_zips_table_reclaims(
+        monkeypatch, capsys):
+    """The flag says which CALLER is asking, never what may go. A table that lands
+    as zips reclaims the same files with it as without it -- otherwise it would be
+    a token that widens a delete, which is what `--in-flow` is careful not to be
+    on the promote side."""
+    _stub_session(monkeypatch)
+    _stub_proof(monkeypatch, [_PART])
+    deleted = _record_deletes(monkeypatch)
+
+    task.main(["estabelecimentos", "999", "2026-06", "--any-table"])
+
+    assert deleted == [_PART]
+    assert "deleted=1" in capsys.readouterr().out
+
+
+def test_the_flag_is_not_a_positional_argument(monkeypatch):
+    """It is filtered out of the positionals before the month is read, the same way
+    `promote_batch.py` filters `--in-flow`. If it were not, this call would read
+    the flag as a month and `require_month` would refuse it -- which is a red run
+    on a correct invocation, and the reason this is asserted rather than assumed."""
+    _stub_session(monkeypatch, months=("2026-06",))
+    _stub_proof(monkeypatch, [_PART])
+    deleted = _record_deletes(monkeypatch)
+
+    task.main(["estabelecimentos", "999", "--any-table"])
+
+    assert deleted == [_PART]
+
+
+def test_an_argument_this_task_does_not_read_is_refused_rather_than_discarded(
+        monkeypatch):
+    """THE ARGUMENT THAT WAS SILENTLY THROWN AWAY WHILE THE DELETE WENT AHEAD.
+
+    `positional = [arg for arg in args if arg != ANY_TABLE_FLAG]` then reads `[0]`,
+    `[1]` and `[2]`, so a fourth argument reached nothing at all. An operator who
+    typed `--dry-run` -- a flag this task has never had -- got a run that ignored it
+    and unlinked every proven file, which is the worst arrangement available: the
+    one invocation whose author believed nothing would be deleted is the one that
+    deletes. `create_dataops_views.main`, this same phase's other task, already
+    refuses the same shape and says why.
+
+    BEFORE SPARK AND BEFORE THE TABLE, because it is a fact about the argv line and
+    needs nothing resolved to be answered."""
+    spark = _stub_session(monkeypatch)
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError, match="takes .table, batch_id, month"):
+        task.main(["estabelecimentos", "999", "2026-06", "--dry-run"])
+
+    assert spark.asked == [] and deleted == []
+
+
+def test_a_repeated_any_table_flag_is_refused_rather_than_read_as_one(monkeypatch):
+    """A switch is not a count, and the duplicate that matters is not a typed one.
+
+    `--any-table --any-table` filters to the same positionals as one, so nothing
+    could tell them apart -- and the way a second one arrives is a paste over the
+    argument that was in that slot. `["estabelecimentos", "999", "--any-table",
+    "--any-table"]` is one paste away from `[..., "2026-06", "--any-table"]`, so the
+    silent reading loses a delete boundary an operator did pass."""
+    spark = _stub_session(monkeypatch)
+    deleted = _record_deletes(monkeypatch)
+
+    with pytest.raises(ValueError, match="was passed 2 times"):
+        task.main(["estabelecimentos", "999", "--any-table", "--any-table"])
+
+    assert spark.asked == [] and deleted == []
+
+
+def test_three_positionals_and_one_flag_is_still_the_accepted_shape(monkeypatch):
+    """The floor under both refusals above: the widest LEGAL invocation must stay
+    legal. Without this, a length check off by one would refuse the shape the three
+    CNPJ jobs would use if they ever gained the flag, and both tests above would
+    still be green."""
+    _stub_session(monkeypatch, months=("2026-06",))
+    _stub_proof(monkeypatch, [_PART])
+    deleted = _record_deletes(monkeypatch)
+
+    task.main(["estabelecimentos", "999", "2026-06", "--any-table"])
+
+    assert deleted == [_PART]

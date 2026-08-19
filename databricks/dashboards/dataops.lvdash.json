@@ -1,0 +1,194 @@
+{
+  "datasets": [
+    {
+      "name": "ds_freshness",
+      "displayName": "Bronze freshness against the declared cadence",
+      "queryLines": [
+        "SELECT source, source_freshness_status, cadence_kind, expected_every_days,\n",
+        "  last_snapshot_month, last_source_date, source_age_days,\n",
+        "  last_ingested_at, pipeline_age_days, bronze_rows, cadence_note\n",
+        "FROM workspace.default.dataops_freshness\n",
+        "ORDER BY source_freshness_status, source"
+      ]
+    },
+    {
+      "name": "ds_sql_coverage",
+      "displayName": "Which task keys the platform records SQL for, and which it does not",
+      "queryLines": [
+        "SELECT task_key, sql_telemetry, COUNT(*) AS task_runs,\n",
+        "  COUNT(read_rows) AS runs_with_a_row_count,\n",
+        "  SUM(CASE WHEN read_rows = 0 THEN 1 WHEN read_rows > 0 THEN 0 END)\n",
+        "    AS runs_reading_zero_rows,\n",
+        "  MAX(execution_seconds) AS slowest_seconds\n",
+        "FROM workspace.default.dataops_task_telemetry\n",
+        "GROUP BY task_key, sql_telemetry\n",
+        "ORDER BY sql_telemetry, task_runs DESC"
+      ]
+    },
+    {
+      "name": "ds_task_runs",
+      "displayName": "Task runs, most recent first",
+      "queryLines": [
+        "SELECT started_at, job_name, task_key, attempt, result_state,\n",
+        "  execution_seconds, sql_telemetry, statements, read_rows, written_rows,\n",
+        "  written_bytes, run_id\n",
+        "FROM workspace.default.dataops_task_telemetry\n",
+        "ORDER BY started_at DESC\n",
+        "LIMIT 200"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "pg_dataops",
+      "displayName": "DataOps",
+      "layout": [
+        {
+          "widget": {
+            "name": "wg_freshness",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_freshness",
+                  "disaggregated": true,
+                  "fields": [
+                    { "name": "source", "expression": "`source`" },
+                    { "name": "source_freshness_status", "expression": "`source_freshness_status`" },
+                    { "name": "cadence_kind", "expression": "`cadence_kind`" },
+                    { "name": "expected_every_days", "expression": "`expected_every_days`" },
+                    { "name": "last_snapshot_month", "expression": "`last_snapshot_month`" },
+                    { "name": "last_source_date", "expression": "`last_source_date`" },
+                    { "name": "source_age_days", "expression": "`source_age_days`" },
+                    { "name": "last_ingested_at", "expression": "`last_ingested_at`" },
+                    { "name": "pipeline_age_days", "expression": "`pipeline_age_days`" },
+                    { "name": "bronze_rows", "expression": "`bronze_rows`" },
+                    { "name": "cadence_note", "expression": "`cadence_note`" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "source", "displayName": "table" },
+                  { "fieldName": "source_freshness_status", "displayName": "source freshness" },
+                  { "fieldName": "cadence_kind", "displayName": "cadence" },
+                  { "fieldName": "expected_every_days", "displayName": "expected every (days)" },
+                  { "fieldName": "last_snapshot_month", "displayName": "snapshot month" },
+                  { "fieldName": "last_source_date", "displayName": "source date" },
+                  { "fieldName": "source_age_days", "displayName": "source age (days)" },
+                  { "fieldName": "last_ingested_at", "displayName": "last ingested" },
+                  { "fieldName": "pipeline_age_days", "displayName": "pipeline age (days) - no threshold" },
+                  { "fieldName": "bronze_rows", "displayName": "rows" },
+                  { "fieldName": "cadence_note", "displayName": "why" }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Freshness - a paused table is a recorded decision, not a fault"
+              }
+            }
+          },
+          "position": { "x": 0, "y": 0, "width": 6, "height": 7 }
+        },
+        {
+          "widget": {
+            "name": "wg_sql_coverage",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sql_coverage",
+                  "disaggregated": true,
+                  "fields": [
+                    { "name": "task_key", "expression": "`task_key`" },
+                    { "name": "sql_telemetry", "expression": "`sql_telemetry`" },
+                    { "name": "task_runs", "expression": "`task_runs`" },
+                    { "name": "runs_with_a_row_count", "expression": "`runs_with_a_row_count`" },
+                    { "name": "runs_reading_zero_rows", "expression": "`runs_reading_zero_rows`" },
+                    { "name": "slowest_seconds", "expression": "`slowest_seconds`" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "task_key", "displayName": "task" },
+                  { "fieldName": "sql_telemetry", "displayName": "SQL telemetry" },
+                  { "fieldName": "task_runs", "displayName": "task runs" },
+                  { "fieldName": "runs_with_a_row_count", "displayName": "runs with a read-rows number" },
+                  { "fieldName": "runs_reading_zero_rows", "displayName": "runs that read 0 rows" },
+                  { "fieldName": "slowest_seconds", "displayName": "slowest (s)" }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "sql_telemetry describes the ATTRIBUTION RECORD, not the task - no_sql_attributed is not proof the task issued none"
+              }
+            }
+          },
+          "position": { "x": 0, "y": 7, "width": 6, "height": 7 }
+        },
+        {
+          "widget": {
+            "name": "wg_task_runs",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_task_runs",
+                  "disaggregated": true,
+                  "fields": [
+                    { "name": "started_at", "expression": "`started_at`" },
+                    { "name": "job_name", "expression": "`job_name`" },
+                    { "name": "task_key", "expression": "`task_key`" },
+                    { "name": "attempt", "expression": "`attempt`" },
+                    { "name": "result_state", "expression": "`result_state`" },
+                    { "name": "execution_seconds", "expression": "`execution_seconds`" },
+                    { "name": "sql_telemetry", "expression": "`sql_telemetry`" },
+                    { "name": "statements", "expression": "`statements`" },
+                    { "name": "read_rows", "expression": "`read_rows`" },
+                    { "name": "written_rows", "expression": "`written_rows`" },
+                    { "name": "written_bytes", "expression": "`written_bytes`" },
+                    { "name": "run_id", "expression": "`run_id`" }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  { "fieldName": "started_at", "displayName": "started" },
+                  { "fieldName": "job_name", "displayName": "job" },
+                  { "fieldName": "task_key", "displayName": "task" },
+                  { "fieldName": "attempt", "displayName": "attempt" },
+                  { "fieldName": "result_state", "displayName": "state" },
+                  { "fieldName": "execution_seconds", "displayName": "execution (s)" },
+                  { "fieldName": "sql_telemetry", "displayName": "SQL telemetry" },
+                  { "fieldName": "statements", "displayName": "statements" },
+                  { "fieldName": "read_rows", "displayName": "read rows" },
+                  { "fieldName": "written_rows", "displayName": "written rows" },
+                  { "fieldName": "written_bytes", "displayName": "written bytes" },
+                  { "fieldName": "run_id", "displayName": "task run id" }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Task runs - one row per attempt, and a blank metric is not a zero"
+              }
+            }
+          },
+          "position": { "x": 0, "y": 14, "width": 6, "height": 8 }
+        }
+      ]
+    }
+  ]
+}

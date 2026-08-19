@@ -1,4 +1,4 @@
-"""Reclaim landed inner files once bronze proves it holds their rows.
+"""Reclaim landed inner files once every row they staged is accounted for.
 
 WHY THIS EXISTS: after F1.3, 16,743,815,717 B of consumed inner CSVs sat in the
 Volume (part 0 alone is 6,780,467,695 B) beside the 5.26 GB of zips they came
@@ -24,28 +24,50 @@ WHY THE UNIT IS THE FILE AND NOT THE DIRECTORY: F1.3 ingests incrementally --
 several batches per month -- so deleting a table's landing dir on one batch's
 promote would destroy parts that are landed but not yet ingested.
 
-WHY THE PROOF SET IS STILL NOT TRUSTED AS A DELETE LIST: `files_of_batch` reads
-`_source_file` out of a Delta table, and that column was written by a stream, not
-by a human -- so it names whatever that stream discovered. F1.3 proved that a
+WHY THE PROOF SET IS STILL NOT TRUSTED AS A DELETE LIST: `file_accounts_of_batch`
+reads `_source_file` out of a Delta table, and that column was written by a stream,
+not by a human -- so it names whatever that stream discovered. F1.3 proved that a
 stream discovers more than intended: a probe.txt planted in
 `zips/estabelecimentos/` was ingested by a stream reading the month root, because
 cloudFiles walks a source dir RECURSIVELY. Rows written that way carry a
 `_source_file` under `zips/`, and handing one to `delete_files` would destroy the
 archive this module's second paragraph exists to keep. `scope_to_landing_dir` is
-what makes "bronze proves it" and "it is this table's landed file" two separate
-conditions, both required.
+what makes "the rows are accounted for" and "it is this table's landed file" two
+separate conditions, both required.
+
+WHY THE PROOF IS NO LONGER "BRONZE HOLDS A ROW OF THIS FILE" (F4). That was
+`files_of_batch`, whose docstring called its query "the whole safety argument --
+what it returns is exactly what may be removed". It is airtight only under an
+all-or-nothing gate, where bronze holding *a* row of a file implies bronze holds
+*every* row of it. `repromote_triaged_batch` breaks the equivalence by design:
+`promote_batch` re-applies the DQ rules and appends only the passing rows, so a file
+with one rejected row has its clean rows in bronze and its rejected row only in
+quarantine -- measured, socios' 3,583 rejects span 20 distinct `_source_file` values.
+Wiring the reclaim into that path (ADR 0006, "the fix is to give the triage path the
+reclaim it lacks") is what made the gap reachable, so the proof had to be repaired in
+the same change that reached it.
+
+The repaired proof is `reconcile.RECLAIMABLE_SQL`: a file may go when every row it
+staged is accounted for -- `promoted + quarantined = staged` at FILE grain -- AND at
+least one of them is in bronze. It IMPLIES the old condition (`promoted > 0` is its
+first conjunct) and refuses cases the old one passed, so the delete set can only
+shrink. `files_of_batch` is deleted rather than deprecated: a weaker proof left in
+the module is a weaker proof somebody calls.
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
-from opl.bronze.autoloader import SOURCE_FILE_COLUMN
 from opl.bronze.promote import BATCH_COLUMN
+from opl.bronze.reconcile import file_accounts_sql
+from opl.bronze.registry import BronzeTable
+from opl.bronze.snapshot import SNAPSHOT_MONTH_COLUMN
+from opl.config import DEFAULT, OplConfig
 
 # `_source_file` is `_metadata.file_path`, i.e. a URI, and this workspace uses both
 # spellings of the same Volume object: F1.3's evidence records that `databricks fs`
@@ -97,29 +119,197 @@ class LandingScope:
     outside: tuple[str, ...]
 
 
-def files_of_batch(spark: SparkSession, bronze_table: str, batch_id: str) -> list[str]:
-    """The distinct landed files BRONZE holds rows of, for this batch.
+@dataclass(frozen=True)
+class FileAccount:
+    """One landed file's three counts for one batch, and the verdict over them.
 
-    Bronze and not staging, on purpose: staging holds rows that have been read but
-    not yet promoted, and a file whose rows are only in staging has not been
-    proven persisted. Deleting it would be unrecoverable without going back to the
-    zip. This query is the whole safety argument -- what it returns is exactly
-    what may be removed.
+    A row of `dataops_reconciliation_by_file` narrowed to one table and one batch.
+    The counts travel WITH the verdict, and not because a caller might want them:
+    a file held back is the loudest thing this module can report, and "held back"
+    without `staged=2 promoted=1 quarantined=0` says a control fired without
+    saying what it saw -- which is the shape of every guard this repository has
+    had to go back and prove could fail."""
 
-    Empty for a table that does not exist, matching `promote.rows_of_batch`'s
-    "0 if it does not exist": the safe action is the same either way (delete
-    nothing). What the emptiness MEANS differs, and telling those causes apart is
-    the calling job task's job, not this function's -- see reclaim_landing.py."""
-    if not spark.catalog.tableExists(bronze_table):
-        return []
+    source_file: str
+    staged: int
+    promoted: int
+    quarantined: int
+    reclaimable: bool
+
+    @property
+    def unaccounted(self) -> int:
+        """Rows of this file that reached neither bronze nor quarantine.
+
+        Negative means bronze and quarantine together hold MORE than staging ever
+        did -- `reconcile`'s `over_promoted`, which is also `reclaimable = false`."""
+        return self.staged - self.promoted - self.quarantined
+
+
+def _absent_roles(spark: SparkSession, spec: BronzeTable, config: OplConfig) -> tuple[str, ...]:
+    """The roles whose tables do NOT exist, for `file_accounts_sql`'s `skip`.
+
+    Asked here rather than handled by a `try` around the query: an
+    AnalysisException naming a missing table cannot be told apart from one naming
+    a missing COLUMN, and the second is a schema drift a reclaim must not swallow.
+
+    ALL THREE IS A REFUSAL, RAISED BY `reconcile._counts_sql` and not here, because
+    that is where the empty union would otherwise have become a Spark parse error."""
+    return tuple(
+        role
+        for role, table in (
+            ("staging", spec.staging),
+            ("bronze", spec.bronze),
+            ("quarantine", spec.quarantine),
+        )
+        if not spark.catalog.tableExists(config.table(table))
+    )
+
+
+def file_accounts_of_batch(
+    spark: SparkSession,
+    spec: BronzeTable,
+    batch_id: str,
+    *,
+    config: OplConfig = DEFAULT,
+) -> tuple[FileAccount, ...]:
+    """Every landed file this batch touched, with the repaired proof over each.
+
+    THE WHOLE SAFETY ARGUMENT, and unlike the query it replaces it is stated over
+    all three tables: what may be removed is a file whose every staged row is
+    accounted for -- in bronze or in quarantine -- and at least one of them in
+    bronze. `reconcile.RECLAIMABLE_SQL` is that predicate, spelled once and shared
+    with the view an operator reads, so a dashboard saying `reclaimable = true`
+    and a task unlinking the file are the same sentence.
+
+    Returns EVERY file, not just the admissible ones, so the caller can report the
+    ones it held back with the counts that held them. Empty when the batch touched
+    nothing -- the same answer, and the same delete-nothing action, as a table that
+    does not exist; which of those happened is the job task's to tell apart.
+
+    A NULL `_source_file` is dropped AND SAID SO -- it names no path, so it can
+    neither be unlinked nor be evidence about one, but see `_report_unnamed_rows`
+    for why a drop nobody prints is the wrong half of that sentence."""
+    rows = spark.sql(
+        file_accounts_sql(spec, config, skip=_absent_roles(spark, spec, config)),
+        args={"batch_id": batch_id},
+    ).collect()
+    _report_unnamed_rows(rows, batch_id)
+    return tuple(
+        sorted(
+            (
+                FileAccount(
+                    row["source_file"],
+                    row["staged"],
+                    row["promoted"],
+                    row["quarantined"],
+                    bool(row["reclaimable"]),
+                )
+                for row in rows
+                if row["source_file"]
+            ),
+            key=lambda account: account.source_file,
+        )
+    )
+
+
+def _report_unnamed_rows(rows: Sequence, batch_id: str) -> None:
+    """Say when this batch holds rows whose `_source_file` names no path.
+
+    A `Sequence` AND NOT AN `Iterable`, which is not a style choice here: the caller
+    iterates the SAME rows again after this returns, so a generator would be
+    exhausted here and leave `file_accounts_of_batch` building zero accounts -- zero
+    deleted, five balanced counters, no line saying why. Literally the species this
+    function was added to close, arriving through its own signature.
+
+    THE SILENT DROP. A row with a NULL (or empty) `_source_file` cannot be unlinked
+    and cannot be evidence about a file, so it is dropped -- and the task's five
+    printed counters (deleted, already_absent, failed, refused, held_back) total
+    over the accounts that SURVIVED the drop, so the dropped rows leave every
+    printed number balanced and appear nowhere at all. A silent failure preserving
+    every other number, in miniature, and the shape this module's own caller
+    invented `HELD BACK` to avoid.
+
+    REPORTED RATHER THAN RAISED, because nothing is at risk -- only unexplained. SQL
+    keys NULL as a group of its own, so an unnamed row joins no named file's counts
+    and moves no file's verdict: the delete list is the same list with these rows and
+    without them. Where the column went missing BETWEEN tables -- staged under a
+    name, promoted under none -- the named group is left short, the arithmetic breaks
+    and the file is held back (driven out of real tables, both directions). What a
+    dropped row costs is ATTRIBUTION and not safety: one that reached neither bronze
+    nor quarantine leaves no file to hold back for it, which is why all three counts
+    are printed rather than a total.
+
+    Not produced by the ingest at all: `_source_file` is `_metadata.file_path` and
+    `autoloader.bronze_stream` is the one place it is written -- every bronze stream,
+    the lookup's included, goes through that function, and the value is never null
+    for a file-fed stream. NOT `add_common_audit_columns`, which writes exactly
+    `_ingested_at`, `_record_source`, `_batch_id`, `_snapshot_month`: the F1b split
+    that created it exists to keep SOURCE-derived columns out, so it is the
+    counter-example. A line here means a hand-written insert or a backfill."""
+    unnamed = [row for row in rows if not row["source_file"]]
+    for row in unnamed:
+        print(f"  DROPPED (names no file): batch {batch_id} has {row['staged']} staged, "
+              f"{row['promoted']} promoted and {row['quarantined']} quarantined ROW(s) "
+              "whose _source_file is NULL or empty. Those are ROW counts and the five "
+              "counters below are FILE counts, so the two do not add. Nothing was "
+              "deleted for these rows and nothing can be, because _source_file is how "
+              "this reclaim names a delete target. Nothing is wrongly DELETED because "
+              "of them either -- they join no named file's counts, so no file's "
+              "verdict differs for their existing. What they cost is ATTRIBUTION: if "
+              "any of them staged a row that reached neither bronze nor quarantine, "
+              "there is no file to hold back for it. Find them with "
+              "SELECT * FROM <staging> WHERE _batch_id = "
+              f"'{batch_id}' AND (_source_file IS NULL OR _source_file = '')")
+
+
+def months_of_batch(spark: SparkSession, staging_table: str, batch_id: str) -> tuple[str, ...]:
+    """The distinct `_snapshot_month` values STAGING stamped on this batch.
+
+    THE OTHER HALF OF THE DELETE BOUNDARY, taken from the data instead of retyped.
+    `landing_table(subdir, month)` is the only directory deletes are confined to,
+    and in a repromote -- hours or days after the ingest -- nobody has the ingest
+    run's month in hand. `_snapshot_month` is not read off the file path: the
+    ingest stamped it from its own `{{job.parameters.month}}`, already through
+    `require_month`, which is what keeps the boundary independent of the
+    `_source_file` values it is used to judge.
+
+    Staging and not bronze, because staging is where the proof's denominator comes
+    from: a batch whose staged ROWS are gone reclaims nothing anyway, so those two
+    become unavailable together rather than one outliving the other. THAT IS A
+    STATEMENT ABOUT THE ROWS AND NOT ABOUT THE COLUMN, and F4's first correction pass
+    escalated it into a false universal in `repromote_batch_job.yml`. The column can
+    go missing on its own: the `()` two lines below is returned for a staging table
+    that has full `staged` counts and files that reconcile perfectly, because the
+    proof grains on `(_batch_id, _source_file)` and never reads this column at all.
+    See that YAML's derivation paragraph for what it costs and why it is latent.
+
+    WHAT IT COSTS, ON THE PATH NOBODY LOOKS AT. `reclaim_landing.main` calls this
+    BEFORE its empty-proof return so the month cross-check fires on the batches whose
+    batch id or month is the very thing that is wrong -- so this DISTINCT now runs on
+    every reclaim, the ingest's own no-new-file no-op included, where until F4's
+    correction pass the derivation ran only once a file was going to be unlinked. A
+    second pass over staging after `reconcile.file_accounts_sql`'s, and staging is not
+    small: `bronze_cnpj_estab_staging` is 144,193,416 rows (measured 2026-08-18). A
+    cost and not a defect, written here because the quiet path is where nobody looks
+    for a new query.
+
+    A TUPLE AND NOT A STRING, because the caller has to see "not exactly one". Empty
+    for a missing table, a staging shape with no such column, or a batch whose rows
+    all stamp NULL; more than one for a batch that somehow spans months -- and both
+    are refusals, made by the caller, which is where the fallback to `DEFAULT.month`
+    would otherwise be written."""
+    if not spark.catalog.tableExists(staging_table):
+        return ()
+    staged = spark.read.table(staging_table)
+    if SNAPSHOT_MONTH_COLUMN not in staged.columns:
+        return ()
     rows = (
-        spark.read.table(bronze_table)
-        .filter(F.col(BATCH_COLUMN) == batch_id)
-        .select(SOURCE_FILE_COLUMN)
+        staged.filter(F.col(BATCH_COLUMN) == batch_id)
+        .select(SNAPSHOT_MONTH_COLUMN)
         .distinct()
         .collect()
     )
-    return sorted(row[SOURCE_FILE_COLUMN] for row in rows if row[SOURCE_FILE_COLUMN])
+    return tuple(sorted(row[SNAPSHOT_MONTH_COLUMN] for row in rows if row[SNAPSHOT_MONTH_COLUMN]))
 
 
 def fuse_path(source_file: str) -> str:

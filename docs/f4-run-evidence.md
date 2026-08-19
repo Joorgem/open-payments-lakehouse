@@ -1,0 +1,1400 @@
+# F4 — DataOps: what was measured before anything was built
+
+**This document holds Task 0's measurements and, as the phase runs, its predictions and what the
+runs said.** It lives in `docs/` and not in `.plans/` deliberately: `.plans/` is git-ignored and this
+repository is public, and F3 shipped a section pointing a public reader at that directory, where they
+reached nothing.
+
+**Controller-verified** means the controller ran the command in this session and read the output.
+**Reported** means an audit lens, a task's stdout or a subagent's report said it. Every claim below
+carries one of the two labels. Revision 1 of this phase's plan said *"measured"* nineteen times and
+never once said by whom, and four of its five worst errors were single-sourced §0 figures — this
+split is the repair.
+
+**Provenance is given as the re-runnable command, and a job `run_id` where one exists.** A run id is
+durable — 7 of 7 at ~9 days, and 51 of the 71 live run ids are cited by number in committed `docs/`
+files with nothing aged out.
+
+> **THE REASON THIS DOCUMENT FIRST GAVE FOR DISTRUSTING STATEMENT IDS WAS ITSELF WRONG, AND F4 FOUND
+> OUT WHY.** It read: *"F-DB §0.1 measured that `GET /api/2.0/sql/statements/<id>` returns `Not Found`
+> for a statement **seconds** old, with a control, so a published statement id is not a durable
+> handle."*
+>
+> **That control was measuring Git Bash.** MSYS rewrites a leading `/api/...` into a Windows path
+> before the CLI sees it (`GET /Program Files/Git/api/2.0/…`), and the request never leaves the box.
+> **Two messages were being read as one:** `Error: Not Found` is **the shell**;
+> `Error: The statement <id> was not found.` is **the API**, and it names the statement.
+>
+> **Controller-verified 2026-08-18, with `MSYS_NO_PATHCONV=1`:** a seconds-old statement returns its
+> full payload; four statements from earlier the same day (up to ~7.5 h) all return `state: CLOSED`;
+> the four ids F-DB probed on 2026-08-15 now all return the API's named `was not found`. So F-DB's
+> original four-id probe was reaching the API all along, **its 8–35 hour band stands**, and the
+> correction to `docs/f-db-run-evidence.md` §0.1 is inline there.
+>
+> **A statement id is therefore usable provenance for work of the last day**, which is why several
+> appear in this document. `.plans/sql.sh` sets `MSYS_NO_PATHCONV=1`; a bare `databricks api get` in
+> Git Bash does not, and its failure looks exactly like expiry.
+
+**Predictions are published BEFORE the run that tests them** (master protocol §4.5). A number first
+written down after the run that produced it is not a prediction. §2 is where they live.
+
+---
+
+## 0. Task 0 — measured before a line was built
+
+Four independent measurement lenses ran before the plan existed, and four independent audits then
+read the plan they produced. **The audits returned five CRITICAL and five BLOCKING findings, and
+three of them reversed a ruling rather than a figure.** What follows is what survived, labelled.
+
+### 0.1 THREE RULINGS WERE REVERSED BY MEASUREMENT, NOT BY OPINION
+
+**Controller-verified.** Each of these was a sentence in the phase plan's revision 1; each is false;
+each was catchable by one command.
+
+| revision 1 asserted | measured | consequence |
+|---|---|---|
+| a graded DQ gate would **activate** a delete path that had never executed — filed as the phase's *hidden cost* | the delete path executed on 2026-07-31 and removed **16,743,815,717 B** with `refused=0`, and ADR 0006 books its unreachability as *"the defect this decision must not leave standing"*, with **8.21 GB** parked and a **~48 GB/month** floor | **reaching reclaim is the product.** The phase's headline moved from grading the gate to wiring the reclaim |
+| *"there is no un-compacted baseline left to optimise from"* | `link_empresa_estabelecimento` — **512 files, 7,201,236,749 B, one Delta version, never compacted** — is the largest table in the vault by bytes | the performance case study's refusal was withdrawn and the benchmark reinstated |
+| schema and catalog grants belong in the Databricks Asset Bundle | the repo's only target is `mode: development`, which **renames** the schema to `dev_<prefix>_default`; a production target **collides** (`Schema 'default' already exists`); and declared grants are documented **authoritative**, so a deploy would revoke the platform's own `CREATE TABLE` on the schema every pipeline writes into — **but only the rename is measured end to end; the collision and the revocation are assumed on strong evidence and stay in §0.9's open list, because proving them means performing the deploy the decision exists to avoid** | governance is **all imperative**. The bundle half was deleted rather than fixed, **on the rename alone**, which is sufficient: under the only target this repo has it governs a schema nobody reads |
+
+**A fourth reversal is the plan's, not an audit's**, and it removes an ordering dependency all four
+audits inherited: the re-derivation the phase needs runs over **staging**, which this project
+deliberately never masks (`masked_table_ddls`' own argument in `src/opl/bronze/masking.py` —
+cited here by line number until F4 Task 5 grew that file from 200 lines to 279 and moved it,
+which is the defect §0.6 corrected once and this sentence repeated; pinned by
+`tests/bronze/test_masking.py::test_the_control_covers_bronze_and_quarantine_and_never_staging`).
+One audit called the UC mask a blocker on 64% of that corpus and re-ordered the phase's tasks to
+repair it first. **The corpus was the wrong table.**
+
+### 0.2 THE QUARANTINE CENSUS, AND THE SHADOWING THAT MEASURES ZERO
+
+**Controller-verified**, 2026-08-18, statement `01f19b1b-88a3-1ce0-9afb-44022b43842e`:
+
+| quarantine | `_dq_reject_reason` | rows | distinct `_source_file` |
+|---|---|---|---|
+| `bronze_cnpj_socios_quarantine` | `null_or_empty_nome_socio_razao_social` | 3,583 | **20** |
+| `bronze_payments_quarantine` | `rescued_data_present` | 2,000 | 1 |
+| `bronze_cnpj_estab_quarantine` | `encoding_replacement_char` | 4 | 2 |
+| `bronze_cnpj_empresas_quarantine` | `null_or_empty_razao_social` | 2 | 2 |
+
+**5,589 rows, four reasons, one per table.** Four of seven quarantines hold rows.
+
+**The under-report the phase was commissioned to expose is a construction, not an event, and it was
+already measured.** ADR 0006:325-328, on 2026-08-03, published `fffd_any / req_blank / both` over
+both staging months of all three CNPJ tables: estabelecimentos 4/0/0 and 4/0/0, empresas 0/1/0 twice,
+socios 0/1797/0 and 0/1786/0. **`both = 0` in all six cells**, pinned as a live property by
+`tests/bronze/test_rules.py::test_a_blank_required_column_hides_the_lost_byte_behind_it`.
+
+**What that leaves genuinely missing** — and it is ADR 0006's own condition 1 — is per-reason counts
+derived from **all** matching rules rather than the first, over the four contracts that sweep never
+covered: payments, ptax, merchant and lookup. That is this phase's Task 3.
+
+**One number the census does not show:** `fail_on_dq` fired **eleven** times across **five** jobs, and
+`bronze_cnpj_lookup_quarantine` — whose contract fired three of the eleven — holds **zero** rows,
+because that table was recreated on 2026-07-31, a week after its firings (**reported**, provenance
+lens). **Three quarantines are empty, not two**, and the joint-most-blocking contract in the
+workspace contributes nothing to any retroactive classification.
+
+### 0.3 THE TELEMETRY EXISTS; THE VIEW IS THE DELIVERABLE
+
+**Controller-verified**, 2026-08-18:
+
+```sql
+SELECT COUNT(*), COUNT(DISTINCT run_id) FROM system.lakeflow.job_task_run_timeline;
+-- 270 rows / 260 distinct task runs
+
+SELECT COUNT(*), COUNT(DISTINCT t.run_id)
+FROM system.lakeflow.job_task_run_timeline t
+JOIN system.query.history q ON q.query_source.job_info.job_task_run_id = t.run_id;
+-- 674 rows / 136 matched task runs
+```
+
+Three properties decide how the view is written, and revision 1 of the plan had none of them:
+
+1. **The join key is `t.run_id`.** `t.job_run_id` yields zero rows *silently*; `t.task_run_id` does
+   not exist. (**Reported**, buildability lens; the working key is controller-verified above.)
+2. **Coverage is 136 of 260 — 52%.** The tasks that match nothing are the ones that issue no SQL:
+   `assert_deployed_revision`, `check_bad_rows`, `fail_on_dq`, `unzip`, `smoke`. **`fail_on_dq`, the
+   phase's headline DQ event, has zero rows in `system.query.history`.**
+3. **The join fans out ~5×.** Any per-task metric read straight off it is multiplied by the statement
+   count, so the `query.history` side is aggregated to task-run grain before anything reads it.
+
+**Both sources are MANAGED tables** in `system.information_schema.tables` (**reported**, provenance
+lens). The plan's revision 1 heading said *"it is a view, not a table"* of the **sources**; the view
+is what F4 builds. Corrected before it shipped.
+
+**Cost, corrected.** There is no 24–29 s per-task floor: that range is the interquartile spread of
+**one** task (`assert_deployed_revision`, 15–33 s over 37 runs), and **88 of 268 task runs finished
+under 24 s**, with `fail_on_dq` at 14–18 s (**reported**, provenance lens). The conclusion survives
+in weaker form — a new task costs ~15–30 s, a large fraction of the smallest jobs — and it is why
+this phase adds exactly one job task.
+
+### 0.4 THE UN-COMPACTED BASELINE THAT WAS SAID NOT TO EXIST
+
+**Controller-verified**, 2026-08-18, statement `01f19b1b-5e9b-149b-9c91-f9eabd790329`:
+
+```
+DESCRIBE DETAIL workspace.default.link_empresa_estabelecimento
+  numFiles 512 | sizeInBytes 7,201,236,749 | partitionColumns [] | clusteringColumns []
+  createdAt 2026-08-10T22:07:15Z | lastModified 2026-08-10T22:15:06Z
+```
+
+and, grouping `system.storage.predictive_optimization_operations_history` by table and operation,
+**Predictive Optimization has run COMPACTION on nine tables and never on this one** — only an
+`ANALYZE`, 2026-08-11T02:46:14Z. 512 files at ~14 MB each is exactly what
+`docs/f2-wave-1-workspace-run-evidence.md:340` recorded at write time, eight days ago.
+
+PO is **not** a past event: it ran `ANALYZE` as recently as 2026-08-18T06:55Z and `VACUUM` at
+2026-08-18T01:50Z (controller-verified in the same grouping). Any baseline taken without disabling it
+per table can be rewritten under the run.
+
+### 0.4.1 THE THREE NULL RESULTS — REPORTED, AND NOT RE-DERIVABLE
+
+**Reported** by the performance measurement lens, before this phase's plan existed. They are the
+reason the plan first refused a baseline→optimised benchmark, and ADR 0018 calls them the item's
+product — **so they belong in the record rather than only in a decision that cites them.**
+
+1. **A point lookup clustered on the lookup key: 47 files → 1, 22–39× fewer bytes, and the wall
+   clock does not move** (1,262–1,561 ms against 1,278–1,558 ms). ~1 s of fixed compile-and-schedule
+   dominates.
+2. **The real gold query cannot be helped by clustering.** `fact_payment` references only **1,027
+   distinct company surrogate keys** and they are hashes spread across the whole key space, so 1,027
+   needles uniformly over 48 files puts ~21 in every file. `rows_read` unchanged (66,438,064 against
+   66,626,466); the clustered run **slower**.
+3. **Clustering the PIT on `as_of_date` fails, and the mechanism says why.** Files 129 → 100,
+   `rows_read` **identical at 145,405,250**, clock **worse** (10,774 → 17,939 ms). The join key is
+   `hub_estabelecimento_hk`, so the satellite side is scanned regardless.
+
+> **THEY CANNOT BE RE-DERIVED, AND THAT IS A LIMIT ON WHAT THEY CAN BE USED FOR.** The provenance
+> audit checked and **every live table reports `clusteringColumns = []`**; `pit_estabelecimento` is
+> at **43** files, not 129 or 100, so experiment 3 ran against an object that no longer exists in
+> that state, and the lens named no table for it. The numbers are **reported, never
+> controller-verified**, and no run id, statement id or re-runnable command survives for any of the
+> three.
+>
+> **What they still support, and what they do not.** They support the *mechanism* claims — a
+> uniformly-hashed key cannot be pruned, and a join on the satellite's hash is not helped by
+> clustering the other side — and those are re-derivable from the key distributions, which §0.4's
+> `fact_payment` figures corroborate. **They do not support any timing.** §2.3's prediction cited
+> experiment 1's "22–39× fewer bytes and no movement in the clock" as its mirror image; that citation
+> is to a reported figure, and Task 6's own measurement — which *is* controller-verified — is what
+> the falsification rests on.
+
+**Why PO compacted nine tables and declined the largest is UNMEASURED**, and is worth exactly one
+probe, not a guess.
+
+### 0.5 THE LANDING RESIDUE, AND THE FACT THAT IT IS STILL REACHABLE
+
+**Controller-verified**, 2026-08-18, `databricks fs ls --output json` summed per directory:
+
+| Volume path | files | bytes |
+|---|---|---|
+| `cnpj/2026-06/empresas` | 10 | **5,359,720,597** |
+| `cnpj/2026-06/socios` | 10 | **2,852,557,826** |
+| `cnpj/2026-06/estabelecimentos` | 0 | 0 — reclaimed 2026-07-31 |
+| `cnpj/2026-07/{empresas,socios,estabelecimentos}` | 0 | 0 |
+| **total residue** | **20** | **8,212,278,423** |
+
+matching ADR 0006's booked 8.21 GB **to the byte**. The `zips/` siblings exist for all three groups,
+so `reclaim_landing`'s way-back-to-the-source argument holds.
+
+**And the residue is reachable from bronze, which is the finding this phase is built on.**
+Controller-verified:
+
+```sql
+SELECT _batch_id, _snapshot_month, COUNT(DISTINCT _source_file), MIN(_source_file)
+FROM workspace.default.bronze_cnpj_empresas GROUP BY 1,2;
+-- 321750543973966 | 2026-06 | 10 | /Volumes/.../cnpj/2026-06/empresas/K3241.K03200Y0.D60613.EMPRECSV
+-- 371067950667703 | 2026-07 | 10 | /Volumes/.../cnpj/2026-07/empresas/K3241.K03200Y0.D60711.EMPRECSV
+```
+
+and socios batch `1121645114029617` = 2026-06 over 10 files, estabelecimentos batch
+`118868417561350` = 2026-06 — which is verbatim the batch F1.4a's reclaim already emptied
+(`docs/f1.4a-migration-evidence.md:472`).
+
+`retention.files_of_batch` reads **bronze**, so for the two 2026-06 batches it returns those twenty
+files **today**. *(Written at Task 0. **`files_of_batch` no longer exists** — Task 2 replaced it with
+`file_accounts_of_batch`, whose proof is strictly stronger; the sentence is left as measured and
+corrected here rather than rewritten, and §1.3 records that the two proofs admit the same twenty
+files on these two batches.)* **The standing 8.21 GB is not a backlog needing a bespoke operator delete; it is one
+job run away**, and the audit finding that said otherwise reasoned from *future* batches, whose
+checkpoints are indeed consumed, rather than from the original batch, which is still in bronze.
+
+**Checked and found true, not a defect:** the empty 2026-07 directories are the result of **three
+operator hand-deletes recorded as such** — `docs/f1.4b-pr-b-run-evidence.md` §19, *"The hand-delete
+between groups — an operator action, not reclaim working"*. Nothing silently deletes landing files,
+and the ~48 GB/month floor survives as a projection of what accumulates when nobody hand-deletes.
+
+### 0.6 GOVERNANCE: THE MASK CANNOT BE OPENED, AND ONE CLAIM ABOUT IT WAS WITHDRAWN
+
+**Controller-verified at Task 0.** `masking.py` used `is_account_group_member('opl_pii_readers')`;
+the `information_schema.routines` definition was unchanged; the owner read `***` through it.
+
+> **STALE LINE REFERENCE, corrected 2026-08-18.** This read *"`masking.py:63` uses …"* in the present
+> tense. Task 5 repaired the predicate: the module's line 79 now emits `is_member(...)`, and 63 is a
+> docstring line. **The deployed function is still the old one** — `information_schema.routines`
+> returns `is_account_group_member` with `last_altered 2026-08-03`, because the repair only reaches
+> the workspace when `ensure_masked_table` runs. **Shipped is not deployed**, and there is no
+> exposure either way: both predicates return false for the only principal in this workspace.
+> Caught by Task 5's independent reviewer, in a paragraph a later commit had edited around without
+> reading.
+**The permissive branch of this project's mask remains untested by construction.**
+
+**A claim to the contrary was published on this branch on 2026-08-18 and withdrawn the same day,
+before it merged** (`4478d07`). What had been measured is that **a** UC column mask discriminates
+between two principals — on a scratch mask with a different predicate — not that **this** one does.
+The withdrawn claim had no statement id, no SQL and no surviving object, and the service principal it
+used has since been deleted. **It was caught by an audit reading the PR's own text.**
+
+**Reported** (platform lens), and load-bearing for the repair:
+
+- `is_member` behaves identically inside a serverless job session, as the user and as a `run_as`
+  service principal, and **fails closed for a group that does not exist** — so substituting it trades
+  an unopenable control for an openable one with the same floor.
+- A workspace-local group works **in a mask predicate** and is **refused as a grant principal**
+  (`PRINCIPAL_DOES_NOT_EXIST`); the only account group that resolves is `account users`, i.e.
+  everyone. **So "RBAC here" necessarily means a workspace-local group in the predicate plus `SELECT`
+  granted per service principal.** There is no group in this workspace that can be both.
+- **Removing a principal from a group does not close the mask promptly** — a measured fail-open
+  window of **> 3 m 50 s, ≤ ~17 min**, with a fresh OAuth token on each read, so it is server-side
+  membership caching. ~~Addition propagates immediately; removal does not, which is the unsafe
+  direction.~~
+  > **THE ASYMMETRY DID NOT REPRODUCE, AND IT WAS THIS PARAGRAPH'S ONLY CONSOLING HALF.** Task 5
+  > re-measured **both** directions on the SQL warehouse, fresh OAuth token and varied literal on
+  > every read: **removal effective at ~3 m 54 s (~~12~~ **11** consecutive reads), addition at ~5 m 18 s
+  > (14 reads)** — the count corrected by ADR 0008, which reconstructed both series from
+  > `system.query.history`: the removal series is 11 statements and the stray *twelve* belongs
+  > to a **third** series this table never described, the reads spent waiting for the addition. Both lag, and the slower of the two is the one that *grants* access.
+  >
+  > That is a different shape of risk from the one first recorded — not *"a control that closes
+  > late"* but **"a control whose membership is slow in both directions"** — and it removes the
+  > sentence a reader would have leaned on. The two figures come from different sources (the first
+  > **reported** by the platform lens, the second **measured** by Task 5) and **ADR 0008 assumes
+  > neither direction is instant**.
+  >
+  > **What is not in doubt, and is the operational point: `REVOKE` bites on the very next statement**
+  > — `INSUFFICIENT_PERMISSIONS`, SQLSTATE 42501, measured **while the principal was still in the
+  > group**. So the fast-closing control here is the **grant**, not the membership, and that is what
+  > the two-principal differential is built on.
+  >
+  > **AND A THIRD TRIAL RECONCILED THE TWO, WHICH IS BETTER THAN EITHER.** Task 5's independent
+  > reviewer measured removal at **~5 m 04 s** — about 30% longer than Task 5's 3 m 54 s, so **that
+  > figure is a lower bound from a single trial and not a bound** — and measured addition visible in
+  > **4 seconds**. The difference is not noise and it is not disagreement: the reviewer's group was
+  > **created with the member already in it**, so no principal had ever resolved it to `false`, while
+  > Task 5 added a member to a group its reading principal had already read as false — **eleven
+  > times, not twelve**; ADR 0008 settled which series was which and the mechanism sentence
+  > below was first built on the wrong one.
+  >
+  > **So what takes minutes is expiring a cached NEGATIVE, not propagating a membership.** All three
+  > sources are now consistent, none of them measured wrong, and the operational rule is sharper than
+  > any of the individual numbers: **a principal that has already been refused stays refused for
+  > minutes after it is authorised** — which is a usability cost, not a safety one — **while the
+  > safety-critical direction, withdrawal, is the `REVOKE`, and that is immediate.**
+
+**Unbacked and not to be cited without a re-run:** the two-principal transcript (principal deleted),
+the ABAC demonstration (policy removed), and ~~the "70 governed tag policies" (no endpoint named, and
+the provenance lens could reach none of `/api/2.0/tag-policies`, `/api/2.1/tag-policies`,
+`/api/2.0/account/tag-policies`)~~.
+
+> **THE TAG CLAIM IS BACKED, AND THE ENDPOINT IS NOW ON THE RECORD.** Task 5 found it:
+> `GET /api/2.1/tag-policies` returns **`tag_policies: 70`**, including `class.name`,
+> `class.br_cpf` and `class.br_cnpj`. `/api/2.0/tag-policies` answers only that it is deprecated —
+> **while naming the 2.1 path in its own reply**.
+>
+> > **TWO THINGS THIS PARAGRAPH SAID ON 2026-08-18 ARE WITHDRAWN THE SAME DAY, AND BOTH WERE THE
+> > CONTROLLER'S.** They are the species this very paragraph was celebrating the phase for hunting.
+> >
+> > ~~*"with `next_page_token: null`"*~~ — **there is no such key.** Controller-re-verified: the
+> > response body's top-level keys are `['tag_policies']` and nothing else. Publishing `null` for a
+> > field nobody was served is **a structural absence printed in the shape of a measurement** —
+> > verbatim the defect `.plans/sql.sh`'s own header retracts for `from_cache: None`. **The
+> > completeness conclusion survives and now rests on what actually supports it: 70 policies came
+> > back in one page.**
+> >
+> > ~~*"the provenance lens reached nothing because it queried the path without the page size …
+> > what was missing was one parameter"*~~ — **false.** Controller-re-verified:
+> > `GET /api/2.1/tag-policies` **with no parameters at all returns all 70**. Whatever defeated the
+> > earlier audit, it was not the page size. **That sentence was an explanation of another agent's
+> > failure, published without testing the explanation** — which is the same error as publishing a
+> > number without measuring it, and it is worse for being about somebody else's work.
+> >
+> > Both caught by Task 5's independent reviewer, in the commit that was congratulating this phase
+> > for catching them elsewhere.
+>
+> **And the thing worth knowing costs more than the count.** Those policies' allowed-value lists are
+> **empty**, measured: `SET TAGS ('class.name' = 'personal_name')` is **refused** and
+> `SET TAGS ('class.name' = '')` **succeeds** and reads back from
+> `information_schema.column_tags`. A bespoke `opl.pii` key is refused outright — *"Tag key contains
+> reserved characters"* — so the governed keys are the only dotted ones available. **A classification
+> whose only legal value is the empty string carries its meaning entirely in the key**, which is a
+> real limit on what tagging buys here and belongs beside the count rather than under it.
+
+### 0.7 THE CACHE FLAG HAS THE SAME DISEASE AS THE MANIFEST, BIASED AGAINST THE RUNS THAT MATTER
+
+**Reported** (platform lens), and it is the fifth instance of this repository's signature error:
+`/api/2.0/sql/history/queries?include_metrics=true` returns `status: FINISHED` with **4** metric keys
+and `result_from_cache: null`, filling to **29** keys about 3 s later — **but a cached result is
+complete on the first read**. Only the *uncached* runs transiently read `None`, which is the
+identical shape to the structural absence `.plans/sql.sh`'s own header retracts.
+
+**So: poll until the flag is non-null, discard a run whose flag never fills, and never read `null` as
+`False`.**
+
+**Controller-verified, and it is a finding about this phase's own tooling:** the helper the audit and
+the session prompt both name as the thing to fix — `.plans/q.sh` — **does not exist**. Neither does
+`.plans/sp_sql.py`, cited by a second audit. `find` over the repository, `.venv` excluded, returns
+nothing for either. They were session artefacts that never landed on disk.
+
+**An instruction pointing at a file that does not exist reads exactly like an instruction that was
+carried out.** That is this project's second recurring species — a guard whose output cannot
+distinguish *passed* from *never ran* — showing up in the tooling rather than the code. Every
+`result_from_cache` figure taken through that helper is unverified.
+
+**So the reader was written rather than fixed** (`.plans/cache_flag.sh` + `.plans/cache_flag.py`,
+git-ignored like the rest of the operator tooling). It polls until the flag is non-null, exits
+non-zero on a flag that never fills, and prints `DISCARD … This is NOT a False` rather than a number.
+**It failed closed twice while being built** — two shell-quoting bugs turned the parser into a
+`SyntaxError`, and both times the wrapper printed `DISCARD` instead of a reading, which is the
+behaviour being bought. The parser moved out of the heredoc for that reason.
+
+**Five readings taken with it, controller-verified 2026-08-18. Two of the audit's three claims
+reproduce exactly; the third did not reproduce, and one number moved that was said not to.**
+
+| run | statement | `result_from_cache` | metric keys | `read_bytes` |
+|---|---|---|---|---|
+| A | `amount_brl > 0.0000031`, read after settling | **False** | 30 | **386,515** |
+| B | **byte-identical re-run of A**, read immediately | **True** | 26 | **0** |
+| C | fresh varied literal, read immediately | **False** | 29 | **386,504** |
+| D–F | three further varied literals | **False** ×3 | — | **386,504 ×3** |
+
+- **The cache behaviour reproduces exactly.** An identical statement returns `True` with
+  `read_bytes 0`, `read_files_count 0` and 375 ms against 917 ms — which is precisely how a "268 ms
+  baseline" gets published. **Varying a literal defeats the cache**, five times out of five.
+- **The transient-`null` race did NOT reproduce.** Run C was uncached and read immediately, and its
+  metrics were already populated at 29 keys on the **first** poll. The audit measured the race and a
+  race is a race, so one non-reproduction refutes nothing — but the poll's justification rests on a
+  reported measurement this controller could not reproduce in one attempt, and that is recorded
+  rather than glossed. **The poll costs nothing and the failure it guards against is silent**, which
+  is why it stays.
+**AND THERE IS A THIRD PATH TO THE FLAG THAT NO DOCUMENT IN THIS REPOSITORY NAMED.** Found by Task
+4's implementer while building the telemetry view, **controller-verified 2026-08-18**:
+`system.query.history` carries **`from_result_cache` (BOOLEAN)** as a column — and
+`cache_origin_statement_id` beside it, which names *which* statement's result was reused.
+`system.information_schema.columns` returns both.
+
+`.plans/sql.sh`'s header says the flag *"IS served, by
+`/api/2.0/sql/history/queries?include_metrics=true`"*. That is true and it is **incomplete**: the
+flag is also plain SQL, with no REST call, no `metrics` object to materialise, and therefore none of
+the transient-`null` race §0.7 exists for.
+
+**So which path is right depends on when you ask, and that is measurable rather than arguable:**
+
+| | measured |
+|---|---|
+| a statement run seconds ago, looked up in `system.query.history` | **not there** — six consecutive polls returned no row |
+| newest row in `system.query.history` versus `current_timestamp()` | **1,349 s behind** — ~22 minutes |
+
+**For a number you are taking now — T5's benchmark — the REST endpoint with the poll is the only
+path that answers at all.** For a retrospective question — *was this figure I published last week
+served from cache?* — **the system-table column is strictly better**: one query, no race, and it
+names the origin statement. Neither replaces the other, and the repository had recorded only one of
+the two.
+
+- **`read_bytes` is not quite the invariant T5 wants to denominate in.** Four of five uncached runs
+  read **386,504** exactly; run A read **386,515**, eleven bytes more. Eleven bytes on 386 KB is
+  0.003% and irrelevant to a 7.2 GB before/after — but the claim T5 inherits is *"byte-identical
+  within a batch"*, and the honest version is **"byte-identical in four of five readings, with one
+  11-byte excursion on the session's first touch of the table"**. The mechanism for the excursion is
+  **unmeasured**; a first-touch metadata read is a guess, not a finding.
+
+### 0.7.1 THE STANDARD SQL ESCAPE FOR AN APOSTROPHE SILENTLY DELETES IT HERE
+
+Found by Task 4's implementer when a test it had written for exactly this failed for real, and
+**controller-verified** on the `opl-free` warehouse 2026-08-18:
+
+```sql
+SELECT length('don''t') AS doubled, length('don\'t') AS backslashed, 'don''t' AS rendered
+--     4                              5                               dont
+```
+
+**`''` is not an escape in Databricks SQL.** The lexer ends the literal and starts another, adjacent
+literals concatenate, and the apostrophe is **gone** — length 4, rendering `dont`, **with nothing
+raising and nothing logged**. The backslash form is correct at 5.
+
+**This is species 1 in its purest form** — a silent failure that preserves every other number — and
+it is not confined to this phase: it applies to anything in this repository that interpolates prose
+into SQL, which now includes the cadence notes a dashboard prints to an operator. Task 4's escaper
+escapes the backslash first and then the quote; the general hazard is recorded here because the next
+person to build a SQL string from English text will not find it in a module they are reading.
+
+### 0.8 SYSTEM-TABLE RETENTION: A MEASURED FLOOR, NOT AN UNKNOWN
+
+**Reported** (platform lens): all seven system tables this phase reads have their earliest row within
+hours of workspace creation and **nothing has been trimmed**. So the retention floor is **~25 days**
+and the ceiling is unmeasurable, because the workspace is younger than any documented horizon.
+Databricks documents 365 days; that is documentation, not a measurement. **The durability guard runs
+while the phase runs**, because it is what would catch the first trim.
+
+### 0.9 WHAT REMAINS UNMEASURED
+
+Listed here so the phase's close can say which of these it changed:
+
+- whether a `bundle deploy` actually fails against the existing `workspace.default` schema (assumed
+  from the underlying API's `already exists`);
+- whether bundle-declared grants actually revoke undeclared ones;
+- whether the platform stops maintaining a table whose PO flag reads `DISABLE` (PO's cadence is hours
+  to days, so it is not settleable in a session — the flag is the request, the ops-history table is
+  the receipt);
+- the exact revocation-propagation delay, bounded to 3 m 50 s – ~17 min;
+- why PO compacted nine tables and declined the largest;
+- the RFB's actual publication cadence for the 2026-07 lookup zips — `f1.4b-pr-b` §25.5 records only
+  that they are not on disk, so "source freshness" for `bronze_cnpj_lookup` is not yet a defined
+  quantity.
+
+---
+
+## 1. The tasks, as they ran
+
+### 1.1 Task 1 — the reconciliation, and it found the stranding without being told
+
+**Built:** `src/opl/bronze/reconcile.py`, `databricks/src/create_dataops_views.py`,
+`databricks/resources/dataops_views_job.yml`, `tests/bronze/test_reconcile.py`, and one entry in
+`tests/test_job_yaml_launch_guards.py`'s guard list. Two views, no table, no schema change.
+
+**Deployed and run. Controller-verified**, 2026-08-18:
+
+| | |
+|---|---|
+| revision the run was launched for | `9d8ea78c431c271bbe7b1c10e89a3778db8d2d64` |
+| revision stamped in the deployed wheel | `9d8ea78c431c271bbe7b1c10e89a3778db8d2d64` |
+| deployed wheel sha256 | `2009eb63eb08f968016d114972dc4285c0bcf889d073b7a6783e211d2a8394e7` |
+| local wheel sha256 | **identical** — the deployed artefact was downloaded and hashed, not trusted |
+| `opl/bronze/reconcile.py` present inside the downloaded wheel | yes |
+| job run | **`836110216544566`**, `opl-dataops-views`, **SUCCESS** |
+
+**What the view says, read back through the view rather than through the query that built it:**
+
+| verdict | (table, batch) pairs |
+|---|---|
+| `reconciled` | **14** |
+| `stranded_gated` | **1** |
+
+```
+source   | batch_id        | staged | promoted | quarantined | unaccounted | verdict
+payments | 592660596679630 |  10000 |        0 |        2000 |        8000 | stranded_gated
+remedy: databricks bundle run repromote_triaged_batch -t free
+        --params table=payments,batch_id=592660596679630,revision=$(git rev-parse HEAD)
+```
+
+**The acceptance was that it finds `592660596679630` without being told about it, and it does.**
+The other fourteen pairs reconcile exactly, including the four CNPJ batches that reached bronze
+through a repromote after the gate blocked them — which is the property that makes this a
+reconciliation and not a test for "the gate fired".
+
+**The file grain, which is Task 2's input. Controller-verified** through
+`dataops_reconciliation_by_file`: all **20** files of the two 2026-06 CNPJ batches are
+`reclaimable`, and the stranded payments file is **not** (8,000 unaccounted). Socios' two batches
+carry 1,797 and 1,786 rejected rows spread over 20 files and every one of those files is
+reclaimable — because a rejected row **is** an accounted-for row once it is in quarantine, which is
+exactly the distinction `retention.files_of_batch`'s proof could not make. *(It no longer has to:
+Task 2 deleted that function and put this predicate on the delete path — §1.3.)*
+
+### 1.3 Task 2 — the reclaim reaches the triage path, and the proof is repaired in the same change
+
+**Built, and reviewed by an agent that did not write it.** The wiring is a third task on
+`repromote_triaged_batch`; the proof is not a wiring change at all. `files_of_batch` returned
+`DISTINCT _source_file FROM <bronze>` — that is, **`promoted(f) > 0`** — and its docstring called it
+*"the whole safety argument"*. That is airtight only under an all-or-nothing gate. It is **deleted**,
+not deprecated, and replaced by
+
+> `promoted(f) > 0 AND promoted(f) + quarantined(f) = staged(f)`
+
+whose first conjunct **is** the old predicate, so `new ⇒ old` and the delete set is a **subset** of
+what shipped before. A retention control is allowed to move in that direction and no other.
+
+**Controller-verified on the live warehouse, independently of the implementer and of the reviewer**,
+2026-08-18 — the two proofs compared over the batches the acceptance run will use:
+
+| batch | files | repaired proof admits | old proof admits | staged | promoted | quarantined |
+|---|---|---|---|---|---|---|
+| empresas `321750543973966` | 10 | **10** | **10** | 68,629,148 | 68,629,147 | 1 |
+| socios `1121645114029617` | 10 | **10** | **10** | 27,838,448 | 27,836,651 | 1,797 |
+
+**The strengthening costs nothing on the batches it was written for** — which is the right result and
+not a disappointing one: socios' 1,797 rejected rows are spread across those same ten files, and
+every file still reconciles, because a rejected row *is* an accounted-for row once quarantine holds
+it. The predicate refuses a different case, and the phase has one: the stranded payments file, where
+8,000 rows reached neither table.
+
+#### The run, and the prediction it tested
+
+**Deployed and run 2026-08-18. Controller-verified**, deployed wheel downloaded and hashed:
+sha256 `d2628a98fadc65c76db5cdfa99e46b4ca529ef3fd82b8f33b0cacd10776943a4` on both sides, stamped
+revision `eb7c6fab1d948c110d7392a52c6f763559157ba6` equal to the revision each run was launched for.
+
+**Before the delete, the recovery path was verified present** — because it is the whole safety
+argument and a control nobody checks is not a control: `cnpj/2026-06/zips/` held **10 zips per
+group**, 1,352,336,436 B (empresas), 680,600,148 B (socios), 5,259,919,847 B (estabelecimentos).
+
+| run | job output, quoted verbatim |
+|---|---|
+| **`945043269742472`** SUCCESS | `promote_batch: batch 321750543973966 is ALREADY in workspace.default.bronze_cnpj_empresas with all 68629147 of its promotable rows -- append skipped` · `1 rejected row(s) … stay in quarantine` · **`reclaim_landing: batch=321750543973966 table=empresas deleted=10 already_absent=0 failed=0 refused=0 held_back=0`** |
+| **`163880365790949`** SUCCESS | `promote_batch: batch 1121645114029617 is ALREADY in workspace.default.bronze_cnpj_socios with all 27836651 of its promotable rows -- append skipped` · `1797 rejected row(s) … stay in quarantine` · **`reclaim_landing: batch=1121645114029617 table=socios deleted=10 already_absent=0 failed=0 refused=0 held_back=0`** |
+
+**Every one of §2.1's predictions is CONFIRMED**, including the two that were written to be falsifiable
+and were not: `refused=0` and `held_back=0` on both. **The Volume, verified after — by listing it,
+not by the success line:**
+
+| path | before | after |
+|---|---|---|
+| `cnpj/2026-06/empresas` | 10 files / 5,359,720,597 B | **0 files** |
+| `cnpj/2026-06/socios` | 10 files / 2,852,557,826 B | **0 files** |
+| `cnpj/2026-06/zips/{empresas,socios,estabelecimentos}` | 10 / 10 / 10 zips | **10 / 10 / 10, byte-identical** |
+
+**8,212,278,423 bytes freed, and the way back to the source untouched.** ADR 0006's *"the defect
+this decision must not leave standing"* — booked on 2026-08-03 with an 8.21 GB standing residue and
+a ~48 GB/month projected floor — **is discharged**, by the wiring ADR 0006 itself named and deferred
+*"as its own change"*.
+
+**A control, because a delete that also moved data would be a much worse outcome than a delete that
+failed.** Read back through `dataops_reconciliation` after both runs: **14 reconciled, 1
+`stranded_gated`**, 337,766,032 staged / 337,762,443 promoted / 3,589 quarantined — unchanged. The
+reclaim touched the Volume and nothing else.
+
+**What this did NOT do, stated because the audit that found the residue got this wrong in the other
+direction:** it does not make future months self-clearing on the in-flow path. `reclaim_landing`
+still hangs off `promote` there, and the gate still blocks empresas and socios every month. What
+changed is that the **triage** path — the one an operator actually runs after a gated batch — now
+reclaims, so the residue stops accumulating at the point a human already has to act.
+
+#### How this task was reviewed, because the chain is the finding
+
+Implementer → independent reviewer (**10 findings**) → correction → **review of the correction** →
+correction 2. The second review is the one that earned its place, and what it found is what this
+phase predicted about itself: **the bug count was low, the code was right, and the defects were all
+in NEW CLAIMS the correction had written.** The worst was a safety argument on the headline wiring —
+*"the derivation cannot outlive the proof"* — which is **false**, and which **a passing test already
+in this repository falsifies**: `months_of_batch` returns empty when a staging table lacks
+`_snapshot_month`, while the counting query grains on `(_batch_id, _source_file)` and never reads it,
+so that table yields full `staged` counts and its files reconcile. Month gone, proof intact, and the
+consequence inverts the paragraph's conclusion — a repromote there goes **red after a promote that
+worked**.
+
+**Controller-measured, which is what turned it from an argument into a scope:** all **seven** live
+staging tables carry `_snapshot_month` and `_source_file` today, so it is **latent, not reachable**
+in this workspace. The claim was false either way.
+
+**The structural fact is worth more than the finding.** `months_of_batch`'s own pre-existing
+docstring states the narrow version *correctly*; the correction pass escalated it into a false
+universal and shipped it as a safety argument on the wiring. That is the third instance of this
+project's correction-passes-overshoot pattern, and it was caught by the only mechanism that has ever
+caught it: someone who did not write it reading it against the code.
+
+**And the chain ran in both directions.** Correction 2 refused to write the replacement sentence this
+controller proposed, because it was *also* over-general; and it corrected two of the reviewer's own
+numbers — the claim that a code path previously did no Spark work at all (it did), and a 68M-row
+table that is in fact 144,193,416 rows.
+
+### 1.2 THE DECISION ON `592660596679630`: DO NOT PROMOTE, and the reason is measurable
+
+**A stranding reported and left unowned is not closed**, so the decision is recorded here rather
+than left implicit. It was taken by the controller on 2026-08-18 with Jorge's delegation, and the
+argument is not the one that looked strongest at first.
+
+**The weak argument, stated so it is not mistaken for the reason.** The 2,000
+`rescued_data_present` rows are F1b's deliberately injected schema drift and the 8,000 clean rows
+are that experiment's other half — so promoting them "spoils an experiment". That is a preference,
+not a mechanism, and this project does not decide on preferences.
+
+**The decisive argument is that a promote falsifies committed documents, and the arithmetic says by
+how much. Controller-verified**, 2026-08-18:
+
+| | rows |
+|---|---|
+| `bronze_payments` | **40,150** |
+| `fact_payment` | **40,000** |
+| `COUNT(DISTINCT transaction_id)` in `bronze_payments` | **40,000** |
+
+The 150-row gap between bronze and the fact is documented at `gold_load_fact.py:125-143` as the
+legitimate repeats removed by deduplication, and it is the same 150 F1b published as its injected
+duplicate count — `40,150 − 40,000`, computed two independent ways and agreeing. **A promote makes
+bronze 48,150 against a fact still at 40,000**, because the gold fact loader is append-only and
+refuses a target it did not write in the same run. The documented 150 becomes an undocumented 8,150,
+and the rule that explains it stops explaining it. Restoring agreement would mean a gold rebuild and
+a correction pass across F1b's, F3's and F-API's published counts — for rows nobody needs.
+
+**Second, and independently:** the observation ledger classifies keys as `rejected_by_our_gate`, and
+a promote is the one act that rewrites such a classification retroactively, underneath the
+effectivity satellites F-DB's headline rests on. Today's repromote path does **not** flip it — it
+re-applies the rules and re-rejects the same rows — which is precisely why this is a decision about
+the 8,000 clean rows and not about the 2,000 rejected ones.
+
+**Third, and it is the one this phase should say out loud:** the stranding is F4's only live
+acceptance case. A phase that builds a finder, points it at the one defect it has, and then deletes
+the defect has tested nothing that survives the phase.
+
+**What would reverse it:** a use for those 8,000 rows that a fifth generated stream cannot serve
+more cheaply. There is none today — the generator is deterministic and another profile costs one
+run. **The command stays printed by the view, and nothing automated will ever run it.**
+
+**What Task 1 does NOT do, said plainly:** it writes no table, so nothing turns red when a batch
+strands. It is a view an operator or a dashboard reads. Making a stranding fail a run is a
+different decision — it would put a gate in front of a condition whose only current instance is a
+deliberate experiment.
+
+---
+
+## 2. Predictions, published before the runs that test them
+
+### 2.1 The reclaim decoupling — the phase's headline
+
+**Published 2026-08-18, before any run.** The prediction is what a `reclaim_landing` invocation
+scoped to each 2026-06 batch will report and what the Volume will hold afterwards:
+
+| table | batch | predicted output | predicted bytes |
+|---|---|---|---|
+| empresas | `321750543973966` | `deleted=10 already_absent=0 failed=0 refused=0` | **5,359,720,597** |
+| socios | `1121645114029617` | `deleted=10 already_absent=0 failed=0 refused=0` | **2,852,557,826** |
+
+and afterwards `cnpj/2026-06/{empresas,socios}` list **zero files**, while `cnpj/2026-06/zips/` still
+holds all three groups' zips, untouched.
+
+**Two preconditions the implementer named as open, closed by the controller BEFORE the run rather
+than diagnosed after it. Controller-verified 2026-08-18:**
+
+1. **The month must be derivable from the batch.** `reclaim_landing` now derives its delete boundary
+   from `_snapshot_month` on the batch's staging rows, and §0.5 had measured that column in *bronze*,
+   not in staging. Measured now:
+   `bronze_cnpj_empresas_staging` for `321750543973966` → `_snapshot_month = 2026-06`, **one distinct
+   value over all 68,629,148 rows**; `bronze_cnpj_socios_staging` for `1121645114029617` → `2026-06`,
+   one value over 27,838,448. Neither is NULL and neither names two months, so `resolve_month`
+   resolves rather than refusing.
+2. **The rules must not have widened since the batches were promoted.** `plan_promotion` re-derives
+   `staged_promotable` from **today's** rules and refuses if bronze no longer equals it — so a rule
+   widened since 2026-08-03 would turn the acceptance run red before reclaim ever started. Checked
+   two ways: the exact-order assertions pinning `empresas` and `socios` in `tests/bronze/test_rules.py`
+   are **unchanged** across `bb9b7b3..HEAD`, and the one commit in that range that edited a shared
+   rule module (`7332283`) changed the **PTAX** publication-instant rule, not
+   `unprovable_snapshot_ref_date`. Today's sets read
+   `[null_or_empty_*…, bad_cnpj_basico_length, encoding_replacement_char, unprovable_snapshot_ref_date]`
+   for both.
+
+**This is the check ADR 0006 demands of anyone reusing its numbers** — *"Any number derived from this
+section must be re-derived after every change to `rules_for`, or discarded"* — applied to its own
+2026-08-03 measurement before that measurement is leaned on again.
+
+**What would falsify the prediction, and each is a real outcome rather than a hedge.** Restated
+against the code that actually ships, because the first version of this criterion named
+`files_of_batch`, which Task 2 deleted — **a falsification criterion phrased against a function that
+no longer exists cannot falsify anything**, and it was caught by the independent reviewer rather than
+by its author:
+
+- a non-zero **`refused`** means `LandingScope`'s containment rejected a path bronze names — a defect
+  in the month derivation, not in the delete;
+- a non-zero **`held_back`** means a file whose rows do not reconcile, which is the outcome the old
+  proof **could not produce at all** and is a finding rather than a failure — the controller measured
+  `held_back = 0` for both batches before the run, so a non-zero one contradicts a published number;
+- a non-zero **`already_absent`** means something removed files this document listed;
+- **`deleted < 10`** on either table means `file_accounts_of_batch` does not return what the Volume
+  holds, which would falsify §0.5's and §1.3's central claim;
+- and a **red run before any delete** is the likeliest non-zero-risk outcome, not a wrong number:
+  `spark.sql(..., args={...})` named-parameter binding is unexercised on serverless, and it is called
+  before the month is resolved and before anything is unlinked.
+
+### 1.4 Task 3 — every rule that matches, not the first, and the overlap is still zero
+
+**ADR 0006 lists three conditions that would reverse its refusal of a per-reason DQ tolerance.**
+Condition 1 is per-reason counts derived from **all** matching rules, and it *"must ship BEFORE any
+per-reason tolerance, never with it"*. **This task ships condition 1 and nothing else** — no gate
+change, no tolerance, no new column on any table. Condition 3 shipped as Task 2. **Condition 2 —
+≥6 monthly observations per table at reject count ≥10 — is evidentiary and no code closes it**;
+empresas' numerator is 1 and estabelecimentos' is 0, and more months of "1" and "0" will not move
+them.
+
+**Run in the workspace on the shipped entry point.** Job run **`80788495253423`**, task run
+**`880229908911460`**, SUCCESS; wheel sha256 `5cb7c36b6b0a5665376994cc91a2001e7663b7f26fd6aa18f40f8dae36f54319`,
+stamped revision equal to the revision the run was launched for, both verified by downloading the
+artefact. **Controller-verified** by parsing the task's own output:
+
+| | |
+|---|---|
+| (table, batch) pairs swept | **15** |
+| staged rows read | **337,776,032** |
+| distinct rule columns evaluated | **50**, across all seven contracts |
+| `rules_matched_2_or_more` | printed **15 times, every one 0** |
+| `rescued_and_at_least_one_rule` | printed **15 times, every one 0** |
+
+**Every non-zero number in the entire sweep:**
+
+| table | batch | reason | rows |
+|---|---|---|---|
+| estabelecimentos | `128878829411613` | `encoding_replacement_char` | **4** |
+| estabelecimentos | `118868417561350` | `encoding_replacement_char` | **4** |
+| empresas | `321750543973966` | `null_or_empty_razao_social` | 1 |
+| empresas | `371067950667703` | `null_or_empty_razao_social` | 1 |
+| socios | `409962018634322` | `null_or_empty_nome_socio_razao_social` | 1,786 |
+| socios | `1121645114029617` | `null_or_empty_nome_socio_razao_social` | 1,797 |
+| payments | `592660596679630` | `rescued_data_present` | **2,000**, and **zero rule matches** |
+
+**§2.2's published prediction is CONFIRMED**, and it is now a stronger statement than the one it
+extends: ADR 0006 measured the overlap on **2026-08-03** over **three** contracts in **six** cells
+with three hand-written columns. This is **seven** contracts, **fifteen** pairs, **fifty** rule
+columns, evaluated by **the deployed rule set itself** rather than by a query someone wrote beside
+it. *"The hole is latent, not open"* now holds where it had never been asked.
+
+**The corpus is staging, and that is the ruling that removed an ordering problem three of the four
+audits had imposed.** They concluded this task must wait on a Unity Catalog mask repair, because
+3,583 of the 5,589 quarantined rows turn on a column that reads `***`. `masking.py` covers bronze
+and quarantine and **deliberately never staging** — and the implementer verified it rather than
+taking it from the controller: `bronze_cnpj_socios_staging` holds **55,830,826 rows, none reading
+`***`**, and 55,830,826 = 55,827,243 promoted + 3,583 quarantined. Staging is complete and unmasked.
+A test pins it so a later edit cannot silently re-point the sweep at the masked table.
+
+**A by-product that re-derives a question ADR 0006 left open.** The sweep implies **5,593** rejects
+against **5,589** rows in quarantine. The difference is **4** — the four 2026-06 estabelecimentos
+rows that the *narrower* gate of the day promoted un-flagged, and which today's rules reject. ADR
+0006 records that as an open policy question (*"whether the system of record is re-gated when a rule
+widens"*) and did not answer it. **Nothing here answers it either.** What is new is that the number
+now falls out of a measurement instead of being remembered — and that both estabelecimentos batches
+report **4**, which is ADR 0006's footnote re-derived from the deployed rules rather than from a
+hand query.
+
+**The independent reviewer derived that difference without the shipped code**, from the quarantine
+grouped by table, reason and batch plus a hand-written U+FFFD count over estab staging, and located
+it precisely: batch `118868417561350` is the 2026-06 cell, holds **4** U+FFFD rows and **0** in
+quarantine, so those four are in bronze un-flagged; `128878829411613` is 2026-07 and its 4 *are*
+quarantined. It is the only cell where "the gate of the day" and "the rules today" differ.
+
+> **AND THE RECONCILIATION RESTS ON THE VERY COUNTERS THIS TASK SHIPPED, which is a better argument
+> than the one first written here.** Summing per-rule counts and adding the rescued count is a count
+> of **rows** only because both overlap counters are zero — otherwise any row carrying two reasons is
+> counted twice and 5,593 is a count of *reason hits*, not of rows. So "5,593 versus 5,589, a
+> difference of 4" is a claim that depends on `rules_matched_2_or_more = 0`, and stating it without
+> that dependency would have been arithmetic resting on an unstated premise. Found by the reviewer;
+> neither the commit message nor ADR 0006 said it.
+
+**What makes the fifteen zeros worth anything is that the counter can count.** A counter that reports
+zero fifteen times is otherwise indistinguishable from one that cannot report anything else — this
+project's second recurring species, now found six times. The implementer's demanded test builds a row
+that is **both** blank in a required column **and** carrying U+FFFD and asserts the counter reads
+exactly 1; ten mutations of shipped code were each caught by named tests, including `when/otherwise`
+→ `cast("int")`, the NULL-propagating spelling that would have made the overlap vanish for precisely
+the rows carrying a NULL.
+
+**What this task deliberately does not do:** adopt a threshold. Two of ADR 0006's three conditions
+now hold and the third cannot be closed by code, so the refusal stands — and the ADR says which is
+which rather than leaving a reader to infer it.
+
+**Cost, measured rather than estimated:** the whole sweep — seven scans, 337,776,032 rows — ran in
+**89 s**. The per-task floor this phase argued about is 15–30 s, so the measurement costs roughly
+three task-starts and buys a number ADR 0006 has wanted since 2026-08-03.
+
+> **THE SIXTH INSTANCE OF THIS PHASE'S SECOND SPECIES WAS IN THIS TASK'S OWN TESTS, and it threatened
+> the sentence two paragraphs above.** `test_it_is_total_over_the_registry_rather_than_a_hand_written_list`
+> asserted `"REGISTRY" in <the entry point's source>` — and the string `REGISTRY` appears in that
+> file's **module docstring**, so the test held with the import and the loop both deleted. The
+> reviewer proved it instead of arguing it: narrowing the sweep to three tables left **all four tests
+> in the file green**.
+>
+> **And the one line that could have contradicted a narrowed sweep printed `len(REGISTRY)`** — the
+> registry's size, not the number of tables actually measured. So a three-table sweep would print
+> *"7 tables"*, every per-rule number would stay correct, and **"fifteen pairs, seven contracts" —
+> published in ADR 0006 and in this document — would have become quietly false**. Both species at
+> once: a guard that cannot fail, and a silent failure that preserves every other number.
+>
+> Closed in the correction pass (`ebeb721`) by asserting the **visited set** — ordered, so an extra
+> table and a missing one both fail — and printing the count **actually measured**. Recorded here
+> rather than only in a commit because the claim it threatened is one this document makes.
+>
+> **And the numbers above were re-taken afterwards**, because the correction changed the code that
+> produced them. A measurement whose code moved under it is a measurement nobody has taken.
+>
+> **Re-run `321135201221285`**, task run `600061871178163`, SUCCESS, wheel sha256
+> `cecf324ad491eca1b7d2ede77405a3c53a0a7020f4d45aec8228c4b788128293`, stamped revision `538a966`.
+> The two runs' outputs were compared key by key by the controller: **208 keys each, and zero
+> differences.** Same summary line, same fifteen pairs, same 337,776,032 rows, same seven non-zeros,
+> same fifteen zeros. So the table above is the corrected code's output as well as the original's —
+> which is what makes it citable, and which nobody would have known without re-running it.
+>
+> **One limit the correction pass stated against its own interest, and it is right:** with the sweep
+> total, `len(measured)` and `len(REGISTRY)` are equal by construction, so no mutation can make the
+> *table count* alone diverge. The visited-set assertion is what carries that half; the summary
+> line's independent bite is on the **row** total, and that was proved by a mutation.
+
+### 1.5 Task 4 — telemetry as a view, and the spec item this phase refuses
+
+**Built:** `src/opl/dataops/` — `telemetry.py` (view `dataops_task_telemetry`), `cadence.py` (the
+expected cadence per bronze table, as data in the repo), `freshness.py` (view `dataops_freshness`),
+`views.py` (the composition root; the view list moved out of `opl.bronze.reconcile` so there is one
+of them). Plus a bundle-declared Lakeview dashboard. **No new job, no new task, no new guard-list
+entry** — the views join the idempotent task Task 1 already wired behind the revision guard.
+
+#### THE SPEC ITEM THIS PHASE REFUSES, RECORDED HERE BECAUSE A REFUSAL BURIED IN A DOCSTRING IS NOT A DECISION ANYONE CAN OVERRULE
+
+The plan asked for a **narrow written table** holding the three values no platform table can know:
+reject counts on an idempotent re-run, `collapsed_duplicates`, and `already_present`. **It is not
+built.** The controller's dispatch demanded either a wired writer or a refusal with a mechanism, and
+named the outcome that was not acceptable: an empty table, which is a guard that cannot fail with a
+schema on it. The implementer refused, the independent reviewer judged the refusal **rigour rather
+than scope-shrinking**, and its one objection was that a dropped spec item was findable only inside a
+module docstring. This section is that objection closed.
+
+**The grounds, in the order that decided it:**
+
+1. **Two of the three are already recoverable without a writer.** Reject counts on an idempotent
+   re-run live in the quarantine table, and `dataops_reconciliation` (Task 1) already reports them
+   per (table, batch). `already_present` follows from Delta history — verified: `hub_empresa`
+   version 2 is a `WRITE` with `numOutputRows = 0`, which **is** the idempotent second load.
+2. **The one genuinely unrecoverable value belongs to five other modules.** `collapsed_duplicates`
+   is real and non-zero — **4,329** of 2026-07's 27,990,592 partner-link rows, verified independently
+   by the reviewer against ADR 0011 — but it is computed in `opl.vault.{partners,reference,effectivity}`
+   and returned by five loader entry points. Persisting it means adding a **Delta append inside every
+   loader's write path**, from the one task in this phase whose stated remit is that it writes nothing.
+3. **The retry hazard is measured.** 24 `(job_run_id, task_key)` pairs ran two attempts despite
+   `max_retries: 0`. A telemetry write is precisely the side effect that turns that from harmless
+   into duplicate rows, and making it idempotent needs the task-run id as a key inside each of those
+   five entry points.
+
+**What reverses it:** the moment anything **branches** on `collapsed_duplicates` rather than printing
+it. That is when a run log stops being sufficient — and the write then belongs in that change, keyed
+on the task run id, in the loaders that produce the number.
+
+**A caveat the reviewer added to ground 1 that the argument did not carry:** the binding constraint
+on reading a row count at an old Delta version is **auto-VACUUM's file retention**, not
+`delta.logRetentionDuration` — `hub_empresa`'s versions 3 and 4 are a Predictive Optimization
+`VACUUM` on 2026-08-18 with `retentionCheckEnabled: false`, which physically removed 147 files. And
+`already_present` is the row count *before* the write, which needs the table at version N−1, not just
+its log.
+
+#### Three corrections the implementer made to the controller's own measured facts
+
+**The largest is one the controller had not seen at all.** `execution_duration_seconds` is **not
+additive across the hour-sliced periods — it repeats**. Task run `99407495289863`
+(`sat_empresa_dados`) carries `0 / 5633 / 5633` across three rows for a task whose wall clock is
+**5,635 s**. `SUM` reports **11,266** — a clean **2× overstatement of the most expensive task in the
+workspace**, silently, on the column anyone reaches for first. `MAX` is correct.
+
+The reviewer confirmed it and generalised it: `setup_duration_seconds` repeats `1/1/1` and
+`cleanup_duration_seconds` `0/1/1`, **both also take `MAX`** in the shipped view; across all eight
+multi-period runs `MAX(execution)` is within 5 s of wall clock in **8 of 8**; and `DESCRIBE TABLE`
+confirms there is no other additive-looking numeric column. The controller had flagged the ~4%
+`COUNT(*)` fan-out; this is a 2× error on the same table and was not on the list.
+
+Also corrected: **a retry gets a new `run_id` under the same `job_run_id` + `task_key`** (24 such
+pairs), so the view's grain is per-**attempt** and carries an `attempt` column rather than letting a
+sum double-count silently; and **`result_state` is NULL on every non-final period** (0 exceptions
+over 284 rows), so the aggregation is `MAX_BY(result_state, period_end_time)`.
+
+#### THE SEVENTH INSTANCE, AND IT WAS INSIDE A TEST WRITTEN TO PREVENT THE SPECIES
+
+`test_the_state_is_the_one_the_run_ended_on_and_not_the_largest_it_ever_showed` **could not fail on
+the mutation it is named for.** Measured by the reviewer: replacing `MAX_BY(result_state,
+period_end_time)` with `MAX(result_state)` in the shipped SQL left **118 passed, 0 failed**. Spark's
+`MAX` skips NULLs, and the only multi-period fixture run carried `(NULL, NULL, 'SUCCEEDED')` — so
+both aggregations returned the same value for every fixture row. **The fixture could not express the
+case the test was named for.**
+
+**The shipped code is right, and what the missing fixture was protecting is severe:** alphabetically
+`CANCELED < FAILED < SUCCEEDED`, so `MAX` **systematically reports a failed run as succeeded**, with
+every other number preserved. The module docstring had already conceded that the two aggregations
+*"disagree the moment a run reports two terminal states"* — and the one tuple that would prove it was
+never added. Closed in the correction pass.
+
+#### The run, and the acceptance case the plan named
+
+**Job run `618271424244463`, SUCCESS**, wheel sha256
+`7cb59d8f479c41553bd227aa76b81253f42ef39b2863c84a15346f00dbb40460`, stamped revision `5f7a5b0`,
+verified by downloading the artefact. **Four views created** (`create_dataops_views: 4 views in
+workspace.default`), and the Lakeview dashboard deployed **ACTIVE** as
+`01f19b5350fa1b689ba796f3d221d7ef`.
+
+**`dataops_freshness`, read back through the view. The acceptance case the plan demanded holds:**
+
+| source | last_snapshot_month | source_age_days | cadence_kind | status |
+|---|---|---|---|---|
+| `lookup` | **2026-06** | **66** | `paused` | **`paused_by_decision`** |
+| empresas / estabelecimentos / socios | 2026-07 | 38 | `declared` (45) | `within_cadence` |
+| merchant | 2026-08 | 0 | `undeclared` | `no_declared_cadence` |
+| payments / ptax | 2026-08 | NULL | `no_source_axis` | `no_source_axis` |
+
+**Lookup is two months behind its siblings and the view says it is a recorded decision, not a
+fault** — carrying the `docs/f1.4b-pr-b-run-evidence.md 25.5` citation in the row. That was the
+plan's stated acceptance: *"a dashboard that does not surface that today has not been tested"*, and
+the trap it names — the alert an operator mutes in week one — is what `paused_by_decision` avoids.
+All **three** tiers are visible, not the two the plan first described. And the two tables that
+structurally lack a source date read `no_source_axis` rather than an unexplained NULL.
+
+**`dataops_task_telemetry`: NULL is never rendered as a zero, measured.**
+
+| `sql_telemetry` | runs | rows carrying a metric | rows with NULL |
+|---|---|---|---|
+| `measured` | 145 | **145** | 0 |
+| `no_sql_attributed` | 119 | **0** | 119 |
+| `older_than_history` | **10** | 0 | 10 |
+| `not_yet_attributed` | **0** | — | — |
+
+**Read 2026-08-18, and the reading time is the point rather than a formality.** These are
+system-table counts and they move: re-read on 2026-08-19T16:38:22Z the same three arms give
+**152 / 121 / 10** over 283 distinct task runs, against 270 rows and 260 task runs recorded in
+§0.3 on 2026-08-18. **Four values for one moving quantity appear in this document** — 268,
+270, 284 and 293 — and each is correct at its own reading. The fourth arm is listed at zero
+rather than omitted, because §1.5 records it holding two rows at 22:31:14Z: **an absent row
+and a zero are the distinction this whole document is about.**
+
+**And the 2× duration trap is closed in the shipped view**: task run `99407495289863` reports
+`execution_seconds = 5633`, not the 11,266 a `SUM` would have produced.
+
+> **WHAT THOSE THREE LABELS MAY BE SAID TO MEAN IS NARROWER THAN IT LOOKS, AND AN EXTERNAL REVIEW
+> CAUGHT IT.** `no_sql_attributed` is **not** proof that a task issued no SQL. The watermark the arm
+> keys on proves that `system.query.history` holds a **newer** statement; it does not prove the table
+> holds every **older** one — and the module's own header already records that ingestion into that
+> table is **not strictly ordered**. So a task whose statements are still in flight is labelled
+> identically to `fail_on_dq`, which genuinely issues none on all 22 of its runs.
+>
+> **It is sharper than it reads, because the reader advances the watermark.** The statements pushing
+> that edge forward are frequently the controller's own measuring queries, issued while nothing else
+> is running — so the act of reading this view can move a run out of "too recent" and into "issued
+> none" while its statements are still arriving.
+>
+> **A completeness guarantee was looked for before this was accepted, and there is none.**
+> `DESCRIBE TABLE system.query.history` returns **46 columns and not one bounds ingestion**; the only
+> candidate, `update_time`, is the statement's own last progress update. And `DESCRIBE DETAIL` on it
+> **fails outright** — `[DELTA_UNSUPPORTED_FILE_SYSTEM] … uc-deltasharing://system.query.history/_delta_log`
+> — so the file-level metadata such a bound would live in is not reachable from this workspace at all.
+>
+> **The counts above stand as measurements**: nothing was renamed and no arm moved, which the
+> correction proved by mutation rather than argued — narrowing the window to job statements *does*
+> move rows between labels, and was refused for that reason among others. What changes is only what
+> the 119 may be called: **runs the record attributes nothing to, not runs proven to have issued
+> nothing.**
+>
+> **And `measured` is provisional too** — an extension nobody had asked for, found from the same
+> fact. Its metrics sum whatever had been ingested **when the view was read**, so a later statement
+> raises them with nothing having run. Observed on this view's own rows: `create_views` carried
+> `statements` NULL at 22:31:14Z and **4** afterwards. **Every metric in this view is a floor, not a
+> total**, and any figure taken from it needs its reading time. **That rule is stated here and
+> nowhere else** — an earlier version of this sentence cited it to §0.5, which is the landing-
+> residue section and contains no such rule. The back-reference was the sentence's whole
+> authority and it pointed at nothing.
+
+#### ~~A FOURTH VALUE THAT CANNOT FIRE~~ — THE CONTROLLER'S OWN FINDING, FALSIFIED FOUR MINUTES LATER, AND IT IS THIS PROJECT'S SIGNATURE ERROR
+
+> **WHAT THIS SECTION SAID, WITHDRAWN 2026-08-18 BEFORE IT MERGED.** It read: *"the fourth —
+> `not_yet_attributed` … returns zero rows. The reason is structural … `system.lakeflow.job_task_run_timeline`
+> **7,455 s (~2.07 h)** · `system.query.history` **1,780 s (~30 min)** … The timeline is roughly four
+> times slower … **The arm is unreachable while the lags stand in this order**."*
+>
+> **The two readings are real. The inference from them is false, and it is the species this
+> repository has now published seven times: a number correct about one population printed as the
+> answer about another.**
+
+**The mechanism, and it is worth more than the finding was.** `now − MAX(watermark)` **is not an
+ingestion lag.** It is the time since the newest *event* a table holds — ingestion delay **plus
+source idleness**. The timeline's source had been idle for hours: **no job ran between 20:23:23Z and
+the reading**, so nearly all of those 7,455 s were an empty workspace, not a slow pipe.
+`system.query.history` is fed by **every operator statement, including the ones doing the
+measuring** — so only *its* subtraction approximates a lag at all. **I compared a lag against a
+lag-plus-idleness and called the ratio a lag ratio.**
+
+**Measured properly — on a single event's arrival rather than on a watermark delta:** a timeline row
+for a task that ended `22:25:22Z` was **absent at 22:29:13Z and present at 22:31:14Z**, so the
+timeline carried it within **231–352 s**, while `query.history` was still **2,013 s** behind at
+22:31:30Z. **The timeline is the faster table** — the opposite of the withdrawn premise.
+
+**And the arm fires.** At **22:31:14Z** the shipped view held **two `not_yet_attributed` rows** —
+`create_views` and `measure_rule_overlap` of a run that ended 22:24:39Z / 22:25:22Z, `statements`
+NULL. At **22:35:12Z** the same two rows read **`measured`**, carrying 4 and 7 statements, **with
+nothing having run in between**. The whole transition the label exists to describe, observed end to
+end in under four minutes.
+
+**So the arm is neither dead nor permanently live.** Its real reachability condition is
+`MAX(period_end_time) > MAX(end_time)` — no row can end later than the timeline's own watermark —
+and **both orderings occurred four minutes apart**. A zero in that column dates fast, which is a very
+different statement from the one this section first made.
+
+**Two things this cost and bought.** It cost a published claim that had to be withdrawn before it
+merged — by a controller who spent this phase correcting exactly this shape in four other documents.
+It bought the correct reading of both system tables, a demonstration of the arm working, and the rule
+that generalises: **a watermark delta on a table nobody is writing to measures the silence, not the
+pipe.** The `lag_seconds` column the correction refused hardest is refused for precisely that reason
+— it is the number that turned two hours of nobody running a job into a two-hour lag.
+
+**Caught by the agent the controller dispatched to record the finding**, which measured the premise
+instead of accepting it and reported that the more publicly readable of the two places the claim
+lived was this document.
+
+> **THE EIGHTH, WHICH THIS DOCUMENT SKIPPED UNTIL ITS CLOSING REVIEW ASKED WHERE IT WAS.** It was
+> found by Task 5's reviewer in `test_every_revoke_precedes_every_grant_and_the_tags_come_last` —
+> a test named for an ordering property it **could not fail on**. `PII_READERS` is empty by
+> decision and no test ran the task with a non-empty roster, so `plan.grant` was empty in every
+> fixture and there was never a `GRANT` for a `REVOKE` to precede. Proven by mutation: swapping the
+> two loops so grants were issued first left **31 tests passing**, and the same mutation with one
+> reader in the roster turned that test red — which is what showed the vacuity came from the empty
+> roster rather than from the assertion. It sits under the safety argument the whole task ordering
+> rests on: *a partial run must leave fewer readers than it found.* Closed by monkeypatching the
+> roster.
+>
+> **The count in this document skipped from seven to nine**, and the closing documentation review
+> caught it. Recorded here rather than renumbered, because a tally that quietly closes its own gap
+> is the shape this phase spent itself learning to distrust.
+
+### 1.7 Task 5 — governance, and THE NINTH INSTANCE WAS THE SAFETY CHECK ON A PRIVACY DEPLOY
+
+**Built and reviewed; the run is recorded below it.** The predicate repair, `opl_pii_readers` created
+empty, an idempotent grants task, a service-principal rebuild script, and ADR 0008 amended rather
+than superseded.
+
+#### The prediction this controller published, and why it could not fail
+
+Before the deploy, the record said: after the run, `SELECT nome_socio_razao_social FROM
+workspace.default.bronze_cnpj_socios LIMIT 1` reads **`***`**, and *"a civil name in that result
+would mean the repair had failed open."*
+
+**Controller-verified 2026-08-18, before running anything:**
+
+| | |
+|---|---|
+| `is_member('opl_pii_readers')` | **false** |
+| `is_account_group_member('opl_pii_readers')` | **false** |
+| deployed `routine_definition` | `CASE WHEN is_account_group_member('opl_pii_readers') THEN name ELSE '***' END` |
+| `last_altered` | `2026-08-03T21:31:27.142Z` |
+
+**Both predicates are false, so both `CASE` expressions take the same `ELSE` branch.** `***` is
+therefore the answer under **all four** of: the repair landed; the repair did not land;
+`ensure_masked_table` returned early; the task never ran. That is not an experiment, it is a
+derivation from two measured booleans — and it means **the check published as the safety gate on a
+privacy deploy has one branch and cannot take the other**, for as long as the group stays empty,
+which is a standing decision rather than a transient.
+
+**This was the ninth instance of this phase's second species, and the worst-placed one** — and a
+**tenth** followed it, found by the closing code review in `governed_contracts()`'s own test, where
+the expected side spelled the function body. The previous eight were in tests, in tooling, in a
+view's arm and in a controller's own published claim.
+This one was the thing that was supposed to tell a repaired privacy control from an unrepaired one.
+**It was caught by the independent reviewer dispatched specifically to ask whether the deploy was
+safe**, in the last review before the deploy would have happened.
+
+**The observation that discriminates**, and it is one statement:
+
+```sql
+SELECT routine_definition, last_altered
+FROM workspace.information_schema.routines WHERE routine_name = 'mask_personal_name'
+```
+
+A successful run must leave `routine_definition` containing **`is_member(`** and `last_altered`
+**after the run's start**. **Nothing in this repository read that** — a grep for
+`information_schema.routines`, `routine_definition` and `DESCRIBE FUNCTION` across `src/`,
+`databricks/`, `tests/` and `scripts/` returned exactly one hit, a comment. The correction is what
+made the deployed predicate assertable rather than assumed.
+
+**And the mask's floor is unaffected either way**: with the group empty, every reader sees `***`
+under both spellings. What the repair buys is that the control **can** be opened by someone
+authorised, which `is_account_group_member` made impossible from this workspace. ADR 0008 was already
+candid about exactly this — *"until then both spellings hide from everyone, so the difference is in
+the argument and not in what any reader sees"* — so the non-discriminating claim was in the job
+header and the commit message, **not** in the ADR that had got it right.
+
+**The repair was not to make the check honest — it was to make it a task.** `assert_mask_predicate`
+now reads `information_schema.routines` and **fails the run** (`max_retries: 0`) unless the deployed
+body carries `is_member(`. It depends on `ensure_masked_table`, so it reads after the repair, and is
+deliberately **not** an ancestor of the grants task: a failure state must not disable its own
+mitigation.
+
+#### Task 5b — the repaired control could only be deployed by re-landing what Task 2 reclaimed
+
+**The near-miss belongs in the record and not only in a commit message.** `ensure_masked_table` is
+the only thing in this repository that issues `CREATE OR REPLACE FUNCTION` for the mask, and it
+existed in exactly one job: the **socios ingestion flow**, where it runs first — **ahead of an
+`unzip` that would have re-extracted `cnpj/2026-06/zips/socios` and re-landed the 2,852,557,826 B
+Task 2 had just reclaimed**, inside the phase whose headline artefact is that 8,212,278,423 B were
+freed. And worse than wasteful: the Auto Loader checkpoint has consumed those files, so the ingest
+would have staged nothing and the gate and promote would have run over an empty batch.
+
+**Deploying a repaired privacy control must not cost a re-landing of the personal data it
+protects.** The fix was to run the same task from this phase's own governance job, which costs no
+new YAML and no guard-list entry — with `apply_pii_governance` re-pointed to depend on it, argued
+from what each statement touches rather than from tidiness: the grants task's first statement is
+`SHOW GRANTS ON TABLE`, which fails on a table that is not there; and in the reverse order an
+`ALL PRIVILEGES` holder would block the mask repair, **a failure state disabling its own
+mitigation**.
+
+**Verified after the run:** `cnpj/2026-06/socios` is still **0 files** and the `zips/` siblings are
+byte-identical. The hazard did not materialise because the path was changed, not because it was
+survived.
+
+#### The run, and the check that could have failed
+
+**Job run `761461564584636`, SUCCESS**, wheel sha256
+`fd73c641a2c1c5d7f07c39b6d7d0f87d7647aeb1883fe78b4f4efe2684d456d2`, stamped revision `c66a76b`,
+verified by downloading the artefact — whose `masking.py` was confirmed to emit `is_member` and no
+longer the old predicate **before** the run.
+
+**The discriminating check fired, and it discriminated:**
+
+```
+assert_mask_predicate: workspace.default.mask_personal_name last_altered 2026-08-19 16:25:23.068000
+assert_mask_predicate: routine_definition CASE WHEN is_member('opl_pii_readers') THEN name ELSE '***' END
+```
+
+**Controller-verified afterwards, read independently rather than from the task's stdout:**
+
+| | before | after |
+|---|---|---|
+| `routine_definition` | `… is_account_group_member('opl_pii_readers') …` | **`… is_member('opl_pii_readers') …`** |
+| `last_altered` | `2026-08-03T21:31:27.142Z` | **`2026-08-19T16:25:23.068Z`** |
+| `SELECT nome_socio_razao_social … LIMIT 2` | `***`, `***` | `***`, `***` |
+
+**The floor did not move, which is the point.** The predicate that could never be made true from this
+workspace has become one that can, and **not one row changed what it shows to anyone** —
+`opl_pii_readers` still has zero members. The old prediction would have called both of those columns
+a pass; the new check calls only the first.
+
+**Governance applied: 12 tags across three tables, zero GRANT and zero REVOKE.** The zero was
+predicted — all three socios tables carry no grant rows — and the tags landed on
+`bronze_cnpj_socios`, its quarantine **and its staging**, verified in
+`information_schema.column_tags`: `class.name` on both name columns and **both** `class.br_cpf` and
+`class.br_cnpj` on `cpf_cnpj_socio`, because `identificador_socio` decides which a row holds.
+
+**Staging is tagged although the mask deliberately refuses it**, and that is the stronger reason:
+a `class.name` tag on an **unmasked** column is the catalog stating that the exposure exists, which
+is more use to a governance reviewer than a tag on a column already hidden.
+
+**One prediction handed to the controller was wrong and is marked as such:** the implementer
+predicted **9** `SET TAGS` (3 tables × 3 pairs); the run issued **12**, because `cpf_cnpj_socio`
+carries two keys, not one. It under-counted its own classification. Nothing downstream depended on
+the number, and it is recorded because a prediction quietly revised after the run is not a
+prediction.
+
+### 1.6 Task 6 — the benchmark the plan's revision 1 refused, and its prediction is FALSIFIED
+
+Revision 1 refused a baseline→optimised measurement on the premise that *"there is no un-compacted
+baseline left to optimise from"*. §0.4 falsified that premise: `link_empresa_estabelecimento` —
+**512 files, 7,201,236,749 B, one Delta version, `ANALYZE`d but never COMPACTED**, the vault's
+largest table by bytes. This is that measurement, run by the controller 2026-08-18.
+
+**The protocol was followed and each step verified by reading state back, not by a success line.**
+Predictive Optimization was `INHERIT` → effective `ENABLE (METASTORE)`; it was set to `DISABLE`
+(effective `DISABLE`, inheritance gone) **before any baseline**, and **restored to `INHERIT`
+afterwards** — re-read from `GET /api/2.1/unity-catalog/tables/…` at both ends. The lakehouse is not
+left un-maintained for a case study.
+
+| | before | after | change |
+|---|---|---|---|
+| files on disk | **512** | **128** | −75% |
+| table bytes | 7,201,236,749 | 6,962,434,417 | −3.32% |
+| `read_files_count` | **512** | **128** | −75% |
+| `read_bytes` (uncached) | **2,532,823,155** ×3 | **2,354,245,901** | **−7.05%** |
+| `execution_time_ms` (clean uncached) | 1,770 / 1,815 / 1,688 | 1,174 / 995 | — |
+
+The `OPTIMIZE` itself took **30.5 s** server-side: 512 files removed at avg 14.06 MB, **128 added at
+avg 54.39 MB**, `totalTaskExecutionTimeMs 184,290` over 128 scheduled tasks.
+
+#### The prediction, and the half that failed
+
+§2.3 published, before the run: *"`read_files_count` down sharply, `read_bytes` roughly unchanged,
+and wall clock improved only if per-file task overhead dominates."*
+
+- **Files: confirmed** — 512 → 128, exactly the file count, so nothing was pruned in either
+  direction and the predicate is doing what it was chosen to do.
+- **Bytes: FALSIFIED.** `read_bytes` fell **7.05%**, not "roughly unchanged". **The mechanism is
+  recompression, not pruning**: the same logical scan reads fewer bytes because 128 files at ~54 MB
+  compress better than 512 at ~14 MB, and the table itself shrank 3.32% on disk for the same reason.
+  Compaction is not a pure re-packing — **it changes how much there is to read.**
+- **Clock: not answerable at this precision**, and the reason is the finding below.
+
+**A falsified prediction is the product**, and this one is falsified in a specific mechanical
+direction rather than by an unexplained number. It also means the phase's earlier null results are
+not the whole story: *clustering* moved pruning without moving the clock, and *compaction* moved
+bytes without being asked to.
+
+#### THE TRAP THAT DWARFS THE EFFECT BEING MEASURED
+
+**The first uncached run of a session is not comparable to the ones after it.** Measured on this
+table, both sides of the experiment:
+
+| | first uncached run | subsequent uncached runs |
+|---|---|---|
+| before `OPTIMIZE` | **13,338 ms** | 1,770 / 1,815 / 1,688 |
+| after `OPTIMIZE` | **3,602 ms** | 1,174 / 995 |
+
+**7.7× and 3.1×.** A benchmark that takes one cold reading for its baseline and one warm reading for
+its result would report an improvement of roughly an order of magnitude, entirely manufactured — and
+every byte figure in the table above would still be correct beside it. That is this phase's first
+species applied to a stopwatch, and it is why T5's ruling denominates in `read_files_count` and
+`read_bytes` and quotes wall clock as a range or not at all.
+
+#### AND THE CACHE PROTOCOL THIS PHASE INHERITED IS TOO LOOSE
+
+The rule carried into this phase was *"defeat the cache by varying a literal"*. Measured here, that
+is **not sufficient**: three runs varying `AND 1=1` → `AND 2=2` → `AND 3=3` returned
+`result_from_cache: True` with **0 bytes and 0 files** on the second and third.
+
+**The mechanism: a tautology is constant-folded before the plan is fingerprinted**, so the plan is
+identical and the cache answers. The rule that actually holds is narrower and worth stating that
+way: **vary a literal that survives into the plan** — one inside a real predicate on a real column.
+Every uncached reading above was taken that way (`hub_empresa_hk > 'b' | 'c' | 'd'`), which is also
+why their `read_bytes` are byte-identical: the comparison value changes the answer, not the scan.
+
+**The warehouse was shared with another agent's read-only queries during this run**, which affects
+wall clock and not `read_files_count` or `read_bytes` — stated because the clock numbers above are
+quoted as ranges for that reason as well as the known 1.53×–2.2× non-determinism.
+
+### 2.2 The all-matching-rules sweep
+
+**Published 2026-08-18, before any run.** Over all seven contracts and every staging batch, evaluating
+every rule rather than the first: **the count of rows matching ≥2 rules is predicted to be zero
+everywhere**, extending ADR 0006's six measured cells from three contracts to seven.
+
+**A non-zero count anywhere falsifies ADR 0006's "the hole is latent, not open" for a contract it
+never covered**, and is the more valuable outcome of the two.
+
+> **CONFIRMED, 2026-08-18** — run `80788495253423`, 15 pairs, 337,776,032 rows, 50 rule columns,
+> **zero everywhere**, and the counter is shown able to report otherwise. The less valuable of the
+> two outcomes, and it is recorded as the prediction that held rather than quietly folded into the
+> narrative. §1.4.
+
+### 2.3 The compaction benchmark
+
+**Published before the run**, with its mechanism beside it so a confirmation is worth something:
+bin-packing does not reduce the bytes a full aggregate must read, so the predicted shape on
+`link_empresa_estabelecimento` is **`read_files_count` down sharply, `read_bytes` roughly unchanged,
+and wall clock improved only if per-file task overhead dominates**. The point-lookup null result
+already falsified the mirror-image hypothesis — 22–39× fewer bytes and no movement in the clock — so
+this prediction is deliberately the one that measurement has most reason to refuse.
+
+> **FALSIFIED, 2026-08-18 — and in the half that was stated most confidently.** `read_files_count`
+> fell 512 → 128 as predicted, but `read_bytes` fell **7.05%** rather than staying "roughly
+> unchanged", because compaction **recompresses**: 128 files at ~54 MB read fewer bytes than 512 at
+> ~14 MB for the same logical scan, and the table shrank 3.32% on disk for the same reason. §1.6.
+
+---
+
+## 3. What is still unexercised
+
+**Protocol §9 condition 6.** A path that ran zero rows through it is not a path that works, and
+this list is what stops the phase from being read as more exercised than it is. Each entry says
+what would exercise it.
+
+### Branches this phase built that have never taken their other arm
+
+| what | why it has not fired | what would fire it |
+|---|---|---|
+| **`apply_pii_governance`'s GRANT branch** | `PII_READERS` is empty by decision, so the task has never issued a `GRANT` in a job | a principal added to the roster and the job re-run |
+| **its REVOKE branch** | all three socios tables carry **zero** grant rows; revokes have fired only against throwaways in review | a real out-of-band grant, or a roster that shrinks |
+| **`UngovernedRead`** — the raise that fails the run on a privilege the task cannot withdraw | nothing holds `MANAGE`, `ALL PRIVILEGES` or an ancestor grant on these tables | any of those granted out of band |
+| **`assert_mask_predicate`'s failure arm** | the predicate was correct on its first and only run | a deploy that skips `ensure_masked_table`, or a wheel from another revision |
+| **`held_back`** in `reclaim_landing` | both real runs reported `held_back=0` — every file reconciled | a batch whose file does not reconcile, i.e. a stranded row inside a promoted file |
+| **`stranded_unexplained`** and **`over_promoted`** in the reconciliation | neither is reachable through the shipped flow; both are driven out of real tables in tests only | a mid-stream ingest failure, or a double promote |
+| **`skip_notice`** in the rule sweep | no contract skipped a rule on any of the 15 (table, batch) pairs | a staging table predating a rule's column |
+
+### Measured on one compute and not the other
+
+- **`is_member` inside a serverless job session** is **reported**, not controller-verified — the
+  floor was re-derived on the SQL warehouse only.
+- **The membership-lag figures are warehouse-side.** Three trials disagree in a way the phase
+  reconciled by mechanism (expiring a cached negative, not propagating a membership), but no
+  trial ran inside a job session.
+- **`spark.sql(..., args={...})` named-parameter binding** now has run on serverless — Task 2's
+  two reclaim runs used it. Its *failure* mode (unsupported → raise before any delete) has not.
+
+### Not exercised by choice, and the choice is recorded
+
+- **The permissive branch of `mask_personal_name`.** `opl_pii_readers` exists with zero members,
+  so nobody has read a real name through the repaired predicate. Exercising it means granting a
+  principal `SELECT` on 55.8M rows of real personal data and, given the measured lag, being
+  unable to withdraw membership promptly. Proven on a purpose-built throwaway instead; ADR 0008
+  says so rather than claiming both halves.
+- **The stranded payments batch** — reported, not promoted, with the arithmetic in §1.2.
+
+### Left as it was found
+
+- **The in-flow reclaim still never fires.** The gate blocks empresas and socios every month and
+  `reclaim_landing` still hangs off `promote` there. F4 gave the **triage** path a reclaim; it did
+  not change the in-flow one.
+- **`bronze_cnpj_lookup` is still two months behind.** The freshness view labels it a recorded
+  decision rather than a fault; nothing in F4 ingested it.
+- **A second masked contract.** The governance job's coverage is locked to `MASKED_COLUMNS`, and
+  that set has exactly one entry, so the lock's other direction is proven only by mutation.
+
+### Carried out of the closing review as follow-ups, not fixed
+
+**The closing record review split the branch into code and documentation packages and read them
+independently.** The documentation package's six blockers were closed in-branch; the code package's
+one blocker — **the tenth instance** — was closed in-branch too, and it is recorded in §1.7's
+species tally rather than here. **These are what it found and this phase deliberately did not
+close**, because each is a real gap and none is wrong in the deployed state:
+
+- **The dashboard ↔ view column contract is unlocked in one direction.** The `.lvdash.json` re-spells
+  23 output column names three times each, and the test compares them **to the dataset's own SQL**,
+  never to what the views return. Proven by mutation: renaming `expected_every_days` in
+  `freshness.py` alone left 8 tests green. `bundle validate` does not parse that file at all, so
+  nothing downstream would catch it. **Correct today** — all 23 names verified present in the
+  deployed views. The machinery to close it already exists in the same file.
+- **The month cross-check can be unwired from all three ingestion jobs with the suite green.** Its
+  passing also leaves no trace: `refuse_month_disagreement` prints nothing when the months agree and
+  nothing when there is no stamp, so a green reclaim log cannot distinguish *cross-checked* from
+  *never ran*. Removing the parameter from **one** job is caught, incidentally, by the byte-diff
+  paste lock; removing it from all three defeats that.
+- **Two remedy commands for the same job disagree**, and the older one cannot be run:
+  `promote.require_batch_id` prints an invocation with no `revision=`, which the job's own guard
+  refuses. `reconcile.py` cites that function as the standard it follows and shipped the corrected
+  spelling beside the stale one without reconciling them.
+- **`reclaim_landing` resolves the landing dir by a second spelling** — `DEFAULT.landing_table(...)`
+  directly, where `registry_landing` owns *"THE one mapping"* and its docstring names this exact
+  drift. Harmless today and fail-closed, and **a test pins the bypass in**, so closing it turns that
+  test red.
+- **`apply_pii_governance` prints no counter for what it observed.** A run that saw nothing, one
+  whose observations were all harmless, and one whose reader silently returned nothing are the same
+  log. Both its sibling tasks solve exactly this and say why.
+- **Three residual tautologies and one floorless sweep**, each read-verified: two assert a pure
+  function against itself, and `test_cadence.py`'s "no schedules anywhere" walks a glob with no
+  non-empty floor, so a moved tree passes having inspected zero jobs. The premise itself is verified
+  live.
+- **The running "guards found" tally is spelled five ways in code** — four, four, five, six, six —
+  while this branch's log records the tenth. A monotonically growing number written into five
+  independent places, none updated when it grows. **It is this repository's signature defect wearing
+  its own name**, and it is left standing on purpose: fixing it by hand is the same act that put it
+  there.
+
+### A CI failure during the close, and what it is honest to say about it
+
+**The closing run failed once, and it is recorded because a phase that reports only its final
+green run has not reported its CI.** `2683 passed, 1 failed` in **20 m 22 s**:
+
+```
+FAILED tests/vault/test_socios_vault.py::test_loading_july_after_june_adds_only_what_july_changed
+  org.apache.spark.memory.SparkOutOfMemoryError: [UNABLE_TO_ACQUIRE_MEMORY]
+  Unable to acquire 65536 bytes of memory, got 0
+```
+
+**It is not a logic failure and the test is not one this phase wrote** — it is F2's, and it died on a
+`saveAsTable` with the suite at 100%. A re-run of the same job passed, and the same code had already
+passed three consecutive runs (`d136cb4`, `eacd499`, `8993d80`), the last of which is byte-identical
+to the failing one because the commit between them touched only this document.
+
+**The hypothesis this phase is responsible for, stated rather than waved away.** F4 added local-Spark
+test modules — reconciliation, retention, rule overlap, telemetry, freshness — and the suite grew
+from **~2,460 collected to 2,683 passing**. They run in the same session-scoped JVM as the vault
+tests and before them, so cumulative memory pressure tipping a pre-existing test over is a mechanism
+this phase supplies. **Runner variance explains it equally well**, and three greens on identical code
+is evidence for that reading.
+
+**What would decide it, and nobody has run it:** the failing test in isolation against the same
+runner class, or the suite with F4's Spark modules deselected. **Left open**, and named here so the
+next phase that sees this failure does not spend its own budget rediscovering the question. The
+inherited figure *"CI ~16–20 min at ~2,460 tests"* should now read **~20 min at ~2,683**.
+
+### Unmeasurable here, and stated as such
+
+- **System-table retention's ceiling.** The workspace is younger than any documented horizon; the
+  floor is ~25 days with nothing trimmed. **What is now observable** is the crossover the
+  telemetry view names: **10 task runs already end before `system.query.history`'s oldest row.**
+- **Whether the platform stops maintaining a table whose PO flag reads `DISABLE`.** The flag is a
+  request and the ops-history table is the receipt; PO's cadence is hours to days, so a session
+  cannot settle it. The flag was restored to `INHERIT` and re-read, which is what this phase can
+  assert.
+- **Whether Lakeview renders the committed `.lvdash.json`.** The dashboard deployed **ACTIVE**
+  and `bundle validate` is measured **not** to parse that file at all, so the local tests are its
+  only check. **Nobody has opened it**, and that is the one deliverable of this phase whose
+  acceptance is a human looking at a screen.

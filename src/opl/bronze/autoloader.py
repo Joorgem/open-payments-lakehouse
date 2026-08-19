@@ -49,13 +49,14 @@ API_RECORD_SOURCE = "bcb_olinda_ptax"
 POSTGRES_RECORD_SOURCE = "opl_merchant_postgres"
 # The one spelling of the column that records WHICH LANDED FILE a row came out of.
 # It lives here because this is where the column is created, and it is a constant
-# rather than a literal because `opl.bronze.retention` reads it back to decide which
-# files may be deleted from the Volume: two spellings of it would be a rename in one
-# place that makes the retention query return nothing and silently reclaim nothing.
+# rather than a literal because `opl.bronze.reconcile` reads it back to build the
+# file-grain query `opl.bronze.retention` decides deletes from: two spellings of it
+# would be a rename in one place that makes that query return nothing and silently
+# reclaim nothing.
 SOURCE_FILE_COLUMN = "_source_file"
 # `_batch_id`'s one spelling is `promote.BATCH_COLUMN`, imported above rather than
 # restated here: it is created in `add_audit_columns` like the column above, but its
-# READERS -- `promote.rows_of_batch`, `promote.batch_rows`, `retention.files_of_batch`
+# READERS -- `promote.rows_of_batch`, `promote.batch_rows`, `retention.months_of_batch`
 # and the three job tasks -- are all on the promote side, and that is where the
 # constant already lived when this module still wrote the name as a bare literal.
 
@@ -305,7 +306,7 @@ def add_common_audit_columns(
         # opposite directions: renaming the constant raises in six places, while
         # renaming this literal leaves `rows_of_batch` counting 0 rows of its own
         # batch -- a promote that reports success having appended nothing -- and
-        # `files_of_batch` proving nothing, so a reclaim silently deletes no bytes.
+        # the file-grain proof matching nothing, so a reclaim deletes no bytes.
         .withColumn(BATCH_COLUMN, F.lit(batch_id))
         .withColumn(SNAPSHOT_MONTH_COLUMN, F.lit(snapshot_month))
     )

@@ -147,8 +147,8 @@ def test_staging_is_never_named_by_this_task(monkeypatch):
     assert not offenders, (
         f"this task named {staging}: {offenders}. Masking staging corrupts bronze on "
         "the next promote and disables the missing-name rule -- see ADR 0008. It "
-        "becomes correct only once opl_pii_readers exists AND the job's run-as "
-        "principal is a member of it."
+        "becomes correct only once the job's run-as principal is a member of "
+        "opl_pii_readers, which F4 created EMPTY."
     )
 
 

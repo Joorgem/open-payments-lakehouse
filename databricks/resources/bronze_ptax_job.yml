@@ -30,10 +30,12 @@
 # unauthenticated. There is no secret scope reference in this file and there must never
 # be one.
 #
-# IT HAS NO reclaim_landing. That task deletes landed files once bronze proves it holds
-# their rows, and it refuses any table that does not land as zips -- because the zips in
-# the sibling directory are the only way back to the source when a parse defect is found
-# after ingestion. The way back here is the REQUEST: the window and the currency, which
+# IT HAS NO reclaim_landing. That task deletes a landed file once every row it staged is
+# accounted for -- in bronze or in quarantine -- and at least one of them is in bronze (F4's
+# proof; it replaced the strictly weaker "once bronze proves it holds their rows"), and it
+# refuses any table that does not land as zips -- because the zips in the sibling directory
+# are the only way back to the source when a parse defect is found after ingestion.
+# The way back here is the REQUEST: the window and the currency, which
 # the landing filename carries, so re-fetching reproduces the same path. Nothing is
 # deleted.
 #

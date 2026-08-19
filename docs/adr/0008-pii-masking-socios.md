@@ -23,6 +23,74 @@ than passed over.
 effort (same section), and it keeps its rows by decision — see
 [Staging retention](#staging-retention-the-rows-stay-and-what-guards-them).
 
+> **⚠️ AMENDED, 2026-08-18 (F4 Task 5). This ADR is amended, not superseded.** Its
+> fail-closed argument and its 55,827,243-row measurement both stand. What changed is
+> that **the control as shipped could not be opened by anyone, ever**, and that is a
+> defect this ADR asserted the opposite of.
+>
+> `is_account_group_member` reads **account** groups. Measured on this workspace: it
+> returns **false** for a workspace-local group the reader demonstrably belongs to
+> while `is_member` returns **true**; exactly one account group resolves at all
+> (`account users`, i.e. everyone, which cannot function as a control); and
+> `databricks account groups list` returns `Not Found`, because a workspace host does
+> not serve account SCIM. So
+> [What would make it correct](#the-boundary-quarantine-is-masked-too-staging-cannot-be)'s
+> *"the moment `opl_pii_readers` exists"* named **a moment that could not arrive from
+> this workspace**. The mask hid, always, from every reader including the owner.
+>
+> **The repair, and it is a one-word substitution with the floor intact.** The
+> predicate in this repository is now `is_member('opl_pii_readers')`, over the
+> **workspace-local** group, which can be created and now **has been** — empty,
+> deliberately. `is_member` was measured inside a serverless job session, as the user
+> *and* as a `run_as` service principal, to return **true** for a group the principal is
+> in and **false for a group that does not exist**. So the
+> [Fail-closed](#fail-closed-and-why-that-is-the-right-direction) section below survives
+> the substitution verbatim; only the function name changes.
+>
+> ~~**SHIPPED IS NOT DEPLOYED, and the two halves of that sentence are in different
+> states.**~~ **BOTH HALVES ARE NOW DONE — this paragraph described 2026-08-18 and was
+> overtaken on 2026-08-19.** `opl_pii_readers` exists, empty; and the predicate went live
+> on run `761461564584636`, after which `workspace.information_schema.routines` returns
+> `CASE WHEN is_member('opl_pii_readers') THEN name ELSE '***' END` with `last_altered`
+> **`2026-08-19T16:25:23.068Z`**, against `2026-08-03T21:31:27.142Z` before it.
+>
+> ~~measured 2026-08-18, `workspace.information_schema.routines` still returns
+> `CASE WHEN is_account_group_member(...)`, `last_altered 2026-08-03T21:31:27Z`. The
+> repaired predicate is in the repository and goes live the next time
+> `ensure_masked_table` runs; nothing in this branch deployed it.~~ **There is no exposure in the meantime** and that is why the
+> deploy was not rushed: both predicates return **false** for every principal that can
+> reach these tables (the group is empty, and the account-group spelling resolves no
+> workspace-local group at all), so the live mask hides exactly as the repaired one
+> will. What is wrong until the deploy is the REASON it hides, not the result.
+>
+> **AND "THE NEXT TIME `ensure_masked_table` RUNS" NAMED A RUN THAT COULD NOT BE
+> AFFORDED, which is a second version of the same defect and was found the same way —
+> by trying to run it.** That task sat in exactly one job, `bronze_socios_job.yml`,
+> where it is the first task of the socios INGESTION flow: its `unzip` re-extracts
+> `cnpj/2026-06/zips/socios` into the landing directory, **re-landing the
+> 2,852,557,826 B F4 Task 2 had just reclaimed** in the phase whose headline artefact is
+> that 8,212,278,423 B were freed — and, because the Auto Loader checkpoint has already
+> consumed those files, the ingest that follows stages nothing and the gate and promote
+> run over an empty batch. **F4 Task 5b gives the repair a path that is not an ingest**:
+> the same task, unchanged, now also runs in `dataops_views_job.yml` behind that job's
+> existing revision guard and ahead of `apply_pii_governance`. Over the populated socios
+> tables its `CREATE TABLE IF NOT EXISTS` statements are inert, the
+> `CREATE OR REPLACE FUNCTION` is the repair — all four masks already reference
+> `workspace.default.mask_personal_name`, so replacing the body repairs every one of
+> them — and the four `SET MASK`s re-apply masks that are already attached. The
+> fail-closed result does not change: measured on the opl-free warehouse 2026-08-18,
+> `is_member('opl_pii_readers')` returns **false** for the owner, so the read stays
+> `***` across the repair.
+>
+> **Read [What RBAC means here](#what-rbac-means-here-and-why-it-is-not-one-grant)
+> before reading the grants**, because the shape is not what the phrase usually means
+> and the per-principal grants will otherwise read as an unfinished job.
+>
+> Three things this amendment adds, each measured:
+> [the two-part access model and why it cannot be one object](#what-rbac-means-here-and-why-it-is-not-one-grant);
+> [group membership lags in BOTH directions while GRANT does not](#the-lag-group-membership-is-not-a-switch);
+> and [what the permissive branch has and has not been shown to do](#the-permissive-branch-proven-on-a-throwaway-and-unexercised-here-by-choice).
+
 ## Context
 
 `socios` is the only CNPJ table in this lakehouse that names natural persons.
@@ -94,8 +162,22 @@ Delta refuses a mistyped column rather than casting it.
    ```sql
    CREATE OR REPLACE FUNCTION workspace.default.mask_personal_name(name STRING)
    RETURNS STRING
-   RETURN CASE WHEN is_account_group_member('opl_pii_readers') THEN name ELSE '***' END
+   RETURN CASE WHEN is_member('opl_pii_readers') THEN name ELSE '***' END
    ```
+
+   **`is_member`, not `is_account_group_member`, since F4 Task 5** — see the amendment
+   note at the top. The earlier spelling could not be made to return true in this
+   workspace for any group creatable from it.
+
+   ~~**This is the DDL this repository holds, and it is not yet the DDL the workspace
+   holds.** `information_schema.routines` still shows the `is_account_group_member`
+   body, `last_altered 2026-08-03` (measured 2026-08-18).~~ **IT IS NOW BOTH.** Deployed
+   on run `761461564584636`, 2026-08-19: `routine_definition` carries `is_member(` and
+   `last_altered` reads `2026-08-19T16:25:23.068Z`. The sentence above described the day
+   before. It changed when `ensure_masked_table` ran — which since F4 Task 5b is a run of
+   `dataops_views_job.yml`, not of the socios ingestion flow (see the amendment) —
+   and until then both spellings hide from everyone, so the difference is in the
+   argument and not in what any reader sees.
 
 2. **Applied to both name columns of `socios`** by
    `ALTER TABLE … ALTER COLUMN … SET MASK`, from `MASKED_COLUMNS`, which is keyed
@@ -109,7 +191,10 @@ Delta refuses a mistyped column rather than casting it.
 
 4. **Applied before ingest**, by a job task (`ensure_masked_table`) that runs
    ahead of `unzip`, and that is a no-op for any table declaring no masked column
-   so the same task can sit in any job's YAML without a per-table branch.
+   so the same task can sit in any job's YAML without a per-table branch. The same
+   task also runs in the governance job, where there is no ingest for it to precede
+   and its job is to re-issue the function and the masks (F4 Task 5b); every
+   statement it issues is idempotent, which is what lets one task serve both.
 
 5. **socios carries no `CHECK` constraint**, and is the only registered table
    without one — see the next section. Refused at import for any masked contract by
@@ -127,7 +212,7 @@ Delta refuses a mistyped column rather than casting it.
 > reachable with this token.
 >
 > **So `opl_pii_readers` cannot be created in a form that satisfies this predicate from this
-> box.** `src/opl/bronze/masking.py:173`'s *"it becomes correct the moment `opl_pii_readers`
+> box.** `src/opl/bronze/masking.py`'s (line 173 before F4 Task 5 grew that file; the sentence now survives only inside `mask_function_ddl`'s docstring, quoted there to be refuted) *"it becomes correct the moment `opl_pii_readers`
 > exists"* names a moment that cannot arrive here.
 >
 > **THE FAIL-CLOSED ARGUMENT BELOW IS UNAFFECTED AND IS WHY THIS IS A CORRECTION AND NOT A
@@ -161,14 +246,313 @@ Delta refuses a mistyped column rather than casting it.
 > timestamp, no SQL, no surviving object. Caught by the F4 plan's provenance audit before this
 > ADR merged.
 
-`is_account_group_member` returns **false** for a group that does not exist. So in
-a workspace where `opl_pii_readers` was never created — which is the current state
-of this one — *every* reader sees `***`, including the table owner's own queries.
+> **AND F4 TOOK THE REPAIR THIS NOTE DEFERRED.** The predicate is `is_member` on and after
+> run `761461564584636` (2026-08-19): `information_schema.routines` returns
+> `CASE WHEN is_member('opl_pii_readers') THEN name ELSE '***' END` with `last_altered`
+> `2026-08-19T16:25:23.068Z`, against `2026-08-03T21:31:27.142Z` before it. **The floor did not
+> move** — `opl_pii_readers` has zero members, so every reader still sees `***`. See
+> *The permissive branch* below for what is and is not exercised, and note that the sentence
+> immediately following now describes `is_member`, which is the predicate that ships.
+
+`is_member` returns **false** for a group that does not exist, and **false** for a group
+that exists and holds nobody. ~~So in a workspace where `opl_pii_readers` was never created
+— which is the current state of this one —~~ **F4 created `opl_pii_readers` on 2026-08-18 and
+left it EMPTY, so the current state is the second case rather than the first**: *every* reader
+sees `***`, including the table owner's own queries. Measured the same day —
+`is_member('opl_pii_readers')` → `false` for the owner, and the masked column reads `***`.
 The control degrades toward hiding, not toward revealing. The alternative
 formulations all fail open: a mask keyed on an allow-list table that has not been
 created yet, or one that checks `current_user()` against a list, reveal the name
 when their dependency is missing. Creating the group is what grants access; doing
 nothing denies it.
+
+## What RBAC means here, and why it is not one GRANT
+
+**Say this before showing the grants, because the shape is not what the phrase usually
+means.** A reviewer looking for `GRANT SELECT ON TABLE ... TO opl_pii_readers` is
+looking for a statement this platform refuses. Measured, 2026-08-18:
+
+| statement | result |
+|---|---|
+| `GRANT SELECT ON TABLE ... TO opl_pii_readers` | **FAILED** — `PRINCIPAL_DOES_NOT_EXIST`, "Could not find principal with name opl_pii_readers" |
+| the same, to a second workspace-local group | **FAILED**, identically |
+| the same, to `account users` | SUCCEEDED — and `account users` is **everyone** |
+| the same, to a service principal's `applicationId` | SUCCEEDED |
+| the same group used in a **mask predicate**, `is_member(...)` | works — see below |
+
+So a workspace-local group **works in a mask predicate and is refused as a grant
+principal**, and the only account group that resolves is one that cannot function as a
+control. **There is no principal in this workspace that can be both halves.** The
+shipped model is therefore necessarily two objects:
+
+1. the workspace-local group `opl_pii_readers` in the mask predicate, which decides
+   what a reader **sees**; and
+2. `SELECT` granted **per principal** — a service principal's `applicationId`, a user's
+   email — which decides whether a reader can open the table **at all**.
+
+`opl.bronze.pii_governance` holds the roster and the SQL;
+`databricks/src/apply_pii_governance.py` issues it, in the `dataops_views` job behind
+the same deployed-revision guard as everything else there.
+
+**Both halves must hold, and either drift fails closed.** In the group without
+`SELECT` → cannot open the table. With `SELECT` and not in the group → reads `***`.
+That is defence in depth by accident of the platform rather than by design, and it is
+worth keeping for the accident.
+
+**The roster is empty today, by decision.** No principal holds `SELECT` on any socios
+table — `information_schema.table_privileges` returns **0 rows** for
+`bronze_cnpj_socios%`, re-checked 2026-08-18 — and `opl_pii_readers` was created with
+**no members**. See
+[the permissive branch](#the-permissive-branch-proven-on-a-throwaway-and-unexercised-here-by-choice).
+
+**And this is what closes the weakest paragraph this ADR ever wrote.**
+[Staging retention](#staging-retention-the-rows-stay-and-what-guards-them) says the
+guard on these tables *"is an absence, not a control. One `GRANT` reverses it, nothing
+in this repository would notice, and no test asserts the empty result."* The grants
+task computes its plan from `SHOW GRANTS`, so a grant issued out of band is **seen** on
+the next run instead of passing unremarked. That is a control rather than an absence.
+
+**What it does with what it sees is asymmetric, and the earlier wording here — "revokes
+every principal the reviewed roster does not name" — was false.** It was a control over
+principals holding a direct, table-level, literally-spelled `SELECT`. Measured
+2026-08-18 on a throwaway table (`workspace._probe_f4t5c.t`, created, granted, revoked,
+dropped, and its absence verified in `information_schema`):
+
+| state | `SHOW GRANTS ON TABLE` reports | `REVOKE SELECT ON TABLE` against it |
+|---|---|---|
+| `GRANT SELECT ON TABLE t` | `p \| SELECT \| TABLE \| …t` | **SUCCEEDS and the row is gone** |
+| `GRANT ALL PRIVILEGES ON TABLE t` | `p \| ALL PRIVILEGES \| TABLE \| …t` | **SUCCEEDS and the row is still there** |
+| `GRANT SELECT ON SCHEMA s` | `p \| SELECT \| SCHEMA \| …s` | **SUCCEEDS and the row is still there** |
+
+So *"just give them everything"* — the likeliest shape of an out-of-band grant — was
+invisible to a lens matching the string `SELECT`, and the obvious remedy for it does
+nothing while reporting success. `information_schema.table_privileges` agrees and
+spells it differently again: `ALL_PRIVILEGES` as a row of its own, never expanded into
+a `SELECT`, and the inherited grant as a row on the TABLE with `inherited_from = SCHEMA`.
+
+**The repair is asymmetric on purpose: the LOOK is wide and the REVOKE stays narrow.**
+`opl.bronze.pii_governance` now reads all four `SHOW GRANTS` columns and treats
+`SELECT` **and** `ALL PRIVILEGES` as conferring a read; it revokes exactly the one shape
+that a `REVOKE SELECT ON TABLE` was measured to remove; and everything else that
+confers a read is **printed one line each and then raised** (`UngovernedRead`) after
+every statement the run could safely issue — naming the statement that does close it
+(`REVOKE ALL PRIVILEGES ON TABLE …` and `REVOKE SELECT ON SCHEMA …`, both measured to
+work). A governance task cannot revoke what the platform will not let it revoke; what
+it must not do is report SUCCESS over it, or print `REVOKED` after a statement that
+removed nothing. **The current state is clean under the wide lens too**: re-measured
+2026-08-18, `SHOW GRANTS ON TABLE` returns **zero rows** on all three of
+`bronze_cnpj_socios`, `bronze_cnpj_socios_quarantine` and `bronze_cnpj_socios_staging`.
+
+It does **not** close the other half of that paragraph: Predictive Optimization read a
+sibling staging table with no grant of any kind, and no `REVOKE` reaches a platform
+service.
+
+**Nothing of this went into the bundle, and that is a measured refusal.** A Databricks
+Asset Bundle has no `tables` resource, and `grants` is a field on Catalog, Schema,
+Volume, RegisteredModel, ExternalLocation and VectorSearchIndex — never on a table.
+Governing the **schema** instead fails three separate ways here: this repo's only
+target is `mode: development`, which rewrites `name: default` to `dev_<prefix>_default`
+and would deploy green while governing a new, empty schema (the prefix cannot be
+disabled); a `production` target keeps the name and then **collides** with the existing
+`default`, owned by `_workspace_admins_workspace_<id>`; and
+`resources.<securable>.grants` is **authoritative**, so declaring it would revoke
+`_workspace_users_workspace_<id>`'s `USE SCHEMA / CREATE TABLE / CREATE FUNCTION /
+CREATE VOLUME / CREATE MODEL / CREATE MATERIALIZED VIEW` on the schema every pipeline
+here writes into. `bundle deployment bind` would adopt the schema and put 55.8M rows of
+personal data inside `bundle destroy`'s blast radius. **Rejected**; revisit only with
+`lifecycle: {prevent_destroy: true}` as a precondition.
+
+## The lag: group membership is not a switch
+
+**This ADR must not claim the control closes when membership is removed, because it
+does not.** Measured 2026-08-18 on the `opl-free` SQL warehouse, reading
+`is_member('<group>')` as a service principal with a **fresh OAuth token on every
+read** and a varied literal to defeat the result cache:
+
+| change | last read showing the OLD value | first read showing the NEW value | reads |
+|---|---|---|---|
+| principal **removed** from the group | +211 s | **+234 s** (~3 m 54 s) | 11 |
+| principal **added** to the group | +294 s | **+318 s** (~5 m 18 s) | 14 |
+
+**Eleven and fourteen consecutive reads** — corrected from "twelve and fourteen", and
+settled rather than dropped. Reconstructed from `system.query.history` on 2026-08-18:
+the removal series is a contiguous run of nonces 100–110 (**11** statements,
+23:00:36.8 → 23:04:27.9) and the addition series is nonces 200–213 (**14** statements,
+23:04:32.8 → 23:09:48.5). The two published deltas land on the last two reads of each
+series to within a second, and the removal series spans only 231 s, so it cannot be the
+one holding a +318 s reading: the rows are not swapped, the count is. The stray
+"twelve" belongs to a THIRD series this table never described — the 12 reads
+(22:54:41 → 22:59:19) spent waiting for the addition that preceded the two-principal
+proof below. Query history stores the statements and not their results, so it settles
+how many reads there were and not what they returned; the deltas remain the
+transcript's.
+
+**Both directions lag**, and on this compute the *addition* lagged longer than the
+removal. That corrects a reported measurement — taken in a serverless job session —
+that addition propagates immediately and only removal lags; whichever compute a reader
+is on, **neither direction may be assumed instant**.
+
+**WHAT TAKES MINUTES IS EXPIRING A CACHED NEGATIVE, NOT PROPAGATING A MEMBERSHIP.**
+That is the mechanism, and it reconciles this table with two independent readings that
+otherwise contradict it. An independent trial on the same warehouse, by a different
+reader, measured a **removal** at **+284 s old / +304 s new (~5 m 04 s)** — about 30%
+longer than the +234 s above — and an **addition visible in 4 seconds** when the group
+was *created with* the member, i.e. when no principal had ever resolved that group to
+`false`. Every slow reading in this ADR was taken by a principal that had already
+resolved the group to `false` — the +318 s addition follows the removal series
+immediately above it, so its reader had read `false` seconds earlier. Consequently:
+
+- **`+318 s` is not a general property of addition** and must not be quoted as one. Its
+  precondition is part of the measurement: the reader had already read this group as
+  `false`. Without that precondition the same direction was observed to close in
+  seconds.
+- **`+234 s` is a LOWER BOUND from a SINGLE trial, not a bound.** An independent trial
+  of the same direction took **304 s**. An incident responder reading "~3 m 54 s" as
+  "closed within four minutes" would be reading something no measurement supports.
+- **The conservative wording is what survives**: neither direction may be assumed
+  instant, and the unsafe direction is removal. That was already this section's
+  conclusion and none of the above weakens it.
+
+**The removal direction is the one that is unsafe**, and it is the reason this
+paragraph exists: for the width of that window a principal that has just been removed
+from `opl_pii_readers` **still reads names in the clear**. A control that closes
+eventually is still a control. It is not a switch, and an incident response that
+depends on it closing *now* is depending on something that was measured not to happen.
+
+**`GRANT`/`REVOKE` are the half that does close now**, measured in the same session:
+after `REVOKE SELECT`, the principal's **very next statement** failed
+`INSUFFICIENT_PERMISSIONS ... does not have SELECT on Table`, SQLSTATE **42501** —
+while it was **still a member of the group**. So:
+
+- to close access **in a hurry**, revoke the grant, not the membership;
+- and any two-principal proof must use `GRANT`/`REVOKE` and **never** a membership
+  flip, because a flip re-read inside one session records a false result. The
+  transcript below obeys that.
+
+## The permissive branch: proven on a throwaway, and unexercised here by choice
+
+**What was proven.** On 2026-08-18 a purpose-built throwaway table
+`workspace.default._probe_pii_mask`, holding **invented** names, carried the same
+function shape — `CASE WHEN is_member('<a throwaway group>') THEN name ELSE '***' END`
+— on the same two column names. Two real principals read it, one statement each, with
+no membership flip between them:
+
+| statement id | principal | `is_member` | `nome_socio_razao_social` |
+|---|---|---|---|
+| `01f19b58-83ea-1a68-a9cf-fd9f7cc6896d` | a service principal, in the group, with `SELECT` | `true` | **`ANA INVENTADA DA SILVA`** |
+| `01f19b58-85aa-163d-8a8a-c811af970c2a` | the workspace owner, not in the group | `false` | **`***`** |
+
+So a UC column mask with **this predicate** discriminates between two principals, and
+the permissive branch of an `is_member`-keyed mask returns the name. A **throwaway
+group** was used rather than `opl_pii_readers` so that the real group is never non-empty
+for even a moment.
+
+**What those two statement ids evidence, stated exactly, because the table above reads
+as though they evidenced the values.** Both ids verify in `system.query.history`
+(re-checked 2026-08-18): two different `executed_by` principals — the probe service
+principal and the workspace owner — **3 seconds apart**, and the statement text of each
+names the **throwaway** group `_probe_pii_readers` and never `opl_pii_readers`. So the
+ids are real evidence, and what they are evidence OF is **who ran what, against which
+group**: two distinct principals, one probe table, the real group never used. They are
+**not** evidence of the last column. `system.query.history` stores no result data — its
+43 columns carry `produced_rows` and not one cell of any row — and the table, the
+function, the group and the service principal were all destroyed afterwards. `ANA
+INVENTADA DA SILVA` / `***` is therefore **a transcript record that nobody, including
+its author, can re-derive from this workspace**. What can be rebuilt is the apparatus:
+`scripts/rebuild_pii_reader_sp.py` exists so the next reviewer re-runs the proof rather
+than believing it. Every object named above was destroyed afterwards and the destruction
+verified: the table and the function are gone from `information_schema`, the probe group
+is gone, and SCIM `ServicePrincipals` reports `totalResults: 0`.
+
+**What was NOT proven, stated plainly because this branch has already withdrawn one
+overclaim about exactly this.** Nobody has read a name through
+`workspace.default.mask_personal_name`. The real socios mask has **not** been exercised
+in its permissive direction, and that is **a choice, not a gap in the work**:
+exercising it means granting a principal `SELECT` on a table holding **55,827,243 rows
+of real personal names in the clear**, and — given the lag measured above — leaving it
+able to read them for minutes after the membership is withdrawn. The platform audit
+refused exactly this trade earlier in the phase and proved the mechanism on a throwaway
+instead. This ADR takes the same decision and records it as a decision.
+
+**What would exercise it**, so this is a precondition and not a permanent no: add one
+principal to `PII_READERS` in `opl.bronze.pii_governance` **and** to the
+`opl_pii_readers` group, run the governance job, and read one row.
+`scripts/rebuild_pii_reader_sp.py` builds the principal from nothing — the previous
+one was deleted, which is what made an earlier transcript unre-readable. The unit test
+`test_the_roster_is_empty_and_that_is_a_decision` goes red when the roster half is
+done, which is how that decision reaches a reviewer rather than passing in a diff.
+
+## The tags: the account's vocabulary, and the call that establishes it
+
+An earlier measurement pass reported *"70 governed tag policies already provisioned,
+including `class.name`, `class.br_cpf`, `class.br_cnpj`"* and **named no endpoint**; an
+independent audit could reach none of `/api/2.0/tag-policies`, `/api/2.1/tag-policies`
+or `/api/2.0/account/tag-policies`. **The claim is true and the call is
+`GET /api/2.1/tag-policies`** — recorded here so it is never again a number without a
+source:
+
+```
+databricks api get "/api/2.1/tag-policies?page_size=200" --profile opl-free
+  -> top-level keys: ['tag_policies']   <- the WHOLE body; there is no other key
+     tag_policies: 70 entries
+     class.name    "A person's name, (e.g., first, middle, last names, titles, ...)"
+     class.br_cpf  "A Brazilian CPF ... individual taxpayer identification number."
+     class.br_cnpj "A Brazilian CNPJ ... business/company tax identification number."
+```
+
+**`next_page_token: null` was published here and has been withdrawn**: re-measured
+2026-08-18, the response body's only top-level key is `tag_policies`, so that field
+does not exist and the `null` was a structural absence printed in the shape of a
+reading — the same defect `.plans/sql.sh`'s own header retracts for `from_cache: None`.
+**The completeness conclusion survives and its evidence is the count**: 70 entries
+returned against `page_size=200`, so nothing was left on a second page. It never rested
+on a token anybody was served.
+
+`/api/2.0/tag-policies` answers that the private-preview API is deprecated and names
+the 2.1 path; `/api/2.0/account/tag-policies` is `Not Found`; `SHOW TAG POLICIES` is a
+parse error. The audit's reach was correct for the paths it tried.
+
+**Their allowed-value list is empty, which does not mean unusable.** Measured:
+`SET TAGS ('class.name' = 'personal_name')` is refused with
+`INVALID_PARAMETER_VALUE ... "not an allowed value for tag policy key class.name.
+Allowed values: []"`, and `SET TAGS ('class.name' = '')` **succeeds** and reads back
+from `information_schema.column_tags`. So the empty string is the only assignable
+value, and that is what the code emits.
+
+**A bespoke namespace was not available even as an alternative.**
+`SET TAGS ('opl.pii' = ...)` is refused: *"Tag key contains reserved characters (., =,
+>, <, %, &, ?, \)"*. The governed keys are the only dotted keys that exist; the choice
+was between the account's vocabulary and an undotted invention of this project's, and
+using somebody else's standard classification is the better of those two.
+
+**What is classified**, by `opl.bronze.pii_governance.CLASSIFIED_COLUMNS`, on all three
+socios tables:
+
+| column | tag | why |
+|---|---|---|
+| `nome_socio_razao_social` | `class.name` | the masked column |
+| `nome_do_representante` | `class.name` | the masked column this ADR widened the spec to include |
+| `cpf_cnpj_socio` | `class.br_cpf` **and** `class.br_cnpj` | `identificador_socio` decides which one a row holds, so one key alone would be false for the other kind of partner |
+
+`cpf_cnpj_socio` is classified and deliberately **not** masked — which is this ADR's
+[Context](#context) argument (the Receita masks it at source, six middle digits,
+irreversible) made visible to someone reading the catalog instead of this file.
+`cnpj_basico` is deliberately absent: it is a CNPJ and tagging it would be true, but it
+identifies the **company**, and a classification that drifts into every identifier
+anyone could name stops meaning anything.
+
+**The tags reach staging, which the mask cannot.** So does the grant discipline. A
+`SET TAGS` and a `GRANT` change who may open a table and change no value any reader
+gets — unlike a mask, which `promote_batch` would read and append into bronze. The
+table this ADR refuses to mask is therefore not ungoverned.
+
+**And there is a better reason than "it costs nothing".** A `class.name` tag on an
+**unmasked** staging column is the catalog *stating that the exposure exists*. That is
+strictly more useful to a governance reviewer than the same tag on a column already
+hidden behind a mask: on bronze it labels data nobody can read anyway, while on staging
+it is the one machine-readable statement in this workspace that 27.8M personal names sit
+in the clear in a table nothing drains. The tag is not consolation for the mask that
+cannot go there — it is the record of what the mask's absence means.
 
 ## Consequences
 
@@ -328,8 +712,17 @@ issues the quarantine DDL ahead of the gate; socios' quarantine is the one that
 missed it.
 
 What the run did **not** establish: nobody has ever seen this mask reveal a name,
-because there is no `opl_pii_readers` group and no member of it to read through.
+because there was no `opl_pii_readers` group and no member of it to read through.
 The permissive half of the control is untested by construction.
+
+> **UPDATE, 2026-08-18 (F4 Task 5).** Two of that sentence's three clauses have moved
+> and the conclusion has not. The group now **exists** — and the predicate that named
+> it could not have read it either way, which is the amendment at the top of this file.
+> The group is **empty by decision**, so there is still no member to read through, and
+> the permissive half of **this** mask is still untested. What *is* now measured, on a
+> throwaway carrying invented names, is that a mask with this predicate reveals to one
+> principal and hides from another — see
+> [the permissive branch](#the-permissive-branch-proven-on-a-throwaway-and-unexercised-here-by-choice).
 
 ## The boundary: quarantine is masked too, staging cannot be
 
@@ -406,8 +799,11 @@ next to the DDL, and two tests refuse the "make the three uniform" edit by name 
 one over the DDL, one over the SQL the task actually issues.
 
 **What would make it correct**, stated so this is a precondition and not a
-permanent no: the mask on staging becomes both safe and effective the moment
-`opl_pii_readers` exists **and** the job's run-as principal is a member of it. Then
+permanent no: the mask on staging becomes both safe and effective once the job's
+run-as principal is a member of `opl_pii_readers`. The group now **exists** and is
+**empty**, so the precondition is unmet and staging stays unmasked; and until F4 the
+predicate named an account group this workspace could not create, so the condition was
+not merely unmet but unreachable — see the amendment at the top. Then
 the pipeline reads real names and everyone else reads `***`. Creating that group and
 its grants is F4's work, and it is the same prerequisite the fail-closed argument
 above is waiting on. Until then, what protects staging is that nobody but its owner
@@ -585,19 +981,34 @@ this evidence, which is precisely the species of claim this ADR was caught makin
 
 ## What this does not settle
 
-- **The `opl_pii_readers` group does not exist in this workspace.** Nothing in
-  this change creates it. That is why the fail-closed direction matters, and
-  creating the group plus the grants that go with it is F4's work.
+- ~~**The `opl_pii_readers` group does not exist in this workspace.**~~ **Created
+  2026-08-18 (F4 Task 5), as a WORKSPACE-LOCAL group, with no members** — and the
+  predicate was repaired in the same change, because until then it named an ACCOUNT
+  group this workspace cannot create, so the group's existence alone would have
+  changed nothing. The grants that go with it are
+  `opl.bronze.pii_governance` + `databricks/src/apply_pii_governance.py`; the roster
+  is empty, which is
+  [a decision](#the-permissive-branch-proven-on-a-throwaway-and-unexercised-here-by-choice)
+  rather than an omission.
 - ~~**The mask has not been exercised against real socios data.**~~ **Discharged
   by the F1.4b PR A run** — see [What the live run proved](#what-the-live-run-proved-and-what-it-only-confirmed).
   The mask is attached to both columns of the live `bronze_cnpj_socios`, it was
   attached while the table held 0 rows, and reading through it over all 27,836,651
   rows returns one distinct value. Everything else in this ADR remains pinned as a
   string by unit tests, by one local Delta round-trip, and by an import-time guard.
-- **The revealing half of the mask is untested, by construction.** Nobody has seen
-  this function return a name, because there is no `opl_pii_readers` group and no
-  member of it. What is verified is that it hides; that it correctly *shows* to an
-  authorised reader is F4's to demonstrate, along with creating the group.
+- **The revealing half of THIS mask is still untested, and now by choice rather than
+  by construction.** Nobody has seen `workspace.default.mask_personal_name` return a
+  name. A mask with the same predicate and the same shape was measured revealing to
+  one principal and hiding from another on a throwaway carrying invented names
+  ([transcript](#the-permissive-branch-proven-on-a-throwaway-and-unexercised-here-by-choice));
+  doing it on the real table means a principal reading 55.8M real names in the clear,
+  and that trade was refused.
+- **Group membership does not close promptly, in either direction** — a removal took
+  **at least** ~3 m 54 s in one trial and ~5 m 04 s in an independent one, and an
+  addition took ~5 m 18 s *for a reader that had already read the group as `false`*
+  (the same direction closed in ~4 s for a group created with its member). Neither
+  figure is a bound; what lags is the expiry of a cached negative. A `REVOKE` closes on
+  the next statement. See [the lag](#the-lag-group-membership-is-not-a-switch).
 - ~~**The quarantine mask has not run against the workspace.**~~ **Applied on
   2026-08-01.** It ran against `bronze_cnpj_socios_quarantine` while the table
   already held its 1,797 rows — first-time `SET MASK` on a populated table, the

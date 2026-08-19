@@ -22,10 +22,12 @@
 # and a pool of real hub_empresa keys and writing it into the Volume. That is the whole
 # difference in the task list, and it is why this job takes a third parameter.
 #
-# IT HAS NO reclaim_landing. That task deletes landed files once bronze proves it holds
-# their rows, and it refuses any table that does not land as zips -- because the zips in
-# the sibling directory are the only way back to the source when a parse defect is found
-# after ingestion. A generated table's way back is the SEED: opl.generator reproduces
+# IT HAS NO reclaim_landing. That task deletes a landed file once every row it staged is
+# accounted for -- in bronze or in quarantine -- and at least one of them is in bronze (F4's
+# proof; it replaced the strictly weaker "once bronze proves it holds their rows"), and it
+# refuses any table that does not land as zips -- because the zips in the sibling directory
+# are the only way back to the source when a parse defect is found after ingestion.
+# A generated table's way back is the SEED: opl.generator reproduces
 # the file byte-for-byte from (seed, stream_id, pool), which is a stronger guarantee
 # than a retained archive. So there is nothing to reclaim and nothing is deleted.
 #

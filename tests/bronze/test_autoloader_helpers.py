@@ -29,7 +29,7 @@ def test_audit_columns_added_with_constant_values(spark):
     )
     out = add_audit_columns(df, batch_id="run-123", snapshot_month="2026-06")
     # BATCH_COLUMN, not the literal: this ingest WRITES the column that
-    # `promote.rows_of_batch` and `retention.files_of_batch` filter on, and it wrote
+    # `promote.rows_of_batch` and `retention.months_of_batch` filter on, and it wrote
     # it as a bare "_batch_id" until the F1.4a review. Asserted through the constant
     # so a rename fails here instead of turning the promote into a silent no-op
     # (0 rows of its own batch) and the reclaim into a delete of nothing.
@@ -62,7 +62,7 @@ def test_the_batch_column_written_here_follows_the_constant_the_readers_filter_o
     never grows the rebound name.
 
     Why it matters which one it is: `promote.rows_of_batch` and
-    `retention.files_of_batch` FILTER on this constant. Rename it and six imports
+    `retention.months_of_batch` FILTER on this constant. Rename it and six imports
     raise; rename the literal and the promote counts 0 rows of its own batch and
     reports success having appended nothing."""
     monkeypatch.setattr(al, "BATCH_COLUMN", "_batch_id_probe")

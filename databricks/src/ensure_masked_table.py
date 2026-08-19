@@ -2,11 +2,22 @@
 """Job task: create this contract's BRONZE and QUARANTINE tables EMPTY and apply
 their column masks, before anything is ingested.
 
-Runs FIRST in its job, ahead of unzip. Everywhere else in this repo a bronze table
-is created by `promote_batch`'s `saveAsTable(...)` in append mode and a quarantine
-table by the gate's, which for a contract holding personal names creates them with
-the names already in them and lets the mask arrive afterwards. This task is the
-ordering that makes "the control was applied when the data landed" true.
+Runs FIRST in the socios INGESTION job, ahead of unzip. Everywhere else in this repo
+a bronze table is created by `promote_batch`'s `saveAsTable(...)` in append mode and a
+quarantine table by the gate's, which for a contract holding personal names creates
+them with the names already in them and lets the mask arrive afterwards. This task is
+the ordering that makes "the control was applied when the data landed" true.
+
+AND IT RUNS IN A SECOND JOB, WHICH IS NOT AN INGESTION FLOW AT ALL (F4 Task 5b).
+`dataops_views_job.yml` runs it for the same table, and the reason is the middle
+statement below: this task is the only thing in the repository that issues
+`CREATE OR REPLACE FUNCTION` for the mask, so a repair to the PREDICATE -- F4
+substituted `is_member` for an `is_account_group_member` that this workspace can never
+make return true -- could otherwise reach the workspace only by re-running the socios
+ingestion flow, whose unzip would re-land the 2,852,557,826 B F4 Task 2 reclaimed.
+Nothing about the statements changes: over the populated socios tables the CREATEs are
+inert, the function is replaced, and the four masks are re-applied to columns that
+already carry them. The ordering below is what makes that safe in either job.
 
 BRONZE AND QUARANTINE, NOT STAGING. The third table is a deliberate exclusion with
 a mechanism behind it, not the part nobody got to: `promote_batch` READS staging and

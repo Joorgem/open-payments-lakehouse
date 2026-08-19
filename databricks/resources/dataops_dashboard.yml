@@ -1,0 +1,54 @@
+# databricks/resources/dataops_dashboard.yml
+#
+# F4 Task 4's dashboard, over the two views the same phase creates. It is the FIRST
+# non-job resource in this bundle, which is why `tests/test_job_yaml_launch_guards.py`
+# grew a third category in the same commit: its classification was TOTAL over
+# `databricks/resources/*.yml` and its whole vocabulary was "guarded" versus
+# "deliberately not", both of which are questions about a job's tasks. A dashboard has
+# no task and cannot answer either.
+#
+# THE WAREHOUSE ID IS COMMITTED AS NO RESOURCE VALUE, AND THAT IS THE POINT OF
+# `${var.wh}`. The wording matters: the literal id IS in this repository, once, inside the
+# `databricks.yml` comment that argues against making it a value -- so "never committed",
+# which is what this header said first, is false as written and true as meant.
+# `databricks bundle generate dashboard` writes the literal id into the YAML as the
+# resource's `warehouse_id`, and a warehouse id is workspace-scoped platform state: as a
+# VALUE it makes "reproducible from GitHub" false for the one artefact a reviewer will try
+# to redeploy into their own workspace. The `lookup:` block in `databricks.yml` resolves
+# the id from the warehouse's NAME at validate time -- measured 2026-08-18, `bundle
+# validate -o json` renders `"wh": {"lookup": {...}, "value": "13cf10c8..."}` -- so the
+# name is what is in the repository and the id is what is in the deploy.
+# `tests/dataops/test_dashboard.py` sweeps the PARSED values of every committed bundle file
+# for it, which is the check the claim actually needs; the first version read raw text and
+# skipped `databricks.yml`, the one file where the string appears.
+#
+# `embed_credentials` IS LEFT AT ITS DEFAULT, WHICH IS FALSE, and that is a decision
+# rather than an omission: the dashboard then runs on the VIEWER's privileges. That is
+# the right answer here because a view over `system.*` confers exactly the slice it
+# selects and nothing more -- measured, a service principal with no `system` privileges
+# read such a view and was refused the source. Embedding would hand every viewer the
+# deployer's reach over the whole of `system`.
+#
+# `display_name` IS PREFIXED BY DEV MODE. `targets.free` is `mode: development`, so the
+# deployed name is `[dev <user>] opl-dataops`, exactly as every job in this bundle is.
+# Not fought: the prefix is what keeps a development deploy from colliding with a
+# production one, and the alternative is a second target this project does not have.
+#
+# THE `.lvdash.json` IS AUTHORED, NEVER ROUND-TRIPPED. `bundle generate dashboard --force`
+# rewrites the file -- sorts keys, pretty-prints, injects `pageType` -- so a UI edit
+# pulled back over the top produces a diff that is mostly formatting and hides whatever
+# actually changed. `tests/dataops/test_dashboard.py` pins the absence of the keys that
+# only the round-trip adds, so the source of truth stays the file in this repository.
+#
+# WHAT NOTHING HERE CHECKS, stated because it is the honest boundary: `bundle validate`
+# does NOT parse the dashboard JSON. Measured -- a file containing
+# `{ "this": "is not a dashboard" }` validated clean and was inlined verbatim into
+# `serialized_dashboard`. So the local tests check the JSON's structure, its dataset
+# references and the view names it reads, and whether Lakeview RENDERS it is settled by
+# the first deploy and by nothing before it.
+resources:
+  dashboards:
+    dataops:
+      display_name: opl-dataops
+      file_path: ../dashboards/dataops.lvdash.json
+      warehouse_id: ${var.wh}

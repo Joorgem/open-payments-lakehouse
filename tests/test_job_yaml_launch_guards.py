@@ -47,6 +47,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 from job_yaml import (
     JOB_OF,
     RESOURCES,
@@ -63,7 +64,8 @@ from opl.config import SENTINEL_MONTH, is_month
 
 # WHICH JOBS REFUSE A RUN BUILT FROM AN UNEXPECTED REVISION, and which one deliberately
 # does not. Every YAML under `databricks/resources` must appear in one of these two, and
-# `test_every_job_yaml_is_either_guarded_or_deliberately_not` asserts it -- `JOB_OF`
+# `test_every_yaml_under_resources_is_classified` asserts it (together with the third
+# list, `_NON_JOB_RESOURCES`, for files that declare no job at all) -- `JOB_OF`
 # covers the ingestion jobs only, so a lock driven off it alone would say nothing about
 # the jobs that ingest nothing, and "a job missing the guard fails" would quietly not
 # hold for exactly the files nobody thinks about.
@@ -164,6 +166,19 @@ _GUARDED_JOBS = (
     # keys and payloads that a later correct load re-derives; this one writes an
     # inference about something that is no longer there to re-read.
     "vault_merchant_job.yml",
+    # F4 Task 1's views job, and this list's question has an answer here that no entry
+    # above has, because this is the first guarded job that WRITES NOTHING. Every other
+    # entry argues from rows: a wheel from another revision appends the wrong ones, and
+    # the repair is deleting them by hand. This job issues `CREATE OR REPLACE VIEW` and
+    # touches no row at all -- which makes the same question sharper rather than moot.
+    # The view's DEFINITION is the deployed wheel's output: `opl.bronze.reconcile`
+    # derives the SQL, the verdict ladder and the remedy string from `REGISTRY`, and OR
+    # REPLACE takes the NAME the correct definition would have had. So a stale wheel
+    # leaves a reconciliation that is individually well-formed, that classifies batches
+    # by a ladder nobody reviewed, and that an operator then reads off a dashboard
+    # believing it is the reviewed one. Nothing fails, nothing looks wrong, and the
+    # artefact that would say otherwise is the thing that was overwritten.
+    "dataops_views_job.yml",
 )
 
 _UNGUARDED_JOBS = {
@@ -176,25 +191,93 @@ _UNGUARDED_JOBS = {
     "smoke_job.yml": "the probe you run when the deployment itself is in doubt",
 }
 
+# THE THIRD CATEGORY, ADDED BY F4 TASK 4, AND IT IS NOT A THIRD ANSWER TO THIS FILE'S
+# QUESTION -- IT IS A FILE THE QUESTION DOES NOT REACH.
+#
+# Both lists above ask "does a run of this job against a wheel built from another revision
+# matter?" That question presupposes a run, and a run presupposes tasks. `databricks/
+# resources/` was jobs-only until F4 declared a Dashboard resource there, and the
+# classification was TOTAL over `*.yml` -- so the first non-job resource turned this file
+# red with a message about an unclassified JOB, which is not what had happened.
+#
+# THE ALTERNATIVE WAS TO SCOPE THE GLOB TO FILES CONTAINING `resources.jobs`, AND IT WAS
+# REJECTED. A glob that skips what it does not recognise reports green over exactly the
+# file nobody classified -- which is the failure mode the exactness of these lists exists
+# to prevent, and the reason `_UNGUARDED_JOBS` is a dict with a stated reason rather than
+# an omission. A named third list keeps the "every YAML is accounted for" property whole
+# and forces a sentence about anything new.
+#
+# WHAT A NON-JOB RESOURCE STILL HAS TO ANSWER lives beside it, not here: a dashboard runs
+# no wheel, so the revision guard has nothing to guard, and what it CAN be wrong about --
+# a committed warehouse id, a round-tripped JSON, embedded credentials -- is asserted in
+# `tests/dataops/test_dashboard.py`.
+_NON_JOB_RESOURCES = {
+    "dataops_dashboard.yml": (
+        "a Lakeview dashboard: no tasks, no wheel, so there is no run for a revision "
+        "guard to stand in front of"
+    ),
+}
 
-def test_every_job_yaml_is_either_guarded_or_deliberately_not():
+# THE RESOURCE KINDS THAT RUN NO CODE OF THIS PROJECT'S, WHICH IS THE PROPERTY THE THIRD
+# LIST ACTUALLY DEPENDS ON. The first spelling of `test_the_non_job_resources_declare_no
+# _job_at_all` asked only for the absence of a `jobs` key, and that is narrower than the
+# question: a DAB `pipelines:` resource runs a wheel, declares no `jobs` key at all, and
+# would therefore have been filed here and never asked whether a run of it against another
+# revision's wheel matters. Nothing like that exists in this bundle today, which is exactly
+# when the vocabulary is cheap to widen. An ALLOW-LIST rather than a deny-list, for the
+# reason the glob was not narrowed: a check that skips what it does not recognise reports
+# green over the one resource nobody classified.
+_RESOURCE_KINDS_THAT_RUN_NOTHING = frozenset({"dashboards"})
+
+
+def test_every_yaml_under_resources_is_classified():
     """The classification is TOTAL over `databricks/resources/*.yml`.
 
-    A new job YAML must be added to one of the two lists, and the choice is the point:
-    "does a run of this job against a wheel built from another revision matter?" has an
-    answer for every job, and the answer for the ingestion jobs and the repromote is
-    yes. Left to a glob, a job added later would inherit whichever behaviour the glob
-    happened to give it."""
-    declared = set(_GUARDED_JOBS) | set(_UNGUARDED_JOBS)
+    A new job YAML must be added to one of the two job lists, and the choice is the
+    point: "does a run of this job against a wheel built from another revision matter?"
+    has an answer for every job, and the answer for the ingestion jobs and the repromote
+    is yes. Left to a glob, a job added later would inherit whichever behaviour the glob
+    happened to give it.
+
+    A YAML that declares no job at all goes in the third list instead, with the reason
+    written out -- see the comment above `_NON_JOB_RESOURCES` for why the glob is not
+    narrowed to job files instead."""
+    declared = set(_GUARDED_JOBS) | set(_UNGUARDED_JOBS) | set(_NON_JOB_RESOURCES)
     present = {path.name for path in RESOURCES.glob("*.yml")}
     assert declared == present, (
-        f"unclassified job YAML(s): {sorted(present - declared)}; classified but absent: "
-        f"{sorted(declared - present)}"
+        f"unclassified YAML(s) under databricks/resources: {sorted(present - declared)}; "
+        f"classified but absent: {sorted(declared - present)}"
     )
     assert set(JOB_OF.values()) <= set(_GUARDED_JOBS), (
         "an ingestion job is not guarded -- these are the jobs that move GB and append "
         f"to bronze: {sorted(set(JOB_OF.values()) - set(_GUARDED_JOBS))}"
     )
+
+
+def test_the_non_job_resources_declare_nothing_that_runs_this_projects_code():
+    """THE THIRD LIST IS NOT A PLACE TO PUT THINGS, and this is what makes that true.
+
+    Without this, a resource that runs a wheel and is filed under `_NON_JOB_RESOURCES`
+    passes the totality check and is never asked for a revision guard -- so the third
+    category, added to keep an exact classification honest, would become the way around it.
+
+    THE QUESTION IS NOT "IS THERE A `jobs` KEY". That was the first spelling and it is a
+    proxy: a DAB `pipelines:` resource runs a wheel and declares no `jobs` key, so it would
+    have passed. The property is that every resource kind in the file is one that runs no
+    code of this project's, and the allow-list is where a new kind has to argue for itself
+    -- a resource kind nobody has thought about fails here rather than being waved
+    through."""
+    for resource_yml, why in _NON_JOB_RESOURCES.items():
+        document = yaml.safe_load((RESOURCES / resource_yml).read_text(encoding="utf-8"))
+        kinds = set(document.get("resources", {}))
+        runners = sorted(kinds - _RESOURCE_KINDS_THAT_RUN_NOTHING)
+        assert not runners, (
+            f"{resource_yml} declares resource kind(s) {runners} but is filed as a non-job "
+            f"resource ({why}), so nothing asks whether a run of it against a wheel from "
+            "another revision matters. Move it to _GUARDED_JOBS or _UNGUARDED_JOBS, or add "
+            f"the kind to _RESOURCE_KINDS_THAT_RUN_NOTHING with the argument for why it "
+            "cannot run this project's code"
+        )
 
 
 def _assert_the_revision_guard_precedes_every_other_task(
