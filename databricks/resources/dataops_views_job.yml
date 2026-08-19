@@ -140,10 +140,20 @@ resources:
         # rather than a risk of running it. `opl_pii_readers` exists with ZERO members
         # (SCIM, measured), so `is_member(...)` is false for every principal: measured on
         # the opl-free warehouse as the owner, 2026-08-18,
-        # `SELECT is_member('opl_pii_readers')` returns FALSE. So
+        # `SELECT is_member('opl_pii_readers')` returns FALSE.
+        #
+        # AND THE CHECK THIS BLOCK USED TO PUBLISH FOR THAT COULD NOT FAIL. It said
         # `SELECT nome_socio_razao_social FROM workspace.default.bronze_cnpj_socios`
-        # returns `***` before this task runs and must return `***` after it. A NAME in
-        # that result would mean the repair had failed open.
+        # returns `***` after this task, and that a NAME there would mean the repair had
+        # failed open. Measured before any run: `***` was ALREADY the answer. Both
+        # predicates are false for every principal, so both `CASE` expressions take the
+        # same `ELSE` branch -- making `***` the answer under all four of: the repair
+        # landed; the repair did not land; this task returned early; this task never ran.
+        # One branch, unreachable for as long as the roster stays empty, which is a
+        # standing decision. The observation that DISCRIMINATES is the deployed function's
+        # BODY, and `assert_mask_predicate` below is the task that reads it -- because an
+        # unasserted deployed predicate is what let this control sit unopenable from
+        # 2026-08-03 to F4 with nothing noticing.
         #
         # IT TAKES A TABLE, WHICH EVERY OTHER TASK IN THIS JOB AVOIDS, and the answer is a
         # lock rather than a second entry point. A wrong value here is the name of a table
@@ -151,7 +161,7 @@ resources:
         # column", return, and the run would be GREEN with the predicate unrepaired -- the
         # same silence the ingestion jobs' paste lock exists for, and that lock is
         # parametrized over `JOB_OF` and never opens this file.
-        # `tests/test_job_yaml_wiring.py`'s
+        # `tests/test_governance_job_wiring.py`'s
         # `test_the_governance_job_masks_every_masked_table_and_hands_it_nothing_else`
         # holds the tables named here equal to the registered tables whose contract
         # declares a mask, derived from `MASKED_COLUMNS` -- so a second masked contract
@@ -171,6 +181,43 @@ resources:
             # so no column name and no qualified table name is spelled here.
             parameters: ["socios"]
 
+        # F4's CORRECTION PASS: THE OBSERVATION THAT TELLS A REPAIR FROM A NO-OP, and it
+        # is a TASK rather than a paragraph because after this phase's record an unasserted
+        # deployed predicate is the defect and not the documentation. It reads
+        # `information_schema.routines` for `mask_personal_name` and fails the run unless
+        # the deployed body carries `is_member(` -- the predicate `opl.bronze.masking`
+        # emits, which is the only spelling a group creatable from this workspace can make
+        # true. Measured 2026-08-19, before anything in this pass ran: the deployed body is
+        # still `CASE WHEN is_account_group_member('opl_pii_readers') THEN name ELSE '***'
+        # END`, `last_altered 2026-08-03T21:31:27.142Z`.
+        #
+        # WHY IT IS NOT SIMPLY A LINE IN THE EVIDENCE DOCUMENT. Nothing in this repository
+        # read that column: grepping `information_schema.routines`, `routine_definition` and
+        # `DESCRIBE FUNCTION` across `src/`, `databricks/`, `tests/` and `scripts/` returned
+        # exactly one hit, a comment in this file. The predicate it describes was wrong for
+        # three months and no run said so.
+        #
+        # WHY IT IS NOT AN ANCESTOR OF `apply_pii_governance`. It can only report; the
+        # governance task REVOKES reads and writes inert tags, and its GRANT list comes from
+        # a roster that is empty by decision. A stale predicate must therefore not stop the
+        # revokes -- the same direction the block below argues for the mask task itself, one
+        # step further out: a failure state must not disable its own mitigation. The two run
+        # in parallel off `ensure_masked_table`, and `max_retries: 0` means a failure here
+        # fails the RUN, which is the strongest stop any task in this job has.
+        #
+        # WHAT IT COSTS is one task start, which is the same ~15-30 s every other task in
+        # this job pays, against a check whose alternative was a `SELECT` that returns `***`
+        # whether or not the deploy did anything at all.
+        - task_key: assert_mask_predicate
+          depends_on: [{ task_key: ensure_masked_table }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_mask_predicate.py
+            # No parameters, and the task refuses any. There is exactly one mask function
+            # and `opl.bronze.masking` names it, so there is no coordinate to hand it.
+            parameters: []
+
         # F4 Task 5: the OTHER HALF of the socios column mask -- who may open the tables
         # at all, and what the catalog says their columns hold. It lives in THIS job for
         # the same three reasons `measure_rule_overlap` does: it is imperative SQL a
@@ -180,14 +227,26 @@ resources:
         # job YAML would have to be classified in `tests/test_job_yaml_launch_guards.py`'s
         # exact list for a revision guard this job already carries.
         #
-        # AND THE GUARD'S QUESTION HAS ITS SHARPEST ANSWER HERE. `create_views` and
-        # `measure_rule_overlap` write no row, and the first of them creates a view whose
-        # NAME a stale wheel would take; `ensure_masked_table` issues DDL that only ever
-        # tightens. This one REVOKES: its roster is a constant in `opl.bronze.pii_governance`, and anything
-        # holding a table-level SELECT outside that roster loses it. A wheel from another
-        # revision therefore issues a different set of revokes against the three tables
-        # holding 55.8M rows of personal data, reports SUCCESS, and leaves an access state
-        # nobody reviewed.
+        # AND THE GUARD'S QUESTION HAS A SHARP ANSWER HERE, THOUGH NOT THE ONLY ONE.
+        # `create_views` and `measure_rule_overlap` write no row, and the first of them
+        # creates a view whose NAME a stale wheel would take. This one REVOKES: its roster
+        # is a constant in `opl.bronze.pii_governance`, and anything holding a table-level
+        # SELECT outside that roster loses it. A wheel from another revision therefore
+        # issues a different set of revokes against the three tables holding 55.8M rows of
+        # personal data, reports SUCCESS, and leaves an access state nobody reviewed.
+        #
+        # THIS BLOCK USED TO SAY `ensure_masked_table` "ISSUES DDL THAT ONLY EVER TIGHTENS",
+        # AND THAT WAS FALSE IN THE DIRECTION THAT MATTERS. Its middle statement is
+        # `CREATE OR REPLACE FUNCTION mask_personal_name`, and its whole purpose in this job
+        # is to LOOSEN the floor -- from a predicate this workspace can never make true to
+        # one it can. Measured: replacing the body of a function a live mask references
+        # takes effect on the very next `SELECT`. So a stale wheel run through that task
+        # installs a different mask body under an unchanged dependency, all four masks pick
+        # it up, and the run reports SUCCESS -- the same "individually well-formed, nobody
+        # reviewed it" shape this file's header uses to justify the guard for
+        # `CREATE OR REPLACE VIEW`. That task has as sharp a claim on the guard as this one,
+        # and `assert_mask_predicate` above is what makes the body it leaves behind a thing
+        # a run asserts rather than a thing a document remembers.
         #
         # AND IT NOW HAS A SECOND WAY TO FAIL, which is deliberate and is the reason the
         # coupling paragraph below matters more than it did. `ALL PRIVILEGES` on the table

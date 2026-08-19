@@ -160,6 +160,34 @@ def test_the_telemetry_view_that_deploys_reads_the_platforms_own_tables():
     assert "opl_views_probe" not in task_telemetry_sql()
 
 
+def test_no_dataops_view_names_a_column_any_contract_masks():
+    """A VIEW IS A READ PATH THE GRANT CONTROL CANNOT SEE, which is why this lock is here
+    and not in the governance module.
+
+    `SHOW GRANTS ON TABLE t` reaches every privilege that applies to `t` wherever among
+    its ANCESTORS it was granted, and reaches nothing granted on an object that READS it:
+    measured 2026-08-19 on a throwaway, `GRANT SELECT ON VIEW v` where `v` reads `t` does
+    not appear on `SHOW GRANTS ON TABLE t`. Two of these views read the socios tables, and
+    they are created by a task in the very job that governs them.
+
+    Nothing leaks today -- they project `COUNT(*)`, `_batch_id` and `_source_file` -- and
+    "today" is exactly the word this repository refuses to leave a control resting on. The
+    lock is over the DDL text rather than a parsed select list because a masked column can
+    reach a view through a projection, a predicate or a `GROUP BY`, and none of those is
+    something this project wants to discover from a dashboard."""
+    from opl.bronze.masking import MASKED_COLUMNS
+
+    masked = {column for columns in MASKED_COLUMNS.values() for column in columns}
+    assert masked, "the mask registry is empty, so this lock is asserting nothing"
+    for name, ddl in zip(DATAOPS_VIEWS, all_view_ddls(_CONFIG), strict=True):
+        named = sorted(column for column in masked if column in ddl)
+        assert not named, (
+            f"{name} names {named}, which some contract masks. A view is a read path "
+            "outside SHOW GRANTS ON TABLE's reach, so a personal name reaching one is "
+            "governed by neither half of the socios control"
+        )
+
+
 def test_the_views_over_this_projects_own_tables_land_where_config_says():
     """The other three are total over registries and read `config.table(...)` throughout,
     which is the rule this repository states for every catalog/schema reference."""

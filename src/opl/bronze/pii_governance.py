@@ -67,11 +67,42 @@ REMEDY IS WRONG: measured 2026-08-18 on a throwaway table, `REVOKE SELECT ON TAB
 FROM <p>` against that grant SUCCEEDS and leaves `ALL PRIVILEGES` standing. The same is
 true of a `SELECT` INHERITED FROM THE SCHEMA, which `SHOW GRANTS ON TABLE` does return
 (as `ObjectType = SCHEMA`) and which that REVOKE also succeeds against while removing
-nothing. So this module LOOKS for every grant that confers a read, REVOKES only the one
-shape a `REVOKE SELECT ON TABLE` was measured to remove -- a direct, table-level
-`SELECT` -- and hands the rest back as an escalation the task PRINTS and then FAILS on.
-Reporting is not the fallback here: a read this control cannot close is precisely the
-condition the revoke half was written to notice.
+nothing. So this module LOOKS wide, REVOKES only the one shape a `REVOKE SELECT ON
+TABLE` was measured to remove -- a direct, table-level `SELECT` -- and hands the rest
+back as an escalation the task PRINTS and then FAILS on. Reporting is not the fallback
+here: a read this control cannot close is precisely the condition the revoke half was
+written to notice.
+
+AND THE WIDE HALF IS A DENY-LIST OF THE HARMLESS, NOT AN ALLOW-LIST OF THE HARMFUL,
+WHICH IS THE SECOND REPAIR AND THE ONE THAT STOPS THIS BUG RECURRING. The first repair
+widened a list of read-conferring actions from one entry to two, and a widened list is
+still a list: every action not on it was dropped BEFORE anything classified it, so it
+produced no revoke, no escalation, no raise and a green run. `MANAGE` was in that gap,
+and it is the worst possible occupant -- Databricks documents it as the privilege to
+manage privileges and transfer ownership, i.e. one statement away from granting itself
+`SELECT`, and documents that `ALL PRIVILEGES` does NOT include it. Measured 2026-08-19
+on a throwaway: `GRANT MANAGE ON TABLE` comes back from `SHOW GRANTS ON TABLE` as
+`MANAGE | TABLE`; `REVOKE SELECT ON TABLE` leaves it standing; and so does
+`REVOKE ALL PRIVILEGES ON TABLE`, which is the remediation the old escalation would
+have printed. So the polarity is inverted: an action is dropped only if it is in
+`HARMLESS_ACTIONS`, and everything else -- including a privilege the platform has not
+invented yet -- lands in the loud branch.
+
+WHAT THIS STATEMENT CANNOT SEE, recorded because two of the three are real reads.
+(1) A DESCENDANT OBJECT. `SHOW GRANTS ON TABLE` reaches every privilege that applies to
+this table wherever it was granted, ancestors included -- and reaches nothing granted on
+an object that READS this table. Measured: `GRANT SELECT ON VIEW v` where `v` reads `t`
+does not appear on `SHOW GRANTS ON TABLE t`. `create_dataops_views`, a task in the same
+job as the governance task, creates two views over the socios tables; they project
+`COUNT(*)`, `_batch_id` and `_source_file` and no name column, which
+`tests/dataops/test_views.py` now holds. (2) OWNERSHIP, which confers a permanent read
+and which `ALTER TABLE ... OWNER TO` moves -- something a `MANAGE` holder can issue. It
+is bounded by the mask, which this repo measured applies to the owner as well; the grant
+half of it is not bounded by anything here. Not closed, and deliberately not probed by
+the task: its statement list is a paste-lock this repo treats as a proof, and an owner
+read whose expected value nobody has reviewed would be a new way to fail a run without
+being a control. (3) A principal reading through a `MANAGE` it has not yet spent, which
+is exactly why (see above) `MANAGE` now raises instead of being dropped.
 
 THE TAG VOCABULARY IS THE ACCOUNT'S, NOT ONE THIS PROJECT INVENTED, and the call that
 establishes that is recorded because an earlier claim about it named no endpoint:
@@ -121,13 +152,28 @@ GOVERNED_ROLES: tuple[str, ...] = ("bronze", "quarantine", "staging")
 # name is this one.
 GOVERNED_PRIVILEGE = "SELECT"
 
-# WHAT COUNTS AS A READ WHEN LOOKING, which is deliberately wider than what is revoked
-# -- see the docstring. Both spellings are measured: `SHOW GRANTS` returns
-# `ALL PRIVILEGES` with a space, `information_schema.table_privileges` returns
-# `ALL_PRIVILEGES` with an underscore, and NEITHER catalog expands it into a `SELECT`
-# row of its own. `_normalised_action` folds the underscore so one constant matches
-# whichever catalog is being read.
-SELECT_CONFERRING_ACTIONS: frozenset[str] = frozenset({GOVERNED_PRIVILEGE, "ALL PRIVILEGES"})
+# WHAT IS DROPPED WITHOUT A VERDICT, and it is the ONLY thing that is -- see the
+# docstring's polarity paragraph. Everything else observed on a governed table is
+# revoked or escalated, so a privilege this project has never heard of is loud rather
+# than silent.
+#
+# THE SET IS MEASURED IN BOTH HALVES. Which actions can appear at all: on 2026-08-19,
+# `GRANT <p> ON TABLE <throwaway>` was issued for thirteen privileges against this
+# metastore (privilege version 1.0), and exactly six were applicable -- SELECT, MODIFY,
+# APPLY TAG, MANAGE, READ METADATA and ALL PRIVILEGES. BROWSE, USE SCHEMA, CREATE TABLE,
+# EXECUTE, REFRESH and MODIFY CLEAN ROOM were all refused with
+# `PRIVILEGE_NOT_APPLICABLE_TO_ENTITY`, which is why they are not listed here: an entry
+# for a privilege that cannot reach this statement is an entry nothing can check.
+# Whether each confers a read is the documentation's: MODIFY is "insert, update, and
+# delete data" and needs SELECT alongside it to read rows; APPLY TAG is "add and edit
+# tags"; READ METADATA is metadata "without the ability to ... read its data".
+#
+# `ALL PRIVILEGES` IS NOT HERE AND NEITHER IS `MANAGE`, which is the whole point.
+# `SHOW GRANTS` spells the first with a space and `information_schema.table_privileges`
+# with an underscore (`ALL_PRIVILEGES`), and neither catalog expands it into a `SELECT`
+# row of its own; `_normalised_action` folds the underscore and the space so one
+# constant matches whichever catalog is being read, in either direction.
+HARMLESS_ACTIONS: frozenset[str] = frozenset({"MODIFY", "APPLY TAG", "READ METADATA"})
 
 # The governed tag keys this project uses, from the account's own 70. The value is the
 # empty string because that is the only value these policies admit.
@@ -176,9 +222,13 @@ class UngovernedRead(RuntimeError):
 
 @dataclass(frozen=True)
 class ObservedGrant:
-    """One `SHOW GRANTS` row that lets its principal READ the table.
+    """One `SHOW GRANTS` row this control has to settle -- revoke it or escalate it.
 
-    Four fields, not two, and that is the repair: the earlier reader kept
+    Not "one row that confers a read": whether it does is exactly what this module was
+    twice wrong about, so the type carries what the catalog said and the verdict is
+    taken from `revocable` and `HARMLESS_ACTIONS` rather than assumed by arriving here.
+
+    Four fields, not two, and that is the earlier repair: the first reader kept
     `(Principal, ActionType)` and discarded `ObjectType`/`ObjectKey`, so an inherited
     `SELECT` was indistinguishable from a table one and got a REVOKE that succeeded
     while changing nothing -- printed as `REVOKED`, a claim with no evidence."""
@@ -233,9 +283,14 @@ def show_grants_sql(table: str) -> str:
     p` appears in `SHOW GRANTS ON TABLE s.t` as `p | SELECT | SCHEMA | s`. What does
     NOT come back is a privilege a table cannot carry: `workspace.default` grants
     `USE SCHEMA` and five `CREATE *` to `_workspace_users_workspace_<id>`, and
-    `SHOW GRANTS ON TABLE workspace.default.bronze_cnpj_socios` returns zero rows. So
-    the reach of this statement is "every privilege that applies to THIS TABLE,
-    wherever it was granted" -- not "every privilege a reader needs"."""
+    `SHOW GRANTS ON TABLE workspace.default.bronze_cnpj_socios` returns zero rows.
+
+    SO THE REACH IS UPWARDS ONLY: every privilege that applies to THIS TABLE, wherever
+    among its ANCESTORS it was granted. Not "every privilege a reader needs", and --
+    the correction -- not every object through which this table can be read. A
+    DESCENDANT is outside it: measured, `GRANT SELECT ON VIEW v` where `v` reads `t`
+    does not appear on `SHOW GRANTS ON TABLE t`. See the module docstring for what that
+    costs here today, which is nothing, and for why."""
     return f"SHOW GRANTS ON TABLE {table}"
 
 
@@ -321,8 +376,12 @@ def _normalised_action(action: object) -> str:
     return " ".join(str(action).upper().replace("_", " ").split())
 
 
-def select_conferring_grants(rows: object) -> tuple[ObservedGrant, ...]:
-    """Every observed grant that lets its principal READ the table -- the WIDE half.
+def grants_to_settle(rows: object) -> tuple[ObservedGrant, ...]:
+    """Every observed grant this control must settle -- the WIDE half, by EXCLUSION.
+
+    A filter on "is it one of the reads we thought of" is what made this module blind
+    to `MANAGE` twice; the question asked here is "is it one of the few we measured to
+    confer nothing", and everything else is revoked or escalated.
 
     Takes 4-tuples rather than Spark `Row`s so this module stays importable where
     pyspark is not; the task is what knows the column names. Order is the catalog's,
@@ -335,7 +394,7 @@ def select_conferring_grants(rows: object) -> tuple[ObservedGrant, ...]:
             object_key=str(object_key),
         )
         for principal, action, object_type, object_key in rows  # type: ignore[attr-defined]
-        if _normalised_action(action) in SELECT_CONFERRING_ACTIONS
+        if _normalised_action(action) not in HARMLESS_ACTIONS
     )
 
 
@@ -346,7 +405,9 @@ def revocable_principals(grants: tuple[ObservedGrant, ...]) -> tuple[str, ...]:
 
 
 def unrevocable_grants(grants: tuple[ObservedGrant, ...]) -> tuple[ObservedGrant, ...]:
-    """The reads this task CANNOT withdraw. Never silently dropped: the task prints
+    """Everything this task cannot withdraw: a read it cannot close (`ALL PRIVILEGES`,
+    a schema-inherited `SELECT`), a privilege that can grant itself one (`MANAGE`), and
+    any action this project has not classified. Never silently dropped: the task prints
     each one and then fails on it -- see `UngovernedRead`."""
     return tuple(grant for grant in grants if not grant.revocable)
 
@@ -354,15 +415,20 @@ def unrevocable_grants(grants: tuple[ObservedGrant, ...]) -> tuple[ObservedGrant
 def unrevocable_escalation(table: str, grant: ObservedGrant) -> str:
     """What an operator has to be told, including the statement that does close it.
 
-    The remediation is measured rather than inferred: `REVOKE ALL PRIVILEGES ON TABLE
-    ... FROM p` removed the `ALL PRIVILEGES` row and `REVOKE SELECT ON SCHEMA s FROM p`
-    removed the inherited one, both verified by re-reading `SHOW GRANTS` after."""
+    The remediation ECHOES THE OBSERVED ACTION rather than naming one blanket revoke,
+    and that is measured rather than tidy: on a throwaway holding all six table-
+    applicable privileges, `REVOKE ALL PRIVILEGES ON TABLE` removed ALL PRIVILEGES,
+    MODIFY and APPLY TAG and LEFT `MANAGE` and `READ METADATA` standing, which the
+    documentation states as `ALL PRIVILEGES` not including them. `REVOKE MANAGE ON
+    TABLE` removed MANAGE, and `REVOKE SELECT ON SCHEMA s` removed the inherited one --
+    each verified by re-reading `SHOW GRANTS` after."""
     return (
-        f"{grant.principal} can read {table} through {grant.action} on "
-        f"{grant.object_type} {grant.object_key}, which this task CANNOT withdraw: a "
-        f"REVOKE {GOVERNED_PRIVILEGE} ON TABLE against it succeeds and removes nothing "
-        f"(measured). Close it with: REVOKE {grant.action} ON {grant.object_type} "
-        f"{grant.object_key} FROM `{grant.principal}`"
+        f"{grant.principal} can read {table}, or grant itself the read, through "
+        f"{grant.action} on {grant.object_type} {grant.object_key} -- which this task "
+        f"CANNOT withdraw: a REVOKE {GOVERNED_PRIVILEGE} ON TABLE removes only a direct "
+        f"table-level {GOVERNED_PRIVILEGE} (measured), so against this it would succeed "
+        f"and remove nothing. Close it with: REVOKE {grant.action} ON "
+        f"{grant.object_type} {grant.object_key} FROM `{grant.principal}`"
     )
 
 

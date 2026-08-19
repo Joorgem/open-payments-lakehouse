@@ -26,9 +26,9 @@ from opl.bronze.pii_governance import (
     GOVERNED_PRIVILEGE,
     GOVERNED_ROLES,
     GOVERNED_TAG_VALUE,
+    HARMLESS_ACTIONS,
     PII_READER_GROUP,
     PII_READERS,
-    SELECT_CONFERRING_ACTIONS,
     TAG_BR_CNPJ,
     TAG_BR_CPF,
     TAG_NAME,
@@ -36,10 +36,10 @@ from opl.bronze.pii_governance import (
     classified_columns,
     governed_contracts,
     grant_select_ddl,
+    grants_to_settle,
     plan_grants,
     revocable_principals,
     revoke_select_ddl,
-    select_conferring_grants,
     set_column_tag_ddl,
     show_grants_sql,
     unrevocable_escalation,
@@ -148,22 +148,63 @@ def _rows(*rows: tuple[str, str, str, str]) -> list[tuple[str, str, str, str]]:
     return list(rows)
 
 
-def test_a_privilege_that_confers_no_read_is_not_looked_at():
-    """`SHOW GRANTS` returns every action type on the table, and this module issues and
-    revokes exactly one. A revoke loop that swept every action would fight whatever the
-    platform or a future bundle granted; the privilege that reveals a personal name is
-    this one."""
-    grants = select_conferring_grants(
+def test_only_a_privilege_measured_to_confer_nothing_is_dropped_without_a_verdict():
+    """THE POLARITY, stated as the only actions that leave no trace.
+
+    `SHOW GRANTS` returns every action type on the table and this module revokes exactly
+    one, so something has to be dropped. What is dropped is a MEASURED set of three:
+    2026-08-19, thirteen privileges were granted against a throwaway in this metastore
+    and six were applicable at all -- SELECT, MODIFY, APPLY TAG, MANAGE, READ METADATA,
+    ALL PRIVILEGES -- and of those, the documentation gives MODIFY ("insert, update, and
+    delete data", SELECT still required to read rows), APPLY TAG and READ METADATA
+    ("without the ability to ... read its data") as conferring no read."""
+    assert HARMLESS_ACTIONS == {"MODIFY", "APPLY TAG", "READ METADATA"}
+    grants = grants_to_settle(
         _rows(
             ("a@x", "SELECT", "TABLE", _TABLE),
             ("b@x", "MODIFY", "TABLE", _TABLE),
             ("c@x", "APPLY_TAG", "TABLE", _TABLE),
+            ("e@x", "READ METADATA", "TABLE", _TABLE),
             ("d@x", "select", "table", _TABLE),
         )
     )
     assert [grant.principal for grant in grants] == ["a@x", "d@x"]
     assert revocable_principals(grants) == ("a@x", "d@x")
     assert GOVERNED_PRIVILEGE == "SELECT"
+
+
+def test_manage_is_a_read_this_control_cannot_close_and_must_not_drop():
+    """THE SAME BUG'S SECOND APPEARANCE, and the reason the lens is now an exclusion.
+
+    The first repair widened a list of read-conferring actions from one entry to two.
+    A widened list is still a list: `MANAGE` was not on it, so it was dropped before
+    anything classified it -- no revoke, no escalation, no raise, green run. It is the
+    worst occupant that gap could have had. Databricks documents `MANAGE` as managing
+    privileges and transferring ownership, i.e. one statement from granting itself
+    SELECT, and documents that `ALL PRIVILEGES` does not include it -- measured
+    2026-08-19 on a throwaway holding all six applicable privileges: `REVOKE ALL
+    PRIVILEGES ON TABLE` removed ALL PRIVILEGES, MODIFY and APPLY TAG and LEFT MANAGE
+    (and READ METADATA) standing; `REVOKE MANAGE ON TABLE` removed it."""
+    grants = grants_to_settle(_rows((_SP, "MANAGE", "TABLE", _TABLE)))
+    assert [grant.action for grant in grants] == ["MANAGE"], "it must not be dropped"
+    assert revocable_principals(grants) == (), "and REVOKE SELECT would not remove it"
+    assert unrevocable_grants(grants) == grants, "so the run has to fail on it"
+    assert f"REVOKE MANAGE ON TABLE {_TABLE} FROM `{_SP}`" in (
+        unrevocable_escalation(_TABLE, grants[0])
+    ), "the remediation must echo the observed action, never ALL PRIVILEGES"
+
+
+def test_a_privilege_this_project_has_never_heard_of_is_loud_rather_than_silent():
+    """THE PROPERTY THE INVERSION BUYS, and the only one that stops a third instance.
+
+    Unity Catalog gains privileges; this repository does not learn about them on the day
+    they ship. Under the old filter the next one landed in the silent branch by default.
+    Under this one it lands in the branch that prints a line and fails the run, and the
+    cost of being wrong is a governance run an operator has to look at rather than a
+    reader nobody sees."""
+    grants = grants_to_settle(_rows((_SP, "READ EVERYTHING SOMEDAY", "TABLE", _TABLE)))
+    assert unrevocable_grants(grants) == grants
+    assert "READ EVERYTHING SOMEDAY" in unrevocable_escalation(_TABLE, grants[0])
 
 
 def test_all_privileges_is_a_read_and_the_old_lens_could_not_see_it():
@@ -174,7 +215,7 @@ def test_all_privileges_is_a_read_and_the_old_lens_could_not_see_it():
     reported by `SHOW GRANTS` as `p | ALL PRIVILEGES | TABLE | t` -- never as SELECT --
     so a lens matching the literal string `SELECT` put the principal in NEITHER list
     and issued nothing at all."""
-    grants = select_conferring_grants(_rows((_SP, "ALL PRIVILEGES", "TABLE", _TABLE)))
+    grants = grants_to_settle(_rows((_SP, "ALL PRIVILEGES", "TABLE", _TABLE)))
     assert [grant.principal for grant in grants] == [_SP], "the wide half must see it"
     assert revocable_principals(grants) == (), "and the narrow half must not touch it"
     assert unrevocable_grants(grants) == grants
@@ -183,10 +224,11 @@ def test_all_privileges_is_a_read_and_the_old_lens_could_not_see_it():
 def test_both_spellings_of_all_privileges_are_the_same_privilege():
     """`SHOW GRANTS` says `ALL PRIVILEGES`, `information_schema.table_privileges` says
     `ALL_PRIVILEGES`, for the same grant -- both measured on the same throwaway. One
-    constant matches either, so changing the observe source cannot reopen the hole."""
-    assert SELECT_CONFERRING_ACTIONS == {"SELECT", "ALL PRIVILEGES"}
+    normalisation matches either. It runs in both directions: the test above hands in
+    `APPLY_TAG` and the harmless set spells it `APPLY TAG`, which is how this metastore
+    returns it, so a grant that confers nothing is not escalated over a separator."""
     for spelling in ("ALL PRIVILEGES", "ALL_PRIVILEGES", "all privileges"):
-        grants = select_conferring_grants(_rows((_SP, spelling, "TABLE", _TABLE)))
+        grants = grants_to_settle(_rows((_SP, spelling, "TABLE", _TABLE)))
         assert [grant.action for grant in grants] == ["ALL PRIVILEGES"], spelling
 
 
@@ -197,7 +239,7 @@ def test_a_select_inherited_from_the_schema_is_seen_and_is_never_revoked():
     `p | SELECT | SCHEMA | s` -- and `REVOKE SELECT ON TABLE s.t FROM p` against it
     SUCCEEDS and leaves the row in place (both measured). The old reader discarded
     `ObjectType`, so it revoked forever and printed `REVOKED` every time."""
-    grants = select_conferring_grants(_rows((_SP, "SELECT", "SCHEMA", _SCHEMA)))
+    grants = grants_to_settle(_rows((_SP, "SELECT", "SCHEMA", _SCHEMA)))
     assert [grant.object_type for grant in grants] == ["SCHEMA"]
     assert revocable_principals(grants) == ()
     assert plan_grants(revocable_principals(grants), roster=()).revoke == ()
@@ -208,7 +250,7 @@ def test_a_direct_table_select_is_the_one_shape_that_gets_revoked():
     was measured to remove -- it disappeared from `SHOW GRANTS` afterwards while the
     principal's `ALL PRIVILEGES` and schema-inherited rows survived the same
     statement."""
-    grants = select_conferring_grants(
+    grants = grants_to_settle(
         _rows(
             (_SP, "ALL PRIVILEGES", "TABLE", _TABLE),
             (_SP, "SELECT", "TABLE", _TABLE),
@@ -224,10 +266,10 @@ def test_the_escalation_names_the_statement_that_actually_closes_it():
     measured: `REVOKE ALL PRIVILEGES ON TABLE` removed the table-level one and
     `REVOKE SELECT ON SCHEMA` removed the inherited one, each verified by re-reading
     `SHOW GRANTS` afterwards."""
-    grant = select_conferring_grants(_rows((_SP, "ALL PRIVILEGES", "TABLE", _TABLE)))[0]
+    grant = grants_to_settle(_rows((_SP, "ALL PRIVILEGES", "TABLE", _TABLE)))[0]
     message = unrevocable_escalation(_TABLE, grant)
     assert f"REVOKE ALL PRIVILEGES ON TABLE {_TABLE} FROM `{_SP}`" in message
-    inherited = select_conferring_grants(_rows((_SP, "SELECT", "SCHEMA", _SCHEMA)))[0]
+    inherited = grants_to_settle(_rows((_SP, "SELECT", "SCHEMA", _SCHEMA)))[0]
     assert f"REVOKE SELECT ON SCHEMA {_SCHEMA} FROM `{_SP}`" in (
         unrevocable_escalation(_TABLE, inherited)
     )

@@ -81,21 +81,26 @@ class _RecordingSession:
     task asked of it -- so a task that stopped issuing REVOKE entirely would still
     pass against one.
 
-    Three rosters of holders, because a REVOKE means something different against each:
+    Four rosters of holders, because a REVOKE means something different against each:
     `observed` holds a direct table-level SELECT (revocable), `all_privileges` holds
-    `ALL PRIVILEGES` on the table, and `inherited` holds a SELECT granted on the SCHEMA.
-    The last two survive `REVOKE SELECT ON TABLE`, measured."""
+    `ALL PRIVILEGES` on the table, `inherited` holds a SELECT granted on the SCHEMA, and
+    `manage` holds `MANAGE` -- which confers no read yet and can grant itself one, which
+    `REVOKE ALL PRIVILEGES` does not remove, and which the module silently DROPPED until
+    the lens became an exclusion. All three of the last survive `REVOKE SELECT ON
+    TABLE`, measured."""
 
     def __init__(
         self,
         observed: tuple[str, ...] = (),
         inherited: tuple[str, ...] = (),
         all_privileges: tuple[str, ...] = (),
+        manage: tuple[str, ...] = (),
     ) -> None:
         self.statements: list[str] = []
         self._observed = observed
         self._inherited = inherited
         self._all_privileges = all_privileges
+        self._manage = manage
 
     def _rows(self, table: str) -> list[dict[str, str]]:
         schema = table.rsplit(".", 1)[0]
@@ -104,6 +109,8 @@ class _RecordingSession:
               "ObjectKey": table} for p in self._observed]
             + [{"Principal": p, "ActionType": "ALL PRIVILEGES", "ObjectType": "TABLE",
                 "ObjectKey": table} for p in self._all_privileges]
+            + [{"Principal": p, "ActionType": "MANAGE", "ObjectType": "TABLE",
+                "ObjectKey": table} for p in self._manage]
             + [{"Principal": p, "ActionType": "SELECT", "ObjectType": "SCHEMA",
                 "ObjectKey": schema} for p in self._inherited]
         )
@@ -245,6 +252,30 @@ def test_a_read_it_cannot_withdraw_fails_the_run_after_everything_it_can_do():
     session = _RecordingSession(all_privileges=(_SP,))
     task.SparkSession = _SessionFactory(session)
     with pytest.raises(UngovernedRead, match="ALL PRIVILEGES"):
+        task.main([])
+    assert not [s for s in session.statements if s.startswith("REVOKE")], (
+        "the task issued a REVOKE that was measured to change nothing"
+    )
+    assert [s for s in session.statements if "SET TAGS" in s], (
+        "the loud failure cost the tagging, which was safe to do"
+    )
+
+
+def test_a_manage_holder_fails_the_run_instead_of_passing_through_unseen():
+    """THE ONE THE FIRST REPAIR STILL MISSED, at the layer that decides the run's
+    verdict.
+
+    `MANAGE` is the privilege whose documented purpose is managing privileges and
+    transferring ownership -- i.e. one statement from granting itself SELECT on 55.8M
+    personal names -- and `SHOW GRANTS ON TABLE` returns it as `MANAGE | TABLE`
+    (measured). Under a lens that kept the actions it recognised as reads, it produced
+    no revoke, no escalation, no raise and a GREEN run. It must fail this one, and the
+    line it prints must name `REVOKE MANAGE`: `REVOKE ALL PRIVILEGES ON TABLE` leaves
+    MANAGE standing, measured on a throwaway and stated in the documentation."""
+    task = _load("apply_pii_governance")
+    session = _RecordingSession(manage=(_SP,))
+    task.SparkSession = _SessionFactory(session)
+    with pytest.raises(UngovernedRead, match="REVOKE MANAGE ON TABLE"):
         task.main([])
     assert not [s for s in session.statements if s.startswith("REVOKE")], (
         "the task issued a REVOKE that was measured to change nothing"

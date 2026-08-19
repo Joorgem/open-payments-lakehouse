@@ -48,6 +48,13 @@ costs the work that was safe to do. A governance task that reported SUCCESS over
 reader of 55.8M personal names it had failed to remove would be the same absence this
 module replaced, wearing a green tick.
 
+AND THE LIST OF WHAT REACHES THAT BRANCH IS NOW EVERYTHING THIS PROJECT HAS NOT CLEARED.
+`opl.bronze.pii_governance` drops an observed action only if it is in `HARMLESS_ACTIONS`
+-- three privileges measured against this metastore and documented to confer no read --
+so `MANAGE`, which can grant itself `SELECT` and which `REVOKE ALL PRIVILEGES` does not
+remove, fails this run instead of being filtered out before anything looked at it. So
+does a privilege the platform invents next year.
+
 WHY IT REACHES STAGING, WHICH THE MASK TASK REFUSES TO NAME. `ensure_masked_table`
 excludes staging because a MASK there would make `promote_batch` read `***` and append
 it into bronze, and would silently stop the DQ rule that rejects a missing name. A
@@ -75,10 +82,10 @@ from opl.bronze.pii_governance import (
     classified_columns,
     governed_contracts,
     grant_select_ddl,
+    grants_to_settle,
     plan_grants,
     revocable_principals,
     revoke_select_ddl,
-    select_conferring_grants,
     set_column_tag_ddl,
     show_grants_sql,
     unrevocable_escalation,
@@ -106,7 +113,7 @@ def governed_tables() -> tuple[tuple[str, str], ...]:
 
 
 def _observed_grants(spark, table: str) -> tuple[ObservedGrant, ...]:
-    """Every grant the CATALOG reports that lets somebody read `table`, right now.
+    """Every grant the CATALOG reports on `table` that this task must settle, right now.
 
     Read rather than inferred, which is the whole of the revoke half: a plan built
     from the statements this run intends to issue could not express "somebody granted
@@ -117,7 +124,7 @@ def _observed_grants(spark, table: str) -> tuple[ObservedGrant, ...]:
     withdraw it: `ObjectType` is what separates a grant on the table from one inherited
     from the schema, and both come back from this statement."""
     rows = spark.sql(show_grants_sql(table)).collect()
-    return select_conferring_grants(
+    return grants_to_settle(
         (row["Principal"], row["ActionType"], row["ObjectType"], row["ObjectKey"])
         for row in rows
     )

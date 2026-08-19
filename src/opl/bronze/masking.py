@@ -32,6 +32,13 @@ from opl.contracts.cnpj_schemas import TABLES
 MASK_FUNCTION = "mask_personal_name"
 PII_READER_GROUP = "opl_pii_readers"
 
+# THE PREDICATE, AS ONE CONSTANT, because it is now spelled in two places that must not
+# disagree: the `CREATE OR REPLACE FUNCTION` below, and the read-back that asks the
+# catalog whether that statement actually landed. Two literals would let the check pass
+# against a body the DDL no longer emits -- which is precisely the failure the read-back
+# exists to catch, wearing the check's own green tick.
+MASK_PREDICATE = f"is_member('{PII_READER_GROUP}')"
+
 # Per contract, the columns that hold a natural person's name. `socios` has TWO:
 # `nome_socio_razao_social` (the partner, who may be a company or a person) and
 # `nome_do_representante` (always a person -- a legal representative). The spec
@@ -76,9 +83,62 @@ def mask_function_ddl(qualified_function: str) -> str:
     return (
         f"CREATE OR REPLACE FUNCTION {qualified_function}(name STRING) "
         "RETURNS STRING "
-        f"RETURN CASE WHEN is_member('{PII_READER_GROUP}') "
+        f"RETURN CASE WHEN {MASK_PREDICATE} "
         "THEN name ELSE '***' END"
     )
+
+
+class StaleMaskPredicate(RuntimeError):
+    """The DEPLOYED mask function does not carry the predicate this wheel ships.
+
+    Raised rather than printed, and the reason is what the alternative was. The claim
+    published as the safety check on this control's deploy was that
+    `SELECT nome_socio_razao_social FROM ... bronze_cnpj_socios` reads `***` afterwards
+    -- which it does under the repaired predicate, under the unrepaired one, under a
+    task that returned early, and under a task that never ran, because
+    `opl_pii_readers` is empty by decision and both spellings therefore take the same
+    `ELSE` branch. A check with one reachable branch is not a check. The body of the
+    function is the only observation that tells those cases apart."""
+
+
+# WHAT THE CATALOG IS ASKED, AND WHY IT IS ASKED AT ALL. Measured 2026-08-18 and again
+# 2026-08-19: `workspace.information_schema.routines` returns `CASE WHEN
+# is_account_group_member('opl_pii_readers') THEN name ELSE '***' END` for
+# `mask_personal_name`, `last_altered 2026-08-03T21:31:27.142Z` -- the F1.4b body, three
+# commits of repair later. Nothing in this repository read that column before F4's
+# correction pass: a grep for `information_schema.routines`, `routine_definition` and
+# `DESCRIBE FUNCTION` across `src/`, `databricks/`, `tests/` and `scripts/` returned one
+# hit, a comment in a job YAML.
+def deployed_predicate_sql(qualified_function: str) -> str:
+    """What the catalog currently says the mask function's BODY is.
+
+    Filtered on all three parts of the name rather than on `routine_name` alone: the
+    unqualified filter is what a person types at a prompt, and it would answer from any
+    catalog or schema that happens to hold a function of that name."""
+    parts = qualified_function.split(".")
+    if len(parts) != 3:
+        raise ValueError(
+            f"{qualified_function!r} is not a three-part function name; this read has to "
+            "filter on catalog, schema and name, or it answers from another schema's "
+            "function of the same name"
+        )
+    catalog, schema, name = parts
+    return (
+        f"SELECT routine_definition, last_altered "
+        f"FROM {catalog}.information_schema.routines "
+        f"WHERE routine_catalog = '{catalog}' AND routine_schema = '{schema}' "
+        f"AND routine_name = '{name}'"
+    )
+
+
+def predicate_is_deployed(routine_definition: object) -> bool:
+    """Whether a deployed body carries the predicate `mask_function_ddl` emits.
+
+    A substring test discriminates on its own: `is_account_group_member(` does not
+    contain `is_member(`. Case and whitespace are folded so the answer is about the
+    predicate rather than about how the catalog chose to render it."""
+    deployed = " ".join(str(routine_definition).split()).lower()
+    return MASK_PREDICATE.lower() in deployed
 
 
 # The columns bronze adds to every contract, WITH THEIR REAL TYPES. Measured off

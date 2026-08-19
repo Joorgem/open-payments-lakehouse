@@ -27,14 +27,17 @@ import pytest
 
 from opl.bronze.masking import (
     MASK_FUNCTION,
+    MASK_PREDICATE,
     MASKED_COLUMNS,
     METADATA_COLUMNS,
     PII_READER_GROUP,
     QUARANTINE_COLUMNS,
     create_quarantine_ddl,
     create_table_ddl,
+    deployed_predicate_sql,
     mask_function_ddl,
     masked_table_ddls,
+    predicate_is_deployed,
     set_mask_ddl,
 )
 from opl.bronze.registry import REGISTRY, table_spec
@@ -86,6 +89,75 @@ def test_the_predicate_is_not_the_one_this_workspace_cannot_open():
         "true in this workspace for any group that can be created from it -- the "
         "control would be unopenable rather than merely closed. See ADR 0008."
     )
+
+
+# The body this workspace has served since F1.4b, verbatim from
+# `workspace.information_schema.routines`, re-measured 2026-08-19: `last_altered
+# 2026-08-03T21:31:27.142Z`, three commits of repair after the predicate was corrected in
+# the wheel. It is a fixture rather than a paraphrase because every assertion below is
+# about telling THIS string from the repaired one.
+_DEPLOYED_TODAY = "CASE WHEN is_account_group_member('opl_pii_readers') THEN name ELSE '***' END"
+
+
+def test_the_ddl_and_the_read_back_cannot_disagree_about_the_predicate():
+    """ONE CONSTANT, TWO USES. The `CREATE OR REPLACE FUNCTION` emits `MASK_PREDICATE`
+    and the read-back looks for it; two literals would let the check report green
+    against a body the DDL no longer produces -- which is the exact failure the read-back
+    was added to catch, wearing the check's own tick."""
+    assert MASK_PREDICATE == f"is_member('{PII_READER_GROUP}')"
+    assert MASK_PREDICATE in mask_function_ddl("workspace.default.mask_personal_name")
+
+
+def test_the_read_back_tells_the_repaired_body_from_the_one_deployed_today():
+    """THE OBSERVATION THAT DISCRIMINATES, and the check it replaces could not.
+
+    The published safety check was that `SELECT nome_socio_razao_social FROM
+    bronze_cnpj_socios` reads `***` after the run. It does -- and it did before, because
+    `opl_pii_readers` is empty by decision, so both predicates are false for every
+    principal and both `CASE` expressions take the same `ELSE`. `***` is the answer under
+    the repair, under no repair, under a task that returned early and under a task that
+    never ran. The BODY is the only thing that differs."""
+    assert not predicate_is_deployed(_DEPLOYED_TODAY), (
+        "the read-back accepts the body this workspace serves today, so it cannot tell a "
+        "repair from a no-op -- which is the whole reason it exists"
+    )
+    assert predicate_is_deployed(
+        f"CASE WHEN {MASK_PREDICATE} THEN name ELSE '***' END"
+    )
+
+
+@pytest.mark.parametrize(
+    "rendered",
+    [
+        "CASE WHEN IS_MEMBER('opl_pii_readers') THEN name ELSE '***' END",
+        "CASE WHEN\n  is_member('opl_pii_readers')\n  THEN name ELSE '***' END",
+    ],
+)
+def test_the_read_back_is_about_the_predicate_and_not_about_the_rendering(rendered):
+    """The catalog returns what it stores, and this project does not own that rendering.
+    A check that failed on a case or a line break would fail a correct deploy, and the
+    repair for a false alarm on a privacy control is to stop believing the control."""
+    assert predicate_is_deployed(rendered)
+
+
+def test_the_read_back_names_all_three_parts_of_the_function():
+    """`WHERE routine_name = 'mask_personal_name'` is what a person types at a prompt,
+    and it answers from any catalog or schema holding a function of that name. The task
+    resolves the qualified name from `opl.config`, so the filter can and must be exact."""
+    sql = deployed_predicate_sql("workspace.default.mask_personal_name")
+    assert sql.startswith("SELECT routine_definition, last_altered")
+    assert "FROM workspace.information_schema.routines" in sql
+    for part in ("routine_catalog = 'workspace'", "routine_schema = 'default'",
+                 "routine_name = 'mask_personal_name'"):
+        assert part in sql
+
+
+def test_the_read_back_refuses_a_function_name_it_cannot_qualify():
+    """An unqualified name here would build a `WHERE routine_catalog = 'mask_personal_
+    name'` and return nothing, which this task reads as "the function is not in the
+    catalog at all" -- a loud failure about the wrong thing."""
+    with pytest.raises(ValueError, match="three-part"):
+        deployed_predicate_sql("mask_personal_name")
 
 
 def test_every_masked_column_exists_in_its_contract():
