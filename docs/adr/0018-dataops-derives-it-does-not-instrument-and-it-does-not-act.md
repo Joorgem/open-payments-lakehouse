@@ -264,11 +264,13 @@ clicked.
 replay, the per-reason tolerance, and the bundle half of governance.
 
 **What it cost to learn, and the reason this ADR is written the way it is.** The phase found
-**nine** instances of one defect: a check whose output cannot distinguish *passed* from *never
+**ten** instances of one defect: a check whose output cannot distinguish *passed* from *never
 ran*. They were in tests, in tooling, in a view's arm, in a controller's published claim
-falsified four minutes later, and — the worst-placed — **in the safety check on a privacy
-deploy**, where `***` was the answer under all four possible outcomes. Every one was found by
-somebody who did not write it.
+falsified four minutes later, in the safety check on a privacy deploy — where `***` was the
+answer under all four possible outcomes — and, last, in a test asserting a function against its
+own body, which left the access control's totality over 55.8M rows unlocked in the one direction
+that matters. **Every one was found by somebody who did not write it**, and the tenth was found
+by the review that closed the phase.
 
 **So the standing instruction this phase adds:** when a check reports the expected value, ask
 what else would produce that value. If the answer is "everything", it is not a check.

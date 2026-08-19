@@ -1052,8 +1052,10 @@ derivation from two measured booleans — and it means **the check published as 
 privacy deploy has one branch and cannot take the other**, for as long as the group stays empty,
 which is a standing decision rather than a transient.
 
-**This is the ninth instance of this phase's second species, and the worst-placed one.** The
-previous eight were in tests, in tooling, in a view's arm and in a controller's own published claim.
+**This was the ninth instance of this phase's second species, and the worst-placed one** — and a
+**tenth** followed it, found by the closing code review in `governed_contracts()`'s own test, where
+the expected side spelled the function body. The previous eight were in tests, in tooling, in a
+view's arm and in a controller's own published claim.
 This one was the thing that was supposed to tell a repaired privacy control from an unrepaired one.
 **It was caught by the independent reviewer dispatched specifically to ask whether the deploy was
 safe**, in the last review before the deploy would have happened.
@@ -1299,6 +1301,46 @@ what would exercise it.
   decision rather than a fault; nothing in F4 ingested it.
 - **A second masked contract.** The governance job's coverage is locked to `MASKED_COLUMNS`, and
   that set has exactly one entry, so the lock's other direction is proven only by mutation.
+
+### Carried out of the closing review as follow-ups, not fixed
+
+**The closing record review split the branch into code and documentation packages and read them
+independently.** The documentation package's six blockers were closed in-branch; the code package's
+one blocker — **the tenth instance** — was closed in-branch too, and it is recorded in §1.7's
+species tally rather than here. **These are what it found and this phase deliberately did not
+close**, because each is a real gap and none is wrong in the deployed state:
+
+- **The dashboard ↔ view column contract is unlocked in one direction.** The `.lvdash.json` re-spells
+  23 output column names three times each, and the test compares them **to the dataset's own SQL**,
+  never to what the views return. Proven by mutation: renaming `expected_every_days` in
+  `freshness.py` alone left 8 tests green. `bundle validate` does not parse that file at all, so
+  nothing downstream would catch it. **Correct today** — all 23 names verified present in the
+  deployed views. The machinery to close it already exists in the same file.
+- **The month cross-check can be unwired from all three ingestion jobs with the suite green.** Its
+  passing also leaves no trace: `refuse_month_disagreement` prints nothing when the months agree and
+  nothing when there is no stamp, so a green reclaim log cannot distinguish *cross-checked* from
+  *never ran*. Removing the parameter from **one** job is caught, incidentally, by the byte-diff
+  paste lock; removing it from all three defeats that.
+- **Two remedy commands for the same job disagree**, and the older one cannot be run:
+  `promote.require_batch_id` prints an invocation with no `revision=`, which the job's own guard
+  refuses. `reconcile.py` cites that function as the standard it follows and shipped the corrected
+  spelling beside the stale one without reconciling them.
+- **`reclaim_landing` resolves the landing dir by a second spelling** — `DEFAULT.landing_table(...)`
+  directly, where `registry_landing` owns *"THE one mapping"* and its docstring names this exact
+  drift. Harmless today and fail-closed, and **a test pins the bypass in**, so closing it turns that
+  test red.
+- **`apply_pii_governance` prints no counter for what it observed.** A run that saw nothing, one
+  whose observations were all harmless, and one whose reader silently returned nothing are the same
+  log. Both its sibling tasks solve exactly this and say why.
+- **Three residual tautologies and one floorless sweep**, each read-verified: two assert a pure
+  function against itself, and `test_cadence.py`'s "no schedules anywhere" walks a glob with no
+  non-empty floor, so a moved tree passes having inspected zero jobs. The premise itself is verified
+  live.
+- **The running "guards found" tally is spelled five ways in code** — four, four, five, six, six —
+  while this branch's log records the tenth. A monotonically growing number written into five
+  independent places, none updated when it grows. **It is this repository's signature defect wearing
+  its own name**, and it is left standing on purpose: fixing it by hand is the same act that put it
+  there.
 
 ### Unmeasurable here, and stated as such
 
