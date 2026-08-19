@@ -1357,6 +1357,34 @@ close**, because each is a real gap and none is wrong in the deployed state:
   its own name**, and it is left standing on purpose: fixing it by hand is the same act that put it
   there.
 
+### A CI failure during the close, and what it is honest to say about it
+
+**The closing run failed once, and it is recorded because a phase that reports only its final
+green run has not reported its CI.** `2683 passed, 1 failed` in **20 m 22 s**:
+
+```
+FAILED tests/vault/test_socios_vault.py::test_loading_july_after_june_adds_only_what_july_changed
+  org.apache.spark.memory.SparkOutOfMemoryError: [UNABLE_TO_ACQUIRE_MEMORY]
+  Unable to acquire 65536 bytes of memory, got 0
+```
+
+**It is not a logic failure and the test is not one this phase wrote** — it is F2's, and it died on a
+`saveAsTable` with the suite at 100%. A re-run of the same job passed, and the same code had already
+passed three consecutive runs (`d136cb4`, `eacd499`, `8993d80`), the last of which is byte-identical
+to the failing one because the commit between them touched only this document.
+
+**The hypothesis this phase is responsible for, stated rather than waved away.** F4 added local-Spark
+test modules — reconciliation, retention, rule overlap, telemetry, freshness — and the suite grew
+from **~2,460 collected to 2,683 passing**. They run in the same session-scoped JVM as the vault
+tests and before them, so cumulative memory pressure tipping a pre-existing test over is a mechanism
+this phase supplies. **Runner variance explains it equally well**, and three greens on identical code
+is evidence for that reading.
+
+**What would decide it, and nobody has run it:** the failing test in isolation against the same
+runner class, or the suite with F4's Spark modules deselected. **Left open**, and named here so the
+next phase that sees this failure does not spend its own budget rediscovering the question. The
+inherited figure *"CI ~16–20 min at ~2,460 tests"* should now read **~20 min at ~2,683**.
+
 ### Unmeasurable here, and stated as such
 
 - **System-table retention's ceiling.** The workspace is younger than any documented horizon; the
