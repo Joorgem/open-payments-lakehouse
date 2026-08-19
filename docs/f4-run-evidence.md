@@ -975,6 +975,60 @@ pipe.** The `lag_seconds` column the correction refused hardest is refused for p
 instead of accepting it and reported that the more publicly readable of the two places the claim
 lived was this document.
 
+### 1.7 Task 5 — governance, and THE NINTH INSTANCE WAS THE SAFETY CHECK ON A PRIVACY DEPLOY
+
+**Built and reviewed; the run is recorded below it.** The predicate repair, `opl_pii_readers` created
+empty, an idempotent grants task, a service-principal rebuild script, and ADR 0008 amended rather
+than superseded.
+
+#### The prediction this controller published, and why it could not fail
+
+Before the deploy, the record said: after the run, `SELECT nome_socio_razao_social FROM
+workspace.default.bronze_cnpj_socios LIMIT 1` reads **`***`**, and *"a civil name in that result
+would mean the repair had failed open."*
+
+**Controller-verified 2026-08-18, before running anything:**
+
+| | |
+|---|---|
+| `is_member('opl_pii_readers')` | **false** |
+| `is_account_group_member('opl_pii_readers')` | **false** |
+| deployed `routine_definition` | `CASE WHEN is_account_group_member('opl_pii_readers') THEN name ELSE '***' END` |
+| `last_altered` | `2026-08-03T21:31:27.142Z` |
+
+**Both predicates are false, so both `CASE` expressions take the same `ELSE` branch.** `***` is
+therefore the answer under **all four** of: the repair landed; the repair did not land;
+`ensure_masked_table` returned early; the task never ran. That is not an experiment, it is a
+derivation from two measured booleans — and it means **the check published as the safety gate on a
+privacy deploy has one branch and cannot take the other**, for as long as the group stays empty,
+which is a standing decision rather than a transient.
+
+**This is the ninth instance of this phase's second species, and the worst-placed one.** The
+previous eight were in tests, in tooling, in a view's arm and in a controller's own published claim.
+This one was the thing that was supposed to tell a repaired privacy control from an unrepaired one.
+**It was caught by the independent reviewer dispatched specifically to ask whether the deploy was
+safe**, in the last review before the deploy would have happened.
+
+**The observation that discriminates**, and it is one statement:
+
+```sql
+SELECT routine_definition, last_altered
+FROM workspace.information_schema.routines WHERE routine_name = 'mask_personal_name'
+```
+
+A successful run must leave `routine_definition` containing **`is_member(`** and `last_altered`
+**after the run's start**. **Nothing in this repository read that** — a grep for
+`information_schema.routines`, `routine_definition` and `DESCRIBE FUNCTION` across `src/`,
+`databricks/`, `tests/` and `scripts/` returned exactly one hit, a comment. The correction is what
+made the deployed predicate assertable rather than assumed.
+
+**And the mask's floor is unaffected either way**: with the group empty, every reader sees `***`
+under both spellings. What the repair buys is that the control **can** be opened by someone
+authorised, which `is_account_group_member` made impossible from this workspace. ADR 0008 was already
+candid about exactly this — *"until then both spellings hide from everyone, so the difference is in
+the argument and not in what any reader sees"* — so the non-discriminating claim was in the job
+header and the commit message, **not** in the ADR that had got it right.
+
 ### 1.6 Task 6 — the benchmark the plan's revision 1 refused, and its prediction is FALSIFIED
 
 Revision 1 refused a baseline→optimised measurement on the premise that *"there is no un-compacted
