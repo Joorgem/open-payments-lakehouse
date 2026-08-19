@@ -22,8 +22,10 @@ rather than superseded.
 The master spec asks F4 for full checks, quarantine/replay, telemetry, a dashboard, UC
 governance and a performance case study. **Four measurement lenses ran before this phase's plan
 existed, and four independent audits then read the plan.** They returned five CRITICAL findings
-and reversed three of its rulings — the plan's revision 2 lists **seven defects that were the
-controller's own**.
+and reversed three of its rulings. **Seven of the defects they found were the controller's
+own**, and they are recorded where a reader of this repository can reach them —
+`docs/f4-run-evidence.md` §0 and §1 — rather than only in the working plan, which is not
+published.
 
 The single fact that shaped everything below: **most of what the spec asks for either already
 existed or could not be built honestly.** `system.lakeflow.job_task_run_timeline` and
@@ -188,8 +190,9 @@ exists.
 
 A Databricks Asset Bundle has **no `tables` resource and no `View`**. `grants` exists only on
 Catalog, Schema, Volume, RegisteredModel, ExternalLocation and VectorSearchIndex. The plan first
-concluded "split governance between the bundle and SQL"; **that is withdrawn**, on three
-independent measured grounds:
+concluded "split governance between the bundle and SQL"; **that is withdrawn** — on one
+measured ground and two that are reasoned from measured parts, and the difference is stated
+because `docs/f4-run-evidence.md` §0.9 still lists the second and third as open:
 
 1. the repo's only target is `mode: development`, which rewrites `name: default` to
    `dev_<prefix>_default` — it would deploy green and govern **a new, empty schema**;
@@ -197,6 +200,15 @@ independent measured grounds:
    `_workspace_admins_workspace_<id>`;
 3. `resources.<securable>.grants` is **authoritative**, so declaring it would revoke the
    platform's own `CREATE TABLE` on the schema every pipeline writes into.
+
+**Only the first is measured end to end** — a scratch bundle was validated and the CLI
+rewrote `name: default` to `dev_<prefix>_default`, so the deploy would govern an empty
+schema. The second and third are **assumed on strong evidence and not proved**: the
+underlying `POST /api/2.1/unity-catalog/schemas` does return `Schema 'default' already
+exists` (measured), and `grants` is documented as authoritative — but **no bundle was
+deployed to watch either happen**, because doing so is the act the decision exists to
+avoid. **The decision stands on ground 1 alone**, which is sufficient: under the only
+target this repository has, the bundle half governs a schema nobody reads.
 
 `bundle deployment bind` is refused: it puts 55.8M rows of personal data inside
 `bundle destroy`'s blast radius for a cosmetic gain.
@@ -212,10 +224,14 @@ the remediation the task prints echoes the observed action rather than a guess.
 
 ## Decision 7 — the performance case study leads with what did not move, and its own prediction is falsified
 
-Three measured null results are the item's product: clustering a point lookup cut 47 files to 1
-and **did not move the clock**; the real gold query cannot be helped, because 1,027 keys spread
-uniformly over 48 files put ~21 in every file; and clustering the PIT on `as_of_date` fails
-because the join key is the satellite's hash.
+Three null results are the item's product: clustering a point lookup cut 47 files to 1 and **did
+not move the clock**; the real gold query cannot be helped, because 1,027 keys spread uniformly
+over 48 files put ~21 in every file; and clustering the PIT on `as_of_date` fails because the join
+key is the satellite's hash. **They are REPORTED, not controller-verified, and they are not
+re-derivable** — every live table now reports `clusteringColumns = []` and the PIT is at 43 files,
+so the third ran against an object that no longer exists in that state. `docs/f4-run-evidence.md`
+§0.4.1 records them with that label. **Their mechanism claims survive re-derivation from the key
+distributions; their timings do not, and nothing here rests on a timing of theirs.**
 
 **The plan's revision 1 then refused a baseline→optimised benchmark on the premise that no
 un-compacted baseline remained. That premise was false** —
@@ -265,4 +281,9 @@ what else would produce that value. If the answer is "everything", it is not a c
 - [ADR 0006](0006-bronze-dq-gate-policy.md) — the DQ gate policy, and *"Where the three stand"*
 - [ADR 0008](0008-pii-masking-socios.md) — the mask, the predicate repair, and what RBAC means here
 - [ADR 0009](0009-deployed-revision-provenance.md) — why every job here carries the revision guard
-- `.plans/2026-08-18-f4-dataops.md` — the plan, revision 2, and §0.1's seven controller defects
+- **The phase plan is NOT part of this repository.** It lives in a git-ignored working
+  directory, so no link to it is given: F3 shipped a section pointing a public reader at
+  that directory and they reached nothing, and `docs/f4-run-evidence.md` opens by refusing
+  to repeat it. Everything a reader needs from the plan — the reversed rulings, the
+  corrected figures and the defects the controller found in its own work — is in that
+  document's §0 and §1.

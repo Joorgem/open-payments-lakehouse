@@ -47,14 +47,17 @@ effort (same section), and it keeps its rows by decision — see
 > [Fail-closed](#fail-closed-and-why-that-is-the-right-direction) section below survives
 > the substitution verbatim; only the function name changes.
 >
-> **SHIPPED IS NOT DEPLOYED, and the two halves of that sentence are in different
-> states.** The GROUP half genuinely has been done — `opl_pii_readers` exists in this
-> workspace, empty. The PREDICATE half has not: measured 2026-08-18,
-> `workspace.information_schema.routines` still returns
-> `CASE WHEN is_account_group_member('opl_pii_readers') THEN name ELSE '***' END` for
-> `mask_personal_name`, `last_altered 2026-08-03T21:31:27Z`. The repaired predicate is
-> in the repository and goes live the next time `ensure_masked_table` runs; nothing in
-> this branch deployed it. **There is no exposure in the meantime** and that is why the
+> ~~**SHIPPED IS NOT DEPLOYED, and the two halves of that sentence are in different
+> states.**~~ **BOTH HALVES ARE NOW DONE — this paragraph described 2026-08-18 and was
+> overtaken on 2026-08-19.** `opl_pii_readers` exists, empty; and the predicate went live
+> on run `761461564584636`, after which `workspace.information_schema.routines` returns
+> `CASE WHEN is_member('opl_pii_readers') THEN name ELSE '***' END` with `last_altered`
+> **`2026-08-19T16:25:23.068Z`**, against `2026-08-03T21:31:27.142Z` before it.
+>
+> ~~measured 2026-08-18, `workspace.information_schema.routines` still returns
+> `CASE WHEN is_account_group_member(...)`, `last_altered 2026-08-03T21:31:27Z`. The
+> repaired predicate is in the repository and goes live the next time
+> `ensure_masked_table` runs; nothing in this branch deployed it.~~ **There is no exposure in the meantime** and that is why the
 > deploy was not rushed: both predicates return **false** for every principal that can
 > reach these tables (the group is empty, and the account-group spelling resolves no
 > workspace-local group at all), so the live mask hides exactly as the repaired one
@@ -166,10 +169,12 @@ Delta refuses a mistyped column rather than casting it.
    note at the top. The earlier spelling could not be made to return true in this
    workspace for any group creatable from it.
 
-   **This is the DDL this repository holds, and it is not yet the DDL the workspace
+   ~~**This is the DDL this repository holds, and it is not yet the DDL the workspace
    holds.** `information_schema.routines` still shows the `is_account_group_member`
-   body, `last_altered 2026-08-03` (measured 2026-08-18). It changes when
-   `ensure_masked_table` next runs — which since F4 Task 5b is a run of
+   body, `last_altered 2026-08-03` (measured 2026-08-18).~~ **IT IS NOW BOTH.** Deployed
+   on run `761461564584636`, 2026-08-19: `routine_definition` carries `is_member(` and
+   `last_altered` reads `2026-08-19T16:25:23.068Z`. The sentence above described the day
+   before. It changed when `ensure_masked_table` ran — which since F4 Task 5b is a run of
    `dataops_views_job.yml`, not of the socios ingestion flow (see the amendment) —
    and until then both spellings hide from everyone, so the difference is in the
    argument and not in what any reader sees.
@@ -207,7 +212,7 @@ Delta refuses a mistyped column rather than casting it.
 > reachable with this token.
 >
 > **So `opl_pii_readers` cannot be created in a form that satisfies this predicate from this
-> box.** `src/opl/bronze/masking.py:173`'s *"it becomes correct the moment `opl_pii_readers`
+> box.** `src/opl/bronze/masking.py`'s (line 173 before F4 Task 5 grew that file; the sentence now survives only inside `mask_function_ddl`'s docstring, quoted there to be refuted) *"it becomes correct the moment `opl_pii_readers`
 > exists"* names a moment that cannot arrive here.
 >
 > **THE FAIL-CLOSED ARGUMENT BELOW IS UNAFFECTED AND IS WHY THIS IS A CORRECTION AND NOT A

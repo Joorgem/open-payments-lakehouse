@@ -373,6 +373,12 @@ through.
 
 ### The defect this decision must not leave standing: reclaim is unreachable
 
+> **DISCHARGED BY F4, 2026-08-18, ON THE TRIAGE PATH — and still true of the in-flow one.**
+> `repromote_triaged_batch` now carries a `reclaim_landing` task, which is the wiring this
+> section names as the fix. What has NOT changed is the sentence below: the in-flow reclaim
+> still hangs off `promote`, and the gate still blocks empresas and socios every month. Read
+> the section as the argument for a change that has since happened, not as a live defect.
+
 `reclaim_landing` has **never deleted a byte through the wired path** — nine
 task instances hung off the ingestion jobs, two executions, zero bytes
 (`docs/f1.4b-pr-b-run-evidence.md` §16). It has deleted bytes exactly once, and
@@ -394,8 +400,11 @@ correct on a real Volume, on this exact table.**
    the checkpoint already consumed the files, so its reclaim correctly refuses.
 
 So a gate that always fires has silently disabled a *different* control for the
-life of the project. Residue today: 8.21 GB of 2026-06 CSVs, deliberately left
-in the Volume so the debt stays visible. Projected floor: ~48 GB peak per month,
+life of the project. ~~Residue today: 8.21 GB of 2026-06 CSVs, deliberately left
+in the Volume so the debt stays visible.~~ **RECLAIMED 2026-08-18 by F4 Task 2 —
+8,212,278,423 B, `deleted=10 refused=0 held_back=0` on each of the two batches,
+the directories verified empty and the `zips/` siblings byte-identical. The debt
+this sentence kept visible is discharged; see "Where the three stand" below.** Projected floor: ~48 GB peak per month,
 2.18× this Volume's demonstrated high, against no published quota.
 
 **A threshold is not the fix for this, and adopting one to fix it would be the
@@ -488,17 +497,25 @@ archaeology session. **Two have moved. The decision has not, and cannot on these
    a second number taken on the same pass, and it stops being comparable to a quarantine
    row count on the day the overlap stops being zero.
 
-   **Provenance: job run `80788495253423`** (task `measure_rule_overlap`, task run
-   `880229908911460`, SUCCESS, 89 s execution over the 337,776,032 rows), behind the
-   `dataops_views` job's deployed-revision guard, with `docs/f4-run-evidence.md` holding
-   the run's evidence. **No statement ids, and that is not an omission**: this ADR
-   previously said these numbers were taken by executing the shipped projection against
-   the SQL warehouse read-only "ahead of the job task's first workspace run", and promised
-   statement ids that document deliberately does not carry — its preamble rules that a
-   statement id is not a durable handle in this workspace:
-   `GET /api/2.0/sql/statements/<id>` returns `Not Found` for a statement seconds old,
-   measured against a control. The numbers are unchanged; the shipped path has since
-   reproduced every one of them.
+   **Provenance: job runs `80788495253423`** (task `measure_rule_overlap`, task run
+   `880229908911460`, SUCCESS, 89 s execution over the 337,776,032 rows) **and
+   `321135201221285`** (task run `600061871178163`), behind the `dataops_views` job's
+   deployed-revision guard, with `docs/f4-run-evidence.md` holding both. **The second run
+   is cited beside the first deliberately**: a correction pass changed the entry point
+   after the first, so the numbers it produced described a wheel that no longer existed;
+   the sweep was re-deployed and re-run at revision `538a966` and the two outputs compared
+   key by key — **208 keys each, zero differences**. A measurement whose code moved under
+   it is a measurement nobody has taken.
+
+   **No statement ids, and the reason first given here was wrong.** This ADR said they
+   were withheld because *"`GET /api/2.0/sql/statements/<id>` returns `Not Found` for a
+   statement seconds old, measured against a control"*. **That control was measuring Git
+   Bash**, which rewrites a leading `/api/...` into a Windows path so the request never
+   leaves the box; `docs/f-db-run-evidence.md` §0.1 and `docs/f4-run-evidence.md`'s
+   preamble — **both corrected in the same phase as this paragraph, and this paragraph was
+   not revisited** — record the two distinguishable messages and the restored 8–35 h band.
+   The real reason there are no statement ids here is simpler: **these numbers come from a
+   job task's stdout, not from a SQL statement.**
 
    The retired pre-run route is worth recording for what it could have hidden. Rendering
    `aggregate_columns` against a frame that lacks a table's **metadata** columns fails

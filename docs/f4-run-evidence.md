@@ -55,11 +55,13 @@ each was catchable by one command.
 |---|---|---|
 | a graded DQ gate would **activate** a delete path that had never executed — filed as the phase's *hidden cost* | the delete path executed on 2026-07-31 and removed **16,743,815,717 B** with `refused=0`, and ADR 0006 books its unreachability as *"the defect this decision must not leave standing"*, with **8.21 GB** parked and a **~48 GB/month** floor | **reaching reclaim is the product.** The phase's headline moved from grading the gate to wiring the reclaim |
 | *"there is no un-compacted baseline left to optimise from"* | `link_empresa_estabelecimento` — **512 files, 7,201,236,749 B, one Delta version, never compacted** — is the largest table in the vault by bytes | the performance case study's refusal was withdrawn and the benchmark reinstated |
-| schema and catalog grants belong in the Databricks Asset Bundle | the repo's only target is `mode: development`, which **renames** the schema to `dev_<prefix>_default`; a production target **collides** (`Schema 'default' already exists`); and declared grants are **authoritative**, so the first deploy would revoke the platform's own `CREATE TABLE` on the schema every pipeline writes into | governance is **all imperative**. The bundle half was deleted rather than fixed |
+| schema and catalog grants belong in the Databricks Asset Bundle | the repo's only target is `mode: development`, which **renames** the schema to `dev_<prefix>_default`; a production target **collides** (`Schema 'default' already exists`); and declared grants are documented **authoritative**, so a deploy would revoke the platform's own `CREATE TABLE` on the schema every pipeline writes into — **but only the rename is measured end to end; the collision and the revocation are assumed on strong evidence and stay in §0.9's open list, because proving them means performing the deploy the decision exists to avoid** | governance is **all imperative**. The bundle half was deleted rather than fixed, **on the rename alone**, which is sufficient: under the only target this repo has it governs a schema nobody reads |
 
 **A fourth reversal is the plan's, not an audit's**, and it removes an ordering dependency all four
 audits inherited: the re-derivation the phase needs runs over **staging**, which this project
-deliberately never masks (`masking.py:155-171`, pinned by
+deliberately never masks (`masked_table_ddls`' own argument in `src/opl/bronze/masking.py` —
+cited here by line number until F4 Task 5 grew that file from 200 lines to 279 and moved it,
+which is the defect §0.6 corrected once and this sentence repeated; pinned by
 `tests/bronze/test_masking.py::test_the_control_covers_bronze_and_quarantine_and_never_staging`).
 One audit called the UC mask a blocker on 64% of that corpus and re-ordered the phase's tasks to
 repair it first. **The corpus was the wrong table.**
@@ -146,6 +148,38 @@ PO is **not** a past event: it ran `ANALYZE` as recently as 2026-08-18T06:55Z an
 2026-08-18T01:50Z (controller-verified in the same grouping). Any baseline taken without disabling it
 per table can be rewritten under the run.
 
+### 0.4.1 THE THREE NULL RESULTS — REPORTED, AND NOT RE-DERIVABLE
+
+**Reported** by the performance measurement lens, before this phase's plan existed. They are the
+reason the plan first refused a baseline→optimised benchmark, and ADR 0018 calls them the item's
+product — **so they belong in the record rather than only in a decision that cites them.**
+
+1. **A point lookup clustered on the lookup key: 47 files → 1, 22–39× fewer bytes, and the wall
+   clock does not move** (1,262–1,561 ms against 1,278–1,558 ms). ~1 s of fixed compile-and-schedule
+   dominates.
+2. **The real gold query cannot be helped by clustering.** `fact_payment` references only **1,027
+   distinct company surrogate keys** and they are hashes spread across the whole key space, so 1,027
+   needles uniformly over 48 files puts ~21 in every file. `rows_read` unchanged (66,438,064 against
+   66,626,466); the clustered run **slower**.
+3. **Clustering the PIT on `as_of_date` fails, and the mechanism says why.** Files 129 → 100,
+   `rows_read` **identical at 145,405,250**, clock **worse** (10,774 → 17,939 ms). The join key is
+   `hub_estabelecimento_hk`, so the satellite side is scanned regardless.
+
+> **THEY CANNOT BE RE-DERIVED, AND THAT IS A LIMIT ON WHAT THEY CAN BE USED FOR.** The provenance
+> audit checked and **every live table reports `clusteringColumns = []`**; `pit_estabelecimento` is
+> at **43** files, not 129 or 100, so experiment 3 ran against an object that no longer exists in
+> that state, and the lens named no table for it. The numbers are **reported, never
+> controller-verified**, and no run id, statement id or re-runnable command survives for any of the
+> three.
+>
+> **What they still support, and what they do not.** They support the *mechanism* claims — a
+> uniformly-hashed key cannot be pruned, and a join on the satellite's hash is not helped by
+> clustering the other side — and those are re-derivable from the key distributions, which §0.4's
+> `fact_payment` figures corroborate. **They do not support any timing.** §2.3's prediction cited
+> experiment 1's "22–39× fewer bytes and no movement in the clock" as its mirror image; that citation
+> is to a reported figure, and Task 6's own measurement — which *is* controller-verified — is what
+> the falsification rests on.
+
 **Why PO compacted nine tables and declined the largest is UNMEASURED**, and is worth exactly one
 probe, not a guess.
 
@@ -227,8 +261,10 @@ used has since been deleted. **It was caught by an audit reading the PR's own te
   direction.~~
   > **THE ASYMMETRY DID NOT REPRODUCE, AND IT WAS THIS PARAGRAPH'S ONLY CONSOLING HALF.** Task 5
   > re-measured **both** directions on the SQL warehouse, fresh OAuth token and varied literal on
-  > every read: **removal effective at ~3 m 54 s (12 consecutive reads), addition at ~5 m 18 s (14
-  > reads)**. Both lag, and the slower of the two is the one that *grants* access.
+  > every read: **removal effective at ~3 m 54 s (~~12~~ **11** consecutive reads), addition at ~5 m 18 s
+  > (14 reads)** — the count corrected by ADR 0008, which reconstructed both series from
+  > `system.query.history`: the removal series is 11 statements and the stray *twelve* belongs
+  > to a **third** series this table never described, the reads spent waiting for the addition. Both lag, and the slower of the two is the one that *grants* access.
   >
   > That is a different shape of risk from the one first recorded — not *"a control that closes
   > late"* but **"a control whose membership is slow in both directions"** — and it removes the
@@ -246,7 +282,9 @@ used has since been deleted. **It was caught by an audit reading the PR's own te
   > figure is a lower bound from a single trial and not a bound** — and measured addition visible in
   > **4 seconds**. The difference is not noise and it is not disagreement: the reviewer's group was
   > **created with the member already in it**, so no principal had ever resolved it to `false`, while
-  > Task 5 added a member to a group its reading principal had already read as false **twelve times**.
+  > Task 5 added a member to a group its reading principal had already read as false — **eleven
+  > times, not twelve**; ADR 0008 settled which series was which and the mechanism sentence
+  > below was first built on the wrong one.
   >
   > **So what takes minutes is expiring a cached NEGATIVE, not propagating a membership.** All three
   > sources are now consistent, none of them measured wrong, and the operational rule is sharper than
@@ -894,6 +932,15 @@ structurally lack a source date read `no_source_axis` rather than an unexplained
 | `measured` | 145 | **145** | 0 |
 | `no_sql_attributed` | 119 | **0** | 119 |
 | `older_than_history` | **10** | 0 | 10 |
+| `not_yet_attributed` | **0** | — | — |
+
+**Read 2026-08-18, and the reading time is the point rather than a formality.** These are
+system-table counts and they move: re-read on 2026-08-19T16:38:22Z the same three arms give
+**152 / 121 / 10** over 283 distinct task runs, against 270 rows and 260 task runs recorded in
+§0.3 on 2026-08-18. **Four values for one moving quantity appear in this document** — 268,
+270, 284 and 293 — and each is correct at its own reading. The fourth arm is listed at zero
+rather than omitted, because §1.5 records it holding two rows at 22:31:14Z: **an absent row
+and a zero are the distinction this whole document is about.**
 
 **And the 2× duration trap is closed in the shipped view**: task run `99407495289863` reports
 `execution_seconds = 5633`, not the 11,266 a `SUM` would have produced.
@@ -926,8 +973,10 @@ structurally lack a source date read `no_source_axis` rather than an unexplained
 > fact. Its metrics sum whatever had been ingested **when the view was read**, so a later statement
 > raises them with nothing having run. Observed on this view's own rows: `create_views` carried
 > `statements` NULL at 22:31:14Z and **4** afterwards. **Every metric in this view is a floor, not a
-> total**, and any figure taken from it needs its reading time — which is the same rule §0.5 already
-> applies to every system-table count, arrived at a second time from a different direction.
+> total**, and any figure taken from it needs its reading time. **That rule is stated here and
+> nowhere else** — an earlier version of this sentence cited it to §0.5, which is the landing-
+> residue section and contains no such rule. The back-reference was the sentence's whole
+> authority and it pointed at nothing.
 
 #### ~~A FOURTH VALUE THAT CANNOT FIRE~~ — THE CONTROLLER'S OWN FINDING, FALSIFIED FOUR MINUTES LATER, AND IT IS THIS PROJECT'S SIGNATURE ERROR
 
@@ -1034,6 +1083,28 @@ now reads `information_schema.routines` and **fails the run** (`max_retries: 0`)
 body carries `is_member(`. It depends on `ensure_masked_table`, so it reads after the repair, and is
 deliberately **not** an ancestor of the grants task: a failure state must not disable its own
 mitigation.
+
+#### Task 5b — the repaired control could only be deployed by re-landing what Task 2 reclaimed
+
+**The near-miss belongs in the record and not only in a commit message.** `ensure_masked_table` is
+the only thing in this repository that issues `CREATE OR REPLACE FUNCTION` for the mask, and it
+existed in exactly one job: the **socios ingestion flow**, where it runs first — **ahead of an
+`unzip` that would have re-extracted `cnpj/2026-06/zips/socios` and re-landed the 2,852,557,826 B
+Task 2 had just reclaimed**, inside the phase whose headline artefact is that 8,212,278,423 B were
+freed. And worse than wasteful: the Auto Loader checkpoint has consumed those files, so the ingest
+would have staged nothing and the gate and promote would have run over an empty batch.
+
+**Deploying a repaired privacy control must not cost a re-landing of the personal data it
+protects.** The fix was to run the same task from this phase's own governance job, which costs no
+new YAML and no guard-list entry — with `apply_pii_governance` re-pointed to depend on it, argued
+from what each statement touches rather than from tidiness: the grants task's first statement is
+`SHOW GRANTS ON TABLE`, which fails on a table that is not there; and in the reverse order an
+`ALL PRIVILEGES` holder would block the mask repair, **a failure state disabling its own
+mitigation**.
+
+**Verified after the run:** `cnpj/2026-06/socios` is still **0 files** and the `zips/` siblings are
+byte-identical. The hazard did not materialise because the path was changed, not because it was
+survived.
 
 #### The run, and the check that could have failed
 
