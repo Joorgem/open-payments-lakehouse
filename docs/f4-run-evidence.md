@@ -1184,4 +1184,61 @@ this prediction is deliberately the one that measurement has most reason to refu
 
 ## 3. What is still unexercised
 
-*(Filled at the phase's close, per protocol §9 condition 6.)*
+**Protocol §9 condition 6.** A path that ran zero rows through it is not a path that works, and
+this list is what stops the phase from being read as more exercised than it is. Each entry says
+what would exercise it.
+
+### Branches this phase built that have never taken their other arm
+
+| what | why it has not fired | what would fire it |
+|---|---|---|
+| **`apply_pii_governance`'s GRANT branch** | `PII_READERS` is empty by decision, so the task has never issued a `GRANT` in a job | a principal added to the roster and the job re-run |
+| **its REVOKE branch** | all three socios tables carry **zero** grant rows; revokes have fired only against throwaways in review | a real out-of-band grant, or a roster that shrinks |
+| **`UngovernedRead`** — the raise that fails the run on a privilege the task cannot withdraw | nothing holds `MANAGE`, `ALL PRIVILEGES` or an ancestor grant on these tables | any of those granted out of band |
+| **`assert_mask_predicate`'s failure arm** | the predicate was correct on its first and only run | a deploy that skips `ensure_masked_table`, or a wheel from another revision |
+| **`held_back`** in `reclaim_landing` | both real runs reported `held_back=0` — every file reconciled | a batch whose file does not reconcile, i.e. a stranded row inside a promoted file |
+| **`stranded_unexplained`** and **`over_promoted`** in the reconciliation | neither is reachable through the shipped flow; both are driven out of real tables in tests only | a mid-stream ingest failure, or a double promote |
+| **`skip_notice`** in the rule sweep | no contract skipped a rule on any of the 15 (table, batch) pairs | a staging table predating a rule's column |
+
+### Measured on one compute and not the other
+
+- **`is_member` inside a serverless job session** is **reported**, not controller-verified — the
+  floor was re-derived on the SQL warehouse only.
+- **The membership-lag figures are warehouse-side.** Three trials disagree in a way the phase
+  reconciled by mechanism (expiring a cached negative, not propagating a membership), but no
+  trial ran inside a job session.
+- **`spark.sql(..., args={...})` named-parameter binding** now has run on serverless — Task 2's
+  two reclaim runs used it. Its *failure* mode (unsupported → raise before any delete) has not.
+
+### Not exercised by choice, and the choice is recorded
+
+- **The permissive branch of `mask_personal_name`.** `opl_pii_readers` exists with zero members,
+  so nobody has read a real name through the repaired predicate. Exercising it means granting a
+  principal `SELECT` on 55.8M rows of real personal data and, given the measured lag, being
+  unable to withdraw membership promptly. Proven on a purpose-built throwaway instead; ADR 0008
+  says so rather than claiming both halves.
+- **The stranded payments batch** — reported, not promoted, with the arithmetic in §1.2.
+
+### Left as it was found
+
+- **The in-flow reclaim still never fires.** The gate blocks empresas and socios every month and
+  `reclaim_landing` still hangs off `promote` there. F4 gave the **triage** path a reclaim; it did
+  not change the in-flow one.
+- **`bronze_cnpj_lookup` is still two months behind.** The freshness view labels it a recorded
+  decision rather than a fault; nothing in F4 ingested it.
+- **A second masked contract.** The governance job's coverage is locked to `MASKED_COLUMNS`, and
+  that set has exactly one entry, so the lock's other direction is proven only by mutation.
+
+### Unmeasurable here, and stated as such
+
+- **System-table retention's ceiling.** The workspace is younger than any documented horizon; the
+  floor is ~25 days with nothing trimmed. **What is now observable** is the crossover the
+  telemetry view names: **10 task runs already end before `system.query.history`'s oldest row.**
+- **Whether the platform stops maintaining a table whose PO flag reads `DISABLE`.** The flag is a
+  request and the ops-history table is the receipt; PO's cadence is hours to days, so a session
+  cannot settle it. The flag was restored to `INHERIT` and re-read, which is what this phase can
+  assert.
+- **Whether Lakeview renders the committed `.lvdash.json`.** The dashboard deployed **ACTIVE**
+  and `bundle validate` is measured **not** to parse that file at all, so the local tests are its
+  only check. **Nobody has opened it**, and that is the one deliverable of this phase whose
+  acceptance is a human looking at a screen.
