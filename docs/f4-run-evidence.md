@@ -11,12 +11,29 @@ carries one of the two labels. Revision 1 of this phase's plan said *"measured"*
 never once said by whom, and four of its five worst errors were single-sourced §0 figures — this
 split is the repair.
 
-**Provenance is given as the re-runnable command, not as a statement id.** F-DB §0.1 measured that
-`GET /api/2.0/sql/statements/<id>` returns `Not Found` for a statement **seconds** old, with a
-control, so a published statement id is not a durable handle in this workspace. A job `run_id` is —
-7 of 7 at ~9 days, and 51 of the 71 live run ids are cited by number in committed `docs/` files with
-nothing aged out. **So run ids are cited; SQL is quoted; statement ids are given only where they were
-recorded at the time.**
+**Provenance is given as the re-runnable command, and a job `run_id` where one exists.** A run id is
+durable — 7 of 7 at ~9 days, and 51 of the 71 live run ids are cited by number in committed `docs/`
+files with nothing aged out.
+
+> **THE REASON THIS DOCUMENT FIRST GAVE FOR DISTRUSTING STATEMENT IDS WAS ITSELF WRONG, AND F4 FOUND
+> OUT WHY.** It read: *"F-DB §0.1 measured that `GET /api/2.0/sql/statements/<id>` returns `Not Found`
+> for a statement **seconds** old, with a control, so a published statement id is not a durable
+> handle."*
+>
+> **That control was measuring Git Bash.** MSYS rewrites a leading `/api/...` into a Windows path
+> before the CLI sees it (`GET /Program Files/Git/api/2.0/…`), and the request never leaves the box.
+> **Two messages were being read as one:** `Error: Not Found` is **the shell**;
+> `Error: The statement <id> was not found.` is **the API**, and it names the statement.
+>
+> **Controller-verified 2026-08-18, with `MSYS_NO_PATHCONV=1`:** a seconds-old statement returns its
+> full payload; four statements from earlier the same day (up to ~7.5 h) all return `state: CLOSED`;
+> the four ids F-DB probed on 2026-08-15 now all return the API's named `was not found`. So F-DB's
+> original four-id probe was reaching the API all along, **its 8–35 hour band stands**, and the
+> correction to `docs/f-db-run-evidence.md` §0.1 is inline there.
+>
+> **A statement id is therefore usable provenance for work of the last day**, which is why several
+> appear in this document. `.plans/sql.sh` sets `MSYS_NO_PATHCONV=1`; a bare `databricks api get` in
+> Git Bash does not, and its failure looks exactly like expiry.
 
 **Predictions are published BEFORE the run that tests them** (master protocol §4.5). A number first
 written down after the run that produced it is not a prediction. §2 is where they live.

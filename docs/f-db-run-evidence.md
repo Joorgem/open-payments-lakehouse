@@ -57,8 +57,43 @@ workspace, four ids of three vintages, run 2026-08-15:
 > consistent with the evidence**, which is a weaker sentence than the one first published
 > here and is the one the four ids earn.
 
-> **THE PROBE THIS SECTION IS BUILT ON HAD NO CONTROL, AND WITH ONE THE AGE READING DOES NOT
-> SURVIVE.** Measured by the controller 2026-08-18T01:16Z, while the phase was still running.
+> ## ⚠️ THE BLOCK BELOW IS WITHDRAWN. ITS CONTROL WAS MEASURING THE SHELL, NOT THE API.
+>
+> **Found during F4, 2026-08-18, and it restores what this block withdrew.** The control that
+> destroyed the 8–35 hour band ran `databricks api get /api/2.0/sql/statements/<id>` from **Git
+> Bash**, where **MSYS rewrites a leading `/api/...` into a Windows path** before the CLI ever sees
+> it — the debug log shows `GET /Program Files/Git/api/2.0/…`. Nothing reached Databricks.
+>
+> **Two different messages were being read as one**, and telling them apart is the whole repair:
+>
+> | message | who said it |
+> |---|---|
+> | `Error: Not Found` | **the shell** — the request never left this box |
+> | `Error: The statement <id> was not found.` | **the API** — and it names the statement |
+>
+> **Re-measured with `MSYS_NO_PATHCONV=1`:** a statement **seconds old** returns its full payload;
+> four statements from **earlier the same day** (up to ~7.5 h) all return `state: CLOSED`; and all
+> four ids in the table above — including the two this document read as `CLOSED` on 2026-08-15 —
+> now return the **API's** named `was not found`.
+>
+> **So the original four-id probe was reaching the API all along** (two `CLOSED`, two named
+> `was not found`), and **the 8–35 hour band it supported stands**. What does not stand is the
+> control: *"this endpoint returns `Not Found` for a statement that has just run"* is false, and the
+> `Not Found` it rests on was Git Bash.
+>
+> **The species is this project's own, one layer out from where it has been hunting it:** a check
+> whose failure output cannot distinguish *"the API refused"* from *"the request was never made"*.
+> Every other number in that session was correct. And the irony is exact — a control added to make an
+> earlier claim falsifiable is what needed falsifying.
+>
+> **A statement id therefore IS usable provenance for recent work**, on the order of a day, provided
+> the path is not mangled. `.plans/sql.sh` already sets `MSYS_NO_PATHCONV=1`; a bare
+> `databricks api get` in Git Bash does not.
+>
+> ---
+>
+> ~~**THE PROBE THIS SECTION IS BUILT ON HAD NO CONTROL, AND WITH ONE THE AGE READING DOES NOT
+> SURVIVE.** Measured by the controller 2026-08-18T01:16Z, while the phase was still running.~~
 >
 > Two statement ids **this phase published an hour earlier** were re-checked with the same
 > method §0.1 used — `GET /api/2.0/sql/statements/<id>` — and both returned **`Error: Not
