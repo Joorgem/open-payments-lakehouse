@@ -1024,6 +1024,21 @@ pipe.** The `lag_seconds` column the correction refused hardest is refused for p
 instead of accepting it and reported that the more publicly readable of the two places the claim
 lived was this document.
 
+> **THE EIGHTH, WHICH THIS DOCUMENT SKIPPED UNTIL ITS CLOSING REVIEW ASKED WHERE IT WAS.** It was
+> found by Task 5's reviewer in `test_every_revoke_precedes_every_grant_and_the_tags_come_last` —
+> a test named for an ordering property it **could not fail on**. `PII_READERS` is empty by
+> decision and no test ran the task with a non-empty roster, so `plan.grant` was empty in every
+> fixture and there was never a `GRANT` for a `REVOKE` to precede. Proven by mutation: swapping the
+> two loops so grants were issued first left **31 tests passing**, and the same mutation with one
+> reader in the roster turned that test red — which is what showed the vacuity came from the empty
+> roster rather than from the assertion. It sits under the safety argument the whole task ordering
+> rests on: *a partial run must leave fewer readers than it found.* Closed by monkeypatching the
+> roster.
+>
+> **The count in this document skipped from seven to nine**, and the closing documentation review
+> caught it. Recorded here rather than renumbered, because a tally that quietly closes its own gap
+> is the shape this phase spent itself learning to distrust.
+
 ### 1.7 Task 5 — governance, and THE NINTH INSTANCE WAS THE SAFETY CHECK ON A PRIVACY DEPLOY
 
 **Built and reviewed; the run is recorded below it.** The predicate repair, `opl_pii_readers` created
