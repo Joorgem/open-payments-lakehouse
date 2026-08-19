@@ -60,6 +60,25 @@ effort (same section), and it keeps its rows by decision — see
 > workspace-local group at all), so the live mask hides exactly as the repaired one
 > will. What is wrong until the deploy is the REASON it hides, not the result.
 >
+> **AND "THE NEXT TIME `ensure_masked_table` RUNS" NAMED A RUN THAT COULD NOT BE
+> AFFORDED, which is a second version of the same defect and was found the same way —
+> by trying to run it.** That task sat in exactly one job, `bronze_socios_job.yml`,
+> where it is the first task of the socios INGESTION flow: its `unzip` re-extracts
+> `cnpj/2026-06/zips/socios` into the landing directory, **re-landing the
+> 2,852,557,826 B F4 Task 2 had just reclaimed** in the phase whose headline artefact is
+> that 8,212,278,423 B were freed — and, because the Auto Loader checkpoint has already
+> consumed those files, the ingest that follows stages nothing and the gate and promote
+> run over an empty batch. **F4 Task 5b gives the repair a path that is not an ingest**:
+> the same task, unchanged, now also runs in `dataops_views_job.yml` behind that job's
+> existing revision guard and ahead of `apply_pii_governance`. Over the populated socios
+> tables its `CREATE TABLE IF NOT EXISTS` statements are inert, the
+> `CREATE OR REPLACE FUNCTION` is the repair — all four masks already reference
+> `workspace.default.mask_personal_name`, so replacing the body repairs every one of
+> them — and the four `SET MASK`s re-apply masks that are already attached. The
+> fail-closed result does not change: measured on the opl-free warehouse 2026-08-18,
+> `is_member('opl_pii_readers')` returns **false** for the owner, so the read stays
+> `***` across the repair.
+>
 > **Read [What RBAC means here](#what-rbac-means-here-and-why-it-is-not-one-grant)
 > before reading the grants**, because the shape is not what the phrase usually means
 > and the per-principal grants will otherwise read as an unfinished job.
@@ -150,8 +169,10 @@ Delta refuses a mistyped column rather than casting it.
    **This is the DDL this repository holds, and it is not yet the DDL the workspace
    holds.** `information_schema.routines` still shows the `is_account_group_member`
    body, `last_altered 2026-08-03` (measured 2026-08-18). It changes when
-   `ensure_masked_table` next runs; until then both spellings hide from everyone, so
-   the difference is in the argument and not in what any reader sees.
+   `ensure_masked_table` next runs — which since F4 Task 5b is a run of
+   `dataops_views_job.yml`, not of the socios ingestion flow (see the amendment) —
+   and until then both spellings hide from everyone, so the difference is in the
+   argument and not in what any reader sees.
 
 2. **Applied to both name columns of `socios`** by
    `ALTER TABLE … ALTER COLUMN … SET MASK`, from `MASKED_COLUMNS`, which is keyed
@@ -165,7 +186,10 @@ Delta refuses a mistyped column rather than casting it.
 
 4. **Applied before ingest**, by a job task (`ensure_masked_table`) that runs
    ahead of `unzip`, and that is a no-op for any table declaring no masked column
-   so the same task can sit in any job's YAML without a per-table branch.
+   so the same task can sit in any job's YAML without a per-table branch. The same
+   task also runs in the governance job, where there is no ingest for it to precede
+   and its job is to re-issue the function and the masks (F4 Task 5b); every
+   statement it issues is idempotent, which is what lets one task serve both.
 
 5. **socios carries no `CHECK` constraint**, and is the only registered table
    without one — see the next section. Refused at import for any masked contract by

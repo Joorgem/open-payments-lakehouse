@@ -34,6 +34,13 @@ says so; this seam cuts through every YAML reader here, so they are extracted in
 module that holds no test at all. See that file for why it is not imported from this
 one.
 
+AND ONE JOB THAT HANDS A TASK A TABLE IS NOT IN THIS FILE'S PARAMETRIZATION AT ALL.
+Every lock below iterates `JOB_OF`, which maps a registered table to its INGESTION
+job. F4 Task 5b put `ensure_masked_table` in `dataops_views_job.yml` as well -- the
+only path by which the repaired mask predicate reaches the workspace without an unzip
+that re-lands what F4 reclaimed -- so that job now spells a table name the paste lock
+here never reads. `tests/test_governance_job_wiring.py` is what reads it.
+
 Nothing here starts Spark and nothing here loads a job script: every assertion is
 about wiring, not data."""
 from __future__ import annotations
