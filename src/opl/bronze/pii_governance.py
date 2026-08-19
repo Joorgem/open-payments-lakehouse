@@ -54,8 +54,24 @@ THE REVOKE HALF IS THE POINT, not a symmetry. ADR 0008's own weakest paragraph s
 what guards these tables today is that no `GRANT SELECT` was ever issued -- "an
 absence, not a control. One GRANT reverses it, nothing in this repository would
 notice, and no test asserts the empty result." This module is what notices: the plan
-is computed against the roster, so a principal that acquired `SELECT` out of band
-loses it on the next run of the task.
+is computed against the roster, so a principal that acquired a table-level `SELECT` out
+of band loses it on the next run of the task -- and one that acquired a read this
+module cannot take away is reported and fails the run, per the next paragraph.
+
+AND THE LOOK IS WIDER THAN THE REVOKE, WHICH IS THE ONE ASYMMETRY IN THIS MODULE.
+`GRANT ALL PRIVILEGES ON TABLE ... TO <p>` makes `p` a reader, and `SHOW GRANTS` reports
+that as `ALL PRIVILEGES` -- never as `SELECT`. A lens matching the literal string
+`SELECT` was therefore blind to "just give them everything", which is the single most
+likely shape of the out-of-band grant the revoke half exists to catch. AND THE OBVIOUS
+REMEDY IS WRONG: measured 2026-08-18 on a throwaway table, `REVOKE SELECT ON TABLE ...
+FROM <p>` against that grant SUCCEEDS and leaves `ALL PRIVILEGES` standing. The same is
+true of a `SELECT` INHERITED FROM THE SCHEMA, which `SHOW GRANTS ON TABLE` does return
+(as `ObjectType = SCHEMA`) and which that REVOKE also succeeds against while removing
+nothing. So this module LOOKS for every grant that confers a read, REVOKES only the one
+shape a `REVOKE SELECT ON TABLE` was measured to remove -- a direct, table-level
+`SELECT` -- and hands the rest back as an escalation the task PRINTS and then FAILS on.
+Reporting is not the fallback here: a read this control cannot close is precisely the
+condition the revoke half was written to notice.
 
 THE TAG VOCABULARY IS THE ACCOUNT'S, NOT ONE THIS PROJECT INVENTED, and the call that
 establishes that is recorded because an earlier claim about it named no endpoint:
@@ -99,11 +115,19 @@ PII_READERS: tuple[str, ...] = ()
 # control is most needed on, for a reason that belongs to a different mechanism.
 GOVERNED_ROLES: tuple[str, ...] = ("bronze", "quarantine", "staging")
 
-# The privilege this module is authoritative over. Exactly one, named rather than
+# The privilege this module ISSUES and REVOKES. Exactly one, named rather than
 # `ALL PRIVILEGES`: a revoke loop that swept every action type would fight whatever
 # the platform or a future bundle granted, and the privilege that reveals a personal
 # name is this one.
 GOVERNED_PRIVILEGE = "SELECT"
+
+# WHAT COUNTS AS A READ WHEN LOOKING, which is deliberately wider than what is revoked
+# -- see the docstring. Both spellings are measured: `SHOW GRANTS` returns
+# `ALL PRIVILEGES` with a space, `information_schema.table_privileges` returns
+# `ALL_PRIVILEGES` with an underscore, and NEITHER catalog expands it into a `SELECT`
+# row of its own. `_normalised_action` folds the underscore so one constant matches
+# whichever catalog is being read.
+SELECT_CONFERRING_ACTIONS: frozenset[str] = frozenset({GOVERNED_PRIVILEGE, "ALL PRIVILEGES"})
 
 # The governed tag keys this project uses, from the account's own 70. The value is the
 # empty string because that is the only value these policies admit.
@@ -140,6 +164,40 @@ class UngrantablePrincipal(ValueError):
     """A principal this module refuses to interpolate into a GRANT."""
 
 
+class UngovernedRead(RuntimeError):
+    """A read of a governed table that this module cannot close, so it is RAISED.
+
+    Not a warning and not a log line: the escalation exists because `REVOKE SELECT ON
+    TABLE` was measured to SUCCEED and change nothing against `ALL PRIVILEGES` and
+    against a schema-inherited `SELECT`. A task that printed and carried on would
+    report SUCCESS over a reader of 55.8M personal names it had just failed to remove
+    -- the same shape as the absence this whole module was written to replace."""
+
+
+@dataclass(frozen=True)
+class ObservedGrant:
+    """One `SHOW GRANTS` row that lets its principal READ the table.
+
+    Four fields, not two, and that is the repair: the earlier reader kept
+    `(Principal, ActionType)` and discarded `ObjectType`/`ObjectKey`, so an inherited
+    `SELECT` was indistinguishable from a table one and got a REVOKE that succeeded
+    while changing nothing -- printed as `REVOKED`, a claim with no evidence."""
+
+    principal: str
+    action: str
+    object_type: str
+    object_key: str
+
+    @property
+    def revocable(self) -> bool:
+        """Whether `REVOKE SELECT ON TABLE` removes this row. Measured three ways on a
+        throwaway, 2026-08-18: a direct table-level `SELECT` disappears from
+        `SHOW GRANTS` after it, while `ALL PRIVILEGES` on the table and a `SELECT`
+        inherited from the schema both SURVIVE it -- and the statement SUCCEEDS in
+        every case, which is why "it did not raise" is not evidence of a revoke."""
+        return self.action == GOVERNED_PRIVILEGE and self.object_type == "TABLE"
+
+
 @dataclass(frozen=True)
 class GrantPlan:
     """What one table's `SELECT` grants must become. Immutable, and derived from the
@@ -168,10 +226,16 @@ def _quoted(principal: str) -> str:
 def show_grants_sql(table: str) -> str:
     """What the catalog currently says about `table`.
 
-    Columns, measured: `Principal | ActionType | ObjectType | ObjectKey`. Only grants
-    ON THE TABLE come back -- `USE CATALOG` and `USE SCHEMA`, which a reader also
-    needs, are on other securables and are deliberately out of this module's reach.
-    Traversal without SELECT reveals nothing but a name."""
+    Columns, measured: `Principal | ActionType | ObjectType | ObjectKey`. ALL FOUR are
+    read, and an earlier version of this module took the first two and threw the rest
+    away -- which made a grant ON THE TABLE indistinguishable from one INHERITED FROM
+    THE SCHEMA. Both come back here: measured 2026-08-18, `GRANT SELECT ON SCHEMA s TO
+    p` appears in `SHOW GRANTS ON TABLE s.t` as `p | SELECT | SCHEMA | s`. What does
+    NOT come back is a privilege a table cannot carry: `workspace.default` grants
+    `USE SCHEMA` and five `CREATE *` to `_workspace_users_workspace_<id>`, and
+    `SHOW GRANTS ON TABLE workspace.default.bronze_cnpj_socios` returns zero rows. So
+    the reach of this statement is "every privilege that applies to THIS TABLE,
+    wherever it was granted" -- not "every privilege a reader needs"."""
     return f"SHOW GRANTS ON TABLE {table}"
 
 
@@ -219,30 +283,86 @@ def governed_contracts() -> tuple[str, ...]:
     return tuple(sorted(MASKED_COLUMNS))
 
 
-def plan_grants(observed: tuple[str, ...], roster: tuple[str, ...] = PII_READERS) -> GrantPlan:
+def plan_grants(observed: tuple[str, ...], roster: tuple[str, ...] | None = None) -> GrantPlan:
     """The difference between what the catalog says and what the roster declares.
 
     Sorted in both directions so the statements a run issues are a function of the
     two sets and not of the order `SHOW GRANTS` happened to return. Revoking is not
     conditional on the roster being non-empty: an empty roster means NOBODY may hold
     SELECT on these tables, which is this project's current state and is a stronger
-    statement than issuing nothing."""
+    statement than issuing nothing.
+
+    `roster=None` means the module's reviewed roster, READ AT CALL TIME rather than
+    bound as a default at import. That is what lets a test substitute a non-empty
+    roster and exercise the ordering the safety argument rests on -- with `PII_READERS`
+    as a default argument, every test in this repository ran against an empty grant
+    list and "every REVOKE precedes every GRANT" could not fail. `roster=()` still
+    means the empty roster, and is not the same thing as `None`.
+
+    `set(observed)` is LOAD-BEARING rather than stylistic. `SHOW GRANTS` returns one
+    row per (principal, privilege, securable), so a principal holding both a table
+    grant and a schema grant comes back TWICE -- measured 2026-08-18: one principal,
+    three rows. Under the four-column reader those rows are now told apart and only
+    the table-level one reaches this function, so that particular duplicate no longer
+    arrives; the set stays because nothing here should depend on the catalog never
+    repeating a principal, and because the difference is set arithmetic anyway."""
     held = set(observed)
-    declared = set(roster)
+    declared = set(PII_READERS if roster is None else roster)
     return GrantPlan(
         grant=tuple(sorted(declared - held)),
         revoke=tuple(sorted(held - declared)),
     )
 
 
-def selecting_principals(rows: object) -> tuple[str, ...]:
-    """The principals holding `SELECT`, out of `SHOW GRANTS`'s (principal, action)
-    pairs. Takes pairs rather than Spark `Row`s so this module stays importable where
-    pyspark is not -- the task is what knows the column names."""
+def _normalised_action(action: object) -> str:
+    """One spelling for a privilege the two catalogs spell differently. Measured:
+    `SHOW GRANTS` returns `ALL PRIVILEGES`, `information_schema.table_privileges`
+    returns `ALL_PRIVILEGES`, for the same grant."""
+    return " ".join(str(action).upper().replace("_", " ").split())
+
+
+def select_conferring_grants(rows: object) -> tuple[ObservedGrant, ...]:
+    """Every observed grant that lets its principal READ the table -- the WIDE half.
+
+    Takes 4-tuples rather than Spark `Row`s so this module stays importable where
+    pyspark is not; the task is what knows the column names. Order is the catalog's,
+    which is what a reported escalation should quote."""
     return tuple(
-        str(principal)
-        for principal, action in rows  # type: ignore[attr-defined]
-        if str(action).upper() == GOVERNED_PRIVILEGE
+        ObservedGrant(
+            principal=str(principal),
+            action=_normalised_action(action),
+            object_type=str(object_type).upper(),
+            object_key=str(object_key),
+        )
+        for principal, action, object_type, object_key in rows  # type: ignore[attr-defined]
+        if _normalised_action(action) in SELECT_CONFERRING_ACTIONS
+    )
+
+
+def revocable_principals(grants: tuple[ObservedGrant, ...]) -> tuple[str, ...]:
+    """The principals whose read this task can actually withdraw -- the NARROW half,
+    and the only input `plan_grants` is allowed to have."""
+    return tuple(grant.principal for grant in grants if grant.revocable)
+
+
+def unrevocable_grants(grants: tuple[ObservedGrant, ...]) -> tuple[ObservedGrant, ...]:
+    """The reads this task CANNOT withdraw. Never silently dropped: the task prints
+    each one and then fails on it -- see `UngovernedRead`."""
+    return tuple(grant for grant in grants if not grant.revocable)
+
+
+def unrevocable_escalation(table: str, grant: ObservedGrant) -> str:
+    """What an operator has to be told, including the statement that does close it.
+
+    The remediation is measured rather than inferred: `REVOKE ALL PRIVILEGES ON TABLE
+    ... FROM p` removed the `ALL PRIVILEGES` row and `REVOKE SELECT ON SCHEMA s FROM p`
+    removed the inherited one, both verified by re-reading `SHOW GRANTS` after."""
+    return (
+        f"{grant.principal} can read {table} through {grant.action} on "
+        f"{grant.object_type} {grant.object_key}, which this task CANNOT withdraw: a "
+        f"REVOKE {GOVERNED_PRIVILEGE} ON TABLE against it succeeds and removes nothing "
+        f"(measured). Close it with: REVOKE {grant.action} ON {grant.object_type} "
+        f"{grant.object_key} FROM `{grant.principal}`"
     )
 
 

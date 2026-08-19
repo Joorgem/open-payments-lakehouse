@@ -29,8 +29,13 @@ assert _spec is not None and _spec.loader is not None
 cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cli)
 
-_APP = "d0e35b43-be45-4466-b4b7-6eec2d3a1fc8"
-_SCIM = "78647837742784"
+# INVENTED, both of them, and shaped like what the platform hands back: an
+# `applicationId` is a UUID and a SCIM `id` is a decimal string, and the script's whole
+# point is that the two are not interchangeable. The earlier fixtures were the REAL
+# applicationId and SCIM id of F4's probe principal -- deleted, not secret, but live
+# workspace identifiers sitting in three test files with nothing saying so.
+_APP = "5f2c8a10-0d4e-4b77-9a31-6c0e7d21b845"
+_SCIM = "10000000000001"
 
 
 class FakeServicePrincipals:
@@ -114,11 +119,25 @@ def test_the_group_is_not_defaulted_to_the_one_that_opens_the_real_names():
     `opl_pii_readers` is empty by decision: membership is what lets a real identity
     read 55.8M real personal names. A `--group` that defaulted to it would make
     "rebuild the principal" and "authorise it over production personal data" the same
-    command."""
+    command.
+
+    THE ASSERTION IS OVER EVERY DEFAULT, not over `--group` alone, because the one it
+    replaced could not fail. `PII_READER_GROUP not in (parsed.group or "")` is
+    VACUOUSLY TRUE whenever `parsed.group is None` -- which is precisely the case this
+    test exists for -- so it was decoration in the shape of a guard: setting
+    `--group`'s default to the real group would have left it green (the new assertion
+    turns red under exactly that edit). Every option is swept because the hazard is a
+    default that opens the names, wherever it is spelled."""
     parsed = cli._parse([])
     assert parsed.group is None
-    assert PII_READER_GROUP not in (parsed.group or "")
+    defaults = {name: str(value) for name, value in vars(parsed).items()}
+    assert PII_READER_GROUP not in defaults.values(), (
+        f"a default now names the group that opens 55.8M real personal names: {defaults}"
+    )
     assert cli._parse(["--group", "_probe_pii_readers"]).group == "_probe_pii_readers"
+    assert cli._parse(["--group", PII_READER_GROUP]).group == PII_READER_GROUP, (
+        "the refusal is of the DEFAULT, not of the operator who types it out"
+    )
 
 
 def test_the_script_writes_no_file_at_all():

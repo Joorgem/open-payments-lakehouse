@@ -108,10 +108,18 @@ resources:
         # AND THE GUARD'S QUESTION HAS ITS SHARPEST ANSWER HERE. The two tasks above
         # write no row and create a view whose name a stale wheel would take. This one
         # REVOKES: its roster is a constant in `opl.bronze.pii_governance`, and anything
-        # holding SELECT outside that roster loses it. A wheel from another revision
-        # therefore issues a different set of revokes against the three tables holding
-        # 55.8M rows of personal data, reports SUCCESS, and leaves an access state nobody
-        # reviewed.
+        # holding a table-level SELECT outside that roster loses it. A wheel from another
+        # revision therefore issues a different set of revokes against the three tables
+        # holding 55.8M rows of personal data, reports SUCCESS, and leaves an access state
+        # nobody reviewed.
+        #
+        # AND IT NOW HAS A SECOND WAY TO FAIL, which is deliberate and is the reason the
+        # coupling paragraph below matters more than it did. `ALL PRIVILEGES` on the table
+        # and a `SELECT` inherited from the SCHEMA both confer a read, and a
+        # `REVOKE SELECT ON TABLE` against either SUCCEEDS while removing nothing
+        # (measured). The task cannot close those, so it prints them and RAISES after
+        # applying everything it can -- a governance run that could not settle who reads
+        # personal data must not report a green tick.
         #
         # NO `depends_on` ON THE OTHER TWO, deliberately, and for the reason
         # `measure_rule_overlap` states: it reads neither view and neither measurement, so

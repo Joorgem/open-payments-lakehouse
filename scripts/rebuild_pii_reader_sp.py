@@ -15,8 +15,11 @@ workspace rather than read off a reference:
   * SCIM `POST .../ServicePrincipals` returns BOTH an `applicationId` (a UUID) and a
     numeric SCIM `id`. They are not interchangeable, and which one a call wants is not
     guessable: `service-principal-secrets-proxy create` takes the NUMERIC id and
-    refuses the UUID outright -- `Error: Invalid service principal id
-    'd0e35b43-...'`. `GRANT` takes the UUID, and refuses the numeric id.
+    refuses the UUID outright -- `Error: Invalid service principal id '<applicationId>'`,
+    with the UUID you passed echoed back where `<applicationId>` is (elided here rather
+    than quoted, because the measured one was a real principal of this workspace and a
+    live identifier does not belong in a docstring as decoration). `GRANT` takes the
+    UUID, and refuses the numeric id.
   * The ACCOUNT-shaped secret paths all return `Not Found` from a workspace host.
     Account SCIM is likewise unreachable from here, which is the same fact that makes
     the mask predicate `is_member` rather than `is_account_group_member` (ADR 0008).

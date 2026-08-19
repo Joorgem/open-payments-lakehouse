@@ -8,12 +8,24 @@ every REVOKE is issued before any GRANT, across every table, and the inert tags 
 last. Totality, because the tables it must reach include the one the mask task
 deliberately refuses to name.
 
-`_RecordingSession` answers `SHOW GRANTS` from its own `observed` argument,
-INDEPENDENTLY of the statements it has been handed -- the same independence
-`tests/test_backfill_masks.py` argues for. A double that answered the probe out of the
-GRANTs it had just recorded could not express the case the revoke half exists for: a
-principal that acquired `SELECT` out of band, which no statement of this run's would
-mention.
+`_RecordingSession` answers `SHOW GRANTS` from its own arguments, INDEPENDENTLY of the
+statements it has been handed -- the same independence `tests/test_backfill_masks.py`
+argues for. A double that answered the probe out of the GRANTs it had just recorded
+could not express the case the revoke half exists for: a principal that acquired
+`SELECT` out of band, which no statement of this run's would mention.
+
+AND IT ANSWERS WITH FOUR COLUMNS, because two of them decide whether a REVOKE would do
+anything. `ALL PRIVILEGES` on the table and a `SELECT` inherited from the SCHEMA both
+confer a read; `REVOKE SELECT ON TABLE` succeeds against either and removes neither
+(measured 2026-08-18). A double that only ever handed back a direct table-level SELECT
+could not have caught either hole, so `inherited` and `all_privileges` exist here to
+make those two states expressible.
+
+THE ROSTER IS SUBSTITUTED IN ONE TEST, and that is a repair rather than a convenience.
+`PII_READERS` is empty by decision, so with it bound as `plan_grants`'s default every
+fixture in this file produced an empty `plan.grant` -- and the ordering test below,
+whose whole subject is that every REVOKE precedes every GRANT, could not fail: swapping
+the two loops in `_apply_grants` left the file green.
 """
 from __future__ import annotations
 
@@ -23,12 +35,22 @@ from pathlib import Path
 
 import pytest
 
-from opl.bronze.pii_governance import CLASSIFIED_COLUMNS, GOVERNED_ROLES
+from opl.bronze import pii_governance
+from opl.bronze.pii_governance import (
+    CLASSIFIED_COLUMNS,
+    GOVERNED_ROLES,
+    UngovernedRead,
+)
 from opl.bronze.registry import table_spec
 from opl.config import DEFAULT
 
 _SRC = Path(__file__).resolve().parents[1] / "databricks" / "src"
-_SP = "d0e35b43-be45-4466-b4b7-6eec2d3a1fc8"
+
+# INVENTED: the shape the platform requires of a service principal's grant principal
+# (an applicationId, i.e. a UUID) and the name of nothing in any workspace. The earlier
+# fixture was the real applicationId of F4's deleted probe principal.
+_SP = "5f2c8a10-0d4e-4b77-9a31-6c0e7d21b845"
+_DECLARED = "zz-declared-reader@example.com"
 
 
 def _load(name: str):
@@ -40,30 +62,57 @@ def _load(name: str):
 
 
 class _Grants:
-    """What `SHOW GRANTS ON TABLE` hands back: `Principal | ActionType | ...`."""
+    """What `SHOW GRANTS ON TABLE` hands back, measured:
+    `Principal | ActionType | ObjectType | ObjectKey`, one row per
+    (principal, privilege, securable)."""
 
-    def __init__(self, principals: tuple[str, ...]) -> None:
-        self._principals = principals
+    def __init__(self, rows: list[dict[str, str]]) -> None:
+        self._rows = rows
 
     def collect(self) -> list[dict[str, str]]:
-        return [{"Principal": p, "ActionType": "SELECT"} for p in self._principals]
+        return list(self._rows)
 
 
 class _RecordingSession:
-    """Records every statement in order and answers the grants probe from `observed`.
+    """Records every statement in order and answers the grants probe from its own state.
 
     Recording and not a no-op double: the assertions that matter here are about which
     statement came before which, and a `mock.Mock()` would auto-create whatever the
     task asked of it -- so a task that stopped issuing REVOKE entirely would still
-    pass against one."""
+    pass against one.
 
-    def __init__(self, observed: tuple[str, ...] = ()) -> None:
+    Three rosters of holders, because a REVOKE means something different against each:
+    `observed` holds a direct table-level SELECT (revocable), `all_privileges` holds
+    `ALL PRIVILEGES` on the table, and `inherited` holds a SELECT granted on the SCHEMA.
+    The last two survive `REVOKE SELECT ON TABLE`, measured."""
+
+    def __init__(
+        self,
+        observed: tuple[str, ...] = (),
+        inherited: tuple[str, ...] = (),
+        all_privileges: tuple[str, ...] = (),
+    ) -> None:
         self.statements: list[str] = []
         self._observed = observed
+        self._inherited = inherited
+        self._all_privileges = all_privileges
+
+    def _rows(self, table: str) -> list[dict[str, str]]:
+        schema = table.rsplit(".", 1)[0]
+        return (
+            [{"Principal": p, "ActionType": "SELECT", "ObjectType": "TABLE",
+              "ObjectKey": table} for p in self._observed]
+            + [{"Principal": p, "ActionType": "ALL PRIVILEGES", "ObjectType": "TABLE",
+                "ObjectKey": table} for p in self._all_privileges]
+            + [{"Principal": p, "ActionType": "SELECT", "ObjectType": "SCHEMA",
+                "ObjectKey": schema} for p in self._inherited]
+        )
 
     def sql(self, statement: str):
         self.statements.append(statement)
-        return _Grants(self._observed) if statement.startswith("SHOW GRANTS") else None
+        if not statement.startswith("SHOW GRANTS"):
+            return None
+        return _Grants(self._rows(statement.rsplit(" ", 1)[-1]))
 
 
 class _SessionFactory:
@@ -80,9 +129,14 @@ class _SessionFactory:
         return self.session
 
 
-def _run(observed: tuple[str, ...] = (), argv: list[str] | None = None):
+def _run(
+    observed: tuple[str, ...] = (),
+    argv: list[str] | None = None,
+    inherited: tuple[str, ...] = (),
+    all_privileges: tuple[str, ...] = (),
+):
     task = _load("apply_pii_governance")
-    session = _RecordingSession(observed)
+    session = _RecordingSession(observed, inherited, all_privileges)
     task.SparkSession = _SessionFactory(session)
     task.main([] if argv is None else argv)
     return session
@@ -93,21 +147,34 @@ def _socios_tables() -> list[str]:
     return [DEFAULT.table(getattr(spec, role)) for role in GOVERNED_ROLES]
 
 
-def test_every_revoke_precedes_every_grant_and_the_tags_come_last():
+def test_every_revoke_precedes_every_grant_and_the_tags_come_last(monkeypatch):
     """THE ORDERING THIS TASK EXISTS FOR, asserted as positions in one list.
 
     `max_retries: 0` does not prevent a retry on INTERNAL_ERROR, so a run can die
     anywhere. The state that survives a partial run must be FEWER readers than it
     found, never more -- hence every REVOKE before any GRANT, across every table
     rather than table by table. Tags are inert metadata and go last: a tag that did
-    not get applied costs a re-run; a grant that did costs a disclosure."""
+    not get applied costs a re-run; a grant that did costs a disclosure.
+
+    THE ROSTER IS SUBSTITUTED, and until it was this test could not fail on the
+    property in its name. `PII_READERS` is empty by decision, so `plan.grant` was empty
+    in every fixture and there was never a GRANT for a REVOKE to precede: swapping the
+    two loops in `_apply_grants` left the whole file green. With a declared reader here
+    the same swap turns exactly this test red."""
+    monkeypatch.setattr(pii_governance, "PII_READERS", (_DECLARED,))
     session = _run(observed=(_SP,))
     kinds = [statement.split(" ", 1)[0] for statement in session.statements]
     revokes = [i for i, k in enumerate(kinds) if k == "REVOKE"]
+    grants = [i for i, k in enumerate(kinds) if k == "GRANT"]
     tags = [i for i, s in enumerate(session.statements) if "SET TAGS" in s]
 
     assert revokes, "the task issued no REVOKE against a catalog reporting a holder"
-    assert max(revokes) < min(tags), "a tag is issued while a reader is still granted"
+    assert grants, "the task issued no GRANT for a roster naming a principal"
+    assert max(revokes) < min(grants), (
+        "a GRANT was issued before a REVOKE finished: a run that dies in between "
+        "leaves MORE readers than it found"
+    )
+    assert max(grants) < min(tags), "a tag is issued while a reader is still granted"
     assert all(kinds[i] == "SHOW" for i in range(min(revokes))), (
         "something other than the catalog reads runs before the first REVOKE"
     )
@@ -163,6 +230,42 @@ def test_a_clean_catalog_and_an_empty_roster_issue_no_grant_and_no_revoke():
     session = _run(observed=())
     assert not [s for s in session.statements if s.split(" ", 1)[0] in ("GRANT", "REVOKE")]
     assert [s for s in session.statements if "SET TAGS" in s]
+
+
+def test_a_read_it_cannot_withdraw_fails_the_run_after_everything_it_can_do():
+    """THE MOST SEVERE HOLE THIS TASK HAD, at the layer that decides the run's verdict.
+
+    `GRANT ALL PRIVILEGES` makes a principal a reader, `SHOW GRANTS` reports it as
+    `ALL PRIVILEGES`, and `REVOKE SELECT ON TABLE` against it SUCCEEDS and removes
+    nothing -- all measured. So the task must not pretend: it issues no REVOKE it
+    cannot back, applies every statement it CAN, and then fails, naming the statement
+    that closes the hole. A task that returned SUCCESS here would report a green tick
+    over an undeclared reader of 55.8M personal names."""
+    task = _load("apply_pii_governance")
+    session = _RecordingSession(all_privileges=(_SP,))
+    task.SparkSession = _SessionFactory(session)
+    with pytest.raises(UngovernedRead, match="ALL PRIVILEGES"):
+        task.main([])
+    assert not [s for s in session.statements if s.startswith("REVOKE")], (
+        "the task issued a REVOKE that was measured to change nothing"
+    )
+    assert [s for s in session.statements if "SET TAGS" in s], (
+        "the loud failure cost the tagging, which was safe to do"
+    )
+
+
+def test_a_schema_inherited_select_is_reported_and_never_reported_as_revoked():
+    """THE SILENT ONE: `GRANT SELECT ON SCHEMA` IS returned by `SHOW GRANTS ON TABLE`
+    (as `ObjectType = SCHEMA`), and revoking it on the TABLE succeeds while leaving it
+    in place -- so the old task printed `REVOKED SELECT on ... from ...` after a
+    statement that removed nothing, forever, on every run. A claim with no evidence is
+    worse here than silence, because it is what an incident responder reads."""
+    task = _load("apply_pii_governance")
+    session = _RecordingSession(inherited=(_SP,))
+    task.SparkSession = _SessionFactory(session)
+    with pytest.raises(UngovernedRead, match="SCHEMA"):
+        task.main([])
+    assert not [s for s in session.statements if s.startswith("REVOKE")]
 
 
 def test_every_statement_names_the_catalog_and_schema_the_config_owns():

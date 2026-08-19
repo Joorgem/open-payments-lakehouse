@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from opl.bronze import masking
+from opl.bronze import masking, pii_governance
 from opl.bronze.pii_governance import (
     CLASSIFIED_COLUMNS,
     GOVERNED_PRIVILEGE,
@@ -28,6 +28,7 @@ from opl.bronze.pii_governance import (
     GOVERNED_TAG_VALUE,
     PII_READER_GROUP,
     PII_READERS,
+    SELECT_CONFERRING_ACTIONS,
     TAG_BR_CNPJ,
     TAG_BR_CPF,
     TAG_NAME,
@@ -36,15 +37,24 @@ from opl.bronze.pii_governance import (
     governed_contracts,
     grant_select_ddl,
     plan_grants,
+    revocable_principals,
     revoke_select_ddl,
-    selecting_principals,
+    select_conferring_grants,
     set_column_tag_ddl,
     show_grants_sql,
+    unrevocable_escalation,
+    unrevocable_grants,
 )
 from opl.contracts.cnpj_schemas import TABLES
 
-_SP = "d0e35b43-be45-4466-b4b7-6eec2d3a1fc8"
+# INVENTED, and that is the point: it has the SHAPE the platform requires of a grant
+# principal for a service principal -- an applicationId, i.e. a UUID -- and names
+# nothing in any workspace. The earlier fixture was the real applicationId of F4's
+# probe principal, which is deleted but was still a live-workspace identifier sitting
+# in three test files with nothing saying so.
+_SP = "5f2c8a10-0d4e-4b77-9a31-6c0e7d21b845"
 _TABLE = "workspace.default.bronze_cnpj_socios"
+_SCHEMA = "workspace.default"
 
 
 # --------------------------------------------------------------------------
@@ -132,14 +142,107 @@ def test_a_declared_principal_that_holds_nothing_is_granted():
     assert plan.grant == (_SP,) and plan.revoke == ()
 
 
-def test_only_select_is_read_out_of_show_grants():
-    """`SHOW GRANTS` returns every action type on the table. This module is
-    authoritative over exactly one privilege, named rather than `ALL PRIVILEGES`: a
-    revoke loop that swept every action would fight whatever the platform granted, and
-    the privilege that reveals a personal name is this one."""
-    rows = [("a@x", "SELECT"), ("b@x", "MODIFY"), ("c@x", "APPLY_TAG"), ("d@x", "select")]
-    assert selecting_principals(rows) == ("a@x", "d@x")
+def _rows(*rows: tuple[str, str, str, str]) -> list[tuple[str, str, str, str]]:
+    """`SHOW GRANTS ON TABLE`'s four columns, in its own order:
+    `Principal | ActionType | ObjectType | ObjectKey`."""
+    return list(rows)
+
+
+def test_a_privilege_that_confers_no_read_is_not_looked_at():
+    """`SHOW GRANTS` returns every action type on the table, and this module issues and
+    revokes exactly one. A revoke loop that swept every action would fight whatever the
+    platform or a future bundle granted; the privilege that reveals a personal name is
+    this one."""
+    grants = select_conferring_grants(
+        _rows(
+            ("a@x", "SELECT", "TABLE", _TABLE),
+            ("b@x", "MODIFY", "TABLE", _TABLE),
+            ("c@x", "APPLY_TAG", "TABLE", _TABLE),
+            ("d@x", "select", "table", _TABLE),
+        )
+    )
+    assert [grant.principal for grant in grants] == ["a@x", "d@x"]
+    assert revocable_principals(grants) == ("a@x", "d@x")
     assert GOVERNED_PRIVILEGE == "SELECT"
+
+
+def test_all_privileges_is_a_read_and_the_old_lens_could_not_see_it():
+    """THE HOLE THIS LENS WAS WIDENED FOR, and it is the likeliest shape of the
+    out-of-band grant the revoke half exists to catch: "just give them everything".
+
+    Measured 2026-08-18 on a throwaway: `GRANT ALL PRIVILEGES ON TABLE t TO p` is
+    reported by `SHOW GRANTS` as `p | ALL PRIVILEGES | TABLE | t` -- never as SELECT --
+    so a lens matching the literal string `SELECT` put the principal in NEITHER list
+    and issued nothing at all."""
+    grants = select_conferring_grants(_rows((_SP, "ALL PRIVILEGES", "TABLE", _TABLE)))
+    assert [grant.principal for grant in grants] == [_SP], "the wide half must see it"
+    assert revocable_principals(grants) == (), "and the narrow half must not touch it"
+    assert unrevocable_grants(grants) == grants
+
+
+def test_both_spellings_of_all_privileges_are_the_same_privilege():
+    """`SHOW GRANTS` says `ALL PRIVILEGES`, `information_schema.table_privileges` says
+    `ALL_PRIVILEGES`, for the same grant -- both measured on the same throwaway. One
+    constant matches either, so changing the observe source cannot reopen the hole."""
+    assert SELECT_CONFERRING_ACTIONS == {"SELECT", "ALL PRIVILEGES"}
+    for spelling in ("ALL PRIVILEGES", "ALL_PRIVILEGES", "all privileges"):
+        grants = select_conferring_grants(_rows((_SP, spelling, "TABLE", _TABLE)))
+        assert [grant.action for grant in grants] == ["ALL PRIVILEGES"], spelling
+
+
+def test_a_select_inherited_from_the_schema_is_seen_and_is_never_revoked():
+    """THE SECOND MEASURED HOLE, and it was a silent no-op rather than an omission.
+
+    `GRANT SELECT ON SCHEMA s TO p` IS returned by `SHOW GRANTS ON TABLE s.t`, as
+    `p | SELECT | SCHEMA | s` -- and `REVOKE SELECT ON TABLE s.t FROM p` against it
+    SUCCEEDS and leaves the row in place (both measured). The old reader discarded
+    `ObjectType`, so it revoked forever and printed `REVOKED` every time."""
+    grants = select_conferring_grants(_rows((_SP, "SELECT", "SCHEMA", _SCHEMA)))
+    assert [grant.object_type for grant in grants] == ["SCHEMA"]
+    assert revocable_principals(grants) == ()
+    assert plan_grants(revocable_principals(grants), roster=()).revoke == ()
+
+
+def test_a_direct_table_select_is_the_one_shape_that_gets_revoked():
+    """The narrow half, stated positively: exactly the row a `REVOKE SELECT ON TABLE`
+    was measured to remove -- it disappeared from `SHOW GRANTS` afterwards while the
+    principal's `ALL PRIVILEGES` and schema-inherited rows survived the same
+    statement."""
+    grants = select_conferring_grants(
+        _rows(
+            (_SP, "ALL PRIVILEGES", "TABLE", _TABLE),
+            (_SP, "SELECT", "TABLE", _TABLE),
+            (_SP, "SELECT", "SCHEMA", _SCHEMA),
+        )
+    )
+    assert revocable_principals(grants) == (_SP,), "one of the three, not three"
+    assert len(unrevocable_grants(grants)) == 2
+
+
+def test_the_escalation_names_the_statement_that_actually_closes_it():
+    """A report an operator cannot act on is a log line. Both remediations are
+    measured: `REVOKE ALL PRIVILEGES ON TABLE` removed the table-level one and
+    `REVOKE SELECT ON SCHEMA` removed the inherited one, each verified by re-reading
+    `SHOW GRANTS` afterwards."""
+    grant = select_conferring_grants(_rows((_SP, "ALL PRIVILEGES", "TABLE", _TABLE)))[0]
+    message = unrevocable_escalation(_TABLE, grant)
+    assert f"REVOKE ALL PRIVILEGES ON TABLE {_TABLE} FROM `{_SP}`" in message
+    inherited = select_conferring_grants(_rows((_SP, "SELECT", "SCHEMA", _SCHEMA)))[0]
+    assert f"REVOKE SELECT ON SCHEMA {_SCHEMA} FROM `{_SP}`" in (
+        unrevocable_escalation(_TABLE, inherited)
+    )
+
+
+def test_the_roster_is_resolved_at_call_time_and_an_empty_tuple_is_not_none(monkeypatch):
+    """WHY `roster=None` RATHER THAN `roster=PII_READERS`, and it is not a style
+    choice. A default argument is bound at import, so with the roster empty by decision
+    NO test in this repository could ever run this task with a non-empty one -- which
+    is how `test_every_revoke_precedes_every_grant_and_the_tags_come_last` came to
+    assert an ordering it could not observe. `roster=()` still means the empty roster
+    and must not fall back to the module's."""
+    monkeypatch.setattr(pii_governance, "PII_READERS", ("zz-declared@example.com",))
+    assert plan_grants(()).grant == ("zz-declared@example.com",)
+    assert plan_grants((), roster=()).grant == ()
 
 
 # --------------------------------------------------------------------------
