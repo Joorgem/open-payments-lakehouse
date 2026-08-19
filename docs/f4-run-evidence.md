@@ -881,6 +881,37 @@ structurally lack a source date read `no_source_axis` rather than an unexplained
 **And the 2× duration trap is closed in the shipped view**: task run `99407495289863` reports
 `execution_seconds = 5633`, not the 11,266 a `SUM` would have produced.
 
+> **WHAT THOSE THREE LABELS MAY BE SAID TO MEAN IS NARROWER THAN IT LOOKS, AND AN EXTERNAL REVIEW
+> CAUGHT IT.** `no_sql_attributed` is **not** proof that a task issued no SQL. The watermark the arm
+> keys on proves that `system.query.history` holds a **newer** statement; it does not prove the table
+> holds every **older** one — and the module's own header already records that ingestion into that
+> table is **not strictly ordered**. So a task whose statements are still in flight is labelled
+> identically to `fail_on_dq`, which genuinely issues none on all 22 of its runs.
+>
+> **It is sharper than it reads, because the reader advances the watermark.** The statements pushing
+> that edge forward are frequently the controller's own measuring queries, issued while nothing else
+> is running — so the act of reading this view can move a run out of "too recent" and into "issued
+> none" while its statements are still arriving.
+>
+> **A completeness guarantee was looked for before this was accepted, and there is none.**
+> `DESCRIBE TABLE system.query.history` returns **46 columns and not one bounds ingestion**; the only
+> candidate, `update_time`, is the statement's own last progress update. And `DESCRIBE DETAIL` on it
+> **fails outright** — `[DELTA_UNSUPPORTED_FILE_SYSTEM] … uc-deltasharing://system.query.history/_delta_log`
+> — so the file-level metadata such a bound would live in is not reachable from this workspace at all.
+>
+> **The counts above stand as measurements**: nothing was renamed and no arm moved, which the
+> correction proved by mutation rather than argued — narrowing the window to job statements *does*
+> move rows between labels, and was refused for that reason among others. What changes is only what
+> the 119 may be called: **runs the record attributes nothing to, not runs proven to have issued
+> nothing.**
+>
+> **And `measured` is provisional too** — an extension nobody had asked for, found from the same
+> fact. Its metrics sum whatever had been ingested **when the view was read**, so a later statement
+> raises them with nothing having run. Observed on this view's own rows: `create_views` carried
+> `statements` NULL at 22:31:14Z and **4** afterwards. **Every metric in this view is a floor, not a
+> total**, and any figure taken from it needs its reading time — which is the same rule §0.5 already
+> applies to every system-table count, arrived at a second time from a different direction.
+
 #### ~~A FOURTH VALUE THAT CANNOT FIRE~~ — THE CONTROLLER'S OWN FINDING, FALSIFIED FOUR MINUTES LATER, AND IT IS THIS PROJECT'S SIGNATURE ERROR
 
 > **WHAT THIS SECTION SAID, WITHDRAWN 2026-08-18 BEFORE IT MERGED.** It read: *"the fourth —
