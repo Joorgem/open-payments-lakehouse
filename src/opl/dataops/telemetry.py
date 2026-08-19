@@ -94,8 +94,49 @@ SQL" -- the failure the whole column was added to prevent, one level further out
                               retentions diverge further, runs that DID issue SQL cross the
                               same line, and this is the label they get.
   * `no_sql_attributed`    -- the run sits INSIDE the window on both sides and the platform
-                              still holds nothing for it. This is the only one of the four
-                              that is evidence about the task.
+                              still holds nothing for it. THIS IS A FACT ABOUT THE RECORD
+                              AND NOT ABOUT THE TASK, which is not what this header used to
+                              say -- see "WHAT `no_sql_attributed` DOES NOT MEAN", below.
+
+WHAT `no_sql_attributed` DOES NOT MEAN, AND THIS FILE USED TO CLAIM IT DID. It called this
+arm "the only one of the four that is evidence about the task". That is wrong, and the
+refutation was already sitting two paragraphs above it: ingestion into
+`system.query.history` IS NOT STRICTLY ORDERED. `w.newest_statement` proves the table holds
+a statement NEWER than the run; it does not prove the table holds every OLDER one. A run
+whose own statements are still in flight, passed by some unrelated statement that ingested
+ahead of them, therefore falls out of `not_yet_attributed` and lands here.
+
+AND THE READER IS OFTEN THE ONE WHO ADVANCES THE WATERMARK. The statements moving
+`MAX(end_time)` are frequently an operator's own interactive queries, issued while nothing
+else is running -- `_history_window_sql` takes the window over ALL statements deliberately,
+and this is the cost of that choice. So READING THIS VIEW can promote a run out of
+`not_yet_attributed` and into `no_sql_attributed` while the run's statements are still on
+their way. A watermark is a LOWER BOUND ON INGESTION and never a completeness guarantee --
+the same error the previous correction to this file found one level out, where
+`now - MAX(watermark)` turned out not to be a lag.
+
+A COMPLETENESS GUARANTEE WAS LOOKED FOR AND THERE IS NONE. Measured 2026-08-18:
+`DESCRIBE TABLE system.query.history` returns 46 columns and not one of them bounds
+ingestion. `update_time` is the closest candidate and it is not one -- it is the STATEMENT's
+last progress update, a property of the query rather than of when its row landed. There is
+no commit timestamp and no ingestion column. Neither is there a partition boundary to read:
+`DESCRIBE DETAIL` fails outright with `[DELTA_UNSUPPORTED_FILE_SYSTEM] ...
+uc-deltasharing://system.query.history/_delta_log`, so the file-level metadata such a bound
+would live in is not reachable from this workspace at all. Until the platform publishes
+one, an unmatched row is an observation about the ATTRIBUTION RECORD and nothing more.
+
+SO WHAT THE ARM IS FOR, GIVEN IT IS NOT EVIDENCE. Its motivating case is real and unchanged:
+`fail_on_dq` issues NO SQL, on all 22 of its runs, and a dashboard rendering `read_rows = 0`
+against this project's headline DQ event asserts something the platform never said. This
+arm is what stops that. What it cannot do is the converse -- it cannot separate "the record
+attributes no statement to this run" from "this task issued none", and NOTHING IN THIS VIEW
+CAN. A consumer needing the second reads the task's code, not this column.
+
+THE SAME NON-ORDERING MAKES `measured` PROVISIONAL, which is one defect and not two.
+`statements`, `read_rows`, `written_rows` and `written_bytes` sum whatever had been ingested
+AT THE MOMENT THE VIEW WAS READ, so a statement landing later raises them with nothing
+having run. Measured on this view's own rows: `create_views` carried `statements` NULL at
+22:31:14Z and 4 once the record caught up. Every metric here is a FLOOR, not a total.
 
 A ZERO IN `not_yet_attributed` IS NOT EVIDENCE THAT NO RUN WAS TOO RECENT. The arm's
 reachability is a RACE BETWEEN TWO WATERMARKS, not a property of this workspace: it can
@@ -242,9 +283,10 @@ from dataclasses import dataclass
 TASK_TELEMETRY_VIEW = "dataops_task_telemetry"
 
 # The four values of `sql_telemetry`, spelled once because a dashboard filters on them.
-# `MEASURED` is the only one that says the metrics mean something; of the other three, only
-# `NO_SQL_ATTRIBUTED` is evidence about the TASK -- the other two are facts about how far
-# `system.query.history` reaches. See the header's "WHICH IS WHY THE LABEL IS NOT BINARY".
+# ALL FOUR ARE FACTS ABOUT THE ATTRIBUTION RECORD AND NONE IS A FACT ABOUT THE TASK.
+# `MEASURED` says the metrics have something behind them; the other three say which way the
+# record falls short. `NO_SQL_ATTRIBUTED` in particular is NOT evidence that a task issued
+# no SQL -- see the header's "WHAT `no_sql_attributed` DOES NOT MEAN".
 MEASURED = "measured"
 NO_SQL_ATTRIBUTED = "no_sql_attributed"
 NOT_YET_ATTRIBUTED = "not_yet_attributed"
@@ -369,6 +411,14 @@ def _sql_telemetry_case() -> str:
     BEFORE the bare `NO_SQL_ATTRIBUTED` else -- reversing that would let a run the record
     cannot reach be reported as a run the record reached and found empty, which is the
     exact substitution `sql_telemetry` exists to refuse.
+
+    THE ELSE IS AN OBSERVATION ABOUT THE RECORD, NOT ABOUT THE TASK, and no arrangement of
+    these arms can make it more than that. `w.newest_statement` bounds ingestion from BELOW
+    -- a newer statement is present, so the table is at least that far along -- and the
+    header records that no column, commit stamp or partition boundary in
+    `system.query.history` bounds it from above. A run whose statements are still in flight
+    is therefore in this ELSE, indistinguishable from one that issued none. The names carry
+    that: `no_sql_ATTRIBUTED`, never `no_sql_issued`.
 
     THE `NOT_YET_ATTRIBUTED` ARM IS REACHABLE ONLY WHILE THE TIMELINE'S WATERMARK IS AHEAD
     OF `w.newest_statement`, because no `t.ended_at` exceeds the former. Both orderings

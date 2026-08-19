@@ -129,7 +129,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "sql_telemetry has four values - only no_sql_attributed is about the task"
+                "title": "sql_telemetry describes the ATTRIBUTION RECORD, not the task - no_sql_attributed is not proof the task issued none"
               }
             }
           },

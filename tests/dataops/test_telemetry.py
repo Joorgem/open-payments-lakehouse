@@ -72,6 +72,14 @@ _TIMELINE = (
     ("r_flip", "j1", "jr5", "promote", "18:25:00", "18:30:00", "FAILED", 1, 600, 0),
     # A job that is no longer in `system.lakeflow.jobs`.
     ("r_orphan", "j_gone", "jr4", "smoke", "19:00:00", "19:00:20", "SUCCEEDED", 1, 20, 0),
+    # CONSTRUCTED, and it is the whole of the defect the label cannot close. This task DID
+    # issue SQL. Its statement is deliberately ABSENT from `_HISTORY` because it is still
+    # in flight -- and the INTERACTIVE row at 19:30:00, unrelated to it and later than it,
+    # has already landed and carries the window's newest edge PAST this 19:00:00 end. So
+    # the conservative arm cannot fire and this run is labelled exactly like `r_nosql`,
+    # which issued nothing at all. Ingestion is not strictly ordered; a watermark is a
+    # lower bound on it, never a completeness guarantee.
+    ("r_delayed", "j1", "jr7", "promote", "18:58:00", "19:00:00", "SUCCEEDED", 1, 120, 0),
     # CONSTRUCTED AS A FIXTURE ROW, BUT NO LONGER WITHOUT A COUNTERPART. Ends AFTER the
     # newest statement `history` holds. Observed live 2026-08-18 22:31:14Z: `create_views`
     # and `measure_rule_overlap`, ended 22:24:39Z and 22:25:22Z, carried this exact label
@@ -158,7 +166,7 @@ def _by_run(spark) -> dict:
 
 
 def test_the_grain_is_one_row_per_task_run_attempt(probe):
-    """Twelve timeline rows, nine task runs, nine rows out.
+    """Thirteen timeline rows, ten task runs, ten rows out.
 
     The `GROUP BY` carries `job_id`, `job_run_id` and `task_key` beside `run_id`, so a
     platform that ever disagreed with itself about a task run's own attributes would show
@@ -168,9 +176,9 @@ def test_the_grain_is_one_row_per_task_run_attempt(probe):
     aggregates the whole of `query.history` to one row, and a version of it that did not
     would multiply every row here by six."""
     rows = probe.sql(task_telemetry_sql(_SYSTEM)).collect()
-    assert len(_TIMELINE) == 12
-    assert len(rows) == 9
-    assert len({row["run_id"] for row in rows}) == 9
+    assert len(_TIMELINE) == 13
+    assert len(rows) == 10
+    assert len({row["run_id"] for row in rows}) == 10
 
 
 def test_a_task_that_issued_no_sql_is_not_the_same_row_as_one_that_read_no_rows(probe):
@@ -241,14 +249,40 @@ def test_a_run_older_than_the_statement_record_is_not_a_run_that_issued_none_eit
     assert rows["r_ancient"]["statements"] is None
 
 
+def test_a_statement_still_in_flight_is_labelled_exactly_like_one_that_never_existed(probe):
+    """THE DEFECT THIS LABEL CANNOT CLOSE, executed, so it is a fixture and not a caveat.
+
+    `w.newest_statement` bounds ingestion from BELOW: it proves the table holds a statement
+    NEWER than the run, never that it holds every OLDER one, and ingestion into
+    `system.query.history` is not strictly ordered. `r_delayed` issued SQL that has not
+    landed, and the 19:30:00 INTERACTIVE row -- unrelated to it, later than it, already
+    ingested -- carries the window's newest edge past its 19:00:00 end. The conservative
+    arm therefore cannot fire, and the run reads `no_sql_attributed`: the same value as
+    `r_nosql`, which issued nothing at all. They are one bucket, and what this asserts is
+    that the view does not pretend otherwise.
+
+    READING THE VIEW IS ONE WAY TO CAUSE IT. The statements that advance that edge are
+    frequently an operator's own interactive queries, issued while nothing else is running,
+    so taking a measurement can promote a run out of `not_yet_attributed` and into a label
+    that reads as a fact about the task while its statements are still on their way."""
+    rows = _by_run(probe)
+    assert rows["r_delayed"]["sql_telemetry"] == NO_SQL_ATTRIBUTED
+    assert rows["r_delayed"]["statements"] is None
+    assert rows["r_delayed"]["sql_telemetry"] == rows["r_nosql"]["sql_telemetry"]
+    # The statement exists in the scenario and NOT in the table, which is the whole point.
+    assert not any(entry[0] == "r_delayed" for entry in _HISTORY)
+
+
 def test_collapsing_the_window_arms_puts_three_unlike_runs_in_one_bucket(probe):
     """The mutation the four-value label refuses, executed, so the two arms do work.
 
     This is the binary spelling the commit shipped: no window, so anything unmatched is
     `no_sql_attributed`. Under it `r_nosql` (the record covers it and holds nothing),
     `r_recent` (the record has not caught up) and `r_ancient` (the record no longer
-    reaches back) are one indistinguishable group -- and only the first is evidence about
-    a task."""
+    reaches back) are one indistinguishable group -- three unlike states of the RECORD
+    collapsed into one word. None of the four values is evidence about a task, which is
+    what `test_a_statement_still_in_flight_is_labelled_exactly_like_one_that_never_existed`
+    holds for the surviving arm; what the window buys is that these three stay apart."""
     binary = task_telemetry_sql(_SYSTEM)
     start = binary.index("CASE WHEN s.statements IS NOT NULL")
     end = binary.index("AS sql_telemetry") + len("AS sql_telemetry")
