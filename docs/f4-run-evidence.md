@@ -1029,6 +1029,55 @@ candid about exactly this — *"until then both spellings hide from everyone, so
 the argument and not in what any reader sees"* — so the non-discriminating claim was in the job
 header and the commit message, **not** in the ADR that had got it right.
 
+**The repair was not to make the check honest — it was to make it a task.** `assert_mask_predicate`
+now reads `information_schema.routines` and **fails the run** (`max_retries: 0`) unless the deployed
+body carries `is_member(`. It depends on `ensure_masked_table`, so it reads after the repair, and is
+deliberately **not** an ancestor of the grants task: a failure state must not disable its own
+mitigation.
+
+#### The run, and the check that could have failed
+
+**Job run `761461564584636`, SUCCESS**, wheel sha256
+`fd73c641a2c1c5d7f07c39b6d7d0f87d7647aeb1883fe78b4f4efe2684d456d2`, stamped revision `c66a76b`,
+verified by downloading the artefact — whose `masking.py` was confirmed to emit `is_member` and no
+longer the old predicate **before** the run.
+
+**The discriminating check fired, and it discriminated:**
+
+```
+assert_mask_predicate: workspace.default.mask_personal_name last_altered 2026-08-19 16:25:23.068000
+assert_mask_predicate: routine_definition CASE WHEN is_member('opl_pii_readers') THEN name ELSE '***' END
+```
+
+**Controller-verified afterwards, read independently rather than from the task's stdout:**
+
+| | before | after |
+|---|---|---|
+| `routine_definition` | `… is_account_group_member('opl_pii_readers') …` | **`… is_member('opl_pii_readers') …`** |
+| `last_altered` | `2026-08-03T21:31:27.142Z` | **`2026-08-19T16:25:23.068Z`** |
+| `SELECT nome_socio_razao_social … LIMIT 2` | `***`, `***` | `***`, `***` |
+
+**The floor did not move, which is the point.** The predicate that could never be made true from this
+workspace has become one that can, and **not one row changed what it shows to anyone** —
+`opl_pii_readers` still has zero members. The old prediction would have called both of those columns
+a pass; the new check calls only the first.
+
+**Governance applied: 12 tags across three tables, zero GRANT and zero REVOKE.** The zero was
+predicted — all three socios tables carry no grant rows — and the tags landed on
+`bronze_cnpj_socios`, its quarantine **and its staging**, verified in
+`information_schema.column_tags`: `class.name` on both name columns and **both** `class.br_cpf` and
+`class.br_cnpj` on `cpf_cnpj_socio`, because `identificador_socio` decides which a row holds.
+
+**Staging is tagged although the mask deliberately refuses it**, and that is the stronger reason:
+a `class.name` tag on an **unmasked** column is the catalog stating that the exposure exists, which
+is more use to a governance reviewer than a tag on a column already hidden.
+
+**One prediction handed to the controller was wrong and is marked as such:** the implementer
+predicted **9** `SET TAGS` (3 tables × 3 pairs); the run issued **12**, because `cpf_cnpj_socio`
+carries two keys, not one. It under-counted its own classification. Nothing downstream depended on
+the number, and it is recorded because a prediction quietly revised after the run is not a
+prediction.
+
 ### 1.6 Task 6 — the benchmark the plan's revision 1 refused, and its prediction is FALSIFIED
 
 Revision 1 refused a baseline→optimised measurement on the premise that *"there is no un-compacted
