@@ -975,6 +975,80 @@ pipe.** The `lag_seconds` column the correction refused hardest is refused for p
 instead of accepting it and reported that the more publicly readable of the two places the claim
 lived was this document.
 
+### 1.6 Task 6 — the benchmark the plan's revision 1 refused, and its prediction is FALSIFIED
+
+Revision 1 refused a baseline→optimised measurement on the premise that *"there is no un-compacted
+baseline left to optimise from"*. §0.4 falsified that premise: `link_empresa_estabelecimento` —
+**512 files, 7,201,236,749 B, one Delta version, `ANALYZE`d but never COMPACTED**, the vault's
+largest table by bytes. This is that measurement, run by the controller 2026-08-18.
+
+**The protocol was followed and each step verified by reading state back, not by a success line.**
+Predictive Optimization was `INHERIT` → effective `ENABLE (METASTORE)`; it was set to `DISABLE`
+(effective `DISABLE`, inheritance gone) **before any baseline**, and **restored to `INHERIT`
+afterwards** — re-read from `GET /api/2.1/unity-catalog/tables/…` at both ends. The lakehouse is not
+left un-maintained for a case study.
+
+| | before | after | change |
+|---|---|---|---|
+| files on disk | **512** | **128** | −75% |
+| table bytes | 7,201,236,749 | 6,962,434,417 | −3.32% |
+| `read_files_count` | **512** | **128** | −75% |
+| `read_bytes` (uncached) | **2,532,823,155** ×3 | **2,354,245,901** | **−7.05%** |
+| `execution_time_ms` (clean uncached) | 1,770 / 1,815 / 1,688 | 1,174 / 995 | — |
+
+The `OPTIMIZE` itself took **30.5 s** server-side: 512 files removed at avg 14.06 MB, **128 added at
+avg 54.39 MB**, `totalTaskExecutionTimeMs 184,290` over 128 scheduled tasks.
+
+#### The prediction, and the half that failed
+
+§2.3 published, before the run: *"`read_files_count` down sharply, `read_bytes` roughly unchanged,
+and wall clock improved only if per-file task overhead dominates."*
+
+- **Files: confirmed** — 512 → 128, exactly the file count, so nothing was pruned in either
+  direction and the predicate is doing what it was chosen to do.
+- **Bytes: FALSIFIED.** `read_bytes` fell **7.05%**, not "roughly unchanged". **The mechanism is
+  recompression, not pruning**: the same logical scan reads fewer bytes because 128 files at ~54 MB
+  compress better than 512 at ~14 MB, and the table itself shrank 3.32% on disk for the same reason.
+  Compaction is not a pure re-packing — **it changes how much there is to read.**
+- **Clock: not answerable at this precision**, and the reason is the finding below.
+
+**A falsified prediction is the product**, and this one is falsified in a specific mechanical
+direction rather than by an unexplained number. It also means the phase's earlier null results are
+not the whole story: *clustering* moved pruning without moving the clock, and *compaction* moved
+bytes without being asked to.
+
+#### THE TRAP THAT DWARFS THE EFFECT BEING MEASURED
+
+**The first uncached run of a session is not comparable to the ones after it.** Measured on this
+table, both sides of the experiment:
+
+| | first uncached run | subsequent uncached runs |
+|---|---|---|
+| before `OPTIMIZE` | **13,338 ms** | 1,770 / 1,815 / 1,688 |
+| after `OPTIMIZE` | **3,602 ms** | 1,174 / 995 |
+
+**7.7× and 3.1×.** A benchmark that takes one cold reading for its baseline and one warm reading for
+its result would report an improvement of roughly an order of magnitude, entirely manufactured — and
+every byte figure in the table above would still be correct beside it. That is this phase's first
+species applied to a stopwatch, and it is why T5's ruling denominates in `read_files_count` and
+`read_bytes` and quotes wall clock as a range or not at all.
+
+#### AND THE CACHE PROTOCOL THIS PHASE INHERITED IS TOO LOOSE
+
+The rule carried into this phase was *"defeat the cache by varying a literal"*. Measured here, that
+is **not sufficient**: three runs varying `AND 1=1` → `AND 2=2` → `AND 3=3` returned
+`result_from_cache: True` with **0 bytes and 0 files** on the second and third.
+
+**The mechanism: a tautology is constant-folded before the plan is fingerprinted**, so the plan is
+identical and the cache answers. The rule that actually holds is narrower and worth stating that
+way: **vary a literal that survives into the plan** — one inside a real predicate on a real column.
+Every uncached reading above was taken that way (`hub_empresa_hk > 'b' | 'c' | 'd'`), which is also
+why their `read_bytes` are byte-identical: the comparison value changes the answer, not the scan.
+
+**The warehouse was shared with another agent's read-only queries during this run**, which affects
+wall clock and not `read_files_count` or `read_bytes` — stated because the clock numbers above are
+quoted as ranges for that reason as well as the known 1.53×–2.2× non-determinism.
+
 ### 2.2 The all-matching-rules sweep
 
 **Published 2026-08-18, before any run.** Over all seven contracts and every staging batch, evaluating
@@ -997,6 +1071,11 @@ bin-packing does not reduce the bytes a full aggregate must read, so the predict
 and wall clock improved only if per-file task overhead dominates**. The point-lookup null result
 already falsified the mirror-image hypothesis — 22–39× fewer bytes and no movement in the clock — so
 this prediction is deliberately the one that measurement has most reason to refuse.
+
+> **FALSIFIED, 2026-08-18 — and in the half that was stated most confidently.** `read_files_count`
+> fell 512 → 128 as predicted, but `read_bytes` fell **7.05%** rather than staying "roughly
+> unchanged", because compaction **recompresses**: 128 files at ~54 MB read fewer bytes than 512 at
+> ~14 MB for the same logical scan, and the table shrank 3.32% on disk for the same reason. §1.6.
 
 ---
 
