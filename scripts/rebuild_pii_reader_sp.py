@@ -84,8 +84,11 @@ def rule_set_name(w: WorkspaceClient, application_id: str) -> str:
     account_id = w.config.account_id
     if not account_id:
         raise SystemExit(
-            "the account id could not be resolved from the CLI profile; pass "
-            "--account-id, which the rule-set name needs"
+            "the account id could not be resolved from the CLI profile, and the "
+            "rule-set name needs it. Set DATABRICKS_ACCOUNT_ID in the environment "
+            "or add account_id to the profile in ~/.databrickscfg, then re-run. "
+            "(This message named a --account-id flag until F4's closing review; "
+            "this script defines no such flag and argparse would have exited 2.)"
         )
     return f"accounts/{account_id}/servicePrincipals/{application_id}/ruleSets/default"
 

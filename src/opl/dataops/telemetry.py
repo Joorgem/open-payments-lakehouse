@@ -282,8 +282,8 @@ from dataclasses import dataclass
 # view can be in, so the prefix plus that module's lock is the whole of the protection.
 TASK_TELEMETRY_VIEW = "dataops_task_telemetry"
 
-# The four values of `sql_telemetry`, spelled once because a dashboard filters on them.
-# ALL FOUR ARE FACTS ABOUT THE ATTRIBUTION RECORD AND NONE IS A FACT ABOUT THE TASK.
+# The four values of `sql_telemetry`. ALL FOUR ARE FACTS ABOUT THE ATTRIBUTION RECORD AND
+# NONE IS A FACT ABOUT THE TASK.
 # `MEASURED` says the metrics have something behind them; the other three say which way the
 # record falls short. `NO_SQL_ATTRIBUTED` in particular is NOT evidence that a task issued
 # no SQL -- see the header's "WHAT `no_sql_attributed` DOES NOT MEAN".
@@ -292,7 +292,11 @@ NO_SQL_ATTRIBUTED = "no_sql_attributed"
 NOT_YET_ATTRIBUTED = "not_yet_attributed"
 OLDER_THAN_HISTORY = "older_than_history"
 
-SQL_TELEMETRY_VALUES = (MEASURED, NOT_YET_ATTRIBUTED, OLDER_THAN_HISTORY, NO_SQL_ATTRIBUTED)
+# ~~`SQL_TELEMETRY_VALUES`~~ was declared here and read by nothing -- not by `src/`, not by
+# `databricks/`, not by a test -- with a comment claiming it was "spelled once because a
+# dashboard filters on them". The dashboard has three table widgets, no filter widget and no
+# WHERE clause. Removed by F4's closing code review: a constant nobody reads, justified by a
+# consumer that does not exist, is two claims and neither was true.
 
 
 @dataclass(frozen=True)

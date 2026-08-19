@@ -87,11 +87,33 @@ def test_the_two_halves_name_the_same_group():
     assert PII_READER_GROUP == masking.PII_READER_GROUP
 
 
-def test_every_contract_that_is_masked_is_also_governed():
+def test_every_contract_that_is_masked_is_also_governed(monkeypatch):
     """Grants and tags are derived from `MASKED_COLUMNS` rather than listed again, so
     a contract that gains a mask gains its access control in the same edit. If these
-    ever came apart, the new masked table would be the one nothing revokes on."""
-    assert governed_contracts() == tuple(sorted(masking.MASKED_COLUMNS))
+    ever came apart, the new masked table would be the one nothing revokes on.
+
+    THE DERIVATION IS WHAT IS TESTED, AND THE FIRST VERSION OF THIS TEST DID NOT TEST IT.
+    It read `governed_contracts() == tuple(sorted(masking.MASKED_COLUMNS))` -- the
+    expected side spelled the function body character for character over the same
+    imported dict, so both sides moved together for any edit. Measured by F4's closing
+    code review: replacing the body with a frozen `return ("socios",)` left fifty-five
+    tests green. The value was pinned; the derivation was not.
+
+    THE ASYMMETRY IS WHY IT MATTERED. The MASK side of a second masked contract is
+    genuinely locked -- `tests/test_governance_job_wiring.py` derives the job's
+    `ensure_masked_table` tasks from `MASKED_COLUMNS` and holds them equal in both
+    directions -- so CI would go red until the YAML named the new table. The
+    GRANT/REVOKE/TAG side would not: `governed_tables()` reads this function, so a new
+    masked table would get no `SHOW GRANTS`, no revoke and no tags, while
+    `apply_pii_governance` printed the OLD count and exited 0. That is the half ADR 0008
+    calls the actual control."""
+    # Today's answer, as an independent literal rather than as the expression under test.
+    assert governed_contracts() == ("socios",)
+    # And the derivation itself: a contract added to the mask map must appear here
+    # without this module being edited. A frozen literal fails this and passes the line
+    # above, which is exactly the mutation that went undetected.
+    monkeypatch.setitem(masking.MASKED_COLUMNS, "zz_probe", ("some_name_column",))
+    assert governed_contracts() == ("socios", "zz_probe")
 
 
 def test_staging_is_governed_here_although_the_mask_refuses_it():
