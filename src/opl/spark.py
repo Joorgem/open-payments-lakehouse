@@ -10,10 +10,32 @@ would make this module's claim false for every test that reads it.
 import os
 import sys
 
+import pyspark
 from delta import configure_spark_with_delta_pip
 from pyspark.sql import SparkSession
 
 from opl.config import SESSION_TIMEZONE, SESSION_TIMEZONE_CONFIG
+
+# The Spark option that names the Maven coordinates a session resolves at startup.
+# Named because it is READ BACK below, and a second spelling of it would make the
+# refusal silently unable to see the package it is looking for.
+PACKAGES_CONFIG = "spark.jars.packages"
+
+# THE KAFKA CONNECTOR IS NOT BUNDLED WITH PYSPARK, measured: nothing matching `kafka`
+# ships in the wheel's `jars/`. It resolves from Maven -- 11 artifacts, 57,002 kB, ~12 s
+# on a cold Ivy cache -- which is why `local_session` takes it as an OPT-IN that defaults
+# off (F5 plan T2, pre-decided): this factory builds the session for the whole suite, and
+# putting the coordinate here unconditionally would give all 2,683 tests a Maven
+# resolution and a network dependency at session start, in a CI job that today needs
+# neither.
+#
+# THE VERSION IS DERIVED FROM THE RUNNING PYSPARK RATHER THAN PINNED, because the
+# connector artifact is versioned in lockstep with Spark and a hardcoded `3.5.9` would
+# survive a pyspark bump by resolving the WRONG connector -- a mismatch whose symptom is a
+# NoSuchMethodError inside the source, naming neither version. Scala 2.12 is not derived
+# because nothing exposes it: `delta.pip_utils.configure_spark_with_delta_pip` hardcodes
+# the same "2.12" for delta's own coordinate, so the two agree by construction.
+KAFKA_CONNECTOR_PACKAGE = f"org.apache.spark:spark-sql-kafka-0-10_2.12:{pyspark.__version__}"
 
 
 def _pin_worker_interpreter() -> None:
@@ -34,9 +56,11 @@ def _pin_worker_interpreter() -> None:
     os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
 
-def local_session(app_name: str = "opl") -> SparkSession:
-    _pin_worker_interpreter()
-    builder = (
+def _delta_builder(app_name: str) -> SparkSession.Builder:
+    """The session config itself. Split out of `local_session` for the 50-line cap only:
+    everything this project declares about a local session is still declared HERE, which
+    is the claim the module docstring makes."""
+    return (
         SparkSession.builder.appName(app_name)
         # local[2] and an explicit driver memory DECLARE what this session needs
         # instead of leaving it implicit. The failure they make legible: at
@@ -72,4 +96,53 @@ def local_session(app_name: str = "opl") -> SparkSession:
         .config("spark.sql.warehouse.dir", "./spark-warehouse")
         .config("spark.ui.enabled", "false")
     )
-    return configure_spark_with_delta_pip(builder).getOrCreate()
+
+
+def _refuse_a_session_that_cannot_read_kafka(session: SparkSession) -> None:
+    """Refuse a session whose SparkConf does not carry the Kafka connector coordinate.
+
+    WHAT IT READS IS THAT CONF AND NOTHING ELSE, so what it can refuse is a session that was
+    never ASKED for the coordinate -- not a request that was made and failed to resolve. A
+    session whose SparkConf carries the coordinate passes here on that alone: the string is
+    the whole of the evidence, and no jar is looked for.
+
+    THE HAZARD IS `getOrCreate`, NOT THE COORDINATE. `spark.jars.packages` is a STATIC
+    configuration: it is applied when the SparkContext is created and ignored on every
+    later builder. The JVM behind this factory is process-wide, so a test that took the
+    suite's ordinary session first and then asked for `kafka=True` gets the SAME
+    Kafka-less session back, silently -- and fails much later, inside `readStream`, with
+    ``Failed to find data source: kafka``, a message that names a missing data source and
+    not the session that was already open. Refusing here names the actual cause while the
+    caller still has a stack that points at it."""
+    resolved = session.sparkContext.getConf().get(PACKAGES_CONFIG, "")
+    if KAFKA_CONNECTOR_PACKAGE in resolved:
+        return
+    raise RuntimeError(
+        f"this session resolves {PACKAGES_CONFIG}={resolved!r}, which does not carry "
+        f"{KAFKA_CONNECTOR_PACKAGE}. `{PACKAGES_CONFIG}` is applied only when the "
+        "SparkContext is created, and `getOrCreate` returns the session this JVM already "
+        "has -- so a Kafka-less session was opened earlier in this process. Run the "
+        "Kafka-reading tests in their own invocation (`-m redpanda`), which is what the "
+        "marker is for."
+    )
+
+
+def local_session(app_name: str = "opl", *, kafka: bool = False) -> SparkSession:
+    """The local Delta session. `kafka=True` also resolves the Structured Streaming
+    Kafka connector from Maven.
+
+    THE ARGUMENT DEFAULTS OFF AND THAT IS THE WHOLE POINT -- see `KAFKA_CONNECTOR_PACKAGE`
+    for the cost it keeps off the 2,683 tests that do not read a broker. An argument here
+    rather than a second builder beside it because this module's docstring claims to be the
+    ONE place a local session is described, and a second builder repeating the master, the
+    driver memory, the shuffle partitions and the timezone pin would be a copy that drifts
+    -- the exact reason `tests/conftest.py` wraps this factory instead of configuring its
+    own."""
+    _pin_worker_interpreter()
+    extra_packages = [KAFKA_CONNECTOR_PACKAGE] if kafka else []
+    session = configure_spark_with_delta_pip(
+        _delta_builder(app_name), extra_packages=extra_packages
+    ).getOrCreate()
+    if kafka:
+        _refuse_a_session_that_cannot_read_kafka(session)
+    return session

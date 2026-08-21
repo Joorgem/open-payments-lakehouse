@@ -33,4 +33,19 @@ counts what the broker acknowledged; its tests need the container and carry the
 `integration` marker, which `addopts` deselects. Had the two lived in one module, the
 phase's headline property would have been provable only where a broker was running --
 which is the same shape as a claim that is checked nowhere.
+
+--- AND THE CONSUMING HALF, WHICH IS SPLIT ON A DIFFERENT SEAM ---------------------------
+
+`ingest` reads the topic back through Structured Streaming into a local Delta table, and
+`exactly_once` is F5's HEADLINE: two `foreachBatch` arms over one fault and the same
+offsets, differing only in whether the append carries Delta's `txnAppId` / `txnVersion`.
+
+The seam between those two is "the sink that is correct BY CONSTRUCTION" against "the sink
+where the guarantee has to be earned", and it is drawn there because the first cannot prove
+anything about the second. `ingest.write_payment_stream` is `format("delta")`, which is
+exactly-once whatever happens -- including when nothing ran -- so an experiment on it
+reports success under every outcome. `exactly_once` is where the batch is written by user
+code and a replay can double-write, which is the only place the property is falsifiable.
+Its NAIVE arm exists to be falsified, and if that arm ever stops duplicating, the phase has
+proven that the fault missed its window rather than that anything is exactly-once.
 """
