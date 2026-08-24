@@ -19,4 +19,10 @@ layer up: this package reads, ranks and DRAFTS. A person decides.
 incident IS. Everything downstream -- severity, sampling, blast radius, the issue
 payload -- takes a record from here and adds a column to it, so that the question "which
 runs are we triaging" has exactly one answer in this project.
+
+`evidence` is the next layer and it GRADES NOTHING: given one of those records it says
+what is actually in the workspace for it -- the quarantine census by reject reason, a
+bounded sample rendered as column STATES rather than values, and the reconciliation
+verdict or the word for its absence. Its header carries the one rule this package cannot
+leave to memory: which of its outputs may reach a public artefact and which may not.
 """
