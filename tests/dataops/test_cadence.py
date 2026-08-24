@@ -7,6 +7,9 @@ threshold to derive and one has to be declared instead. That premise is a fact a
 declaration whose reason has quietly become false is worse than no declaration."""
 from __future__ import annotations
 
+import importlib.util
+import sys
+
 import pytest
 import yaml
 from job_yaml import RESOURCES
@@ -142,3 +145,68 @@ def test_the_known_ref_date_rule_gap_is_still_exactly_lookup():
         f"the set of tables carrying _snapshot_ref_date with no rule refusing a NULL in it "
         f"is now {sorted(gap)}. rules.py records exactly one, and calls it a known gap"
     )
+
+
+def _reimported_cadence():
+    """A SECOND execution of `cadence.py`'s module body, from its own file.
+
+    Not `importlib.reload`, which would rebind the module every other test in this suite
+    imported from. This builds a throwaway module under a throwaway NAME and runs the body
+    -- which is the only way to observe what the import-time CALLS do.
+
+    THE THROWAWAY NAME IS ENTERED IN `sys.modules` AND REMOVED AGAIN, which the sibling
+    version of this helper in `tests/triage_agent/test_incidents_declaration.py` does not
+    have to do.
+    `cadence.py` declares a `@dataclass` under `from __future__ import annotations`, so its
+    field annotations are STRINGS, and `dataclasses` resolves them by looking the defining
+    class's `__module__` up in `sys.modules` -- which raises `AttributeError: 'NoneType'`
+    on a module that is not there. Registering under `_cadence_reimported` rather than
+    under `opl.dataops.cadence` is what keeps the real module bound for everyone else."""
+    spec = importlib.util.spec_from_file_location(
+        "opl.dataops._cadence_reimported", cadence_module.__file__
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        del sys.modules[spec.name]
+    return module
+
+
+def _declaration(module) -> dict[str, tuple]:
+    """`CADENCE` as plain fields, so two executions of the module can be compared.
+
+    NOT `==` ON THE DATACLASSES. The re-executed module defines its OWN `Cadence` class, and
+    `dataclass.__eq__` returns `NotImplemented` for an instance of a different class -- so
+    equal declarations compare unequal, which is an artefact of the re-execution and not a
+    fact about either declaration."""
+    return {
+        table: (cadence.kind, cadence.every_days, cadence.why)
+        for table, cadence in module.CADENCE.items()
+    }
+
+
+def test_the_guards_run_at_import_so_deleting_the_call_is_a_failure_not_a_silent_loss(
+    monkeypatch,
+):
+    """The half every `pytest.raises` sibling above leaves open, closed here.
+
+    Each of the four refusals in this file is paired with a test that calls it on a broken
+    declaration and requires a raise. NONE of them proves the refusals RUN. Measured
+    2026-08-24: deleting all four calls at the bottom of `cadence.py` left this file at
+    `10 passed` -- every guard still provably able to fail, and none of them wired to
+    anything. That is this repository's most-hunted species one level up: not a check that
+    cannot fail, but a check that can fail and is never asked.
+
+    So `REGISTRY` gains a table no cadence declares and the module body is executed again;
+    the ValueError has to come out of the IMPORT. With the calls deleted, the re-execution
+    returns a module and this fails.
+
+    The first line is the control: re-executing an UNMUTATED module must succeed, or the
+    raise below could be about the re-execution rather than about the declaration."""
+    assert _declaration(_reimported_cadence()) == _declaration(cadence_module)
+
+    monkeypatch.setitem(REGISTRY, "a_table_no_cadence_declares", REGISTRY["ptax"])
+    with pytest.raises(ValueError, match="not total over the bronze registry"):
+        _reimported_cadence()
