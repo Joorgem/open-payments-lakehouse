@@ -49,6 +49,13 @@ code and a replay can double-write, which is the only place the property is fals
 Its NAIVE arm exists to be falsified, and if that arm ever stops duplicating, the phase has
 proven that the fault missed its window rather than that anything is exactly-once.
 
+`managed_broker` IS NOT A FOURTH CONSUMER. It reads nothing and lands nothing: it holds the
+two things that differ when `ingest` is pointed at the MANAGED cluster instead of the local
+container -- the JVM client's spelling of a SASL_SSL credential, and the row floor a run
+declares at launch. The T8 job composes it with `ingest`; it does not replace it, and if it
+ever grows a read of its own then this package has the second spelling of ingest that F5's
+plan spends a paragraph refusing.
+
 `watermarked_dedup` IS THE THIRD, and it is cut on a question neither of those two asks:
 not where the bytes go, but WHICH ROWS ARRIVE IN TIME TO COUNT. Its chain is
 `withWatermark -> dropDuplicatesWithinWatermark` and its product is the DIFFERENCE between

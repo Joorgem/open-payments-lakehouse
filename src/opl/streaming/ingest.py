@@ -55,9 +55,29 @@ return and pins the LANDED row count at 24 instead, and the fifth is the second 
 drained checkpoint, which is the refusal below firing. So: the default is the floor that
 lives in SHIPPED code and catches the drained checkpoint; the exact count is the assertion
 that lives in the caller and catches everything between 1 and the truth.
+
+--- TWO DOORS T8 OPENED, AND NEITHER IS A SECOND SPELLING OF THIS MODULE ------------------
+
+The managed-broker job reads the SAME topic layout through THIS function, which is the
+whole point of it existing -- so what it needed was two parameters, not a second ingest.
+
+  * `broker_options` on the read. The managed cluster is SASL_SSL, and the JVM client's
+    spelling of that credential is `opl.streaming.managed_broker`'s subject rather than
+    this one's. What is this module's business is that a caller must not be able to hand
+    in an option that re-decides something decided HERE:
+    `_refuse_options_that_reopen_a_decision` refuses `startingOffsets` above all, because a
+    caller-supplied `latest` would walk straight around the refusal three paragraphs up
+    -- through the parameter added to support it.
+  * `table` on the write, as an alternative to `path`. On the deploy target the two are
+    not interchangeable: Unity Catalog does not let a Delta table be created inside a
+    Volume, so a serverless run has a NAME to write to and no writable path, while every
+    local test has a tmp dir and no catalog. Exactly one of the two, refused otherwise --
+    passing both leaves the destination ambiguous, and passing neither is no destination
+    at all.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pyspark.sql import DataFrame, SparkSession
@@ -82,6 +102,24 @@ KAFKA_COLUMNS = (*PROCESSING_IDENTITY, VALUE_COLUMN)
 # not, for the reason the module docstring gives.
 EARLIEST = "earliest"
 LATEST = "latest"
+
+# Every reader option `payment_stream` decides for itself. A caller-supplied option under
+# one of these names is refused rather than merged, and `startingOffsets` is why the set
+# exists at all: silently letting a caller re-spell it would reopen the `latest` hole this
+# module refuses in shipped code, through the door that was opened to carry SASL.
+DECIDED_READER_OPTIONS = frozenset(
+    {
+        "kafka.bootstrap.servers",
+        "subscribe",
+        "startingOffsets",
+        "failOnDataLoss",
+        "maxOffsetsPerTrigger",
+    }
+)
+
+# The same names folded for comparison. See `_refuse_options_that_reopen_a_decision` for
+# why the refusal cannot be an exact-spelling one.
+_DECIDED_FOLDED = frozenset(name.lower() for name in DECIDED_READER_OPTIONS)
 
 
 def _assert_the_kafka_columns_do_not_shadow_the_contract() -> None:
@@ -136,6 +174,31 @@ def _refuse_offsets_that_can_read_nothing(starting_offsets: str) -> None:
     )
 
 
+def _refuse_options_that_reopen_a_decision(options: Mapping[str, str]) -> None:
+    """Refuse a caller option that re-spells one this function decides. See
+    `DECIDED_READER_OPTIONS` for why `startingOffsets` is the one that matters.
+
+    CASE-INSENSITIVELY, BECAUSE THE READER IT PROTECTS IS. Measured on a `readStream` in
+    this project's own session: `.option("header", "true").option("HEADER", "false")`
+    returns the header row AS DATA, and the reverse order does not -- so the streaming
+    reader folds an option's name and the LAST spelling wins. The caller's options are
+    applied after this function's own (see `payment_stream`), which makes the caller's
+    spelling the later one. An exact-match refusal would therefore have refused
+    `startingOffsets` and accepted `STARTINGOFFSETS`, which reaches the same source
+    option, overrides the same decision, and is the same hole."""
+    collisions = sorted(name for name in options if name.lower() in _DECIDED_FOLDED)
+    if not collisions:
+        return
+    raise ValueError(
+        f"broker_options carries {collisions}, which this function decides for itself. "
+        "This door exists to carry a broker's SECURITY settings; an option that re-spells "
+        f"{sorted(DECIDED_READER_OPTIONS)} would move a decision out of shipped code -- "
+        f"and for startingOffsets that decision is the refusal of {LATEST!r}, which reads "
+        "zero records over an already-published topic and makes every count downstream "
+        "true and worthless."
+    )
+
+
 def payment_stream(
     spark: SparkSession,
     *,
@@ -143,6 +206,7 @@ def payment_stream(
     bootstrap: str,
     starting_offsets: str = EARLIEST,
     max_offsets_per_trigger: int | None = None,
+    broker_options: Mapping[str, str] | None = None,
 ) -> DataFrame:
     """The streaming read of `topic`: Kafka coordinates, raw value, and parsed contract
     columns.
@@ -150,8 +214,14 @@ def payment_stream(
     `max_offsets_per_trigger` is what splits ONE `availableNow` run into several
     micro-batches -- deterministically, because the offsets are fixed before the run
     starts. T3 needs more than one batch to have a batch to fault, and this is the only
-    knob that produces them without introducing a clock."""
+    knob that produces them without introducing a clock.
+
+    `broker_options` is how a SASL_SSL broker's `kafka.*` settings reach the reader without
+    this module learning a second protocol -- `opl.streaming.managed_broker` builds them.
+    An empty mapping is the local PLAINTEXT container and is the default."""
     _refuse_offsets_that_can_read_nothing(starting_offsets)
+    options = dict(broker_options or {})
+    _refuse_options_that_reopen_a_decision(options)
     reader = (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", bootstrap)
@@ -163,6 +233,13 @@ def payment_stream(
         # through the broker's retention policy instead of through a test's options.
         .option("failOnDataLoss", "true")
     )
+    # One `.option` per entry rather than `.options(**broker_options)`: these keys carry
+    # dots, and `**` unpacking of non-identifier keys is a CPython permission rather than a
+    # documented part of PySpark's signature. The loop needs no such permission, and it
+    # also keeps `DECIDED_READER_OPTIONS`' derivation above honest -- the literals a
+    # reviewer can see are the ones this function decides.
+    for key, value in options.items():
+        reader = reader.option(key, value)
     if max_offsets_per_trigger is not None:
         reader = reader.option("maxOffsetsPerTrigger", max_offsets_per_trigger)
     return _projected(reader.load())
@@ -218,15 +295,36 @@ def _refuse_a_run_that_processed_nothing(input_rows: int, minimum_rows: int, top
     )
 
 
+def _start_at_the_one_destination(writer, path: str | None, table: str | None):
+    """Start the query at exactly one of a path or a catalog name, or refuse.
+
+    THE TWO ARE NOT INTERCHANGEABLE ON THE DEPLOY TARGET, which is why this is a refusal
+    and not a default. Unity Catalog does not let a Delta table be created inside a Volume,
+    so a serverless run has a NAME and no writable path; a local test has a tmp dir and no
+    catalog. Both arguments would leave it ambiguous which one the run's counts describe,
+    and passing neither is no destination at all."""
+    if (path is None) == (table is None):
+        raise ValueError(
+            f"pass exactly one of `path` ({path!r}) or `table` ({table!r}). A path is a "
+            "Delta location -- what every local run of this uses -- and a table is a Unity "
+            "Catalog name, which is what a serverless run has, because UC refuses a Delta "
+            "table inside a Volume. Two destinations, or none, is a run whose row counts "
+            "describe nothing in particular."
+        )
+    return writer.start(path) if table is None else writer.toTable(table)
+
+
 def write_payment_stream(
     frame: DataFrame,
     *,
-    path: str,
+    path: str | None = None,
+    table: str | None = None,
     checkpoint: str,
     topic: str,
     minimum_rows: int = 1,
 ) -> IngestedStream:
-    """Run `frame` to completion into the Delta table at `path`. THE T2 SINK.
+    """Run `frame` to completion into the Delta table at `path` or named `table`. THE T2
+    SINK.
 
     `format("delta")` DELIBERATELY, AND THAT IS WHY IT PROVES NOTHING ABOUT EXACTLY-ONCE.
     This sink is exactly-once BY CONSTRUCTION -- it commits the batch id into the Delta log
@@ -238,13 +336,19 @@ def write_payment_stream(
     `availableNow` rather than `once` or a continuous trigger: it drains everything the
     broker holds and STOPS, which is what makes a run a measurement rather than a
     subscription -- and, unlike `once`, it still honours `maxOffsetsPerTrigger`, so the
-    multi-batch split T3 depends on survives."""
-    query = (
+    multi-batch split T3 depends on survives.
+
+    EXACTLY ONE OF `path` AND `table` -- see `_start_at_the_one_destination`. Everything
+    else about the query is identical between them, deliberately: the checkpoint, the
+    trigger, the progress reading and the floor are what make a run a measurement, and none
+    of them is a function of where the rows land."""
+    query = _start_at_the_one_destination(
         frame.writeStream.format("delta")
         .outputMode("append")
         .option("checkpointLocation", checkpoint)
-        .trigger(availableNow=True)
-        .start(path)
+        .trigger(availableNow=True),
+        path,
+        table,
     )
     query.awaitTermination()
     batch_ids, input_rows = _progress_of(query, frame.sparkSession)

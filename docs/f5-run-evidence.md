@@ -519,3 +519,118 @@ file positions** at lag 2 and at neither 1 nor 3.
 session start and one 58-batch arm. The fixed costs dominate, so it is **not** a third of the file;
 the full file runs three arms and costs more than the 16–20 min the two-arm version measured on this
 Windows box.
+
+### 2.5 T8 — THE MANAGED BROKER FROM A SERVERLESS JOB, published 2026-08-23 before any workspace run
+
+**Written by the implementer of T8, before the job existed in the workspace.** The job is built, the
+bundle validates and the run is the controller's; everything below can be wrong, and each clause says
+how.
+
+> **T8 IS NOT THE EXACTLY-ONCE PROOF.** That is §2.1/§2.2, it runs locally, and it stays local because
+> it needs a fault injected between the data commit and the offset commit — a serverless task is the
+> one place this project cannot kill a process on purpose. T8's sink is `format("delta")`, which is
+> exactly-once **by construction** and would therefore report success under every outcome §2.2 exists
+> to tell apart. Anyone reading this section as "the real proof, now on real infrastructure" has the
+> phase backwards.
+
+**What T8 claims instead, in one sentence:** this lakehouse ingests an event **stream** on the
+platform it deploys to, closing the one honest gap in the four-sources claim — until now, event
+streams reached the workspace only as **files**.
+
+#### The state of the topic before the run — Reported, measured from this box 2026-08-23
+
+The shipped code (`payment_stream` + `sasl_reader_options`, local Spark, the OSS login-module class)
+read the managed cluster over SASL_SSL and drained the topic:
+
+```
+OPTIONS | kafka.sasl.jaas.config=<withheld: carries the SASL password>, kafka.sasl.mechanism=SCRAM-SHA-256, kafka.security.protocol=SASL_SSL
+READ | OK | input_rows=1 batches=(0,)
+LANDED | 1 rows | partitions [2]
+  row | Row(kafka_partition=2, kafka_offset=0, transaction_id=None)
+```
+
+**So `opl-payments` holds exactly one record today** — §1.2's `opl-cloud-probe-…`, on partition 2 at
+offset 0 — **and it is not a payment.** `transaction_id` is NULL because `from_json` yields a struct
+of NULLs for a value it cannot parse, and `kafka_value` keeps its bytes. That is the column doing the
+job `opl.streaming.ingest` says it is kept for.
+
+**AND THAT SAME READ IS WHAT MEASURES `OSS_SCRAM_LOGIN_MODULE`, WHICH SHIPPED PROSE CALLED
+UNMEASURED.** The same session, credential and broker, handed `DATABRICKS_SCRAM_LOGIN_MODULE`
+instead, never reaches the broker at all:
+
+```
+Caused by: javax.security.auth.login.LoginException: No LoginModule found for kafkashaded.org.apache.kafka.common.security.scram.ScramLoginModule
+```
+
+So the two constants are a **measured pair** rather than one measurement and one label: the shaded
+class is on serverless's classpath (§1.2, job run `382097683531247`) and is **not loadable here**;
+the unshaded one is loadable here and read the row above. Two files in this change-set had said the
+OSS constant was *"a constant no run has exercised"* — **while this section recorded the run that
+necessarily used it**, because the shaded name cannot load off Databricks. Both were corrected by
+measuring the second arm rather than by softening the first.
+
+#### The predictions, in the form that can be wrong
+
+1. **The launch refuses before a session starts** unless `minimum_rows` is a positive whole number.
+   The YAML default is a sentinel; `require_minimum_rows` refuses it, and it refuses `0` as well —
+   `0` is the value that would turn the floor into a switch for disabling itself.
+2. **`input_rows` equals the number of records on the topic at launch**, which is `1` plus whatever
+   the producer publishes beforehand. It is read from Spark's own progress, not from the sink.
+3. **The landed table holds exactly `input_rows` rows**, and the probe record among them carries NULL
+   contract columns beside a non-NULL `kafka_value`.
+4. **A second attempt of the same task consumes 0 and FAILS** rather than reporting a second green
+   run — the checkpoint is fixed, so a retry resumes a drained stream and the floor refuses. It also
+   cannot double-write: the Delta sink commits the micro-batch id transactionally with the rows.
+   `max_retries: 0` does not prevent a retry (24 `(job_run_id, task_key)` pairs have run twice on this
+   workspace), so this is the arm that has to be safe, not the happy one.
+5. ~~**No `[REDACTED]` appears anywhere in the task output**~~ — **narrowed before the run, because
+   as written it could not be read.** **The task's own two `stream_managed_broker:` lines carry no
+   `[REDACTED]`**, and the first renders `kafka.sasl.jaas.config` as
+   `<withheld: carries the SASL password>`. §1.2 measured that a secret's value is scrubbed from every
+   line; the USERNAME is no longer a secret, so those two lines are the control for that repair.
+   **The BOOTSTRAP still is a secret, deliberately** — and the Kafka client logs `bootstrap.servers`
+   at INFO by design — so a `[REDACTED]` elsewhere in the output is that secret being scrubbed as
+   intended and does **not** falsify this. The original clause would have been falsified by the
+   platform working correctly, which is a prediction that cannot distinguish its two outcomes.
+
+#### What falsifies each, and none of these is a platform failure
+
+- **A `javax.security.auth.login.LoginException: No LoginModule found for
+  kafkashaded.…ScramLoginModule`** falsifies the one constant no local run can check. That is the
+  exact string local OSS Spark produces for that name — measured above — so the failure *mode* is
+  known and only the platform it appears on is in question. ~~This bullet first named a
+  `ClassNotFoundException`, which is not what either runtime emits.~~ §1.2's probe used that spelling on serverless and read a row, so it is measured
+  — but by a **batch** read (`spark.read`), and T8 is the first **streaming** read of Kafka on this
+  compute. If the shaded name were wrong, nothing local would ever have said so.
+- **`input_rows` larger than the topic held** means the checkpoint was not the one this run thought it
+  was — the same shape as the month-scoped Auto Loader hazard, reached through a different door.
+- **`input_rows` of 1 after a publish** means the producer did not reach this broker, not that the read
+  is short: the two brokers share the topic name `opl-payments` and differ only in the bootstrap.
+- **A green second run** falsifies prediction 4 and means the floor is not where this document says.
+- **A metadata timeout** is one string across four worlds (expired trial, revoked ACL, wrong username,
+  no route) — ADR 0018's species, and the reason the trial's expiry date is written down rather than
+  left to be inferred from an error.
+
+#### What `describe_reader_options` does not cover, so it is not read as more than it is
+
+**Reported** by T8's independent reviewer, measured by them rather than by the controller: the JAAS
+option value is carried in the DataFrame's **logical plan**, so it is recoverable from an `explain()`
+on the frame before the query starts — `Parsed`, `Analyzed` and `Optimized` all carry it; the
+physical plan and a failed query's traceback did not. Nothing this task runs calls `explain()`, and
+the withheld-value line is a statement about what the task **prints**, not about what the plan holds.
+
+**What covers the plan is the platform, not this repository.** Databricks replaces every occurrence
+of a secret's value in task output — which is exactly why the password, and only the password, is in
+the scope. Spark's own `spark.redaction.regex` keys on `secret|password|token` and
+`kafka.sasl.jaas.config` matches none of them, so it is not a second defence.
+
+#### The broker is temporary, and the job says so in its own header
+
+The trial's credits expire **~2026-09-03** and the cluster then stops answering.
+`databricks/resources/streaming_managed_broker_job.yml` is therefore a **recorded run, not a job a
+future reader can run green**, and the table it lands —
+`workspace.default.streaming_payments_managed_broker` — is deliberately **not** registered in
+`opl.bronze.REGISTRY`: F4's `dataops_reconciliation` and `dataops_freshness` are total over that
+registry, so registering it would leave a permanent stale row in a freshness view for a source nobody
+can refresh. **When the broker goes away, say so here**, or the next reader re-runs the job, gets a
+connection failure, and reads a dead trial account as a regression in this repository.

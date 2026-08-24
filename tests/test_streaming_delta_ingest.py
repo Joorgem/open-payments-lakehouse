@@ -10,7 +10,9 @@ is running.
 """
 from __future__ import annotations
 
+import ast
 import inspect
+import textwrap
 
 import pytest
 
@@ -18,6 +20,7 @@ from opl.contracts.payments import COLUMNS
 from opl.spark import KAFKA_CONNECTOR_PACKAGE, PACKAGES_CONFIG, local_session
 from opl.streaming import ingest
 from opl.streaming.ingest import (
+    DECIDED_READER_OPTIONS,
     KAFKA_COLUMNS,
     LATEST,
     PROCESSING_IDENTITY,
@@ -231,6 +234,126 @@ def test_the_default_floor_refuses_zero_and_a_short_read_is_not_its_job():
     # ...and only an explicit floor sees the short read the default let through.
     with pytest.raises(RuntimeError, match="consumed 1 records"):
         ingest._refuse_a_run_that_processed_nothing(1, 29, "t")
+
+
+class _FakeWriter:
+    """A `DataStreamWriter` reduced to its two terminal methods, each recording the
+    destination it was given. Neither returns a query, because `_start_at_the_one_
+    destination` is the only thing under test and it does nothing with the return."""
+
+    def __init__(self) -> None:
+        self.started: list[tuple[str, str | None]] = []
+
+    def start(self, path):
+        self.started.append(("start", path))
+
+    def toTable(self, table):  # noqa: N802 -- Spark's spelling, not this project's
+        self.started.append(("toTable", table))
+
+
+def _spelled_option_names() -> set[str]:
+    """Every literal `payment_stream` hands to `.option(...)`, read off its own source."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(payment_stream)))
+    return {
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "option"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+    }
+
+
+def test_the_refused_option_names_are_exactly_the_ones_the_reader_spells_itself():
+    """THE LOCK THAT KEEPS THE REFUSAL LIST FROM ROTTING, and it is not bookkeeping.
+
+    `broker_options` was added so a SASL_SSL broker's settings could reach the reader; the
+    price is that a caller can now hand in ANY reader option. `DECIDED_READER_OPTIONS` is
+    what stops one of them re-deciding something this function decided -- and a list that
+    is maintained by hand goes stale in the direction that reports green: an option added
+    to the reader and not to the frozenset becomes overridable by a caller, silently.
+
+    Derived from the FUNCTION'S OWN SOURCE, so the two can only agree by being the same
+    thing. `startingOffsets` is why the property matters: a caller-supplied `latest` would
+    walk around the refusal in shipped code, through the parameter added to support SASL."""
+    assert _spelled_option_names() == set(DECIDED_READER_OPTIONS)
+    assert "startingOffsets" in DECIDED_READER_OPTIONS
+
+
+@pytest.mark.parametrize("name", sorted(DECIDED_READER_OPTIONS))
+def test_a_broker_option_that_re_decides_a_reader_decision_is_refused(name):
+    """Every one of them, and BEFORE the session is touched -- `None` is passed as the
+    session for `test_a_read_that_would_start_after_the_corpus_is_refused`'s reason: a
+    refusal placed after `spark.readStream` would raise AttributeError here instead."""
+    with pytest.raises(ValueError, match="which this function decides for itself"):
+        payment_stream(
+            None, topic="t", bootstrap="localhost:9092", broker_options={name: "x"}
+        )
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["startingOffsets", "STARTINGOFFSETS", "startingoffsets", "StartingOffsets"],
+)
+def test_the_refusal_folds_case_because_the_reader_it_protects_folds_case(spelling):
+    """FOUR SPELLINGS OF ONE OPTION, and the reader reads them as one.
+
+    Measured on a `readStream` in this project's own session: `.option("header", "true")`
+    followed by `.option("HEADER", "false")` returns the header row AS DATA, and the
+    reverse order does not -- so the name is folded and the LAST spelling wins.
+    `payment_stream` applies the caller's options AFTER its own, which makes the caller's
+    the later one. An exact-match refusal would have refused `startingOffsets` and accepted
+    `STARTINGOFFSETS`, which reaches the same option and overrides the same decision -- and
+    `latest` over an already-published topic reads zero records, the one outcome no count
+    downstream can tell from success."""
+    with pytest.raises(ValueError, match="which this function decides for itself"):
+        payment_stream(
+            None, topic="t", bootstrap="localhost:9092", broker_options={spelling: LATEST}
+        )
+
+
+def test_the_security_options_a_managed_broker_needs_pass_the_refusal():
+    """THE FLOOR UNDER THE SWEEP ABOVE: a refusal that rejected everything would satisfy it
+    and would make the SASL door unusable. These three are what
+    `opl.streaming.managed_broker.sasl_reader_options` returns."""
+    ingest._refuse_options_that_reopen_a_decision(
+        {
+            "kafka.security.protocol": "SASL_SSL",
+            "kafka.sasl.mechanism": "SCRAM-SHA-256",
+            "kafka.sasl.jaas.config": "<a jaas string>",
+        }
+    )
+    ingest._refuse_options_that_reopen_a_decision({})
+
+
+@pytest.mark.parametrize(
+    ("path", "table"), [(None, None), ("/tmp/sink", "workspace.default.t")]
+)
+def test_a_sink_with_two_destinations_or_none_is_refused(path, table):
+    """Neither is no destination at all; both is a run whose counts describe nothing in
+    particular. Refused rather than defaulted, because on the deploy target the two are not
+    interchangeable -- Unity Catalog will not create a Delta table inside a Volume, so a
+    serverless run has a NAME and no writable path, and a local test has the reverse."""
+    with pytest.raises(ValueError, match="exactly one of `path`"):
+        ingest._start_at_the_one_destination(_FakeWriter(), path, table)
+
+
+@pytest.mark.parametrize(
+    ("path", "table", "expected"),
+    [
+        ("/tmp/sink", None, ("start", "/tmp/sink")),
+        (None, "workspace.default.t", ("toTable", "workspace.default.t")),
+    ],
+)
+def test_each_destination_reaches_the_writer_method_that_can_take_it(path, table, expected):
+    """`start(path)` and `toTable(name)` are different methods, and handing a catalog name
+    to `start` creates a Delta table in a DIRECTORY LITERALLY CALLED
+    `workspace.default.t` -- which succeeds, locally, and is discovered by a reader who
+    cannot find the table."""
+    writer = _FakeWriter()
+    ingest._start_at_the_one_destination(writer, path, table)
+    assert writer.started == [expected]
 
 
 def test_the_kafka_columns_are_the_processing_identity_plus_the_record():
