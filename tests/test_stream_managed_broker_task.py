@@ -222,6 +222,49 @@ def test_a_secret_stored_blank_is_refused_by_name(monkeypatch, key, blank):
         TASK._broker()
 
 
+@pytest.mark.parametrize("padded", ["seed.example:9092\n", " seed.example:9092", "secret\n"])
+@pytest.mark.parametrize("key", ["kafka_bootstrap", "kafka_password"])
+def test_a_secret_stored_with_surrounding_whitespace_is_refused_by_name(
+    monkeypatch, key, padded
+):
+    """THE ARM THE BLANK CHECK LOOKED LIKE IT COVERED AND DID NOT.
+
+    `_secret` tested `value.strip()` and returned `value`: it VALIDATED one string and
+    RETURNED another. A scope value set with a trailing newline -- which is what a paste out
+    of a terminal or a file carries -- therefore passed the blank test and reached the
+    broker with the newline on it, where it fails the SCRAM exchange or resolves as a host
+    nobody is listening on. Both come back as the ONE ERROR STRING this task's neighbours
+    exist to stop having a fifth cause (ADR 0018 counts four).
+
+    THE COMPARISON NEXT DOOR IS WHAT MADE IT VISIBLE.
+    `opl.streaming.managed_broker.require_minimum_rows` strips what it parses; this did not,
+    and the two sit four lines apart in the same task's call graph.
+
+    REFUSED, NOT TRIMMED, and the accepted case below is where that is asserted: a value
+    with no padding comes back BYTE FOR BYTE, so a repair that normalised instead would be
+    caught here rather than in a broker's error text."""
+    values = {"kafka_bootstrap": "seed.example:9092", "kafka_password": "not-the-real-one-0000"}
+    _stub_the_runtime(monkeypatch, {**values, key: padded})
+    with pytest.raises(ValueError, match=f"secret opl/{key} has leading or trailing"):
+        TASK._broker()
+
+
+def test_an_unpadded_secret_is_returned_exactly_as_the_scope_holds_it(monkeypatch):
+    """THE FLOOR UNDER THE REFUSAL ABOVE, and the half that says it is a refusal.
+
+    A guard that trimmed would pass every case above and change what the broker is handed;
+    a guard that refused everything would pass them too and stop the task dead. So the
+    accepted value is compared for equality with what the scope holds, and it is one whose
+    INTERIOR spacing would not survive a `.strip()` mistake spelled as `.replace`."""
+    interior = "seed.example:9092,seed2.example:9092"
+    _stub_the_runtime(
+        monkeypatch, {"kafka_bootstrap": interior, "kafka_password": "not the real one"}
+    )
+    broker = TASK._broker()
+    assert broker.bootstrap == interior
+    assert broker.password == "not the real one"
+
+
 def test_no_print_in_this_task_names_the_option_mapping_or_the_broker():
     """ONE OF THE OPTION VALUES IS THE PASSWORD, and this run's output is what the evidence
     document quotes from.

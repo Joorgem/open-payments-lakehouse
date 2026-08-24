@@ -27,8 +27,14 @@ smaller domain in its docstring, and it is smaller on purpose.
 WHY BOTH FORMS ARE STATED, AND WHICH ONE BELONGS ON WHICH SIDE. A Kafka topic with more
 than one partition has NO GLOBAL ORDER: a consumer reading three partitions may interleave
 them any way the broker hands them over, so the strongest thing a CONSUMER can assert is
-the multiset -- and that is the form `tests/test_payment_streaming.py` asserts after
-consuming. On the PRODUCE side the order is known, because it is the order this function
+the multiset -- and that is the form
+`tests/integration/test_payment_streaming_live.py` asserts after consuming, in
+`test_a_three_partition_topic_returns_the_same_multiset`, over a topic that really has
+three partitions and with a floor that more than one of them was used. NOTHING IN
+`tests/test_payment_streaming.py` CONSUMES ANYTHING: that file is the produce side
+throughout, and an earlier version of this paragraph named it here -- which put the
+consumer's half of the claim in a file with no consumer in it. On the PRODUCE side the
+order is known, because it is the order this function
 returns and the order `producer.publish_records` hands to the client, so the stronger
 ordered form is available there. It is also the only form that can be compared against a
 GOLDEN DIGEST at all: a digest is taken over a byte string, and turning a multiset into a

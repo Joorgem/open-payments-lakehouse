@@ -63,4 +63,13 @@ one corpus read at two watermark delays. It sits DOWNSTREAM of the seam above ra
 across it -- it lands through `ingest.write_payment_stream` instead of replacing it -- and
 that is the right way round precisely because what it measures is the watermark and not the
 write, so a sink that is exactly-once by construction is one fewer thing in the way.
+
+`lateness` IS NOT A FOURTH CONSUMER EITHER, on `managed_broker`'s model. It reads nothing
+and lands nothing: it is the ARITHMETIC that places one of `watermarked_dedup`'s arguments
+-- the two watermark delays -- over the delivered corpus and a rate limit, with no session,
+no socket and no clock in it. That is the seam: a prediction which could only be computed
+by starting the run it predicts is not a prediction, and this half imports no pyspark, so
+the delays a phase publishes before its run are guarded by a test that needs no JVM. The
+chain itself is NOT what was split, and must not be: `watermarked_dedup`'s own opening
+paragraph is where that argument lives.
 """

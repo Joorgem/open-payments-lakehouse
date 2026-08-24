@@ -48,13 +48,28 @@ everything" from a silent zero into a named failure.
 AND THE DEFAULT IS A FLOOR AGAINST ZERO, NOT AGAINST A SHORT READ -- stated here because
 "a non-zero floor" reads like the stronger promise and is not it. `minimum_rows=1` accepts
 a run that consumed 1 of 29 records; the only thing it refuses is 0. A SHORT read is caught
-one level up, by callers that state the exact count they expect. Every call of this function
-today is in `tests/integration/test_payment_stream_ingest.py` and all five take the DEFAULT:
-three then assert the `input_rows` they predicted (24, 29 and 24), a fourth discards the
-return and pins the LANDED row count at 24 instead, and the fifth is the second run over a
-drained checkpoint, which is the refusal below firing. So: the default is the floor that
-lives in SHIPPED code and catches the drained checkpoint; the exact count is the assertion
-that lives in the caller and catches everything between 1 and the truth.
+one level up, by callers that state the exact count they expect.
+
+SEVEN CALL SITES, AND THE FIVE THAT TAKE THE DEFAULT ARE THE FIVE IN ONE TEST FILE. In
+`tests/integration/test_payment_stream_ingest.py` all five take it: three then assert the
+`input_rows` they predicted (24, 29 and 24), a fourth discards the return and pins the
+LANDED row count at 24 instead, and the fifth is the second run over a drained checkpoint,
+which is the refusal below firing.
+
+THE OTHER TWO DECLARE A FLOOR, AND NEITHER IS A TEST OF THIS FUNCTION.
+`opl.streaming.watermarked_dedup.run_arm` passes its own caller's number straight through,
+which is 10,150 in the F5 late-arrival run -- so an arm that consumed a short prefix is
+refused here rather than reported downstream as a small drop.
+`databricks/src/stream_managed_broker.py` passes the count declared AT LAUNCH: that task's
+whole product is the number it prints, which is why `managed_broker.require_minimum_rows`
+refuses a run that was handed none at all. AN EARLIER VERSION OF THIS PARAGRAPH SAID EVERY
+CALL WAS IN THAT TEST FILE. It was true when it was written, in `6ea3cfa`, and both of
+those two arrived later on the same branch -- `run_arm`'s in `f5d9abd` and the task's in
+`c19ea0b` -- which is the shape of staleness a universal invites and a count does not.
+
+So: the default is the floor that lives in SHIPPED code and catches the drained checkpoint;
+the exact count is the assertion that lives in the caller and catches everything between 1
+and the truth.
 
 --- TWO DOORS T8 OPENED, AND NEITHER IS A SECOND SPELLING OF THIS MODULE ------------------
 
@@ -85,6 +100,28 @@ returned would turn the one guard here that cannot fire in a shipped run into a 
 a check whose output cannot tell "verified" from "could not look" -- so `RingBufferReading`
 carries WHICH argument ruled truncation out, or that none did, and a run prints it beside
 its count.
+
+--- HOW FAR THE SHIPPED RUNS SIT FROM THAT REFUSAL, AND WHAT THE DISTANCE IS MEASURED IN ---
+
+`_progress_of` refuses a total taken over a ring that has REACHED its cap. That refusal has
+never fired, and this section is here because the count an earlier version of its docstring
+quoted was wrong by more than an order of magnitude -- 1 and 3 consuming batches, written
+after three runs of 77, 77 and 58 had already gone through this function.
+
+THE CONSUMING-BATCH COUNTS ASSERTED ANYWHERE IN THIS TREE are 1 and 3 in
+`tests/integration/test_payment_stream_ingest.py` (`batch_ids == (0,)` and `== (0, 1, 2)`)
+and 77, 77 and 58 in `tests/integration/test_late_arrival_boundary.py`'s three arms. The
+SEVENTH call site's run -- the managed broker's -- prints its `batch_ids` and pins them
+nowhere, so it is absent from that list rather than covered by it.
+
+AND THE COMPARISON IS NOT OVER THOSE COUNTS. It is over EVERY progress update, and a
+stateful `availableNow` query adds a trailing one that consumes nothing -- measured in that
+file's falsifier checkpoint, `commits` 0..58 over 58 consuming batches -- so each stateful
+arm above stands one nearer the cap than its own count reads.
+`opl.streaming.lateness.boundary_for`'s docstring WRITES DOWN the floor that follows over
+that corpus, 104 records a trigger, and does NOT enforce it: it accepts every limit from 1
+up, and 103 of the limits it accepts would fail here instead. Loosening a shipped refusal
+that nothing forced is not this fix's business.
 """
 from __future__ import annotations
 
@@ -307,11 +344,18 @@ def _refuse_options_that_reopen_a_decision(options: Mapping[str, str]) -> None:
     CASE-INSENSITIVELY, BECAUSE THE READER IT PROTECTS IS. Measured on a `readStream` in
     this project's own session: `.option("header", "true").option("HEADER", "false")`
     returns the header row AS DATA, and the reverse order does not -- so the streaming
-    reader folds an option's name and the LAST spelling wins. The caller's options are
-    applied after this function's own (see `payment_stream`), which makes the caller's
-    spelling the later one. An exact-match refusal would therefore have refused
-    `startingOffsets` and accepted `STARTINGOFFSETS`, which reaches the same source
-    option, overrides the same decision, and is the same hole."""
+    reader folds an option's name and the LAST spelling wins. In `payment_stream` the
+    caller's options are applied after FOUR of the five names below -- `startingOffsets`
+    among them, which is the one this refusal exists for -- so for those the caller's
+    spelling is the later one and would win. An exact-match refusal would therefore have
+    refused `startingOffsets` and accepted `STARTINGOFFSETS`, which reaches the same source
+    option, overrides the same decision, and is the same hole.
+
+    `maxOffsetsPerTrigger` IS THE FIFTH AND IT IS SET AFTER THE LOOP, so a caller's
+    spelling of THAT one would lose rather than win. It is refused all the same, and not
+    for symmetry: `opl.streaming.lateness.boundary_for` derives its watermark delays for a
+    read split at exactly that limit, so an option that quietly did nothing would leave a
+    caller believing it had chosen the split the margins were computed for."""
     collisions = sorted(name for name in options if name.lower() in _DECIDED_FOLDED)
     if not collisions:
         return
@@ -427,8 +471,8 @@ def _progress_of(query, spark: SparkSession) -> IngestedStream:
 
     THAT REFUSAL IS AT `>= cap` AND STAYS THERE, including in the one case `FIRST_BATCH_ID`
     would clear (a full ring that has not evicted anything yet). It has never fired in a
-    shipped run -- the runs here measure 1 and 3 consuming batches against a cap of 100 --
-    and loosening a shipped refusal that nothing forced is not this fix's business.
+    shipped run; the module docstring's last section carries how far the shipped runs sit
+    from it, and why that distance is not the batch counts they report.
 
     WHERE THE CAP CANNOT BE READ there is nothing to compare, and no comparison is
     invented. The reading says which argument it had; `RingBufferReading` is the argument."""

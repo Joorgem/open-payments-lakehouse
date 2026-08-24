@@ -127,10 +127,11 @@ def _progresses(count: int, rows: int = 1, first: int = 0) -> list[dict[str, int
 
 
 def test_the_default_local_session_carries_no_kafka_connector(spark):
-    """THE PRE-DECISION, GUARDED. `opl.spark.local_session` builds the session all 2,683
-    tests share, and the Kafka connector resolves 11 artifacts and 57 MB from Maven at
-    SparkContext creation -- so it is an opt-in that defaults off, and a commit that
-    flipped the default would put a network dependency on every one of them.
+    """THE PRE-DECISION, GUARDED. `opl.spark.local_session` builds the session every test
+    in the default invocation shares -- 2,863 collected of 2,910 today -- and the Kafka
+    connector resolves 11 artifacts and 57 MB from Maven at SparkContext creation, so it is
+    an opt-in that defaults off and a commit that flipped the default would put a network
+    dependency on every one of them.
 
     Read off the SESSION rather than off the source, because that is where the cost would
     actually be paid: a default that changed via `configure_spark_with_delta_pip`, via a
@@ -345,24 +346,36 @@ def test_a_run_can_never_print_one_of_the_two_states_when_the_other_happened():
 
 
 def test_the_progress_cap_key_is_one_spark_actually_knows(spark):
-    """THE FLOOR UNDER THE FAKE ABOVE, and the one thing that fake cannot supply.
+    """THE FLOOR UNDER THE FAKES ABOVE, and the one thing those fakes cannot supply.
 
-    `_progress_of` reads the cap with a DEFAULT, and `spark.conf.get` answers a key it does
-    not know by returning that default rather than by raising -- measured on this session: a
-    misspelled key returns '100' when a default is passed and raises `SQL_CONF_NOT_FOUND`
-    when one is not.
+    THE SHIPPED READ CARRIES NO DEFAULT. It is `int(spark.conf.get(PROGRESS_CAP_CONFIG))`,
+    and `test_the_cap_is_asked_for_by_name_and_without_a_default` pins that as a CALL --
+    `session.conf.calls == [(_PROGRESS_CAP_CONFIG, ())]`, an empty argument tuple. An
+    earlier version of this docstring said the opposite of both the shipped read and that
+    sibling. What this test adds is the property of a REAL session that makes a
+    defaultless read worth having: a key Spark does not know RAISES when no default is
+    passed and hands back the default when one is, so a defaulted call cannot tell "this
+    session says 100" from "this session has never heard of that key".
 
-    THE TWO SPELLINGS, MUTATED ONE AT A TIME AND RUN. Misspell the shipped literal alone and
-    the fake above goes red (it reads the fake's default 100, and the refusal does not fire
-    on 3 progresses) while this test stays green -- so the fake is what pins the two
-    spellings to EACH OTHER. Misspell BOTH the same way and the fake goes green again, this
-    test being the only one in the file that fails; without it, `_progress_of` would read the
-    caller's 100 forever on a real session and nothing here would say so.
+    THE TWO SPELLINGS, MUTATED ONE AT A TIME AND RUN AGAINST TODAY'S READ. Misspell the
+    SHIPPED literal alone and THREE tests in this file go red while this one stays green:
+    `_FakeConf` raises `SQL_CONF_NOT_FOUND` for a key it was not seeded with,
+    `_cap_or_the_reason_it_could_not_be_read` carries that back as `(None, ...)`, and
+    `test_a_truncated_progress_ring_is_refused_rather_than_summed_over` fails reading
+    `(None, True)` where it wants `(3, True)`, with
+    `test_the_cap_is_asked_for_by_name_and_without_a_default` (whose recorded call becomes
+    the misspelling) and
+    `test_a_run_can_never_print_one_of_the_two_states_when_the_other_happened` (which loses
+    "cap of 100 READ from this session" out of `describe()`) behind it.
+    So the fakes pin the two spellings to EACH OTHER. Misspell BOTH the same way and those
+    three go green again and THIS one is the only failure in the file -- here, on a real
+    session, with `SparkNoSuchElementException: [SQL_CONF_NOT_FOUND]`. Without it the pair
+    could be renamed in step forever and nothing would say so.
 
-    So: asked WITHOUT a default, on a real session, where a key Spark does not know raises.
-    The value is asserted too, because `_progress_of`'s own fallback and the "(100 by
-    default)" in its docstring are claims about Spark's default and not about this project's
-    choice."""
+    THE VALUE IS ASSERTED TOO, because the "(100 by default)" in `_progress_of`'s docstring
+    is a claim about SPARK'S default and not about this project's choice. There is no
+    fallback of this module's own to check: an unreadable cap becomes a STATE
+    `RingBufferReading` reports rather than a number anything here made up."""
     assert spark.conf.get(_PROGRESS_CAP_CONFIG) == "100"
 
     # ...and the floor on that: a key Spark does not know is silent under a default and

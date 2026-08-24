@@ -62,8 +62,9 @@ jobs:
   # ADDITIVE, on the `postgres` job's precedent: the `test` job's command is untouched,
   # and `addopts` deselects `redpanda` by default, so a second `-m` on the command line
   # replaces that term rather than intersecting it -- verified by collection: `-m redpanda`
-  # selects 22 of 2,820 and every one of the 22 also carries `integration`, which an
-  # intersection would have removed.
+  # selects 22 of 2,910 and every one of the 22 also carries `integration`, which an
+  # intersection would have removed. (This comment said 2,820 until F5's closing review
+  # re-collected it; the 22 was right and the total was one change-set stale.)
   #
   # WHY `docker compose` AND NOT A `services:` BLOCK, which is what the postgres job uses.
   #
@@ -97,11 +98,12 @@ jobs:
   redpanda:
     runs-on: ubuntu-latest
     # THE CEILING IS SET FROM THE MEASUREMENT OF WHAT THIS JOB RUNS, WHICH IS NOT ONE FILE.
-    # `-m redpanda` is 22 tests across 5 files. Measured on the Windows dev box:
-    # `test_late_arrival_boundary.py` 2,170 s (three arms over 10,150 records, each batch a
-    # Delta commit plus a state-store write) and the other 15 tests 128 s -- ~38 m 20 s
-    # before checkout, `uv sync` (cold pyspark ~320 MB), a cold Maven resolution and the
-    # image pull.
+    # `-m redpanda` is 22 tests across 5 files. Measured on the Windows dev box, and QUOTED
+    # AS A RANGE because two runs of the SAME file disagree by 2.5x: `test_late_arrival_
+    # boundary.py` took 2,170 s once and 885 s another time, seven tests both times. F4's
+    # rule applies -- quote wall clock as a range or not at all -- and the ceiling below
+    # stands on the larger, plus 128 s for the other 15 tests, plus checkout, `uv sync`
+    # (cold pyspark ~320 MB), a cold Maven resolution and the image pull.
     #
     # 45 WAS THE FIRST NUMBER HERE AND IT WAS TOO TIGHT, on a stale 16-20 min figure that
     # belonged to the two-arm version of that file. The compounding is the reason the

@@ -9,6 +9,21 @@ the split exists, and this phase inherits both the rule and the reason.
 written down after the run that produced it is not a prediction. §2 is where they live, and §2.1 was
 written while the run that tests it was already in flight and its result unknown.
 
+**Where the labels bind, stated because this phase applied them unevenly and was caught twice.**
+Every claim in §0–§2 carries one. **§3 is uniformly *Reported* unless a cell says otherwise** — it is
+a ledger of what has NOT run, and its entries are read off the code and the record rather than
+measured. A hybrid such as *"controller-verified via a reviewer's probe"* is **not** a label this
+document defines; a reviewer's measurement is *Reported*, and where the controller re-ran something
+separately that is said as its own sentence.
+
+**And the statement ids below have expired, which F4's preamble warned of and this one first
+omitted.** `01f19c26-a459-…`, `01f19c26-dfef-…` and `01f19c27-5a37-…` now return the API's own named
+refusal — `Error: The statement <id> was not found.` — at ~5 days. That is **expiry, not
+fabrication**, and the two are distinguishable: the API names the statement, while MSYS path-rewriting
+returns a bare `Error: Not Found` that names nothing (F4 §0.1's correction). **A statement id is
+provenance for work of the last day**; the job `run_id`s in this document are durable and are what a
+later reader should follow.
+
 > **The phase plan is NOT part of this repository.** It lives in a git-ignored working directory, so
 > no link to it is given: F3 shipped a section pointing a public reader at that directory and they
 > reached nothing. Everything a reader needs from it is here.
@@ -89,6 +104,12 @@ not about what you sent.
 **Controller-verified.** `pyspark 3.5.9` bundles **no** Kafka jar. With
 `spark.jars.packages=org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.9`, Ivy resolved **11 artifacts,
 57,002 kB** in ~12 s and the read returned the three probe records with their partitions and offsets.
+
+**Those 11 are the Kafka connector's closure, and a later section of this document says 14** — the
+two are reconciled here rather than left for a reader to notice. A session that asks for Kafka
+*and* Delta resolves **14**; Delta's three (`delta-spark`, `delta-storage`, `antlr4-runtime`) resolve
+whether or not Kafka is requested, so the connector's own cost is the 11 / 57,002 kB above and the
+cache a CI job restores holds all 14 / ~64,317 kB.
 
 **Consequence, pre-decided before any implementer met it:** the jar does **not** go on
 `opl.spark.local_session`, because that would give all 2,683 tests a Maven resolution and a network
@@ -196,6 +217,28 @@ failure, and reads a dead trial account as a regression in this repository.
 
 ---
 
+### 1.3 T6 — the CI job, WRITTEN AND NEVER RUN
+
+**Stated in §1 because a reader looks here for what was built, and until the agent that wrote this phase's ADR said so this
+job appeared in this document only inside a subordinate clause.** `.github/workflows/ci.yml` gains a
+`redpanda` job that starts the broker from the committed `docker-compose.yml` and runs
+`uv run pytest -m redpanda -v` — 22 tests across 5 files, so the streaming proof runs somewhere other
+than one Windows box.
+
+**It uses compose rather than a `services:` block** to avoid a second spelling of the broker's launch
+arguments beside the one the compose file already carries — the defect class this repository polices
+hardest, and the one the `postgres` job above it pays for today by duplicating its service
+definition. **The reason first written for that choice was factually false** (that a service container
+cannot supply a container command; it can, since the 2026-04-02 changelog), **and the correction of
+it carried two invented dates**. Both are recorded in the file rather than quietly fixed, and the
+decision survives on the second ground, which was always the stronger one.
+
+> **NOT ONE CI JOB ON THIS BRANCH HAS EVER EXECUTED.** `ci.yml` fires on pushes to `main` and on
+> pull requests; this branch has had neither. **The job's first run is its first execution**, which
+> also makes it the first measurement of whether the Windows JVM-startup race — 2 failures in 5
+> starts here — exists on `ubuntu-latest`. The 75-minute ceiling is set from a 38-minute Windows
+> measurement and is an expectation about Linux, not evidence about it. §3 lists it as unexercised.
+
 ## 2. Predictions, published before the runs that test them
 
 ### 2.1 THE EXACTLY-ONCE PROOF — published 2026-08-19, while the run was in flight and its result unknown
@@ -252,9 +295,23 @@ arithmetic.
 
 ### 2.2 THE RESULT — CONFIRMED, AND THE NEGATIVE CONTROL FIRED
 
-**Controller-verified**: the numbers below were reproduced by the independent reviewer through their
-own probe against the shipped code, and again through the shipped test suite — two routes, and
-neither is the implementer's report.
+**Reported** — and the label matters here more than anywhere else in this document, so it is stated
+against the preamble's own definition rather than loosely. The numbers were produced by T2+T3's
+implementer and **reproduced by the independent reviewer** through their own probe and again through
+the shipped suite: two routes, neither of them the implementer's report. The preamble defines a
+reviewer's measurement as *Reported*, so that is what this is.
+**What the controller verified separately** is narrower and is stated as its own thing: that the
+suite asserting these numbers passes on this box — ~~348 tests over the streaming and sweep files~~,
+a figure with no file list behind it and which no combination of the streaming and sweep files
+reproduces; the re-runnable form is
+`uv run pytest tests/test_streaming_*.py tests/test_payment_streaming.py tests/test_size_caps.py -q`
+— that
+ruff is clean, and that the size caps hold once the files are staged.
+
+> **THIS SECTION SAID "CONTROLLER-VERIFIED" UNTIL T7's AUTHOR READ IT AGAINST THE PREAMBLE.** The
+> phase's headline result carried the one label the document asks a reader to trust, and carried the
+> wrong one — while §2.4 and §2.5 got the same distinction right. A convention applied unevenly is
+> weaker than no convention, because a reader cannot tell which sections were careful.
 
 **The corpus is 29 delivered records** — 24 distinct events plus 5 injected redeliveries — over one
 partition at `maxOffsetsPerTrigger=10`, so `availableNow` resolves batches of **10 / 10 / 9** before
@@ -276,8 +333,8 @@ than measured once.
 
 #### The fault was located from the filesystem, not from the code
 
-The claim that decides the whole experiment is *where* the fault lands. **Controller-verified via the
-reviewer's independent probe**, reading the two artefacts that answer it — the streaming checkpoint
+The claim that decides the whole experiment is *where* the fault lands. **Reported** — measured by
+the reviewer through their own probe, reading the two artefacts that answer it — the streaming checkpoint
 and the Delta log — in both arms, at the instant between the fault and the restart:
 
 ```
@@ -449,7 +506,12 @@ partition, 133 records per trigger → 77 micro-batches on both arms.
 | | | **difference = 100** |
 
 **100 is `promotable`'s declared `late_count`**, and `dropped_rows` reads that declaration rather
-than a literal — `grep "100\b"` over the module finds four hits, all in docstrings. Both arms consumed
+than a literal — verified by reading `LatenessBoundary.dropped_rows`, which returns
+`defects.late_count` and consults neither the rate limit nor the margins.
+~~That grep over the module finds four hits, all in docstrings.~~ **It returns TEN, and returned
+ten at every revision on this branch** — a re-runnable measurement, offered as evidence, that does
+not reproduce in one command. All ten are prose and none is a code literal, so the claim survives;
+the evidence given for it did not. Both arms consumed
 10,150 rows across the same 77 batches, read from Spark's **source-side** progress, so the difference
 cannot be a short read.
 
@@ -504,8 +566,11 @@ file positions** at lag 2 and at neither 1 nor 3.
 > well-evidenced, and **unfalsifiable from anything a reader could run** — this project's signature
 > defect, wearing a correct answer.
 >
-> **Closed by a run at 175 records per trigger, where the three candidate lags predict three
-> DIFFERENT removed-identity sets** — 100 / 97 / 95. **Measured: 97.** Lag 2 confirmed; lag 1
+> **Closed by a run at 175 records per trigger — a limit the SHIPPED model REFUSES** (`boundary_for`
+> at lag 2: *"narrowest late margin is -350000 ms"*), and which only the superseded one-batch lag
+> accepts. That is what makes it the separating experiment rather than an ordinary one: the delay it
+> ran at is the one-batch model's own. **There the three candidate lags predict three DIFFERENT
+> removed-identity sets** — 100 / 97 / 95. **Measured: 97.** Lag 2 confirmed; lag 1
 > refuted *at the configuration lag 1 itself derived*, so it was refuted on its own best ground; lag
 > 3 refuted. The assertion is set equality element by element, and the predicted sets are built by
 > the shipped model with the lag monkeypatched rather than written as literals, so changing the model
@@ -595,11 +660,14 @@ measuring the second arm rather than by softening the first.
 
 #### What falsifies each, and none of these is a platform failure
 
-- **A `javax.security.auth.login.LoginException: No LoginModule found for
+- ~~**A `ClassNotFoundException` naming `kafkashaded.…ScramLoginModule`**~~ →
+  **A `javax.security.auth.login.LoginException: No LoginModule found for
   kafkashaded.…ScramLoginModule`** falsifies the one constant no local run can check. That is the
   exact string local OSS Spark produces for that name — measured above — so the failure *mode* is
-  known and only the platform it appears on is in question. ~~This bullet first named a
-  `ClassNotFoundException`, which is not what either runtime emits.~~ §1.2's probe used that spelling on serverless and read a row, so it is measured
+  known and only the platform it appears on is in question. The struck spelling is not what either
+  runtime emits. **Two revisions of this bullet got the house form wrong in opposite directions** —
+  the first struck the withdrawal instead of the withdrawn claim, the second named that error and
+  then applied no strikethrough at all. §1.2's probe used that spelling on serverless and read a row, so it is measured
   — but by a **batch** read (`spark.read`), and T8 is the first **streaming** read of Kafka on this
   compute. If the shaded name were wrong, nothing local would ever have said so.
 - **`input_rows` larger than the topic held** means the checkpoint was not the one this run thought it
@@ -623,7 +691,7 @@ over a clean tree.
 
 | | |
 |---|---|
-| rows landed | **10,151** (10,150 corpus + §2.5's probe record) |
+| rows landed | **10,151** (10,150 corpus + §1.2's probe record) |
 | distinct `(kafka_partition, kafka_offset)` | **10,151** |
 | distinct `transaction_id` | **10,000** |
 
@@ -631,12 +699,33 @@ over a clean tree.
 arriving intact — 10,150 deliveries carrying 10,000 distinct ids — with the probe record's NULL id
 excluded by `COUNT(DISTINCT)`, which is the one place that operator's NULL-dropping is wanted.
 
-> **AND THE RETRY THIS PROJECT KEEPS MEASURING RAN AGAIN, WHICH TESTED PREDICTION 4 FOR REAL.**
-> `max_retries: 0` did not prevent it: one `task_key`, **two `task_run_id`s** (`533379837633364` and
-> `740868890853109`). If the sink were not idempotent the second attempt would have re-consumed
-> offsets the first had committed and the table would hold more than 10,151 rows. **It holds exactly
-> 10,151, over 10,151 distinct coordinates.** The Delta sink's transactional batch-id commit held
-> under a retry nobody staged — which is better evidence than the test that would have staged one.
+> ~~**AND THE RETRY THIS PROJECT KEEPS MEASURING RAN AGAIN, WHICH TESTED PREDICTION 4 FOR REAL.** If
+> the sink were not idempotent the second attempt would have re-consumed offsets the first had
+> committed and the table would hold more than 10,151 rows. It holds exactly 10,151, over 10,151
+> distinct coordinates. The Delta sink's transactional batch-id commit held under a retry nobody
+> staged — which is better evidence than the test that would have staged one.~~
+>
+> **WITHDRAWN, AND IT IS THIS DOCUMENT'S WORST DEFECT: A SAFETY CLAIM THAT COULD NOT HAVE COME OUT
+> OTHERWISE.** The retry is real — `max_retries: 0` did not prevent it, one `task_key` and **two
+> `task_run_id`s**, `533379837633364` (84 s) and `740868890853109` (**32 s**). But the second
+> attempt's log holds **one line, the launch header**, and it died on the same `CONFIG_NOT_AVAILABLE`
+> read. **It consumed zero records.**
+>
+> **A retry that consumes nothing appends nothing, whatever the sink is.** `10,151 / 10,151` is the
+> outcome under both hypotheses, so it cannot distinguish *the guarantee held* from *the guarantee was
+> never asked* — ADR 0018's species, published in this phase's own closing document, about a phase
+> whose subject is that species.
+>
+> **And the mechanism inverts the sentence.** Offsets the first attempt *committed* are never
+> re-consumed; that is what a committed offset means. Sink idempotency is exercised only when a batch
+> is **re-planned**, which requires the checkpoint to be *behind* the data write — the opposite of what
+> happened. The shipped task's own header keeps the two apart correctly
+> (`databricks/src/stream_managed_broker.py`: *"a second attempt … consumes ZERO records, and
+> `write_payment_stream`'s floor REFUSES"*); this document fused them.
+>
+> **Commit `2fa610c`'s message carries the withdrawn claim too, and is left standing rather than
+> reworded** — this repository retracts in place rather than editing the record to look better.
+> Found by the closing documentation review.
 
 **What failed, and it is a capability difference nobody had measured:**
 
@@ -650,8 +739,14 @@ spark.sql.streaming.numRecentProgressUpdates is not available.  SQLSTATE: 42K0I
 **Serverless refuses to READ that config**, and the frame names `handleGetWithDefault` — so passing a
 default does not help, because the default is applied by the server *after* a read it declines to
 perform. That read is `ingest._progress_of`'s ring-buffer cap guard, **built and tested against a
-local session where the key resolves to `100`.** §2.3's whole F9 line of reasoning — the 104 floor,
-the trailing-progress arithmetic — was measured on the one compute where the key is readable.
+local session where the key resolves to `100`.** The reasoning that rests on it — the runnable-rate-
+limit floor of 104 and the trailing-progress arithmetic behind it — lives in
+`watermarked_dedup.boundary_for`'s docstring and in `tests/test_streaming_watermarked_dedup.py`,
+**not in this document**, and every bit of it was measured on the one compute where the key is
+readable. An earlier version of this paragraph cited ~~"§2.3's F9 line of reasoning"~~. §2.3 carries
+neither figure, and `F9` is a finding id from the phase plan — which is git-ignored, which this
+document's own preamble refuses to point a public reader at, and which therefore cannot be a
+citation. Caught by the agent that wrote this phase's ADR and unexercised ledger.
 
 **The repair does not guess the cap.** A fallback of 100 would make a guard that cannot tell
 *verified* from *could not look* — this phase's seventh instance of that shape. Instead truncation is
@@ -667,6 +762,72 @@ test sweeps all four readings and asserts neither state can borrow the other's v
 2. **The withhold holds in production.** The task's own line printed
    `kafka.sasl.jaas.config=<withheld: carries the SASL password>`.
 3. **`spark.readStream.format("kafka")` runs on serverless.** §1.2 had measured only a *batch* read.
+
+#### THE RECORDED RUN — job run `336384048296782`, SUCCESS
+
+**Controller-verified 2026-08-24**, revision `2fa610c2c5501dc8765287022ceebd011f0e509b`, deploy
+verified by artefact (wheel sha256 `3b5e2c1601a15408e6b3f215e151027f8a318d73de9a53692d2492d274a893ca`
+on both sides; `opl/_revision.py` inside it equal to `git HEAD` over a clean tree). Reset first — the
+checkpoint directory removed and the sink dropped, the repair the task's own header documents.
+
+| | |
+|---|---|
+| rows landed | **10,151** |
+| distinct `(kafka_partition, kafka_offset)` | **10,151** |
+| distinct `transaction_id` | **10,000** |
+
+**Where the 10,150 came from, because the input to this phase's flagship result had no provenance
+line until the closing review asked for one. Controller-verified 2026-08-24**, from this box, before
+the run: `publish_records` over `delivered_records(PROFILES["promotable"].stream_spec(pool), …)` with
+the synthetic pool, to topic `opl-payments` on the managed cluster, reported
+`message_count 10150`, `byte_count 2,969,937` and partition counts `((0, 3290), (1, 3410),
+(2, 3450))` — 3,290 + 3,410 + 3,450 = 10,150. The byte count is `promotable`'s, the same figure the
+profile sweep measures locally. **Plus §1.2's one probe record already on the topic gives 10,151**,
+which is the floor the run was launched with and the row count it landed.
+
+**The task's own output, quoted because the sentence is the deliverable and not the number:**
+
+```
+consumed 10151 records from 'opl-payments' across batches (0,) into
+workspace.default.streaming_payments_managed_broker. progress ring: 1 updates;
+spark.sql.streaming.numRecentProgressUpdates could not be read here (AnalysisException:
+[CONFIG_NOT_AVAILABLE.WITHOUT_SUGGESTION] ... SQLSTATE: 42K0I), so no cap was compared
+against -- but the oldest retained update is batch 0, the first this query ran, and the
+ring evicts oldest-first, so nothing was evicted and the count above is the run's whole
+total. That is a count of records READ from the managed broker on serverless compute --
+it is not, and must not be quoted as, evidence about exactly-once processing.
+```
+
+**Two properties of that sentence are the point of T8's repair.** It names the refusal it could not
+get past, with the SQLSTATE, instead of printing a number that reads as verified — and it then rules
+truncation out **by a different measurement** rather than by assuming the cap. A reader can tell
+*"I checked the cap"* from *"I could not, and here is why I still know"*. That is the distinction
+ADR 0018 says a check must be able to make.
+
+**And it refuses its own most likely misreading in its last clause.** 10,151 records read from a
+managed broker on serverless compute is not evidence about exactly-once. That proof is §2.2's, it is
+local, and it is local because it needs a fault injected between the data commit and the offset
+commit. The job carries the refusal in its header and in its output, not only in this document.
+
+**The predictions of §2.5, marked:** 1 CONFIRMED (the sentinel refuses before a session starts) ·
+2 CONFIRMED (`input_rows` 10,151 = 1 probe + 10,150 published, read from Spark's own progress) ·
+3 CONFIRMED (10,151 landed; 10,000 distinct ids is the 150 redeliveries intact with the probe's NULL
+excluded) · 4 **HALF confirmed, and the half is named** — see below ·
+5 CONFIRMED as narrowed (the task's two lines carry no `[REDACTED]` and the JAAS value is withheld).
+
+> **PREDICTION 4 HAS TWO CLAUSES AND ONLY ONE OF THEM WAS TESTED.** It predicted that a second
+> attempt *"consumes 0 and FAILS"* at the row floor **and** that it *"cannot double-write"*.
+>
+> **The second is established**: two attempts, 10,151 rows over 10,151 distinct coordinates.
+> **The first is NOT.** Controller-verified 2026-08-24 by reading the retry's own output — task run
+> `740868890853109` failed on the **same** `CONFIG_NOT_AVAILABLE` read as the first attempt, which in
+> the pre-fix code sits *before* `_refuse_a_run_that_processed_nothing`. The retry never reached the
+> floor, so the floor's behaviour on a drained checkpoint remains **unexercised on serverless** and is
+> listed as such in §3.
+>
+> This was marked CONFIRMED in an earlier revision on the strength of the half that held — the
+> arithmetic was right and the conclusion drawn from it was wider than it. Caught by the agent that wrote this phase's ADR and unexercised ledger,
+> settled by reading the second attempt's log rather than by reasoning about it.
 
 #### What `describe_reader_options` does not cover, so it is not read as more than it is
 
@@ -691,3 +852,127 @@ future reader can run green**, and the table it lands —
 registry, so registering it would leave a permanent stale row in a freshness view for a source nobody
 can refresh. **When the broker goes away, say so here**, or the next reader re-runs the job, gets a
 connection failure, and reads a dead trial account as a regression in this repository.
+
+---
+
+## 3. What is still unexercised
+
+**Protocol §9 condition 6.** A path that ran zero rows through it is not a path that works, and
+this list is what stops the phase from being read as more exercised than it is. Each entry says
+what would exercise it.
+
+**Two entries below are unusual for this ledger and are marked as such.** One is a whole CI job
+that has never executed once, and one is a comparison this phase deliberately refused to resolve.
+Neither is a gap that was discovered at the close: both were decided during the phase, and they are
+here because the reason they are absent from §1 and §2 is that nothing ran them.
+
+### Written and never run
+
+- **The CI `redpanda` job.** `.github/workflows/ci.yml` gained a `redpanda` job that starts the
+  committed compose service and runs `uv run pytest -m redpanda`. **It has never executed.** That
+  workflow triggers on pushes to `main` and on pull requests; this branch has had neither, so
+  **the first PR run is this job's first execution** — of the job, of the compose service's
+  healthcheck, of the Ivy cache key, and of the timeout. *What would exercise it: opening the PR.*
+  Nothing in §1 or §2 is a result of this job, and no claim in this document depends on one.
+- **The Windows session-start race, on `ubuntu-latest`.** §2.2 measured a local-Spark session
+  failing to start across five attempts and reported that as five samples rather than as a rate;
+  the two configuration "fixes" were falsified by the same probe. **That is a Windows-local fact
+  and this document does not project it onto Linux** — the signature is not documented there.
+  *What would exercise it: the same first PR run, and then repeated runs, since one green run is
+  not a rate either.*
+- **The job's own time budget on Linux.** The ceiling in `ci.yml` is set from the Windows
+  measurements §2.4 publishes — **12 m 32 s** for the falsifier arm alone, and a full file of three
+  arms costing more than the 16–20 min the two-arm version took on this box. Linux is *expected* to
+  be faster and that expectation is not evidence. *What would exercise it: the first green run,
+  whose duration replaces the estimate.*
+
+### Branches this phase built that have never taken their other arm
+
+| what | why it has not fired | what would fire it |
+|---|---|---|
+| **`_progress_of`'s truncation refusal** (`len(progresses) >= cap`) | it has never fired in a shipped run — §2.5's serverless run reports `progress ring: 1 updates`, and `_progress_of`'s own docstring records the local runs at 1 and 3 consuming batches against a cap of 100 | a run with as many progress updates as the cap. Over `promotable` that floor is **104 records a trigger** — the arithmetic is `watermarked_dedup.boundary_for`'s docstring and `tests/test_streaming_watermarked_dedup.py`'s, and **this document has never carried it** |
+| **`RingBufferReading`'s fourth state** — unreadable cap over a RESUMED checkpoint, where the count is printed as a **LOWER BOUND** | both serverless runs in §2.5 are fresh checkpoints whose oldest retained update is batch 0, so the second argument always applied | a serverless run resumed against a checkpoint that had already committed a batch and still consumed something — i.e. T8's job re-pointed at a topic carrying new records **without** the reset §2.5 performed |
+| **`_progress_of`'s trailing-progress arithmetic on the STATELESS path** | the extra non-consuming batch was measured on the **stateful** chain only (the falsifier arm's checkpoint: `commits` 0..58 with `offsets/57` and `offsets/58` both ending at `{"0":10150}`). `write_payment_stream` is stateless and has no state eviction. ~~No run has measured whether it produces a trailing progress update at all.~~ **§2.5's recorded run measured exactly that** — `progress ring: 1 updates` over `batches (0,)`, so one consuming batch produced one update and no trailing one. What is unmeasured is its behaviour NEAR THE CAP, which is what the third column asks for. (An earlier revision of this cell named `land_stream`, a function that exists nowhere in this repository) | a stateless `availableNow` run through `write_payment_stream` at a rate limit fine enough to approach the cap, with the progress list read back |
+| **the drift column through the Kafka transport** | every stream this phase published carries redeliveries and late arrivals and **no drift**: no `DefectSpec` under `tests/integration/` or `src/opl/streaming/` sets `drift_from_index` (checked by `grep`). `ingest`'s docstring argues that `from_json` drops the undeclared key while `kafka_value` keeps the bytes — **an argument, with no run behind it** | publishing a `drifting` profile to a topic and rebuilding the landed `kafka_value` bytes against `b45f1dc7…`, which is the route `tests/integration/test_payment_stream_ingest.py` already takes for an undrifted corpus |
+| **a fault across MORE THAN ONE partition** | §2.2's proof ran over **one partition** at `maxOffsetsPerTrigger=10`, chosen so a micro-batch is a countable unit. The managed topic has 3 partitions and §2.5 never faulted | the same two arms over a multi-partition topic, where a replayed batch spans partitions and the offset log carries more than one end |
+| **`read_kafka` from the SQL warehouse** | §0.2 established that the function **exists** and nothing else. Every Kafka read in §1 and §2 goes through Spark | a statement reading the managed broker through it — which §0.3 is the reason nobody attempted casually |
+
+### Not exercised by choice, and the choice is recorded
+
+- **The `<=` in the late-data model, and it is UNDECIDED rather than assumed.** `WatermarkMargins`
+  drops a row when the delay is `<=` its margin. Measured over `promotable`, **no delivered
+  record's margin equals either arm's delay** — at 133 or at 175 records a trigger, under a lag of
+  1, 2 or 3 alike — so a model written with `<` would have named the same sets, **including the
+  falsifier run's 97**. The two guards are strict in the direction that refuses: the keeping delay
+  must strictly *exceed* the widest late margin, and the dropping delay must be strictly *above*
+  the widest punctual one, so the one case where the two readings disagree is **refused rather
+  than resolved**. The module's docstring no longer attributes the comparison to Spark; that
+  attribution was a reading of Spark's source, and the runs beside it were not a test of it.
+  *What would exercise it: a corpus, or a rate limit, that puts a delivered record's margin exactly
+  on an arm's delay — at which point the guard refuses and the comparison has to be settled from
+  Spark's source or from a run built for it.*
+- **The ring-buffer cap on serverless.** The platform refuses the read (§2.5), and this repository
+  refused to substitute the value it would have returned. Both refusals are deliberate, and
+  together they mean **no serverless run has ever compared retained updates against a cap**;
+  truncation is ruled out there by the oldest-retained-batch argument instead. *What would exercise
+  it: a Databricks compute that permits the read — the cap arm is unchanged and takes precedence
+  wherever it can run.*
+- **The exactly-once proof on the deploy target.** Refused with a reason, in
+  [ADR 0019](adr/0019-the-proof-runs-where-a-process-can-be-killed.md) Decision 2 and in the job's
+  own header: it needs a process killed between the data commit and the offset commit. *What would
+  exercise it: a way to terminate a task's process at a chosen instant on that compute. Until then,
+  moving it there costs it its falsifier.*
+- **No latency, no throughput, anywhere in this phase.** §1.2 measured the same serverless read at
+  **19,606 ms** and then **2,730 ms** over identical data, so nothing here is quoted as a
+  performance figure. *What would produce one: a warmed session and repeated trials under F4 Task
+  6's protocol, which nothing in F5 ran.*
+
+### Measured on one compute and not the other
+
+- **The two SCRAM login-module spellings are a measured pair with two untried corners.** §2.5
+  measures the shaded name working on serverless and **failing to load locally**, and the OSS name
+  working locally. **Nobody has tried the OSS name on serverless**, and nobody has tried the shaded
+  name anywhere other than serverless. The constants are selected by environment rather than probed,
+  which is correct and is not the same as covered.
+- **`foreachBatch` on serverless.** §2.5 established that `spark.readStream.format("kafka")` runs
+  there and that a `format("delta")` sink commits transactionally under a retry. The
+  `foreachBatch` sink both exactly-once arms are written against has **only ever run locally**.
+- **`dbutils.secrets.get` from a `spark_python_task`** now has run (§2.5). Its *failure* mode — a
+  missing scope, a revoked key — has not, on either compute.
+
+### Carried out of the phase as follow-ups, not fixed
+
+- **`src/opl/streaming/__init__.py` describes the CI job that was not built.** Its docstring says
+  the byte-identity test runs in CI's default invocation *"before T6 gives CI a Redpanda service
+  container"*. The shipped job uses `docker compose` against the committed compose file, and
+  `ci.yml`'s own comment records at length why a `services:` block was rejected — it would be a
+  **second spelling** of the broker's launch arguments. The prose is stale in the one direction
+  that matters (it names the rejected design), and it is left rather than patched because the
+  correction belongs with whoever next touches that module.
+- **Two files sit within single digits of the 800-line cap**, measured with `wc -l`:
+  `src/opl/streaming/watermarked_dedup.py` at **795** and
+  `tests/test_streaming_watermarked_dedup.py` at **793**. The cap is strict — 800 is over — so
+  whoever touches either splits it first, which is the standing rule two files at 799 already
+  carried out of F-DB.
+- **`describe_reader_options` does not cover the logical plan**, reported by T8's independent
+  reviewer and recorded in §2.5. Nothing this task runs calls `explain()`, so **the exposure has
+  never occurred in a run**; what covers it is the platform's scrubbing of a secret's value, not
+  this repository. *What would exercise it: any code that calls `explain()` on the reader frame
+  before the query starts.*
+- **The orphan topic left by a fixture that dies during SETUP.** §2.2 lists it as unclosed: the
+  teardown hardening waits for the broker to confirm deletion, but a session that raises during
+  setup never reaches the finaliser. Harmless today because topic names carry a uuid — which is
+  also why no run has ever demonstrated the hazard the conftest's own docstring names.
+
+### Unmeasurable here, and stated as such
+
+- **How much of the trial credit is left.** `/v1/billing`, `/v1/usage`, `/v1/subscriptions` and
+  `/v1/organizations` return the control plane's own `NOT_FOUND` for this service account, and the
+  cluster's Prometheus endpoint returns **401** under both credentials. **No figure is published.**
+  What does not depend on it: the corpus is 40,150 records at ~293 B, ≈ **12 MB per full replay**,
+  and the producer counts what it sends.
+- **What the broker does after ~2026-09-03.** The cluster stops answering and T8's job then fails
+  at the metadata fetch — one string that covers an expired trial, a revoked ACL, a wrong username
+  and no route alike. **This document must say the broker is gone once it is.** Until someone
+  writes that line, a reader after that date cannot tell a dead trial account from a regression in
+  this repository, and the run ids and row counts above are the only thing that dates the evidence.

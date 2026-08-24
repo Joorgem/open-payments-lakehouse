@@ -737,13 +737,22 @@ def test_the_broker_is_read_from_a_mapping_the_caller_passes():
     [
         ({}, "no bootstrap address"),
         ({BOOTSTRAP_ENV_VAR: "   "}, "no bootstrap address"),
+        ({BOOTSTRAP_ENV_VAR: "h:9092\n"}, "carries leading or trailing whitespace"),
+        ({BOOTSTRAP_ENV_VAR: " h:9092"}, "carries leading or trailing whitespace"),
         ({BOOTSTRAP_ENV_VAR: "h:9092", USERNAME_ENV_VAR: "opl"}, f"{PASSWORD_ENV_VAR} is not set"),
         (
             {BOOTSTRAP_ENV_VAR: "h:9092", PASSWORD_ENV_VAR: "hunter2"},
             f"{USERNAME_ENV_VAR} is not set",
         ),
     ],
-    ids=["no-bootstrap", "blank-bootstrap", "user-without-password", "password-without-user"],
+    ids=[
+        "no-bootstrap",
+        "blank-bootstrap",
+        "bootstrap-with-a-trailing-newline",
+        "bootstrap-with-a-leading-space",
+        "user-without-password",
+        "password-without-user",
+    ],
 )
 def test_an_unusable_broker_is_refused_naming_the_variable_that_is_missing(env, expected):
     """Refused before a socket exists, and NAMING the variable.
@@ -754,8 +763,21 @@ def test_an_unusable_broker_is_refused_naming_the_variable_that_is_missing(env, 
     produce. F5's own Task 0 spent two statements learning that one error across three worlds
     is not a check.
 
+    THE TWO PADDED ADDRESSES ARE A FOURTH CAUSE OF THAT SAME STRING, and they used to get
+    through: `__post_init__` tested `.strip()` and stored the RAW value, so an address with
+    whitespace round it passed and went to librdkafka verbatim. BOTH ENDS ARE PARAMETRISED
+    because `.lstrip()` and `.rstrip()` are different mistakes and a guard written as either
+    one would pass half of this. No provenance is claimed for the padding: the defect is the
+    mismatch between the string checked and the string kept.
+
     THE MATCHED STRINGS ARE THE DISCRIMINATING HALF OF EACH MESSAGE, on purpose. Both
     variable names appear in the half-credential refusal, so matching on a bare name would
-    pass in either direction and this parametrisation would be four ids over two checks."""
+    pass in either direction and this parametrisation would be six ids over three checks.
+
+    AND THE ACCEPTED ADDRESS IS ASSERTED VERBATIM BELOW, because trimming would pass every
+    case here while changing what the client is handed -- and the same guard one layer up
+    (`stream_managed_broker._secret`) governs a PASSWORD, where that is a different
+    credential."""
     with pytest.raises(ValueError, match=expected):
         broker_from_environment(env)
+    assert BrokerConfig(bootstrap="h:9092").bootstrap == "h:9092"

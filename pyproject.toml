@@ -133,6 +133,13 @@ markers = [
   # live-WebDAV modules and turn red on them. `not redpanda` below is load-bearing on its own
   # for the same reason `not postgres` is: a future broker test that forgets `integration` is
   # still deselected from every default invocation.
-  "redpanda: requires only the local Redpanda container",
+  #
+  # BUT "ONLY THE CONTAINER" IS WHAT THIS ENTRY USED TO SAY AND IT WAS FALSE OF MOST OF THEM.
+  # `-m redpanda` selects 22 tests across 5 files; 17 take the `kafka_spark` fixture, which
+  # starts a local Spark session and resolves the Kafka connector from Maven because pyspark
+  # ships no kafka jar. The CI job for this marker installs a JDK for exactly that reason and
+  # says so, and the two statements were in the same branch disagreeing. What the marker
+  # actually promises is the narrower thing the Postgres one promises: no OTHER container.
+  "redpanda: needs the local Redpanda container -- and, for most of them, a local JVM too",
 ]
 addopts = "-m 'not integration and not postgres and not redpanda'"

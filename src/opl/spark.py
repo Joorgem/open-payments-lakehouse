@@ -25,9 +25,13 @@ PACKAGES_CONFIG = "spark.jars.packages"
 # ships in the wheel's `jars/`. It resolves from Maven -- 11 artifacts, 57,002 kB, ~12 s
 # on a cold Ivy cache -- which is why `local_session` takes it as an OPT-IN that defaults
 # off (F5 plan T2, pre-decided): this factory builds the session for the whole suite, and
-# putting the coordinate here unconditionally would give all 2,683 tests a Maven
-# resolution and a network dependency at session start, in a CI job that today needs
-# neither.
+# putting the coordinate here unconditionally would give a Maven resolution and a network
+# dependency at session start to every test the default invocation collects -- 2,863 of
+# 2,910 today (`uv run pytest --collect-only -q`), in a CI job that needs neither. THE
+# COUNT IS RE-MEASURED RATHER THAN COPIED: this line, `local_session` below and
+# `tests/test_streaming_delta_ingest.py` all carried 2,683 against that measurement. A
+# suite total is the species of number that goes stale on the next commit and reads as
+# measured forever, so the command that produces it is named beside it.
 #
 # THE VERSION IS DERIVED FROM THE RUNNING PYSPARK RATHER THAN PINNED, because the
 # connector artifact is versioned in lockstep with Spark and a hardcoded `3.5.9` would
@@ -132,7 +136,13 @@ def local_session(app_name: str = "opl", *, kafka: bool = False) -> SparkSession
     Kafka connector from Maven.
 
     THE ARGUMENT DEFAULTS OFF AND THAT IS THE WHOLE POINT -- see `KAFKA_CONNECTOR_PACKAGE`
-    for the cost it keeps off the 2,683 tests that do not read a broker. An argument here
+    for the cost it keeps off every test that does not need the CONNECTOR, which is a
+    narrower set than "does not read a broker": 22 tests carry the `redpanda` marker, and
+    the 17 of them that take `tests/integration/conftest.py`'s `kafka_spark` are the ones
+    that build a session here with `kafka=True`. The other five reach the broker with a raw
+    client and no JVM. `kafka_spark` is not the only caller passing the argument --
+    `tests/test_streaming_delta_ingest.py` passes it to reach
+    `_refuse_a_session_that_cannot_read_kafka`'s failure arm. An argument here
     rather than a second builder beside it because this module's docstring claims to be the
     ONE place a local session is described, and a second builder repeating the master, the
     driver memory, the shuffle partitions and the timezone pin would be a copy that drifts

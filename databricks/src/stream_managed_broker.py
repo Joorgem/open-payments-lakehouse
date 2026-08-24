@@ -144,7 +144,7 @@ CHECKPOINT = f"{DEFAULT.volume_root}/_checkpoints/managed-broker/{TOPIC}"
 
 
 def _secret(key: str) -> str:
-    """One value out of the secret scope, refused if it is blank.
+    """One value out of the secret scope, refused if it is blank OR PADDED.
 
     `dbutils` is imported HERE and not at module scope for `dq_gate_batch._publish`'s
     reason: `databricks.sdk.runtime` builds a workspace client on import and raises without
@@ -154,7 +154,21 @@ def _secret(key: str) -> str:
     A BLANK VALUE IS REFUSED rather than passed on. `dbutils.secrets.get` raises for a key
     that is absent, but a key STORED empty comes back as `""` -- and an empty password
     reaches the broker as a failed SCRAM exchange, whose error text is the same one an
-    expired trial and a revoked ACL produce."""
+    expired trial and a revoked ACL produce.
+
+    AND SO IS A PADDED ONE, WHICH IS THE SAME DEFECT ONE STEP ALONG. This function used to
+    test `value.strip()` and return `value` -- it VALIDATED one string and RETURNED
+    another -- so a scope value with whitespace round it cleared the blank check and reached
+    the broker with the whitespace still on it. The symptom is the metadata timeout ADR 0018
+    counts across four worlds, and this module's neighbours exist to keep that string from
+    having a fifth cause. `managed_broker.require_minimum_rows` already strips what it
+    parses; this did not, and the gap between the two is what the check below closes. HOW A
+    PADDED VALUE GETS INTO THE SCOPE IS NOT CLAIMED HERE: nothing in this repository has
+    measured that, and the defect being repaired is the mismatch itself.
+
+    REFUSED RATHER THAN TRIMMED, and that is a decision. Trimming a PASSWORD silently
+    substitutes a different credential, and a scope whose stored value is not the value
+    being used is a thing an operator has to be told rather than rescued from."""
     from databricks.sdk.runtime import dbutils
     value = dbutils.secrets.get(SECRET_SCOPE, key)
     if not value.strip():
@@ -162,6 +176,15 @@ def _secret(key: str) -> str:
             f"secret {SECRET_SCOPE}/{key} is empty. Set it before launching this job: an "
             "empty bootstrap or password fails at the broker with the same message an "
             "expired trial, a revoked ACL and a wrong username all produce."
+        )
+    if value != value.strip():
+        raise ValueError(
+            f"secret {SECRET_SCOPE}/{key} has leading or trailing whitespace, and it is "
+            "sent to the broker verbatim. A trailing newline out of a paste fails the "
+            "SCRAM exchange -- or resolves as a host nobody is listening on -- with the "
+            "same message an expired trial, a revoked ACL and a wrong username produce. "
+            "Re-set the scope value without it: this task will not trim a credential, "
+            "because a trimmed password is a different password."
         )
     return value
 

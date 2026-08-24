@@ -119,12 +119,36 @@ class BrokerConfig:
     password: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        """Refuse an unusable broker before a socket is opened."""
+        """Refuse an unusable broker before a socket is opened.
+
+        THE SECOND CHECK IS THE ADDRESS AGAINST ITSELF, NOT AGAINST ITS OWN STRIP. This
+        used to test `bootstrap.strip()` and then store `bootstrap` -- it validated one
+        string and kept another -- so an address with whitespace round it passed the blank
+        test and went to librdkafka verbatim, where it resolves as a host nobody is
+        listening on and comes back as a METADATA TIMEOUT. That is the same string an
+        unreachable host, a wrong port and a stopped cluster produce, which is the one
+        confusion `_refuse_half_a_credential` below exists to stop this module adding to.
+        NO PROVENANCE IS CLAIMED FOR THE PADDING and an earlier version of this paragraph
+        blamed `set -a && source .env`, which was checked and does not do it: a sourced
+        `VAR=value` line loses its own terminator. The defect being repaired is the
+        mismatch between the string checked and the string kept, whatever put it there.
+
+        REFUSED RATHER THAN TRIMMED, so what the client is handed is what the operator can
+        read in the variable. `databricks/src/stream_managed_broker.py::_secret` makes the
+        same call one layer up, over the scope value that fills this field."""
         if not self.bootstrap.strip():
             raise ValueError(
                 f"no bootstrap address: pass one, or set {BOOTSTRAP_ENV_VAR}. There is no "
                 "default -- a fallback to the local container would publish a corpus meant "
                 "for the managed broker into a topic nobody is reading, and report success."
+            )
+        if self.bootstrap != self.bootstrap.strip():
+            raise ValueError(
+                f"the bootstrap address {self.bootstrap!r} carries leading or trailing "
+                f"whitespace and is passed to the client verbatim. Set {BOOTSTRAP_ENV_VAR} "
+                "without it: the address resolves as a host nobody is listening on, and "
+                "the metadata timeout that follows is also what a stopped cluster, a wrong "
+                "port and an unreachable host produce."
             )
         _refuse_half_a_credential(self.username, self.password)
 

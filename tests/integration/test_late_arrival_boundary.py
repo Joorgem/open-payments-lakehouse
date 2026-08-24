@@ -4,7 +4,7 @@
 TWO RUNS, ONE CORPUS, TWO WATERMARKS. The same 10,150 Kafka records, read at the same rate
 limit, through the same `withWatermark -> dropDuplicatesWithinWatermark` chain, differing
 in ONE THING: the watermark delay. Both delays are arithmetic over the delivered corpus and
-`opl.streaming.watermarked_dedup.boundary_for` computes them before anything runs.
+`opl.streaming.lateness.boundary_for` computes them before anything runs.
 
     DROPPING     262,500 ms      9,900 rows land
     KEEPING    3,600,000 ms     10,000 rows land
@@ -16,7 +16,13 @@ rows at a wide watermark has shown only that a watermark can be set wide enough 
 nothing, which is true of every watermark that is never tested; a run landing 9,900 at a
 narrow one has shown only that 100 rows went missing, which is true of a broken parse. The
 pair, over one corpus, at two delays fixed before the run, is the measurement -- and
-`_refuse_a_pair_that_dropped_nothing` is why it cannot be quietly lost.
+`prove_boundary` is where it cannot be quietly lost: `_refuse_a_pair_that_dropped_nothing`
+refuses a pair that found no boundary at all, and
+`_refuse_a_drop_the_boundary_did_not_predict` refuses one whose difference is not the 100
+the declaration names. THE SECOND IS NEW AND THE FIRST NEVER COVERED IT: a pair differing
+by 97 -- the number this phase's published prediction actually met, and the number the
+third arm below still reproduces at 175 records a trigger -- cleared every other refusal in
+that module and came back reading as a clean measurement.
 
 WHY 133 RECORDS A TRIGGER, AND THAT IT IS A CHOICE. Nothing in `src/` computes a rate
 limit. 133 is picked out of a band, and it is not even the best pick inside it: 137 leaves
@@ -63,9 +69,9 @@ no evidence about the choice. What the sweep does say is that all 191 are ACCEPT
 with a delay pair clearing every inequality `boundary_for` enforces -- and that the limit
 moves that pair: 262,500 ms at 133 against 665,000 at a limit of 1 and 30,000 at 260. The
 prediction meets a measurement HERE instead, against the difference between two landed
-counts. The module docstring records the published
-prediction that got the MODEL wrong -- 100 predicted, 97 dropped -- and
-`tests/test_streaming_watermarked_dedup.py` re-runs the superseded arithmetic against it.
+counts. `opl.streaming.lateness`'s module docstring records the published prediction
+that got the MODEL wrong -- 100 predicted, 97 dropped -- and
+`tests/test_streaming_lateness.py` re-runs the superseded arithmetic against it.
 
 WHAT THIS FILE DOES NOT CLAIM. It is not a byte-identity test: nothing here rebuilds F1b's
 pinned file, and the pool below is a synthetic 1,024-key stand-in for the one
@@ -91,17 +97,19 @@ from opl.generator.defects import delivered_records
 from opl.generator.instants import from_text
 from opl.generator.measures import late_arrivals
 from opl.generator.profiles import POOL_SIZE, PROFILES
-from opl.streaming import watermarked_dedup as wd
+from opl.streaming import lateness as lt
 from opl.streaming.ingest import payment_stream
-from opl.streaming.producer import BrokerConfig, publish_records
-from opl.streaming.watermarked_dedup import (
+from opl.streaming.lateness import (
     DROPPING,
     KEEPING,
     LATE_EVENT_WATERMARK_LAG_BATCHES,
-    BoundaryEvidence,
-    LandedArm,
     LatenessBoundary,
     boundary_for,
+)
+from opl.streaming.producer import BrokerConfig, publish_records
+from opl.streaming.watermarked_dedup import (
+    BoundaryEvidence,
+    LandedArm,
     dedup_shape,
     prove_boundary,
     run_arm,
@@ -236,7 +244,7 @@ def falsifier(corpus, kafka_spark, bootstrap, tmp_path_factory) -> _Falsifier:
     That is the point: the run is the superseded model given its own best configuration, at
     a limit where its prediction and the shipped model's differ."""
     with pytest.MonkeyPatch.context() as patched:
-        patched.setattr(wd, "LATE_EVENT_WATERMARK_LAG_BATCHES", 1)
+        patched.setattr(lt, "LATE_EVENT_WATERMARK_LAG_BATCHES", 1)
         superseded = boundary_for(
             corpus.records, _DEFECTS, max_offsets_per_trigger=_FALSIFIER_PER_TRIGGER
         )
@@ -261,15 +269,15 @@ def falsifier(corpus, kafka_spark, bootstrap, tmp_path_factory) -> _Falsifier:
 
 def _margin_of(frontier: int | None, event: int) -> int:
     """`watermark_margins`'s arithmetic, one row at a time: how far this row sits below the
-    watermark its own batch is filtered against. `wd._UNREACHABLE` for a batch read before
+    watermark its own batch is filtered against. `lt._UNREACHABLE` for a batch read before
     the watermark left its floor, which no legal delay is at or below."""
-    return wd._UNREACHABLE if frontier is None else frontier - event
+    return lt._UNREACHABLE if frontier is None else frontier - event
 
 
 def _identities_the_model_drops(records, *, lag: int, per_trigger: int, delay_ms: int):
     """Which identities a late-event watermark `lag` batches back would remove entirely.
 
-    `wd._batch_frontiers` is the SHIPPED model read at a lag this function supplies, so the
+    `lt._batch_frontiers` is the SHIPPED model read at a lag this function supplies, so the
     three predictions below are COMPUTED FROM THE MODULE UNDER TEST rather than pinned as
     literals.
 
@@ -282,7 +290,7 @@ def _identities_the_model_drops(records, *, lag: int, per_trigger: int, delay_ms
     `delay > margin` relaxed to `>=`, and `_batch_frontiers`'s floor marker replaced by the
     first record's own event time. What DOES move the set is the lag (100 at a lag of 1, 97
     at 2, 95 at 3) and the rate limit (99 at 174, 98 at 176). The index and the floor marker
-    are caught in `tests/test_streaming_watermarked_dedup.py`; the `>=` is caught nowhere,
+    are caught in `tests/test_streaming_lateness.py`; the `>=` is caught nowhere,
     because no record over this corpus sits exactly at either arm's delay -- so `<=` and `<`
     name the same sets here and nothing in F5 separates them.
 
@@ -291,8 +299,8 @@ def _identities_the_model_drops(records, *, lag: int, per_trigger: int, delay_ms
     against a different batch's watermark, and one copy surviving lands the identity."""
     events = [from_text(record[EVENT_TIME_COLUMN]) for record in records]
     with pytest.MonkeyPatch.context() as patched:
-        patched.setattr(wd, "LATE_EVENT_WATERMARK_LAG_BATCHES", lag)
-        frontiers = wd._batch_frontiers(events, per_trigger)
+        patched.setattr(lt, "LATE_EVENT_WATERMARK_LAG_BATCHES", lag)
+        frontiers = lt._batch_frontiers(events, per_trigger)
     surviving = {
         record[IDENTITY_COLUMN]
         for position, record in enumerate(records)
@@ -477,7 +485,7 @@ def test_a_run_at_175_picks_the_two_batch_lag_out_of_three(falsifier, corpus, ka
     derives for it -- 262,500 ms, its own best answer at its own best configuration -- and
     the three candidate lags then predict three DIFFERENT sets of removed identities: 100
     for a one-batch lag, 97 for two, 95 for three. The predictions are computed from
-    `wd._batch_frontiers`, the shipped model, rather than typed in.
+    `lt._batch_frontiers`, the shipped model, rather than typed in.
 
     ONE RUN CHOOSES AMONG THEM, AND AMONG THEM IS THE WHOLE OF WHAT IT CHOOSES. What Spark
     removes is compared against the whole set and not against its size, because three models
