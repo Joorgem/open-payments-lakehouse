@@ -15,6 +15,7 @@ import inspect
 import textwrap
 
 import pytest
+from pyspark.errors import AnalysisException
 
 from opl.contracts.payments import COLUMNS
 from opl.spark import KAFKA_CONNECTOR_PACKAGE, PACKAGES_CONFIG, local_session
@@ -36,19 +37,74 @@ from opl.streaming.ingest import (
 _PROGRESS_CAP_CONFIG = "spark.sql.streaming.numRecentProgressUpdates"
 
 
+# The refusal a SERVERLESS session answers that key with, quoted from T8's job run
+# `570309961086740` (task run `533379837633364`) -- which had already landed 10,151 rows
+# when it hit this. Spelled here rather than paraphrased: it is the input to `_first_line`,
+# and what a reader of a run's output has to be able to recognise.
+_SERVERLESS_REFUSAL = (
+    "[CONFIG_NOT_AVAILABLE.WITHOUT_SUGGESTION] Configuration "
+    "spark.sql.streaming.numRecentProgressUpdates is not available.  SQLSTATE: 42K0I"
+)
+
+
 class _FakeConf:
-    """`session.conf`, reduced to the one `get(key, default)` `_progress_of` calls."""
+    """`session.conf`, reduced to the `get` the shipped cap read calls -- and it RAISES for
+    a key it does not hold, because a real session does.
+
+    THAT IS NOT DECORATION, it is the half the old fake got wrong. Measured on a real
+    session by `test_the_progress_cap_key_is_one_spark_actually_knows`: an unknown key
+    returns the DEFAULT when one is passed and raises `SQL_CONF_NOT_FOUND` when one is not.
+    A fake that answered `None` for an unknown key would report a misspelled key as a
+    readable cap, which is the confusion the shipped read dropped its default to end.
+
+    IT RECORDS WHAT IT WAS ASKED, so a test can say the shipped call carries NO default
+    rather than merely that it produced the right number."""
 
     def __init__(self, values: dict[str, str]):
         self._values = values
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
 
-    def get(self, key: str, default: str | None = None) -> str | None:
-        return self._values.get(key, default)
+    def get(self, key: str, *default: str) -> str:
+        self.calls.append((key, default))
+        if key in self._values:
+            return self._values[key]
+        if default:
+            return default[0]
+        raise RuntimeError(f"[SQL_CONF_NOT_FOUND] The SQL config {key!r} cannot be found.")
+
+
+class _RefusingConf:
+    """`session.conf` ON SERVERLESS: the READ ITSELF is refused, defaulted or not.
+
+    The message carries a JVM stack trace behind it -- ~90 frames in the real one -- which
+    is why `_first_line` exists and why one of them is kept here."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def get(self, key: str, *default: str) -> str:
+        self.calls.append((key, default))
+        raise AnalysisException(
+            f"""{_SERVERLESS_REFUSAL}
+
+JVM stacktrace:
+org.apache.spark.sql.AnalysisException
+  at com.databricks.sql.connect.SparkConnectConfig$.assertConfigAllowedForRead(:487)
+  at ...SparkConnectConfigHandler.handleGetWithDefault(SparkConnectConfigHandler:366)"""
+        )
 
 
 class _FakeSession:
+    """A session reduced to its `conf`. `cap=None` is a session that does not KNOW the key;
+    `_RefusingSession` is one that knows it and will not ANSWER."""
+
     def __init__(self, cap: str | None = None):
         self.conf = _FakeConf({} if cap is None else {_PROGRESS_CAP_CONFIG: cap})
+
+
+class _RefusingSession:
+    def __init__(self) -> None:
+        self.conf = _RefusingConf()
 
 
 class _FakeQuery:
@@ -61,8 +117,13 @@ class _FakeQuery:
         self.recentProgress = progresses
 
 
-def _progresses(count: int, rows: int = 1) -> list[dict[str, int]]:
-    return [{"batchId": i, "numInputRows": rows} for i in range(count)]
+def _progresses(count: int, rows: int = 1, first: int = 0) -> list[dict[str, int]]:
+    """`count` consecutive progress updates from batch id `first`.
+
+    `first` is what makes a ring that has EVICTED something expressible: a buffer whose
+    oldest retained update is batch 7 either resumed a checkpoint or lost batches 0-6, and
+    from the buffer alone those two are the same picture."""
+    return [{"batchId": i, "numInputRows": rows} for i in range(first, first + count)]
 
 
 def test_the_default_local_session_carries_no_kafka_connector(spark):
@@ -167,14 +228,120 @@ def test_a_truncated_progress_ring_is_refused_rather_than_summed_over():
     session holding one conf entry are the whole of what `_progress_of` reads, so the arm
     that is unreachable in a real run is reachable here for free."""
     under = ingest._progress_of(_FakeQuery(_progresses(2, rows=5)), _FakeSession("3"))
-    assert under == ((0, 1), 10)
+    assert (under.batch_ids, under.input_rows) == ((0, 1), 10)
+    assert (under.ring.cap, under.ring.truncation_ruled_out) == (3, True)
 
     at_the_cap = _FakeQuery(_progresses(3, rows=5))
     with pytest.raises(RuntimeError, match="3 progress updates against a"):
         ingest._progress_of(at_the_cap, _FakeSession("3"))
     # ...and the SAME query is fine once the buffer is bigger than the run, which is what
     # says the refusal is about the ring filling and not about the number of batches.
-    assert ingest._progress_of(at_the_cap, _FakeSession("4")) == ((0, 1, 2), 15)
+    fits = ingest._progress_of(at_the_cap, _FakeSession("4"))
+    assert (fits.batch_ids, fits.input_rows) == ((0, 1, 2), 15)
+
+
+def test_the_cap_is_asked_for_by_name_and_without_a_default():
+    """WHY THE SHIPPED READ CARRIES NO DEFAULT, pinned as a call rather than as prose.
+
+    A defaulted read cannot tell "this session says 100" from "this session has never
+    heard of that key" -- the same value comes back either way -- so a key that stopped
+    existing under a Spark upgrade would report a cap of 100 forever. Without a default the
+    session raises, and an unreadable cap becomes a STATE this module reports instead of a
+    number it made up.
+
+    It buys nothing on serverless either, and that half is measured rather than reasoned:
+    T8's run passed `"100"` and was refused inside `handleGetWithDefault`."""
+    session = _FakeSession("100")
+    ingest._progress_of(_FakeQuery(_progresses(2)), session)
+    assert session.conf.calls == [(_PROGRESS_CAP_CONFIG, ())]
+
+
+def test_a_cap_that_cannot_be_read_is_not_replaced_by_a_number():
+    """THE DEFECT, IN THE ARM THAT PRODUCED IT. T8 read the managed broker, landed 10,151
+    rows, and then died here -- `[CONFIG_NOT_AVAILABLE.WITHOUT_SUGGESTION]`, because a
+    Spark Connect session refuses to hand this config over at all.
+
+    AND THE REPAIR IS NOT `except: cap = 100`. That would print "the ring did not truncate"
+    over a session that never said how big the ring was -- a check whose output cannot be
+    told from a real verification, which is the shape this phase keeps finding. So the cap
+    stays None, the refusal is carried into the reading, and the ~90 JVM frames that came
+    with it do not follow it into a run's output line."""
+    run = ingest._progress_of(_FakeQuery(_progresses(2, rows=5)), _RefusingSession())
+    assert (run.batch_ids, run.input_rows) == ((0, 1), 10)
+    assert run.ring.cap is None
+    assert "AnalysisException" in run.ring.unreadable_because
+    assert "CONFIG_NOT_AVAILABLE" in run.ring.unreadable_because
+    assert "JVM stacktrace" not in run.ring.unreadable_because
+    assert len(run.ring.unreadable_because) <= 240
+
+
+def test_an_unreadable_cap_is_ruled_out_by_the_ring_still_holding_the_first_batch():
+    """THE SECOND ARGUMENT, and it is a measurement rather than a fallback.
+
+    The ring evicts OLDEST-FIRST, so a buffer whose oldest retained update is batch 0 has
+    evicted nothing -- there is no batch before 0 to have evicted. That holds whatever the
+    cap is, which is exactly why it survives a session that will not state one, and it
+    covers the run T8 makes: a fresh checkpoint over a topic.
+
+    A RESUMED checkpoint gets the other answer. Its oldest retained id is some later
+    number, and from the buffer alone "batches 0-6 were evicted" and "this run started at
+    batch 7" are the same picture -- so truncation is UNRULED-OUT and the total is a lower
+    bound. That is the honest answer rather than a refusal: what catches an undercount is
+    the floor the caller declares."""
+    fresh = ingest._progress_of(_FakeQuery(_progresses(3, rows=5)), _RefusingSession())
+    assert fresh.ring.earliest_batch_id == 0
+    assert fresh.ring.truncation_ruled_out is True
+
+    resumed = ingest._progress_of(
+        _FakeQuery(_progresses(3, rows=5, first=7)), _RefusingSession()
+    )
+    assert (resumed.batch_ids, resumed.input_rows) == ((7, 8, 9), 15)
+    assert resumed.ring.earliest_batch_id == 7
+    assert resumed.ring.truncation_ruled_out is False
+
+    # ...and an EMPTY ring is a third shape of "could not look", not a second of "fine".
+    empty = ingest._progress_of(_FakeQuery([]), _RefusingSession())
+    assert (empty.ring.earliest_batch_id, empty.ring.truncation_ruled_out) == (None, False)
+
+
+def test_a_run_can_never_print_one_of_the_two_states_when_the_other_happened():
+    """THE REQUIREMENT, ASSERTED OVER THE SENTENCE ITSELF.
+
+    Every reading in this project is quoted by something -- a run's output, an evidence
+    document -- and the two states here are one word apart in consequence: a total, or a
+    lower bound. So the sentence is derived from the same fields the decision is, and no
+    reading may carry the other's vocabulary.
+
+    THE EMPTY-RING CASE IS IN THE SWEEP because it is the one that would read as nonsense
+    unattended: `describe()` has no batch id to name, and says the ring is empty."""
+    ruled_out = [
+        ingest._progress_of(_FakeQuery(_progresses(2)), _FakeSession("100")).ring,
+        ingest._progress_of(_FakeQuery(_progresses(2)), _RefusingSession()).ring,
+    ]
+    unruled = [
+        ingest._progress_of(_FakeQuery(_progresses(2, first=7)), _RefusingSession()).ring,
+        ingest._progress_of(_FakeQuery([]), _RefusingSession()).ring,
+    ]
+    for reading in ruled_out:
+        assert reading.truncation_ruled_out is True
+        assert "whole total" in reading.describe()
+        assert "UNRULED-OUT" not in reading.describe()
+        assert "LOWER BOUND" not in reading.describe()
+    for reading in unruled:
+        assert reading.truncation_ruled_out is False
+        assert "UNRULED-OUT" in reading.describe()
+        assert "LOWER BOUND" in reading.describe()
+        assert "whole total" not in reading.describe()
+
+    # ...and the two ruled-out readings do not claim the same thing either: one compared a
+    # cap it read, the other never had one to compare.
+    assert "cap of 100 READ from this session" in ruled_out[0].describe()
+    # WHITESPACE-FOLDED, which is `_first_line` doing its job: the message arrives with the
+    # JVM stack trace behind it and two spaces before its SQLSTATE, and what has to survive
+    # into a one-line run output is the text a reader recognises, not its formatting.
+    assert " ".join(_SERVERLESS_REFUSAL.split()) in ruled_out[1].describe()
+    assert "no cap was compared against" in ruled_out[1].describe()
+    assert "the ring is empty" in unruled[1].describe()
 
 
 def test_the_progress_cap_key_is_one_spark_actually_knows(spark):
@@ -211,7 +378,11 @@ def test_a_batch_that_consumed_no_rows_is_not_reported_as_a_batch():
     would make `batch_ids` disagree with the batch split the rate limit predicts -- which
     is the number T3 chooses its fault's batch id from."""
     mixed = _FakeQuery([{"batchId": 0, "numInputRows": 7}, {"batchId": 1, "numInputRows": 0}])
-    assert ingest._progress_of(mixed, _FakeSession("100")) == ((0,), 7)
+    run = ingest._progress_of(mixed, _FakeSession("100"))
+    assert (run.batch_ids, run.input_rows) == ((0,), 7)
+    # ...and the RING is counted the other way, over every update the buffer holds: it is
+    # the buffer that overflows, not the consuming subset of it.
+    assert run.ring.updates == 2
 
 
 def test_the_default_floor_refuses_zero_and_a_short_read_is_not_its_job():

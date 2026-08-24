@@ -611,6 +611,63 @@ measuring the second arm rather than by softening the first.
   no route) — ADR 0018's species, and the reason the trial's expiry date is written down rather than
   left to be inferred from an error.
 
+#### THE FIRST RUN FAILED, AFTER LANDING EVERYTHING — AND THE PLATFORM PROVED PREDICTION 4 BY ITSELF
+
+**Controller-verified 2026-08-23.** Job run **`570309961086740`**, revision
+`c19ea0b5a86f91a57fe9a38ae62c1bbb448cdba2` — the deploy verified by artefact first: the wheel
+downloaded back out of the workspace hashed **`a3f1cf4e8463cf9cbd40444152cfaeddf53a3282b0a1de5c43a78380358608b9`**
+on both sides, and `opl/_revision.py` **inside** it carried that same revision, equal to `git HEAD`
+over a clean tree.
+
+`assert_deployed_revision` SUCCESS. `read_managed_broker` **FAILED** — and the table it wrote holds:
+
+| | |
+|---|---|
+| rows landed | **10,151** (10,150 corpus + §2.5's probe record) |
+| distinct `(kafka_partition, kafka_offset)` | **10,151** |
+| distinct `transaction_id` | **10,000** |
+
+**So the read worked and the failure is downstream of it.** The 10,000 is the 150 redeliveries
+arriving intact — 10,150 deliveries carrying 10,000 distinct ids — with the probe record's NULL id
+excluded by `COUNT(DISTINCT)`, which is the one place that operator's NULL-dropping is wanted.
+
+> **AND THE RETRY THIS PROJECT KEEPS MEASURING RAN AGAIN, WHICH TESTED PREDICTION 4 FOR REAL.**
+> `max_retries: 0` did not prevent it: one `task_key`, **two `task_run_id`s** (`533379837633364` and
+> `740868890853109`). If the sink were not idempotent the second attempt would have re-consumed
+> offsets the first had committed and the table would hold more than 10,151 rows. **It holds exactly
+> 10,151, over 10,151 distinct coordinates.** The Delta sink's transactional batch-id commit held
+> under a retry nobody staged — which is better evidence than the test that would have staged one.
+
+**What failed, and it is a capability difference nobody had measured:**
+
+```
+[CONFIG_NOT_AVAILABLE.WITHOUT_SUGGESTION] Configuration
+spark.sql.streaming.numRecentProgressUpdates is not available.  SQLSTATE: 42K0I
+  at com.databricks.sql.connect.SparkConnectConfig$.assertConfigAllowedForRead
+  at ...SparkConnectConfigHandler.handleGetWithDefault
+```
+
+**Serverless refuses to READ that config**, and the frame names `handleGetWithDefault` — so passing a
+default does not help, because the default is applied by the server *after* a read it declines to
+perform. That read is `ingest._progress_of`'s ring-buffer cap guard, **built and tested against a
+local session where the key resolves to `100`.** §2.3's whole F9 line of reasoning — the 104 floor,
+the trailing-progress arithmetic — was measured on the one compute where the key is readable.
+
+**The repair does not guess the cap.** A fallback of 100 would make a guard that cannot tell
+*verified* from *could not look* — this phase's seventh instance of that shape. Instead truncation is
+ruled out by a **second measurement**: the ring evicts oldest-first, so a buffer whose oldest retained
+update is batch 0 has evicted nothing, whatever the cap is. Where neither the cap nor that evidence is
+available, the run prints that the count is a **LOWER BOUND** and says truncation is unruled-out. A
+test sweeps all four readings and asserts neither state can borrow the other's vocabulary.
+
+**Three things the failed run established that no local test could:**
+
+1. **`dbutils.secrets.get` works from a `spark_python_task`** — the implementer's highest-risk
+   untested line. §1.2's probe was a *notebook*, where `dbutils` is injected; this is not.
+2. **The withhold holds in production.** The task's own line printed
+   `kafka.sasl.jaas.config=<withheld: carries the SASL password>`.
+3. **`spark.readStream.format("kafka")` runs on serverless.** §1.2 had measured only a *batch* read.
+
 #### What `describe_reader_options` does not cover, so it is not read as more than it is
 
 **Reported** by T8's independent reviewer, measured by them rather than by the controller: the JAAS

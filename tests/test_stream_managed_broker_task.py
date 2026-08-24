@@ -356,3 +356,32 @@ def test_the_floor_the_launch_declared_is_the_floor_the_sink_is_given():
     )
     assert isinstance(handed["minimum_rows"], ast.Name)
     assert handed["minimum_rows"].id == "minimum_rows"
+
+
+def test_the_run_says_whether_the_count_it_prints_is_the_whole_count():
+    """THE COUNT AND ITS STANDING, IN ONE LINE OF OUTPUT.
+
+    `input_rows` is summed out of a RING BUFFER, and the config sizing that buffer is one
+    serverless refuses to read -- job run `570309961086740` died on
+    `[CONFIG_NOT_AVAILABLE.WITHOUT_SUGGESTION]` after landing 10,151 rows. So the count
+    this task prints is the run's total under one argument and a LOWER BOUND under
+    another, and `RingBufferReading.describe()` is the sentence that says which.
+
+    ASSERTED HERE BECAUSE THE OUTPUT IS THE PRODUCT. This task's own header calls a
+    recorded run its product; a run whose output states a number without its standing is
+    the number quoted into an evidence document with the caveat dropped."""
+    described = [
+        node
+        for call in ast.walk(_function("main"))
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "print"
+        for node in ast.walk(call)
+        if isinstance(node, ast.Attribute) and node.attr == "describe"
+    ]
+    assert described, (
+        f"no print() in {_TASK}.py:main reaches `.describe()`. The run would state its "
+        "row count without saying whether the progress ring it was summed from could have "
+        "dropped batches -- which on this platform is a question the session refuses to "
+        "answer, not one that answers itself"
+    )

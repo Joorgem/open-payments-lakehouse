@@ -74,6 +74,17 @@ whole point of it existing -- so what it needed was two parameters, not a second
     local test has a tmp dir and no catalog. Exactly one of the two, refused otherwise --
     passing both leaves the destination ambiguous, and passing neither is no destination
     at all.
+
+--- AND A THIRD THING T8 FOUND: THIS MODULE'S OWN INSTRUMENT IS NOT ALWAYS READABLE -------
+
+`_progress_of` sized its truncation refusal off a Spark config, and SERVERLESS REFUSES TO
+READ THAT CONFIG AT ALL. Measured, after the run had already landed 10,151 rows:
+`[CONFIG_NOT_AVAILABLE.WITHOUT_SUGGESTION]` out of
+`SparkConnectConfig$.assertConfigAllowedForRead`. Substituting the value it would have
+returned would turn the one guard here that cannot fire in a shipped run into a guess --
+a check whose output cannot tell "verified" from "could not look" -- so `RingBufferReading`
+carries WHICH argument ruled truncation out, or that none did, and a run prints it beside
+its count.
 """
 from __future__ import annotations
 
@@ -94,6 +105,19 @@ PROCESSING_IDENTITY = (PARTITION_COLUMN, OFFSET_COLUMN)
 
 # The record's bytes, kept verbatim beside the parsed columns.
 VALUE_COLUMN = "kafka_value"
+
+# The Spark config that sizes `recentProgress`'s ring buffer, spelled once. READ rather
+# than assumed, and on a serverless session not readable at all -- see
+# `_cap_or_the_reason_it_could_not_be_read`.
+PROGRESS_CAP_CONFIG = "spark.sql.streaming.numRecentProgressUpdates"
+
+# The batch id a streaming query's FIRST batch carries. A query whose checkpoint is fresh
+# (or whose checkpoint committed nothing) starts here; one that resumes a checkpoint
+# continues from the id after the last committed batch. The ring evicts OLDEST-FIRST, so a
+# buffer still holding this id has evicted nothing -- there is nothing before it to evict.
+# That is `RingBufferReading`'s second argument, and the only one left where the cap is
+# unreadable.
+FIRST_BATCH_ID = 0
 
 KAFKA_COLUMNS = (*PROCESSING_IDENTITY, VALUE_COLUMN)
 
@@ -142,6 +166,102 @@ _assert_the_kafka_columns_do_not_shadow_the_contract()
 
 
 @dataclass(frozen=True, kw_only=True)
+class RingBufferReading:
+    """WHETHER `input_rows` IS THE RUN'S WHOLE TOTAL OR ONLY A LOWER BOUND -- and by which
+    of two arguments, because a run that cannot tell those apart must print neither.
+
+    `recentProgress` IS A RING BUFFER: capped by `PROGRESS_CAP_CONFIG` (100 on every session
+    this project has measured), evicting its OLDEST entry on overflow. A total summed over
+    an overflowed buffer is an undercount, in the same shape as every other short read this
+    phase refuses.
+
+    THE OBVIOUS CHECK -- retained updates against the cap -- NEEDS THE CAP, AND SERVERLESS
+    WILL NOT HAND IT OVER. Measured on T8's job run `570309961086740` (task run
+    `533379837633364`), AFTER it had already landed 10,151 rows into
+    `workspace.default.streaming_payments_managed_broker`:
+
+        [CONFIG_NOT_AVAILABLE.WITHOUT_SUGGESTION] Configuration
+        spark.sql.streaming.numRecentProgressUpdates is not available.  SQLSTATE: 42K0I
+          at com.databricks.sql.connect.SparkConnectConfig$.assertConfigAllowedForRead(:487)
+          at ...SparkConnectConfigHandler.handleGetWithDefault(SparkConnectConfigHandler:366)
+
+    AND A DEFAULT DOES NOT RESCUE IT -- that second frame is the proof, not an opinion. The
+    call that raised WAS `spark.conf.get(key, "100")`; PySpark's Connect client routes a
+    call carrying a default to `ConfigRequest.GetWithDefault` (`RuntimeConf.get`, in
+    `pyspark/sql/connect/conf.py`), and the refusal is raised inside the handler for exactly
+    that request. The
+    default is applied by the SERVER, after a read it will not perform.
+
+    AND `100` IS NOT PUT IN ITS PLACE. A hardcoded cap would report "the ring did not
+    truncate" on a session that never said how big the ring was -- output identical to a
+    real verification, which is the one property this module refuses everywhere else.
+
+    SO THERE ARE TWO ARGUMENTS, AND A READING NAMES THE ONE IT USED:
+
+      * THE CAP, where the session hands it over: fewer retained updates than the cap and
+        nothing was evicted. Every local run takes this branch and it is unchanged.
+      * THE FIRST BATCH ID, where it does not: the ring evicts oldest-first, so a buffer
+        whose oldest retained update is `FIRST_BATCH_ID` has evicted nothing WHATEVER its
+        size. That is a measurement over the same progress list the total is summed from,
+        not a fallback -- and it covers the run T8 actually makes, a fresh checkpoint over
+        a topic, where batch 0 is the first batch there is.
+
+    WHEN NEITHER APPLIES -- an unreadable cap over a RESUMED checkpoint, whose oldest
+    retained id is some later number -- `truncation_ruled_out` is False and `describe()`
+    calls the count a LOWER BOUND. Nothing here refuses that run: an undercount is what
+    `_refuse_a_run_that_processed_nothing`'s floor is for, and that floor is a number the
+    CALLER declares (T8 declared 10,151 at launch) rather than one this module could
+    invent."""
+
+    updates: int
+    earliest_batch_id: int | None
+    cap: int | None
+    unreadable_because: str | None
+
+    @property
+    def truncation_ruled_out(self) -> bool:
+        """True only where one of the two arguments actually ran.
+
+        Both terms of the cap arm are checked here rather than inferred from `_progress_of`
+        having raised: a property reading "the cap is known" alone would answer True on a
+        reading built anywhere else, and this value is what a caller prints."""
+        if self.cap is not None:
+            return self.updates < self.cap
+        return self.earliest_batch_id == FIRST_BATCH_ID
+
+    def describe(self) -> str:
+        """The reading as one sentence, for a run's own output.
+
+        DERIVED FROM THE SAME FIELDS the decision is, so a run cannot print one state while
+        the other happened -- which is the whole requirement here: "the ring did not
+        truncate" and "truncation is unruled-out" must never be the same sentence."""
+        held = f"progress ring: {self.updates} updates"
+        if self.cap is not None:
+            return (
+                f"{held} against a cap of {self.cap} READ from this session -- under it, so "
+                "nothing was evicted and the count above is the run's whole total."
+            )
+        unread = f"{PROGRESS_CAP_CONFIG} could not be read here ({self.unreadable_because})"
+        if self.earliest_batch_id == FIRST_BATCH_ID:
+            return (
+                f"{held}; {unread}, so no cap was compared against -- but the oldest "
+                f"retained update is batch {FIRST_BATCH_ID}, the first this query ran, and "
+                "the ring evicts oldest-first, so nothing was evicted and the count above "
+                "is the run's whole total."
+            )
+        oldest = (
+            f"the oldest retained update is batch {self.earliest_batch_id}"
+            if self.earliest_batch_id is not None
+            else "the ring is empty"
+        )
+        return (
+            f"{held}; {unread}, and {oldest} rather than batch {FIRST_BATCH_ID} -- so an "
+            "earlier update may have been evicted, TRUNCATION IS UNRULED-OUT, and the count "
+            "above is a LOWER BOUND rather than the run's total."
+        )
+
+
+@dataclass(frozen=True, kw_only=True)
 class IngestedStream:
     """What one `availableNow` run of a stream processed, taken from SPARK'S OWN PROGRESS
     and not from the sink.
@@ -155,10 +275,16 @@ class IngestedStream:
 
     `batch_ids` is the second, and it is what makes the rate-limited split OBSERVABLE:
     T3's fault is injected on a chosen batch id, and a batch id can only be chosen because
-    a run states which ones it had."""
+    a run states which ones it had.
+
+    `ring` is the third and it qualifies the other two: whether `input_rows` is the run's
+    total or a floor under it, and by which argument -- see `RingBufferReading`. It carries
+    NO DEFAULT on purpose. There is no honest value for "nobody looked", and a default here
+    would be exactly that value, printed in the shape of a measurement."""
 
     batch_ids: tuple[int, ...]
     input_rows: int
+    ring: RingBufferReading
 
 
 def _refuse_offsets_that_can_read_nothing(starting_offsets: str) -> None:
@@ -256,18 +382,59 @@ def _projected(frame: DataFrame) -> DataFrame:
     )
 
 
-def _progress_of(query, spark: SparkSession) -> tuple[tuple[int, ...], int]:
-    """The batch ids that consumed something, and the total they consumed.
+def _first_line(exc: BaseException, limit: int = 200) -> str:
+    """An exception reduced to something a run's output line can carry.
 
-    THE TRUNCATION IS REFUSED RATHER THAN SUMMED OVER. `recentProgress` is a RING BUFFER
-    capped by `spark.sql.streaming.numRecentProgressUpdates` (100 by default), so a query
-    with more batches than that silently reports the sum of its LAST hundred -- a number
-    smaller than the truth, in the same shape as every other short read this phase
+    A Spark Connect error arrives with the JVM stack trace attached -- T8's was ~90 frames
+    -- and a reading whose reason is a stack trace is a reading nobody reads. The first
+    line is the SQLSTATE-carrying message, which is the part that says why."""
+    lines = str(exc).splitlines() or [""]
+    text = " ".join(lines[0].split())
+    return text if len(text) <= limit else f"{text[: limit - 3]}..."
+
+
+def _cap_or_the_reason_it_could_not_be_read(
+    spark: SparkSession,
+) -> tuple[int | None, str | None]:
+    """The ring buffer's cap, or the refusal that came back instead of it. Never a
+    stand-in for it: exactly one of the two is not None.
+
+    ASKED WITHOUT A DEFAULT, which is a change of question rather than of style. Measured
+    on a real session (`tests/test_streaming_delta_ingest.py`): a key Spark does not know
+    returns the DEFAULT when one is passed and raises `SQL_CONF_NOT_FOUND` when one is
+    not -- so the defaulted call cannot tell "this session says 100" from "this session
+    has never heard of that key". On serverless the default buys nothing at all; see
+    `RingBufferReading` for the frame that proves it.
+
+    THE REFUSAL IS CARRIED, NOT SWALLOWED. Its message is what `describe()` prints, and it
+    is the only thing that lets a reader tell an unruled-out run from a checked one."""
+    try:
+        return int(spark.conf.get(PROGRESS_CAP_CONFIG)), None
+    except Exception as refusal:  # noqa: BLE001 -- reported by `describe()`, not discarded
+        return None, f"{type(refusal).__name__}: {_first_line(refusal)}"
+
+
+def _progress_of(query, spark: SparkSession) -> IngestedStream:
+    """What one run processed: the batch ids that consumed something, the total they
+    consumed, and WHETHER THAT TOTAL IS THE WHOLE OF IT.
+
+    THE TRUNCATION IS REFUSED RATHER THAN SUMMED OVER, WHERE THE CAP CAN BE READ.
+    `recentProgress` is a RING BUFFER capped by `PROGRESS_CAP_CONFIG` (100 by default), so
+    a query with more batches than that silently reports the sum of its LAST hundred -- a
+    number smaller than the truth, in the same shape as every other short read this phase
     refuses. Nothing here needs a long run; a run that becomes one gets a message instead
-    of an undercount."""
+    of an undercount.
+
+    THAT REFUSAL IS AT `>= cap` AND STAYS THERE, including in the one case `FIRST_BATCH_ID`
+    would clear (a full ring that has not evicted anything yet). It has never fired in a
+    shipped run -- the runs here measure 1 and 3 consuming batches against a cap of 100 --
+    and loosening a shipped refusal that nothing forced is not this fix's business.
+
+    WHERE THE CAP CANNOT BE READ there is nothing to compare, and no comparison is
+    invented. The reading says which argument it had; `RingBufferReading` is the argument."""
     progresses = query.recentProgress
-    cap = int(spark.conf.get("spark.sql.streaming.numRecentProgressUpdates", "100"))
-    if len(progresses) >= cap:
+    cap, unreadable_because = _cap_or_the_reason_it_could_not_be_read(spark)
+    if cap is not None and len(progresses) >= cap:
         raise RuntimeError(
             f"the query reported {len(progresses)} progress updates against a "
             f"`numRecentProgressUpdates` cap of {cap}. The buffer is a ring, so the "
@@ -275,9 +442,15 @@ def _progress_of(query, spark: SparkSession) -> tuple[tuple[int, ...], int]:
             "undercount. Raise the cap or shorten the run."
         )
     consuming = [p for p in progresses if p["numInputRows"] > 0]
-    return (
-        tuple(int(p["batchId"]) for p in consuming),
-        sum(int(p["numInputRows"]) for p in consuming),
+    return IngestedStream(
+        batch_ids=tuple(int(p["batchId"]) for p in consuming),
+        input_rows=sum(int(p["numInputRows"]) for p in consuming),
+        ring=RingBufferReading(
+            updates=len(progresses),
+            earliest_batch_id=int(progresses[0]["batchId"]) if progresses else None,
+            cap=cap,
+            unreadable_because=unreadable_because,
+        ),
     )
 
 
@@ -351,6 +524,6 @@ def write_payment_stream(
         table,
     )
     query.awaitTermination()
-    batch_ids, input_rows = _progress_of(query, frame.sparkSession)
-    _refuse_a_run_that_processed_nothing(input_rows, minimum_rows, topic)
-    return IngestedStream(batch_ids=batch_ids, input_rows=input_rows)
+    ingested = _progress_of(query, frame.sparkSession)
+    _refuse_a_run_that_processed_nothing(ingested.input_rows, minimum_rows, topic)
+    return ingested

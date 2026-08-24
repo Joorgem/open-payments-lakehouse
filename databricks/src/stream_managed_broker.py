@@ -68,6 +68,22 @@ order or either. A fresh checkpoint over a surviving table would re-read the top
 `earliest` and append it a second time -- the same shape as the month-scoped Auto Loader
 checkpoint hazard `opl.bronze.autoloader.checkpoint_location` documents.
 
+--- THE COUNT IT PRINTS SAYS WHETHER IT IS THE WHOLE COUNT --------------------------------
+
+`input_rows` is summed out of Spark's `recentProgress`, WHICH IS A RING BUFFER, and the
+config that sizes that buffer is one THIS PLATFORM REFUSES TO READ: job run
+`570309961086740` landed 10,151 rows and then died on
+`[CONFIG_NOT_AVAILABLE.WITHOUT_SUGGESTION] Configuration
+spark.sql.streaming.numRecentProgressUpdates is not available`, raised inside Spark
+Connect's `handleGetWithDefault` -- so passing a default does not reach it either.
+
+The repair is not a hardcoded 100. `opl.streaming.ingest.RingBufferReading` rules
+truncation out by a SECOND argument where the cap is unreadable -- the ring evicts
+oldest-first, so a buffer still holding batch 0 has evicted nothing -- and where even that
+does not apply it says so. Its sentence is printed beside the count below, which is what
+makes "the ring did not truncate" and "truncation is unruled-out, this is a lower bound"
+two different run outputs rather than one.
+
 --- CREDENTIALS: ONLY THE PASSWORD IS A SECRET, AND THAT WAS MEASURED THE HARD WAY --------
 
 Databricks replaces every occurrence of a SECRET'S VALUE in task output. The Kafka username
@@ -198,9 +214,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     print(
         f"stream_managed_broker: consumed {ingested.input_rows} records from {TOPIC!r} "
-        f"across batches {ingested.batch_ids} into {table}. That is a count of records "
-        "READ from the managed broker on serverless compute -- it is not, and must not be "
-        "quoted as, evidence about exactly-once processing (see this task's header)."
+        f"across batches {ingested.batch_ids} into {table}. {ingested.ring.describe()} "
+        "That is a count of records READ from the managed broker on serverless compute -- "
+        "it is not, and must not be quoted as, evidence about exactly-once processing "
+        "(see this task's header)."
     )
 
 

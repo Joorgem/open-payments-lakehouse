@@ -92,6 +92,14 @@ def test_the_topic_lands_in_delta_as_the_pinned_file(kafka_spark, kafka_topic, b
         topic=topic,
     )
     assert (ingested.batch_ids, ingested.input_rows) == ((0,), _PINNED_ROWS)
+    # AND THE PROGRESS RING'S READING, ON A REAL QUERY, because the serverless arm of
+    # `RingBufferReading` rests on a premise only a real query can supply: a query over a
+    # FRESH CHECKPOINT has batch 0 as the oldest update in its ring, and a ring that still
+    # holds its first batch has evicted nothing whatever its cap is. Here the cap is
+    # readable and rules truncation out on its own; what this line adds is that the OTHER
+    # argument's premise holds where it can be measured, which is not on Spark Connect.
+    assert (ingested.ring.cap, ingested.ring.truncation_ruled_out) == (100, True)
+    assert ingested.ring.earliest_batch_id == 0
 
     landed = _landed(kafka_spark, (tmp_path / "sink").as_posix())
     assert landed.count() == _PINNED_ROWS
