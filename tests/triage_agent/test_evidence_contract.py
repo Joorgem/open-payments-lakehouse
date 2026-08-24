@@ -1,11 +1,20 @@
 """What `evidence.py` promises before a single row is read: the refusals and the locks.
 
-SPLIT FROM `test_evidence.py` AT A SUBJECT SEAM AND NOT AT A LINE COUNT, and decided before
-either file was written so there is no move for a later reader to have to diff. That file
-runs SQL over real tables and answers "what does this return"; this one answers "what does
-this refuse, and what is it locked against" -- none of which needs a row, a table or a JVM,
-and all of which changes for different reasons. It is `test_incidents_declaration.py`'s
-seam, taken deliberately rather than after the cap was hit.
+SEPARATED FROM THE SPARK-RUNNING TESTS AT A SUBJECT SEAM AND NOT AT A LINE COUNT, and
+decided before either file was written so there is no move for a later reader to have to
+diff. Those tests run SQL over real tables and answer "what does this return"; this file
+answers "what does this refuse, and what is it locked against" -- none of which needs a
+row, a table or a JVM, and all of which changes for different reasons. It is
+`test_incidents_declaration.py`'s seam, taken deliberately rather than after the cap was
+hit.
+
+THE HALF THIS ONE WAS SEPARATED FROM WAS ITSELF SPLIT LATER, at `ac984e5`, when it reached
+the 800-line cap: `test_evidence_census.py` took the counts and the verdicts,
+`test_evidence_sample.py` took the row states and the taint sweep. Where this header names
+the other arm of a two-arm property, it names `test_evidence_sample.py`, which is where the
+sweep went -- **and that repointing is why this paragraph exists**: the earlier text said
+`test_evidence.py`, and a citation a reader cannot open is worse than none, because they
+cannot tell a missing file from a withheld argument.
 
 Nothing here starts Spark, and nothing here enforces that -- the same property, unguarded
 for the same reason, that `test_incidents_declaration.py` records: every cheap spelling of
@@ -28,17 +37,17 @@ blind spot.
     arm alone can reach -- measured 2026-08-24, adding
     `SUBSTR(nome_socio_razao_social, 1, 3) AS initials` to `row_shapes_sql`'s outer
     projection puts the first three characters of a real partner name in a published row and
-    `test_evidence.py` passes ENTIRELY, because the transform drops the planted sentinel and
+    `test_evidence_sample.py` passes ENTIRELY, because the transform drops the planted sentinel and
     leaves its taint sweep nothing to find.
   * IT IS BLIND TO EVERY LEAK THAT NEVER SPELLS THE NAME, and that door is open BY
     CONSTRUCTION: `row_shapes_sql` builds its inner CTE as `SELECT * FROM <quarantine>`, so
     `sampled.*` in the outer projection reads every personal column and adds ZERO to
     `shapes.count(column)`. Measured 2026-08-24: with `sampled.*` in that same outer
-    projection, every test in THIS file passes -- blind -- while `test_evidence.py`'s taint
+    projection, every test in THIS file passes -- blind -- while `test_evidence_sample.py`'s taint
     sweep goes red. The exact mirror of the bullet above. `struct(*)` and `t.*` are the same
     door by the same arithmetic -- neither spells the name -- and were NOT separately
     measured; only the star was.
-  * `test_evidence.py` IS THE OTHER ARM. It reads the RESULTS and looks for planted values,
+  * `test_evidence_sample.py` IS THE OTHER ARM. It reads the RESULTS and looks for planted values,
     so it sees a leak in any spelling including a star -- and only where the leaked text
     still carries a sentinel, which is why its `_TAINT_SWEEP` walks a batch the eleven
     incidents do not.
@@ -155,12 +164,12 @@ def test_no_publishable_statement_READS_a_declared_personal_column():
     only the BACKTICKED form the state expression builds, and `nome_socio_razao_social AS
     leaked_name` -- unbackticked, which is this module's own house spelling three lines away
     (`row_shapes_sql` writes `_dq_reject_reason AS reject_reason`) -- walked straight
-    through it, green here and green in `test_evidence.py` as both files then stood. What is
+    through it, green here and green in `test_evidence_sample.py` as both files then stood. What is
     asserted instead is the ONLY legal occurrence: the name appears in `row_shapes` EXACTLY
     ONCE, and that once is the quoted map key beside `masked`.
 
     SO A READ IS A SECOND OCCURRENCE IN ANY SPELLING OF THE NAME -- AND IN NO OTHER CASE.
-    What that covers, what it cannot, and why the sweep in `test_evidence.py` is not a
+    What that covers, what it cannot, and why the sweep in `test_evidence_sample.py` is not a
     duplicate of it are in this file's own header, with both mutations measured.
 
     THE CONTROL IS IN THE SAME STRINGS. Every UNMASKED socios column must be read in

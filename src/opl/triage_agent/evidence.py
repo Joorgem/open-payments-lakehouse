@@ -72,7 +72,7 @@ records, so a row value that reaches an artefact reaches everyone.
 
     THAT IS A PROPERTY OF THE OUTPUT, SO IT IS ASSERTED AGAINST THE OUTPUT -- BY TWO CHECKS
     NEITHER OF WHICH IS TOTAL, and the split is stated here so neither is later dropped as
-    redundant. `tests/triage_agent/test_evidence.py` plants a sentinel in every fixture
+    redundant. `tests/triage_agent/test_evidence_sample.py` plants a sentinel in every fixture
     value EXCEPT those pinned to a state word a sentinel would destroy (`''`, NULL, `***`)
     and requires that no sentinel reaches these results. It catches a leak in ANY spelling,
     `SELECT *` included, and ONLY where the leaked text still carries a planted sentinel --
