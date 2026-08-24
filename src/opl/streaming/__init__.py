@@ -34,7 +34,7 @@ counts what the broker acknowledged; its tests need the container and carry the
 phase's headline property would have been provable only where a broker was running --
 which is the same shape as a claim that is checked nowhere.
 
---- AND THE CONSUMING HALF, WHICH IS SPLIT ON A DIFFERENT SEAM ---------------------------
+--- AND THE CONSUMING HALF, WHICH IS THREE MODULES SPLIT ON A DIFFERENT SEAM -------------
 
 `ingest` reads the topic back through Structured Streaming into a local Delta table, and
 `exactly_once` is F5's HEADLINE: two `foreachBatch` arms over one fault and the same
@@ -48,4 +48,12 @@ reports success under every outcome. `exactly_once` is where the batch is writte
 code and a replay can double-write, which is the only place the property is falsifiable.
 Its NAIVE arm exists to be falsified, and if that arm ever stops duplicating, the phase has
 proven that the fault missed its window rather than that anything is exactly-once.
+
+`watermarked_dedup` IS THE THIRD, and it is cut on a question neither of those two asks:
+not where the bytes go, but WHICH ROWS ARRIVE IN TIME TO COUNT. Its chain is
+`withWatermark -> dropDuplicatesWithinWatermark` and its product is the DIFFERENCE between
+one corpus read at two watermark delays. It sits DOWNSTREAM of the seam above rather than
+across it -- it lands through `ingest.write_payment_stream` instead of replacing it -- and
+that is the right way round precisely because what it measures is the watermark and not the
+write, so a sink that is exactly-once by construction is one fewer thing in the way.
 """

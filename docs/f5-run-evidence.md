@@ -353,3 +353,169 @@ reported `killed` by the harness and read as failures; the third had in fact wri
 `15 passed, 25 deselected in 125.64s` to its output file before the shell died. **The JVM's process
 tree outlives pytest**, which is exactly why `CLAUDE.md` says to redirect to a file and read the
 file. The controller read a terminal status as a test result twice before checking the file.
+
+### 2.3 LATE ARRIVAL AND DEDUP — published 2026-08-20, while the run was in flight and unknown
+
+**Written before any number came back.** The corpus is the `promotable` profile, whose every figure
+is arithmetic on a declaration in `src/opl/generator/profiles.py` and needs no run: **10,000 events,
+800 legitimate repeats, 150 redeliveries, 100 late arrivals delayed by exactly `LATENESS_WINDOW_MS`
+(3,600,000 ms)**, delivered as **10,150** records.
+
+**Lateness is injected into `emitted_at` and nothing else** — the payment did not move, the delivery
+did — so a late record appears in delivery order after records whose `event_time` is newer.
+
+#### The late-arrival prediction, in the form that can be wrong
+
+**Two runs over the SAME corpus at two watermark thresholds**, one narrower than the injected delay
+and one wider:
+
+| arm | landed rows |
+|---|---|
+| watermark **narrower** than 3,600,000 ms | ~~the corpus **minus the 100 late records**~~ |
+| watermark **wider** | ~~the whole corpus~~ |
+| **difference** | **exactly 100** |
+
+> **BOTH PER-ARM CELLS ARE FALSIFIED AND BOTH ARE THE CONTROLLER'S.** Predicted 10,050 and 10,150;
+> measured **9,900 and 10,000**. Each is 150 low, and the 150 is the redelivery count.
+>
+> **The mechanism is the error, not the arithmetic.** This section wrote the watermark prediction and
+> the dedup prediction as two independent tables, as if a row could be counted once for lateness and
+> again for duplication. **The implementation composes them into ONE operator chain**, so the dedup
+> removes its 150 from *both* arms before either count is taken. Predicting two effects separately
+> for a system that applies them together is the same class of error as §2.1's — a term that changes
+> meaning between two places in one document.
+>
+> **The bolded clause survives, and it is the one the experiment was built to test:** the difference
+> is **exactly 100**, confirmed at the shipped rate limit and again at a limit nobody tuned. Found by
+> the independent reviewer of T4+T5, checking §2.3 clause by clause because they were asked to.
+
+**One arm alone would be a demo.** A single run that drops nothing is indistinguishable from a
+watermark that was never consulted, and this phase has already published three checks with that
+shape. The pair is the measurement.
+
+#### The dedup prediction
+
+Over the delivered 10,150: **exactly 150 rows collapse** (`COUNT(*) − COUNT(DISTINCT transaction_id)`
+= 150, the injected redelivery count), leaving **10,000**, of which **9,200 are distinct
+business-attribute tuples** — because **the 800 legitimate repeats SURVIVE**. A repeat is a customer
+paying the same supplier the same amount twice: same payer, payee, amount, currency and method, its
+own `transaction_id`, and ordinary business.
+
+#### What falsifies each, and every one is a real outcome
+
+- **Both watermark arms landing the same count falsifies the experiment, not the guarantee.** It
+  means the watermark never bit — a stateless sink (a watermark outside a stateful operator discards
+  nothing), a single micro-batch (a watermark computed from data already seen starts at its floor),
+  or a threshold wide enough to admit everything. **This is the outcome the pair exists to make
+  visible.**
+- ~~**950 collapsing falsifies the dedup key**: it was taken over the business tuple, and the 800
+  legitimate repeats were destroyed along with the 150 redeliveries.~~ A test asserting only "150
+  fewer rows" would not see it, which is why the surviving count is asserted too.
+
+  > **THIS FALSIFIER WOULD NOT HAVE FIRED, AND IT IS THE CONTROLLER'S SECOND DEFECT IN ONE SECTION.**
+  > Measured with the business-tuple key: **526 collapse, not 950** — 150 redeliveries plus 376
+  > ordinary payments destroyed, leaving **424** of the 800 repeats standing. So a run that had taken
+  > the wrong key would have shown a number this document never named, and **the tripwire published
+  > here would have stayed silent.**
+  >
+  > **The reason is worth more than the correction.** The shipped operator is *windowed*: it collapses
+  > only the repeats whose copies fall inside its state window, so the damage is an artefact of the
+  > batching and lands on no round number at all. The reviewer verified the mechanism quantitatively
+  > — the coarser rate limit collapses **more** (393 against 376), which is the direction the
+  > explanation requires, and the corpus's median repeat gap of 8.7 M ms against a ~8 M ms effective
+  > window is why the survivors land near half rather than near 0 or 800.
+  >
+  > **What actually closes the trap is the shipped assertion `surviving_repeats == 800`**, which the
+  > implementer wrote — not this document's arithmetic. A falsifier that names the wrong number is
+  > worse than none, because it reads as coverage.
+- **A surviving-repeat count of zero falsifies nothing and means the test asked nothing** — there
+  would have been no legitimate repeat for a dedup to be wrong about.
+
+**And this measures a property of the DATA, not of the processing.** The 150 are the producer
+delivering one `transaction_id` twice. §2.2's exactly-once proof is about what a pipeline does when
+it dies mid-batch. The two are separate claims over one corpus, and this document keeps them apart
+because §2.1 already blurred them once, in the controller's own hand.
+
+### 2.4 THE RESULT — the difference is 100, and Spark's watermark is two batches behind its own report
+
+**Reported** by the implementer, **independently reproduced by the reviewer** through their own probe
+and through the shipped suite. Corpus: the `promotable` profile, 10,150 delivered records, one
+partition, 133 records per trigger → 77 micro-batches on both arms.
+
+| arm | watermark delay | landed |
+|---|---|---|
+| DROPPING | 262,500 ms | **9,900** |
+| KEEPING | 3,600,000 ms | **10,000** |
+| | | **difference = 100** |
+
+**100 is `promotable`'s declared `late_count`**, and `dropped_rows` reads that declaration rather
+than a literal — `grep "100\b"` over the module finds four hits, all in docstrings. Both arms consumed
+10,150 rows across the same 77 batches, read from Spark's **source-side** progress, so the difference
+cannot be a short read.
+
+**Dedup, on the arm where nothing was dropped:** 10,150 delivered → **10,000 landed, so exactly 150
+redeliveries collapsed**; 10,000 distinct `transaction_id` over **9,200** distinct business tuples,
+so **the 800 legitimate repeats survived**. The key is `transaction_id` alone and shipped code
+refuses any key touching the business attributes.
+
+#### THE QUESTION THE REVIEW WAS SENT TO ANSWER: DERIVED, OR SEARCHED?
+
+The implementer's first run produced **97**, not the predicted 100. They then changed the
+configuration and got 100. **That sequence has two readings and they are opposite**, so the reviewer
+was asked to decide it by evidence rather than to check the number.
+
+**Verdict: DERIVED.** Four things establish it, and the fourth is the one that settles it:
+
+1. **Nothing in `src/` compares against 100.** The discriminating assertion lives in the test, where
+   one side is two Delta `.count()`s and the other is the profile declaration. Shipped code only
+   requires `> 0` — **so a 97 would have been accepted by the code and failed in the test**, which is
+   the correct place for it.
+2. **Sweeping the rate limit 1…260: 191 accepted, 69 refused, and every accepted limit yields a
+   positive dropping delay.** ~~And the prediction is 100 on all 191, so no legal configuration
+   yields a different number.~~
+   > **THAT SECOND CLAUSE IS AN IDENTITY WEARING A MEASUREMENT'S CLOTHES, AND IT IS THE
+   > CONTROLLER'S.** `LatenessBoundary.dropped_rows` returns `self.late_count` and reads neither the
+   > limit nor the margins, so it *could not have come out otherwise* — sweeping 191 limits to
+   > observe it is like measuring that a constant is constant. What the sweep genuinely establishes
+   > is the half above: that 191 limits are **accepted** at all, each with a usable delay, so the
+   > shipped one was drawn from a wide legal set rather than being the only thing that worked.
+   > Found by the reviewer of the correction, reading the field's definition instead of the sweep's
+   > output.
+3. **The derivation transfers and refuses.** A corpus with 37 late arrivals predicts 37; one with 12
+   predicts 12; one it cannot separate is **refused** with a negative margin rather than answered.
+4. **The reviewer ran it at a rate limit nobody had used** — 260/trigger, where the narrowest late
+   margin is 60,000 ms against 133's 525,000, an **8.75× tighter** boundary. First try:
+   **9,900 / 10,000, difference 100.** A boundary tuned to make one configuration come out right does
+   not survive an untuned one at a margin that much tighter.
+
+#### THE MECHANISM BEHIND THE 97, AND HOW IT WAS MADE FALSIFIABLE
+
+**Spark 3.5 filters a batch's late events against a watermark TWO batches behind the data, while the
+watermark it reports in `StreamingQueryProgress` is ONE batch behind.** The reported value for batch
+N equals `max(event_time over batches 0..N−1) − delay`, verified to the millisecond; the three
+survivors of the first run sit in batch 50 with event times strictly between the values reported for
+batches 49 and 50; and a pure-Python re-simulation reproduces **the same 97 rows and the same three
+file positions** at lag 2 and at neither 1 nor 3.
+
+> **THE REVIEWER'S SHARPEST FINDING WAS NOT ABOUT THE NUMBER — IT WAS THAT THE CONSTANT COULD NOT BE
+> TESTED.** At the shipped configuration a one-batch and a two-batch lag remove **the same 100
+> identities**, so the headline run said nothing about which was right. The only separating
+> observation lived in an uncommitted scratchpad. `LATE_EVENT_WATERMARK_LAG_BATCHES = 2` was true,
+> well-evidenced, and **unfalsifiable from anything a reader could run** — this project's signature
+> defect, wearing a correct answer.
+>
+> **Closed by a run at 175 records per trigger, where the three candidate lags predict three
+> DIFFERENT removed-identity sets** — 100 / 97 / 95. **Measured: 97.** Lag 2 confirmed; lag 1
+> refuted *at the configuration lag 1 itself derived*, so it was refuted on its own best ground; lag
+> 3 refuted. The assertion is set equality element by element, and the predicted sets are built by
+> the shipped model with the lag monkeypatched rather than written as literals, so changing the model
+> changes what the run is compared against.
+>
+> `1 passed, 6 deselected in 752.10s`.
+
+#### What this cost, for whoever budgets the CI job
+
+**12 m 32 s** for the falsifier arm alone — corpus derivation, publishing 10,150 records, a Spark
+session start and one 58-batch arm. The fixed costs dominate, so it is **not** a third of the file;
+the full file runs three arms and costs more than the 16–20 min the two-arm version measured on this
+Windows box.

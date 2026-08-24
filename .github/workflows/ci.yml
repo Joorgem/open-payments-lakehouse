@@ -58,6 +58,107 @@ jobs:
       - name: Live Postgres tests (the container-only slice)
         run: uv run pytest -m postgres -v
 
+  # F5 T6: THE STREAMING PROOF, VERIFIED SOMEWHERE OTHER THAN ONE WINDOWS BOX.
+  # ADDITIVE, on the `postgres` job's precedent: the `test` job's command is untouched,
+  # and `addopts` deselects `redpanda` by default, so a second `-m` on the command line
+  # replaces that term rather than intersecting it -- verified by collection: `-m redpanda`
+  # selects 22 of 2,820 and every one of the 22 also carries `integration`, which an
+  # intersection would have removed.
+  #
+  # WHY `docker compose` AND NOT A `services:` BLOCK, which is what the postgres job uses.
+  #
+  # THIS BLOCK HAS NOW BEEN WRONG TWICE, BOTH TIMES FROM MEMORY, AND BOTH ARE CORRECTED
+  # HERE RATHER THAN DELETED. It first said a service container "cannot supply argv".
+  # False: GitHub added `entrypoint` and `command` keys to `services:`, in the changelog
+  # entry "GitHub Actions: Early April 2026 updates" (2026-04-02). The correction of that
+  # claim then published two dates of its own -- an "announcement" and a GA -- and NEITHER
+  # IS IN ANY PRIMARY SOURCE: the 2026-02-13 entry that date was attached to is about
+  # Agentic Workflows. Checking a claim against a community discussion instead of the
+  # changelog is the same defect as not checking it, wearing the appearance of rigour.
+  #
+  # THE DECISION SURVIVES ON THE OTHER GROUND, WHICH WAS ALWAYS THE STRONGER ONE. A
+  # `services:` block would be a SECOND SPELLING of the broker's launch arguments, beside
+  # the one `docker-compose.yml` already carries -- the defect class this repository
+  # polices hardest, and the one the postgres job above pays for today by duplicating its
+  # service definition (its own comment names the port as the thing that must stay in step
+  # by hand). Compose has one spelling and CI reads it.
+  #
+  # THE SIDE EFFECT, STATED NARROWLY: this job runs `docker compose up -d --wait redpanda`
+  # against the committed compose file, so THAT SERVICE and its healthcheck are exercised
+  # by CI. The `postgres` service in the same file is still started by nobody -- the
+  # postgres job re-declares it -- so CLAUDE.md's whole-stack line remains hand-run only.
+  #
+  # AND IT DOES NEED A JDK, WHICH IS THE OPPOSITE OF THE JOB ABOVE. The postgres job's
+  # "NO JAVA STEP" comment is true of `-m postgres` and false of `-m redpanda`: these
+  # tests start a local Spark session and resolve the Kafka connector from Maven, because
+  # pyspark ships no kafka jar. `src/opl/spark.py` measures that closure at 11 artifacts /
+  # 57,002 kB; `~/.ivy2/jars` ends up holding 14 / ~64,317 kB because Delta's three
+  # resolve whether or not Kafka is asked for.
+  redpanda:
+    runs-on: ubuntu-latest
+    # THE CEILING IS SET FROM THE MEASUREMENT OF WHAT THIS JOB RUNS, WHICH IS NOT ONE FILE.
+    # `-m redpanda` is 22 tests across 5 files. Measured on the Windows dev box:
+    # `test_late_arrival_boundary.py` 2,170 s (three arms over 10,150 records, each batch a
+    # Delta commit plus a state-store write) and the other 15 tests 128 s -- ~38 m 20 s
+    # before checkout, `uv sync` (cold pyspark ~320 MB), a cold Maven resolution and the
+    # image pull.
+    #
+    # 45 WAS THE FIRST NUMBER HERE AND IT WAS TOO TIGHT, on a stale 16-20 min figure that
+    # belonged to the two-arm version of that file. The compounding is the reason the
+    # margin is generous rather than snug: on a timeout cancellation `actions/cache`'s
+    # post-step is not reliably run, so the Ivy jars are never saved and the NEXT run pays
+    # the cold download again -- a first timeout makes the second more likely.
+    #
+    # LINUX IS EXPECTED TO BE FASTER AND NOBODY HAS MEASURED IT. The runner is 4 vCPU /
+    # 16 GB against a dev box running the same `local[2]` / 2g session, so the expectation
+    # is reasonable and is not evidence. The first green run on this branch is what
+    # replaces this paragraph with a number.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.12" }
+      - run: uv sync --all-groups --all-extras
+
+      # KEYED ON THE LOCKFILE, WHICH IS NOT THE SAME THING AS THE CONNECTOR COORDINATE, and
+      # this comment said the opposite of the line below it until a review read the two
+      # together. `opl.spark.KAFKA_CONNECTOR_PACKAGE` derives from `pyspark.__version__`, so
+      # a pyspark bump is what SHOULD invalidate this -- but nothing here extracts that
+      # version, and any dependency change rewrites `uv.lock` and misses the key. The
+      # `restore-keys` prefix makes that a wasted ~64 MB entry rather than a cold download,
+      # which is why the simpler key is kept. `~/.ivy2` is the right path: the resolution
+      # writes both `cache/` and `jars/` under it and needs nothing else.
+      - name: Cache the Ivy jars the Kafka connector resolves
+        uses: actions/cache@v4
+        with:
+          path: ~/.ivy2
+          key: ivy-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: ivy-${{ runner.os }}-
+
+      # `--wait` BLOCKS ON THE HEALTHCHECK THE COMPOSE FILE ALREADY DECLARES, which is the
+      # whole reason this job uses compose. The first version of this step re-spelled that
+      # healthcheck as a 12-line polling loop -- a second spelling of the check, inside the
+      # job whose stated reason for existing is that it refuses second spellings. Compose
+      # on `ubuntu-latest` is 2.38.2, which supports `--wait`.
+      - name: Start the broker and wait for its declared healthcheck
+        run: docker compose up -d --wait redpanda
+
+      # A CONTAINER THAT NEVER STARTED HAS NO LOGS. `docker compose logs` on a service that
+      # never ran exits 0 and prints nothing, so `ps -a` comes first: it is the one that
+      # distinguishes "never created" from "created and unhealthy".
+      - name: What the broker did, if it did not come up
+        if: failure()
+        run: |
+          docker compose ps -a redpanda
+          docker compose logs redpanda
+
+      - name: Streaming tests against the live broker
+        run: uv run pytest -m redpanda -v
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:
