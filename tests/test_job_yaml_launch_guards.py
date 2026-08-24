@@ -23,11 +23,19 @@ on somebody having looked.
 THE `month` DEFAULT IS HERE TOO, AND IT IS NOT A REVISION GUARD. It sat under that
 section header in the unsplit file, and it belongs on this side of the seam for the
 property it shares rather than the subject: a job-parameter default cannot validate
-anything, so its whole job is to be a value the code refuses. `revision` and `month`
-are the two whose default is LOCKED against the constant the code names, and both were
-a real object name or a real month once.
+anything, so its whole job is to be a value the code refuses. `revision`, `month` and
+-- since F5 T8 -- `minimum_rows` are the THREE whose default is LOCKED against the
+constant the code names, and the first two were a real object name or a real month once.
 
-THE TWO THAT ARE NOT, NAMED SO THE SENTENCE ABOVE IS NOT READ AS "THE ONLY TWO
+THE THIRD IS THE ONE THAT WAS NEVER A REAL VALUE, and it is here because a plausible
+default would have been the measurement. `streaming_managed_broker_job.yml`'s
+`minimum_rows` is the floor its run's entire product depends on: that job reads a broker
+that stops answering in days, has no downstream test stating an exact count, and prints a
+number that goes into an evidence document. A default of `1` would parse, would pass, and
+would let a run that consumed one record of forty thousand report SUCCESS with a number
+that looks exactly like the one that was meant.
+
+THE TWO THAT ARE NOT, NAMED SO THE SENTENCE ABOVE IS NOT READ AS "THE ONLY THREE
 SENTINELS". `bronze_payments_job.yml`'s `profile` defaults to
 `opl.generator.profiles.SENTINEL_PROFILE` and `repromote_batch_job.yml`'s `batch_id` to
 `opl.bronze.promote.SENTINEL_BATCH_ID`; both are refused by the code that reads them,
@@ -61,6 +69,7 @@ from job_yaml import (
 
 from opl.bronze.provenance import SENTINEL_REVISION, is_object_name
 from opl.config import SENTINEL_MONTH, is_month
+from opl.streaming.managed_broker import SENTINEL_MINIMUM_ROWS
 
 # WHICH JOBS REFUSE A RUN BUILT FROM AN UNEXPECTED REVISION, and which one deliberately
 # does not. Every YAML under `databricks/resources` must appear in one of these two, and
@@ -179,6 +188,19 @@ _GUARDED_JOBS = (
     # believing it is the reviewed one. Nothing fails, nothing looks wrong, and the
     # artefact that would say otherwise is the thing that was overwritten.
     "dataops_views_job.yml",
+    # F5 T8's managed-broker read, and this list's question has an answer here that is not
+    # about the rows -- though the row argument holds too. What a stale wheel writes is a
+    # DIFFERENT PROJECTION of the same Kafka records: the column names, the parse and the
+    # kept raw value are all `opl.streaming.ingest`'s, and the sink is append-only behind a
+    # checkpoint, so the repair is dropping the table and deleting the checkpoint by hand.
+    # The sharper answer is that THIS JOB'S OUTPUT IS THE PRODUCT. It writes to a table
+    # nothing else reads, deliberately unregistered; what leaves the run is a ROW COUNT
+    # quoted in `docs/f5-run-evidence.md` as what this lakehouse read from a real broker on
+    # the platform it deploys to. A count produced by a wheel nobody reviewed is a claim
+    # about code that is not in this repository, published under this repository's name --
+    # and unlike a wrong row, there is nothing left afterwards that could be re-read to
+    # find out.
+    "streaming_managed_broker_job.yml",
 )
 
 _UNGUARDED_JOBS = {
@@ -470,6 +492,82 @@ def test_the_month_default_lock_catches_the_real_month_it_used_to_carry(tmp_path
         _assert_the_month_default_cannot_pass(
             "bronze_estabelecimentos_job.yml", root=root
         )
+
+
+# The one job that declares a row floor at launch, named rather than swept: it is the only
+# job in this repository whose product is a COUNT rather than a table other jobs read, and
+# a parametrization over `_GUARDED_JOBS` would demand the parameter from twelve jobs that
+# have no use for one.
+_FLOOR_JOB = "streaming_managed_broker_job.yml"
+
+
+def _assert_the_minimum_rows_default_cannot_pass(job_yml: str, root: Path = RESOURCES) -> None:
+    parameters = {
+        parameter["name"]: parameter.get("default")
+        for parameter in job_of(job_yml, root).get("parameters", [])
+    }
+    assert "minimum_rows" in parameters, (
+        f"{job_yml} declares no `minimum_rows` job parameter, so there is nothing for "
+        "--params minimum_rows=... to reach and the task falls back on a floor nobody chose"
+    )
+    default = parameters["minimum_rows"]
+    assert not str(default).strip().isdigit(), (
+        f"{job_yml}'s minimum_rows default is {default!r}, which `require_minimum_rows` "
+        "ACCEPTS as a floor -- so a run launched without --params minimum_rows=... would "
+        "measure against a number nobody chose. This job's whole product is the count it "
+        "prints: a floor of one accepts a run that consumed one record of forty thousand, "
+        "reports SUCCESS, and puts a number into the evidence document that looks exactly "
+        "like the one that was meant"
+    )
+    assert default == SENTINEL_MINIMUM_ROWS, (
+        f"{job_yml}'s minimum_rows default is {default!r} rather than the sentinel the code "
+        f"names ({SENTINEL_MINIMUM_ROWS!r}). Two spellings of one sentinel is a default "
+        "that drifts into a value nobody checked"
+    )
+
+
+def test_the_minimum_rows_default_refuses_rather_than_naming_a_floor_nobody_chose():
+    """The third locked sentinel, and the one that was never a real value.
+
+    `revision` and `month` are locked because each WAS a working value once and stopped
+    being one. This is locked before that can happen: the plausible default is `1`, which
+    is `write_payment_stream`'s own, and which that function's docstring already says is a
+    floor against ZERO and not against a short read."""
+    _assert_the_minimum_rows_default_cannot_pass(_FLOOR_JOB)
+
+
+def test_the_minimum_rows_lock_catches_the_plausible_default_that_would_pass(tmp_path):
+    """Proves the lock above can fail, in the value somebody would actually type.
+
+    `1` is not an invented mutation -- it is the shipped default of the function this
+    parameter feeds. Restoring it here turns the floor off in the exact case it exists for:
+    a run whose read stalled after one record ends GREEN, and the count it prints is the
+    only artefact anyone will ever have of what the broker held."""
+    root = mutated(
+        _FLOOR_JOB, tmp_path, f'default: "{SENTINEL_MINIMUM_ROWS}"', 'default: "1"'
+    )
+    with pytest.raises(AssertionError, match="one record of forty thousand"):
+        _assert_the_minimum_rows_default_cannot_pass(_FLOOR_JOB, root=root)
+
+
+def test_no_other_job_takes_a_row_floor_nothing_reads():
+    """THE OTHER DIRECTION, which the two `revision`/`month` locks each have and this one
+    would otherwise lack: a `minimum_rows` parameter on a job whose task does not read one
+    reads as a floor that is there, and is not.
+
+    Total over `databricks/resources`, so it also covers the unguarded and non-job files --
+    the parameter is cheap to paste and the classification lists above are the only other
+    thing that would notice a new YAML at all."""
+    for path in RESOURCES.glob("*.yml"):
+        if path.name == _FLOOR_JOB:
+            continue
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for job in document.get("resources", {}).get("jobs", {}).values():
+            names = {parameter["name"] for parameter in job.get("parameters", [])}
+            assert "minimum_rows" not in names, (
+                f"{path.name} takes a minimum_rows parameter that no task in it reads, "
+                f"which reads as a floor that is not there. Only {_FLOOR_JOB} declares one"
+            )
 
 
 def test_the_revision_default_lock_catches_a_default_that_would_pass_a_run(tmp_path):

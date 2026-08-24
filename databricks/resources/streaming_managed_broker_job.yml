@@ -1,0 +1,123 @@
+# databricks/resources/streaming_managed_broker_job.yml
+#
+# F5 T8: a serverless job that reads the payment topic from the MANAGED Redpanda cluster
+# over SASL_SSL and lands it in Delta -- so this lakehouse ingests an event STREAM on the
+# platform it deploys to, and not only on the developer's laptop. Until this job, event
+# streams reached the workspace as FILES (`generate_payments.py` writes JSON Lines into a
+# Volume, Auto Loader reads the directory), which is the one honest gap the "four sources"
+# claim carried.
+#
+# ================================ READ THIS FIRST ==========================================
+#
+# THIS JOB IS NOT THE EXACTLY-ONCE PROOF, AND ANYONE READING IT AS "the real proof, now on
+# real infrastructure" HAS THE PHASE BACKWARDS. That proof is `opl.streaming.exactly_once`,
+# it runs LOCALLY, and it stays local because it needs a fault injected BETWEEN the data
+# commit and the offset commit -- a serverless task is the one place this project cannot
+# kill a process on purpose. Its NAIVE control arm exists to DUPLICATE; if that arm ever
+# stops duplicating, the phase has proven the fault missed its window and nothing else.
+# This job injects no fault, has no control arm, and writes through a Delta sink that is
+# exactly-once BY CONSTRUCTION -- i.e. it would report success under every outcome the
+# proof exists to tell apart, including "nothing ran".
+#
+# THIS IS A RECORDED RUN, NOT A JOB A FUTURE READER CAN RUN GREEN. The broker is a Redpanda
+# Serverless TRIAL: $100 of credits, 14 days, provisioned 2026-08-19. The credits expire
+# around 2026-09-03 and the cluster then stops answering. After that this job fails at the
+# metadata fetch, and that failure is a dead trial account rather than a regression in this
+# repository -- `docs/f5-run-evidence.md` carries the run ids, the row counts and the date
+# the broker went away. Nothing else in this bundle depends on the broker being alive, and
+# nothing else may be made to.
+#
+# ===========================================================================================
+#
+# WHAT IT WRITES, AND WHY THAT TABLE IS NOT IN `opl.bronze.REGISTRY`. It appends to
+# `workspace.default.streaming_payments_managed_broker` through a checkpointed
+# `availableNow` stream. Registering it would be worse than useless: F4's
+# `dataops_reconciliation` and `dataops_freshness` are TOTAL over the registry, so the
+# table would take a permanent row in a freshness view for a source whose broker is about
+# to stop answering -- a standing stale alert for a table nobody can refresh, on the one
+# dashboard whose value is that a red cell means something. The product here is a run id,
+# a row count and a task log, which is the currency every other phase in this repository
+# publishes.
+#
+# TWO PARAMETERS, AND BOTH DEFAULTS EXIST TO BE REFUSED. `revision` is the guard every job
+# in `tests/test_job_yaml_launch_guards.py`'s guarded list declares. `minimum_rows` is the
+# floor this run's ENTIRE PRODUCT depends on: `write_payment_stream`'s own default refuses
+# zero and accepts one record of forty thousand, and this run has no test downstream to
+# state an exact count, so the count is declared at launch by whoever published the corpus.
+#
+#     databricks bundle run streaming_managed_broker -t free \
+#       --params revision=$(git rev-parse HEAD),minimum_rows=<what you published>
+#
+# THE GUARD'S QUESTION -- "does a run of this job against a wheel built from another
+# revision matter?" -- has an answer here that no other entry in that list has, and it is
+# not about the rows. Every other guarded job argues that a stale wheel writes the WRONG
+# ROWS and the repair is deleting them by hand; that argument holds here too (the landed
+# projection, its column names and its parse are all `opl.streaming.ingest`'s, and the sink
+# is append-only behind a checkpoint, so the repair is dropping the table and the
+# checkpoint). But the sharper one is that THIS JOB'S OUTPUT IS EVIDENCE. Its product is a
+# number that gets quoted in `docs/f5-run-evidence.md` as what this lakehouse read from a
+# real broker on the platform it deploys to -- and a number produced by a wheel nobody
+# reviewed is a claim about code that is not in this repository, published under this
+# repository's name. Nothing fails and nothing looks wrong.
+#
+# ONE WORK TASK, AND IT IS SAFE TO RUN TWICE -- which matters because `max_retries: 0` does
+# NOT prevent a retry (measured on this workspace: 24 `(job_run_id, task_key)` pairs ran two
+# attempts). Two independent reasons, argued in full in the task's own header: the Delta
+# sink commits the micro-batch id transactionally with the rows and ignores a replay, so a
+# second attempt appends NOTHING; and the checkpoint is fixed, so a second attempt consumes
+# zero records and the floor REFUSES rather than reporting a second green run over an empty
+# read. A second recorded run is therefore a deliberate act -- drop the table and delete the
+# checkpoint directory -- and not something a retry can do by accident.
+#
+# CREDENTIALS ARE NOT HERE AND CANNOT BE. The task reads `kafka_bootstrap` and
+# `kafka_password` from the `opl` secret scope; the SASL username is a literal in the task
+# because Databricks scrubs every occurrence of a SECRET'S VALUE from task output and the
+# username is `opl` -- this repository's catalog, topic, package and job prefix. While it
+# sat in the scope, a run's own output read `[REDACTED]-cloud-probe-...` for a record whose
+# value was `opl-cloud-probe-...`. Controller-verified with a control, job runs
+# `382097683531247` then `838423822976396`.
+resources:
+  jobs:
+    streaming_managed_broker:
+      name: opl-streaming-managed-broker
+      parameters:
+        - name: revision
+          # The same sentinel every guarded job declares
+          # (opl.bronze.provenance.SENTINEL_REVISION), and the same reason: a job parameter
+          # default cannot validate anything, so its only job is to be a value the code
+          # refuses.
+          default: "REQUIRED-PASS-A-REVISION"
+        - name: minimum_rows
+          # `opl.streaming.managed_broker.SENTINEL_MINIMUM_ROWS`, and the same argument one
+          # step further: this default does not merely fail to validate, it would BE the
+          # measurement if it parsed. A run that declared no floor can consume one record
+          # of forty thousand and report SUCCESS, and the number it printed would go into
+          # the evidence document looking exactly like the number that was meant.
+          default: "REQUIRED-PASS-THE-ROW-COUNT-THIS-RUN-MUST-CONSUME"
+      tasks:
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        - task_key: read_managed_broker
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/stream_managed_broker.py
+            # THE FLOOR, and it is the only parameter this task takes. The topic, the
+            # table, the checkpoint and the SASL username are fixed in the task file --
+            # each is a coordinate that could be wrong for no gain, which is what the
+            # ingestion jobs' paste lock exists to catch. The two secrets are read from
+            # the `opl` scope and appear in neither this file nor that one.
+            parameters: ["{{job.parameters.minimum_rows}}"]
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

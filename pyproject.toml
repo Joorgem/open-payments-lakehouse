@@ -126,5 +126,20 @@ markers = [
   # `not postgres` term below is what makes the marker load-bearing on its own: a future
   # container test that forgets `integration` is still deselected by default.
   "postgres: requires only the local Postgres container",
+  # THE SAME DESELECTION, FOR THE OTHER CONTAINER, and it exists for the reason the comment
+  # above gives rather than by symmetry. `tests/integration/test_payment_streaming_live.py`
+  # needs a Redpanda broker and nothing else, so F5 T6's CI job selects `-m redpanda` the way
+  # the Postgres job selects `-m postgres`; `-m integration` would pull in Postgres and two
+  # live-WebDAV modules and turn red on them. `not redpanda` below is load-bearing on its own
+  # for the same reason `not postgres` is: a future broker test that forgets `integration` is
+  # still deselected from every default invocation.
+  #
+  # BUT "ONLY THE CONTAINER" IS WHAT THIS ENTRY USED TO SAY AND IT WAS FALSE OF MOST OF THEM.
+  # `-m redpanda` selects 22 tests across 5 files; 17 take the `kafka_spark` fixture, which
+  # starts a local Spark session and resolves the Kafka connector from Maven because pyspark
+  # ships no kafka jar. The CI job for this marker installs a JDK for exactly that reason and
+  # says so, and the two statements were in the same branch disagreeing. What the marker
+  # actually promises is the narrower thing the Postgres one promises: no OTHER container.
+  "redpanda: needs the local Redpanda container -- and, for most of them, a local JVM too",
 ]
-addopts = "-m 'not integration and not postgres'"
+addopts = "-m 'not integration and not postgres and not redpanda'"

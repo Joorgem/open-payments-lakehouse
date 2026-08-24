@@ -4,7 +4,11 @@ import uuid
 import pytest
 from confluent_kafka import Consumer, Producer
 
-pytestmark = pytest.mark.integration
+# BOTH MARKERS, the way the three Postgres files carry both. `integration` deselects it from
+# every default invocation; `redpanda` is what a `-m redpanda` CI job selects, and this file
+# needs the broker and nothing else -- so without it that job would skip the repository's
+# only other broker test and still report green.
+pytestmark = [pytest.mark.integration, pytest.mark.redpanda]
 
 
 def test_kafka_produce_consume():

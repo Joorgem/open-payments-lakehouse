@@ -90,8 +90,20 @@ _SRC = _REPO / "databricks" / "src"
 
 # Every job task under databricks/src that resolves a table. Enumerated rather
 # than globbed: a new entry point must be a deliberate addition to this list, and
-# a glob would silently give a newly-added script a free pass. `smoke.py` is the
-# only other script there and it touches no table at all.
+# a glob would silently give a newly-added script a free pass.
+#
+# THE SCRIPTS THAT ARE NOT HERE, NAMED SO THE ABSENCE IS A DECISION RATHER THAN AN
+# OVERSIGHT -- this used to say "smoke.py is the only other script there", and F5
+# T8 made that false. `smoke.py` touches no table at all. The governance and
+# DataOps tasks resolve their targets from `MASKED_COLUMNS` and from the registry
+# itself rather than from a spec, which is `test_governance_job_wiring.py`'s
+# subject. And `stream_managed_broker.py` names a table DIRECTLY and on purpose:
+# `streaming_payments_managed_broker` is deliberately NOT in the registry, because
+# F4's reconciliation and freshness views are total over it and would carry a
+# permanent stale row for a trial broker that stops answering in days. This lock
+# asks "did a task spell a name the registry should have given it"; there, there is
+# no registry entry to give one, and the argument for that lives in the task's own
+# header and in its job YAML.
 _TABLE_TASKS = [
     "bronze_ingest",
     "bronze_lookup_ingest",
