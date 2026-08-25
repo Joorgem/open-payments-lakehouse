@@ -413,6 +413,42 @@ workspace; it is the majority state**, and an agent that reports "compared again
 nothing anomalous" without saying how many it actually found would be reporting a comparison it
 did not make for most tables in the project.
 
+### 0.9 THE COLUMN MASKS, MEASURED — because a later module cites this section for them
+
+**Controller-verified 2026-08-24**, statement `01f19ff8-d9b0-1928-b669-cdc750ea7926`, over
+`workspace.information_schema.column_masks`:
+
+| table | column | mask |
+|---|---|---|
+| `bronze_cnpj_socios` | `nome_do_representante` | `workspace.default.mask_personal_name` |
+| `bronze_cnpj_socios` | `nome_socio_razao_social` | `workspace.default.mask_personal_name` |
+| `bronze_cnpj_socios_quarantine` | `nome_do_representante` | `workspace.default.mask_personal_name` |
+| `bronze_cnpj_socios_quarantine` | `nome_socio_razao_social` | `workspace.default.mask_personal_name` |
+
+**Four masks, on two tables, one contract.** ADR 0008 records the same four at 2026-08-01/08-18
+against `system.information_schema.column_masks`; this is a re-reading on the day F6's evidence
+sampler was designed, and it agrees.
+
+**Why this section exists at all, and it is a defect in the record rather than a measurement gap.**
+`src/opl/triage_agent/evidence.py` cites *"`docs/f6-run-evidence.md` carries the measurement"* for
+the claim that the workspace's four masks are the four its declaration profiles — the paragraph
+whose whole purpose is separating what the module **asserts** from what it **quotes**. The
+controller had measured it and never written it down, so **the citation resolved to nothing**, in
+the one place a reader goes to check that a quoted fact was really measured. Found by the review of
+T2's correction, which followed the pointer.
+
+#### AND THIS IS WHAT MAKES THE TWO LARGEST INCIDENTS DANGEROUS TO SAMPLE
+
+The two socios incidents are **3,583 rows** whose reject reason is
+`null_or_empty_nome_socio_razao_social` — the rejection **is** that the name column is null or
+empty — **and that same column is masked.** A triager sampling it reads `***` and cannot tell
+*"masked from me"* from *"empty, which is why the row was rejected"*: one string covering the two
+worlds, where the second is the very fact the reject reason asserts.
+
+ADR 0018 already records this shape once, in a privacy deploy check where *"`***` was the answer
+under all four possible outcomes"*. **T2's sampler is built so the question cannot arise** — it
+emits the word `masked` from the declaration and **never reads the column** (§1.2).
+
 ---
 
 ## 1. What has been built and run
@@ -588,7 +624,12 @@ the published-column read. The two arms cover different directions.
 > literal-marking arm left a string on the first `'` it met, so a **backslash-escaped apostrophe**
 > ended the literal early and the rest of it was read as query structure — surfacing as a bare
 > `IndexError` naming neither the note that was edited nor the column the test is about.
-> `opl.dataops.freshness._quote` exists *precisely* so an operator's prose in `cadence.why` may
+> `opl.dataops.freshness.sql_string_literal` (named `_quote` when this was written; T3 promoted it
+> to a public name because it had grown a cross-package caller — ***Reported***, and on that narrow
+> ground only: measured by AST over `src/` and `databricks/src/`, **49** private imports cross a
+> module boundary and all 49 stay inside one subpackage, so `_quote`'s `opl.triage_agent` caller
+> was the only one reaching across a **subpackage** boundary and after the rename there are none)
+> exists *precisely* so an operator's prose in `cadence.why` may
 > carry an apostrophe, and its own docstring calls that *"a matter of time"*; `CLAUDE.md` records
 > that `''` is not an escape on Databricks and the backslash is. **The shape the parser had to
 > survive is the one the codebase invites.**
@@ -620,6 +661,104 @@ after), total unchanged, and the declaration file runs in **~1.4 s with no JVM**
 **Controller-verified at the close of T1:** `uv run pytest tests/triage_agent/ tests/test_size_caps.py
 tests/dataops/test_cadence.py` → **`38 passed in 40.58s`**, read from the output file; `ruff` clean;
 `incidents.py` **347**, `test_incidents.py` **508**, `test_incidents_declaration.py` **409**.
+
+### 1.2 T2 — the evidence for one incident, and the state that is not "clean"
+
+Committed at `ac984e5`, split at `5a401ef`. `opl.triage_agent.evidence` assembles the quarantine
+census by reject reason, a publishable row shape, and the reconciliation verdict. It classifies
+nothing and writes nothing.
+
+**The census cannot return an empty result**, by construction: an ungrouped `COUNT(*)` is exactly
+one row on every input and a `LEFT JOIN … ON true` preserves it. **Reported**, and the reviewer
+could not defeat it on an empty table, an other-batches-only table, or a NULL/empty `batch_id`.
+
+**The removal is two words, not one** — `evidence_missing_quarantine_empty` (the table holds
+nothing: the three lookup firings F4 accounts for) against `evidence_missing_batch_absent` (the
+table holds other batches and not this one: `187805471003061` and `315230730740144`, which nothing
+explains). **The implementer split it against the controller's brief and was right:** one word lets
+the unexplained pair borrow the explained trio's account, which is the only account that exists.
+
+**And `masked` is emitted WITHOUT READING THE COLUMN**, which is the second refusal and the better
+one. The controller's brief said to report a masked column's *value* as masked; the implementer
+refused the framing — a sampler that reads and then reports "masked" is **reader-dependent**, since
+`is_member(...)` hands a group member the real name, so the same function would produce **a
+different artefact per principal**. An artefact whose contents turn on the caller's group
+membership is exactly what must not be published. The generated SQL carries a literal where every
+other column carries a `CASE`.
+
+> **THE PHASE'S FIRST BLOCKING DEFECT, AND IT IS A PII PATH IN A PUBLIC REPOSITORY.** Adding
+> `nome_socio_razao_social AS leaked_name` — **unbackticked** — to `row_shapes_sql` left the whole
+> suite green. Two blindnesses combined: the guard banned only the **backticked** spelling, while
+> unbackticked is this module's own house spelling three lines away; and the taint sweep could not
+> see that column at all, because the corpus pins it to `''` — **being empty is what got those rows
+> rejected.** Both are closed, and each was measured to catch the leak with the other removed.
+>
+> **Nothing leaked.** The shipped code was clean; the defect was that no test could tell.
+
+### 1.3 T3 — severity, and the hold that keeps the biggest incident from reading as the most urgent
+
+Committed at `0503761`. A severity ladder and a **separate** action ladder, with every input
+published beside the grade.
+
+**The corpus hid two confounds and only the first was obvious.** *"Most rows"* and *"the only
+stranding"* are the same incident, so a row-count grader and a verdict-aware one rank this
+workspace identically — closed by a constructed disagreement. **The second was found by review:**
+*"evidence removed"* and *"has no reconciliation row"* are the **same five incidents** (§0.5), so an
+arm keyed on the verdict spelling ranks the corpus identically too — **and the first constructed
+case could not see it**, because both its incidents are *in* the view. Two more constructed
+relations close it; the substitution now reddens exactly them and nothing else.
+
+**The hold, and why it is not a lookup table.** `592660596679630` is the largest incident and its
+correct recommendation is **do not promote** — a decision recorded in `docs/f4-run-evidence.md`
+§1.2, derivable from no column. It ships as a **declared hold carrying its citation**, on
+`cadence.py`'s pattern, and the note carries the **decisive** argument rather than the weak one that
+section rejects by name. **The falsifier is what stops it being decoration:** deleting the hold must
+*flip* the recommendation, and respelling the ladder as `batch_id = '592660596679630'` — the lookup
+spelling — fails that test while the citation test stays green.
+
+#### THE FOURTH PUBLISHABLE STATEMENT JOINS T2's PAIRING RATHER THAN REPEATING HALF OF IT
+
+`severity_sql`'s row is bound for a public GitHub issue. T3 first shipped only the name-count lock;
+the review demonstrated it green under a `SELECT *` leak. **Controller-verified 2026-08-25**, with
+the leak spliced in and its presence in the generated SQL confirmed before the result was read:
+
+| arm | under a `SELECT *` over the socios quarantine projected as `l.*` |
+|---|---|
+| the name-count lock (T3's) | **22 passed** — blind by construction; the statement emits three `SELECT *` |
+| the runtime taint sweep (T2's, now walking `severity_sql`) | **1 failed** — `severity on payments/592660596679630 emitted a value` |
+
+**Neither arm is total and each one's only cover is the other's measured blind spot** — the name
+count cannot see a leak that never spells the column; the sweep cannot see one that *transforms* the
+value (`SUBSTR(nome_socio_razao_social, 1, 3)` carries no sentinel). Both are written down.
+
+#### Eight refusals, and the two worth the record
+
+The implementer refused eight of the controller's instructions and **all eight were right**.
+
+- **A threshold between 1 and 4 rejected rows was refused rather than invented.** The only
+  reject-count line this repository has ever argued for is ADR 0006 condition 2's `>= 10`, and
+  inventing a second so a test could show three values is what `cadence.py` exists to refuse. The
+  ordering is asserted including socios instead, so the size arm is load-bearing on live counts with
+  nothing fabricated.
+- **`unaccounted > 0` was refused as a stranding signal because `over_promoted` makes it NEGATIVE**,
+  so an arithmetic grader would rank the batch whose counts contradict themselves as the mildest
+  thing the module emits. **The fixture already contains one** — a live demonstration rather than an
+  argument.
+
+**`freshness._quote` is promoted to `sql_string_literal`.** The hold's note is English prose reaching
+a SQL literal and `''` is not an escape on Spark, so the one correct spelling had to be reused — and
+its own docstring said *"THIS FUNCTION IS NOT REUSED"*, which reuse makes false. The paragraph is
+replaced rather than softened, and the two claims it fused are separated: it has a caller now, and
+the latent hazard is still open.
+
+> **A PATTERN THIS PHASE HAS NOW MEASURED FOUR TIMES.** In T1, twice in T2 and again in T3, the
+> **review of a correction** found its defects in **new claims the correction had written**, not in
+> bugs it fixed. T3's went further: a header still asserting the premise that produced the blocking
+> defect, and a docstring claiming the count lock sees a leak *"in any spelling"* when it is
+> structurally blind to `*`. **The correction is the most dangerous commit in a task** — it is
+> trusted, it writes fresh prose, and nobody has read it.
+
+---
 
 ## 2. Predictions, published before the runs that test them
 
