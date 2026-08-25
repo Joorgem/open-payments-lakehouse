@@ -217,14 +217,20 @@ def _publishable(source: str) -> dict[str, str]:
 
     ITS OTHER ARM IS A NAME COUNT AND IS BLIND TO THE LEAK THIS ONE CATCHES, which is the
     pairing `test_evidence_contract.py`'s header states for the first three and the reason
-    the fourth cannot be left with one arm. `test_severity.py::test_the_graded_statement_
-    READS_no_declared_personal_column` counts declared-personal column NAMES in the
-    generated SQL, and `severity_sql` emits three `SELECT *`, so a leak into it need never
-    spell one. MEASURED 2026-08-24: adding `leak AS (SELECT * FROM <this source's
+    the fourth cannot be left with one arm. `test_severity_declaration.py::test_the_graded_
+    statement_READS_no_declared_personal_column` counts declared-personal column NAMES in
+    the generated SQL, and `severity_sql` emits three `SELECT *`, so a leak into it need
+    never spell one. MEASURED 2026-08-25, WHEN THAT TEST AND `test_severity.py` WERE STILL
+    ONE FILE, AND OVER THE WHOLE OF IT: adding `leak AS (SELECT * FROM <this source's
     quarantine> WHERE _batch_id = :batch_id LIMIT 1)` to `severity_sql`, joined through
-    `LEFT JOIN` and projected as `l.*`, leaves `test_severity.py` GREEN -- the colour is the
-    claim and no total is quoted for it -- and turns the sweep below RED on
+    `LEFT JOIN` and projected as `l.*`, left that file GREEN -- the colour is the claim and
+    no total is quoted for it -- and turns the sweep below RED on
     `payments/592660596679630`, the first swept incident whose quarantine still holds rows.
+    THE SPLIT THAT FOLLOWED WAS FREE OF BEHAVIOUR AND THE LEAK HAS NOT BEEN RE-RUN SINCE, so
+    the green is HISTORICAL and bounded to that file as it stood: it covers exactly the tests
+    now divided between the two files -- the arm named above among them -- and says nothing
+    about what either has gained since that measurement. Re-observing the colour means running
+    BOTH halves, because no one file holds those tests any more.
     The same leak on `socios`/`_MATRIX_BATCH` puts BOTH `_PERSONAL_TOKENS` values into the
     graded row, measured on its own, so what this arm catches there is the PERSONAL half and
     not merely some value."""

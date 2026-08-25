@@ -83,6 +83,10 @@ _ESTAB_UNEXPLAINED = ("187805471003061", "315230730740144")
 _EMPRESAS_BATCHES = ("321750543973966", "371067950667703")
 _LOOKUP_BATCHES = ("184706631093131", "241387611390862", "996871467498110")
 
+# The batch the one declared hold is about. Named once here so the tests that assert the
+# hold fires and the tests that assert it can be removed cannot drift onto two batches.
+_HELD_BATCH = _PAYMENTS_BATCH
+
 # INVENTED, and labelled so no later reader mistakes either for a measurement.
 #
 # `_MATRIX_BATCH` exists because the corpus cannot express what the mask/empty pair needs:

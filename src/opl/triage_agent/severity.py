@@ -167,7 +167,7 @@ BROKEN.
 
 AND THE HOLD IS NON-VACUOUS, WHICH IS ASSERTED RATHER THAN ASSUMED.
 `tests/triage_agent/test_severity.py::test_removing_the_declared_hold_flips_the_recommenda
-tion_on_the_one_batch_that_carries_one` runs the same incident over the same data with
+tion_on_that_batch` runs the same incident over the same data with
 `HOLDS` emptied and requires the recommendation to become `promote_the_clean_rows`. A hold
 that changed nothing when deleted would be decoration, and the recommendation would be
 coming from somewhere this file does not name.
