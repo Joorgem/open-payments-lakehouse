@@ -177,11 +177,12 @@ def test_a_cadence_note_containing_an_apostrophe_survives_into_the_view(probe, m
 
     These notes are English prose an operator reads, so an apostrophe is a matter of time.
     This test was written expecting a CREATE that fails loudly if the escaping were wrong;
-    what it found is worse. `_quote` doubled the apostrophe -- the SQL-standard escape --
-    and Spark returned `dont`: the lexer ends the literal and starts another, adjacent
-    literals concatenate, and the character is DELETED with nothing failing anywhere. Same
-    on the `opl-free` SQL warehouse. The backslash form is what Spark implements, and the
-    backslash in the note is here so the escape of the escape is exercised too."""
+    what it found is worse. `sql_string_literal` doubled the apostrophe -- the SQL-standard
+    escape -- and Spark returned `dont`: the lexer ends the literal and starts another,
+    adjacent literals concatenate, and the character is DELETED with nothing failing
+    anywhere. Same on the `opl-free` SQL warehouse. The backslash form is what Spark
+    implements, and the backslash in the note is here so the escape of the escape is
+    exercised too."""
     from opl.dataops import cadence as cadence_module
     from opl.dataops.cadence import Cadence
 

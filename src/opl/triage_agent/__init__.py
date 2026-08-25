@@ -25,4 +25,13 @@ what is actually in the workspace for it -- the quarantine census by reject reas
 bounded sample rendered as column STATES rather than values, and the reconciliation
 verdict or the word for its absence. Its header carries the one rule this package cannot
 leave to memory: which of its outputs may reach a public artefact and which may not.
+
+`severity` is the first module that GRADES, and it emits TWO columns rather than one: how
+bad the incident is, ranked, and what a person should do next. Fusing them is what turns
+"2,000 rows" into "promote", and the workspace's largest incident is the one whose recorded
+recommendation is do not promote -- a decision no column can derive, so it ships as a
+declared hold carrying its citation, on `opl.dataops.cadence`'s pattern. The hold changes
+the ACTION and never the severity, and a test requires the recommendation to flip when the
+declaration is removed. It still runs nothing: the remedy it prints is
+`dataops_reconciliation`'s own column, passed through.
 """

@@ -42,6 +42,7 @@ from opl.triage_agent.evidence import (
     row_shapes_sql,
     value_state_sql,
 )
+from opl.triage_agent.severity import severity_sql
 
 from .conftest import (
     _CONFIG,
@@ -203,6 +204,33 @@ def _planted(spark, source: str, column: str, batch: str) -> str:
     return str([row["planted"] for row in rows])
 
 
+_GRADE = "severity"
+
+
+def _publishable(source: str) -> dict[str, str]:
+    """EVERY statement this project would put in front of a stranger, for one source.
+
+    FOUR AND NOT THREE, AND THE FOURTH IS T3's. `severity.severity_sql` composes the census
+    and the reconciliation, and T6 puts the row it returns into a PUBLIC GitHub issue -- so
+    it is publishable by the same definition as `evidence_sql`'s three, and it belongs in
+    the sweep that reads OUTPUT rather than in a hand check.
+
+    ITS OTHER ARM IS A NAME COUNT AND IS BLIND TO THE LEAK THIS ONE CATCHES, which is the
+    pairing `test_evidence_contract.py`'s header states for the first three and the reason
+    the fourth cannot be left with one arm. `test_severity.py::test_the_graded_statement_
+    READS_no_declared_personal_column` counts declared-personal column NAMES in the
+    generated SQL, and `severity_sql` emits three `SELECT *`, so a leak into it need never
+    spell one. MEASURED 2026-08-24: adding `leak AS (SELECT * FROM <this source's
+    quarantine> WHERE _batch_id = :batch_id LIMIT 1)` to `severity_sql`, joined through
+    `LEFT JOIN` and projected as `l.*`, leaves `test_severity.py` GREEN -- the colour is the
+    claim and no total is quoted for it -- and turns the sweep below RED on
+    `payments/592660596679630`, the first swept incident whose quarantine still holds rows.
+    The same leak on `socios`/`_MATRIX_BATCH` puts BOTH `_PERSONAL_TOKENS` values into the
+    graded row, measured on its own, so what this arm catches there is the PERSONAL half and
+    not merely some value."""
+    return {**evidence_sql(source, _CONFIG), _GRADE: severity_sql(source, _CONFIG)}
+
+
 def test_no_publishable_statement_emits_a_row_value_and_the_sample_proves_the_reader_works(
     probe,
 ):
@@ -221,11 +249,18 @@ def test_no_publishable_statement_emits_a_row_value_and_the_sample_proves_the_re
     required to find sentinels. And `assert "MARIA" not in leaked` ran against a batch
     where no column held that string, so deleting `row_sample_sql`'s mask filter outright
     left it green; the tokens are now read out of the fixture first and required to be
-    there, making the absence below an absence from the OUTPUT and not from the input."""
+    there, making the absence below an absence from the OUTPUT and not from the input.
+
+    THE SWEEP IS OVER `_publishable`, WHICH IS FOUR STATEMENTS AND NOT THREE, and that
+    helper's docstring carries why the fourth is here and what its other arm cannot see."""
     for source, batch in _TAINT_SWEEP:
-        for name, sql in evidence_sql(source, _CONFIG).items():
-            rendered = str(_run(probe, sql, batch))
-            assert _SENTINEL not in rendered, f"{name} on {source}/{batch} emitted a value"
+        for name, sql in _publishable(source).items():
+            rows = _run(probe, sql, batch)
+            assert _SENTINEL not in str(rows), f"{name} on {source}/{batch} emitted a value"
+            assert name != _GRADE or len(rows) == 1, (
+                f"{source}/{batch} graded to {len(rows)} rows, so the line above is an "
+                "absence check over an empty result and green for the wrong reason"
+            )
 
     leaked = str(_run(probe, row_sample_sql(table_spec("socios"), _CONFIG), _MATRIX_BATCH))
     assert _SENTINEL in leaked, "the sentinel reader found nothing where values ARE projected"

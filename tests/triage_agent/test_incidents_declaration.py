@@ -23,7 +23,10 @@ Each of the two import-time guards is fired on the declaration it exists to refu
 the import-time CALL is fired by re-executing the module body against a registry it cannot
 satisfy. Calling the guards over VALID data -- which is what this file used to do -- only
 restates their bodies over data that already passed at import: deleting both calls from
-`incidents.py` left the file at `17 passed`, which is how that was found.
+`incidents.py` left the file GREEN, which is how that was found. THE COLOUR IS NAMED AND
+NOT THE TOTAL that stood here: a total goes stale on the next commit that adds a test, and
+this file has since been split off and gained tests, so the number no longer reproduces.
+That is `test_evidence_contract.py`'s ruling, applied by grep rather than where pointed.
 """
 from __future__ import annotations
 
@@ -76,7 +79,7 @@ def _paren_depth(sql: str) -> list[int]:
     version left the literal on the first `'` it met, so a backslash-escaped apostrophe
     ended the literal early and the rest of it was read as query structure -- surfacing as
     a bare `IndexError` from this file, naming neither the note that was edited nor the
-    column this test is about. `opl.dataops.freshness._quote` exists precisely so an
+    column this test is about. `opl.dataops.freshness.sql_string_literal` exists precisely so an
     operator's prose in `cadence.why` MAY carry an apostrophe, and its own docstring calls
     that "a matter of time"; `CLAUDE.md` records that `''` is not an escape on Databricks
     and that the backslash is. So the shape this parser must survive is the one the
@@ -362,8 +365,9 @@ def test_the_guards_run_at_import_so_deleting_the_call_is_a_failure_not_a_silent
 
     It said calling the guards in a test meant "a future edit removing the import-time call
     is a failure rather than a silent loss". Deleting both calls at the bottom of
-    `incidents.py` left the suite at `17 passed`, so the sentence was supported by nobody
-    checking it. This is the test that makes it true: `REGISTRY` gains a table no job
+    `incidents.py` left the suite GREEN -- the colour, not the total that stood here, which
+    has gone stale since -- so the sentence was supported by nobody checking it. This is the
+    test that makes it true: `REGISTRY` gains a table no job
     gates, the module body is executed again, and the ValueError has to come out of the
     IMPORT. With the two calls deleted the re-execution returns a module and this fails.
 

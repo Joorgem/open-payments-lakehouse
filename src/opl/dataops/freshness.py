@@ -115,8 +115,13 @@ def status_case_sql() -> str:
     return f"CASE\n    {arms}\n    ELSE '{WITHIN_CADENCE}'\n  END"
 
 
-def _quote(text: str) -> str:
+def sql_string_literal(text: str) -> str:
     r"""A SQL string literal, backslash-escaped -- and NOT SQL-standard doubled.
+
+    PUBLIC BECAUSE THE LAST PARAGRAPH BELOW ALREADY PUBLISHES A CONTRACT -- reach for this
+    rather than an f-string -- while an underscore name said the opposite, and
+    `opl.triage_agent.severity` reached past it across a package boundary anyway. The
+    contradiction was the name, so the name changed.
 
     THE OBVIOUS SPELLING IS WRONG HERE AND IT IS WRONG SILENTLY, which is why this is a
     function with a paragraph rather than an f-string. Measured 2026-08-18 on local Spark
@@ -136,20 +141,28 @@ def _quote(text: str) -> str:
     matter of time. Refusing the character instead would push the escaping problem into the
     prose, which is the half of this that a reviewer would have to keep noticing.
 
-    THIS FUNCTION IS NOT REUSED, AND THAT IS THE HAZARD'S CURRENT SHAPE RATHER THAN ITS
-    CLOSURE. Every other site in this repository that interpolates a Python value into a
-    SQL string was swept -- `reconcile._REMEDY_PREFIX`/`_SUFFIX` and `_VERDICT_LADDER`,
-    `promote.py:177`, `retention.py:262`, `reclaim_landing.py:329/383/402`,
-    `dq_gate_batch.py:100`, `backfill_masks.py:90/91`, `cnpj_pool.py:167`,
-    `ptax_source.py:202` -- and NONE of them is exposed today. Not because any of them
-    escapes: because each interpolates an identifier, a registry key, an enum constant or a
-    batch id, none of which has ever contained an apostrophe. So the apostrophe hazard in
-    this repository is LATENT, not closed. The day one of those constants gains one -- a
-    remedy line rephrased, a verdict given a possessive -- it behaves exactly like the
-    doubled form does here: the character is deleted, the statement parses, and nothing
-    raises. Anyone building a SQL string out of English text should reach for this function
-    rather than an f-string, and anyone adding prose to one of the constants above should
-    know that the site around it does not."""
+    IT HAS ONE OTHER CALLER, AND THE SWEEP BELOW IS TWO CLAIMS RATHER THAN ONE.
+    `opl.triage_agent.severity.hold_note_sql` interpolates a declared hold's English `why`
+    and calls this rather than spelling the escape again, so the sentence that used to
+    stand here -- that this function is not reused -- is gone rather than softened. THE
+    COMPLETENESS HALF IS F4's AND HAS EXPIRED: as of F4, every other site in this
+    repository that interpolated a Python value into a SQL string was enumerated:
+    `reconcile._REMEDY_PREFIX`/`_SUFFIX` and `_VERDICT_LADDER`, `promote.py:177`,
+    `retention.py:262`, `reclaim_landing.py:329/383/402`, `dq_gate_batch.py:100`,
+    `backfill_masks.py:90/91`, `cnpj_pool.py:167`, `ptax_source.py:202`. It names no
+    `opl.triage_agent` module and all three of F6's build SQL by interpolation, so it is a
+    phase-old census, not the present tense it was written in.
+
+    THE SAFETY HALF STILL HOLDS, F6's sites included: none of them is exposed today. Not because
+    any escapes -- each interpolates an identifier, a registry key, an enum or module constant,
+    a declared bundle job name, a validated integer (`evidence`'s `limit`, `severity_rank_sql`'s
+    `rank`) or a batch id, none of which has ever held an apostrophe and the integer of which
+    cannot. F6's one site interpolating prose written for a human is `severity.hold_note_sql`,
+    which calls this. So the hazard is LATENT, not closed: the day one of those constants gains
+    an apostrophe -- a remedy line rephrased, a verdict given a possessive -- it behaves exactly
+    as the doubled form does here, the character is deleted, the statement parses and nothing
+    raises. Anyone building a SQL string out of English text should reach for this function, and
+    anyone adding prose to a constant above should know that the site around it does not."""
     return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
@@ -183,9 +196,10 @@ def _cadence_row_sql(table: str, cadence: Cadence) -> str:
     declaration that lives in a table nobody writes is a threshold with no diff and no
     owner. Here the number reaching the view is the number in the commit."""
     days = "NULL" if cadence.every_days is None else str(cadence.every_days)
+    note = sql_string_literal(cadence.why)
     return (
         f"SELECT '{table}' AS source, '{cadence.kind}' AS cadence_kind, "
-        f"CAST({days} AS INT) AS expected_every_days, {_quote(cadence.why)} AS cadence_note"
+        f"CAST({days} AS INT) AS expected_every_days, {note} AS cadence_note"
     )
 
 
