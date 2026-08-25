@@ -34,4 +34,15 @@ declared hold carrying its citation, on `opl.dataops.cadence`'s pattern. The hol
 the ACTION and never the severity, and a test requires the recommendation to flip when the
 declaration is removed. It still runs nothing: the remedy it prints is
 `dataops_reconciliation`'s own column, passed through.
+
+`history` is the fourth of the four facts named above -- what the same table's recent runs
+looked like -- and it is the one whose absence is hardest to see. It counts the prior gate
+executions an incident can be compared against and how many of those also fired the gate,
+and it COMPARES NOTHING: the word it publishes says whether a comparison is possible, never
+what one found, because "compared against the last 5, nothing anomalous" is false for ten of
+this workspace's eleven incidents and two of them have no prior execution at all. So the
+number actually found is on every row, and the two ways of having less than N -- fewer, and
+none -- are two words rather than one. It reads the same F4 view `incidents` reads, on a key
+(`check_bad_rows`) chosen because it survives a gate task that was renamed mid-project and
+whose old runs the telemetry still serves under a name nothing marks as superseded.
 """
