@@ -516,6 +516,15 @@ most needs to see, *this table has never been gated before*, is the state the de
 is the fourth silent off-by-one or 2× this project has measured, after §0.4's fan-out, F4's
 hour-sliced durations and F4's telemetry join.
 
+> **AND THE MINIMAL REPAIR IS NOT THE TIMESTAMP, WHICH THE NAME ABOVE IMPLIES AND WHICH IS
+> WORTH CORRECTING.** *Amended 2026-08-25, from T4's independent reviewer's measurement.*
+> Adding an **identity** exclusion — `job_run_id <> :batch_id` — to the controller's hand query,
+> leaving its `fail_on_dq` anchor and its `<` exactly where they were, returns all eleven correct
+> counts. So the defect is *"no identity exclusion, on an anchor that postdates the row being
+> excluded"*, and the two halves are separable: **move the anchor onto the gate run itself and the
+> identity predicate becomes provably unreachable dead code** — which is what T4's implementer
+> refused the controller over, and why the shipped query uses `<=` rather than `<`.
+
 > **AND IT IS THE CONTROLLER'S OWN, CAUGHT IN THE CONTROLLER'S OWN PROBE.** Statement
 > `01f1a0ac-5fe2-17d0-8896-c2b9ffa853ff` is that query, run first and read as the answer. It was
 > caught not by review but by **arithmetic that refused to close**: it reported 8 prior runs for an
@@ -529,6 +538,21 @@ hour-sliced durations and F4's telemetry join.
 total, because the only `dq_gate_batch` run the lookup ever had is dated **after** all three of its
 incidents. **The three incidents whose quarantine evidence is already gone (§0.5) are exactly the
 three whose history the naive key also deletes.**
+
+> **THE `0` IS A PROPERTY OF WHAT THE QUERY ANCHORS ON, AND SAYING SO MAKES THE FINDING
+> SHARPER RATHER THAN WEAKER.** *Amended 2026-08-25, on T4's implementer's reading of the
+> shipped module against this section.* The `0` above is the controller's hand query, which
+> anchors each incident on its own **`fail_on_dq`** row — always present, so the subquery
+> still returns a count, and the count is `0`. **T4's module anchors on the incident's own
+> `check_bad_rows` run instead**, so under the retired spelling there is no anchor at all and
+> the reading comes back `gate_run_absent` with **NULL** counts rather than `0`.
+>
+> **Both are the same wrong key and they fail differently, and the difference is the whole
+> point of this section.** `0` asserts *"this table was never gated before"* — a lie, and the
+> most reassuring one available. `gate_run_absent` asserts *"I could not look"*. The naive
+> key reaches the first through the anchor that is always there; **an implementation is not
+> safe from this hazard merely by not spelling `dq_gate_batch`, it is safe by refusing to
+> publish a count it did not measure.**
 
 **3. `check_bad_rows.result_state` cannot tell a fired gate from a clean one.** Statement
 `01f1a0ac-d078-154b-b9bf-94c1e0b4b44a`: **`check_bad_rows` is `SUCCEEDED` on all 29 runs**,
@@ -943,6 +967,101 @@ bug it fixed, and the first time the new claim was the controller's own.** The r
 struck through in the header rather than deleted, and §3 now carries the narrower true gap: **a
 seventh recommended action, reached by nothing, would leave every test in this repository green.**
 
+### 1.5 T4 — the last-N comparison, and the character that decided whether a defence existed
+
+Committed at `1803652`. `opl.triage_agent.history` returns, for one incident, `prior_executions`,
+`prior_incidents` and a **reading**, at `N_EXECUTIONS = 5`.
+
+**Controller-verified:** `134 passed in 98.31s` across `tests/triage_agent/` and
+`tests/test_size_caps.py`, read from the output file — 88 before the task plus 46. `ruff` clean;
+zero CR bytes by raw byte count; longest function 44 against the 50 cap.
+
+**Prediction 6 CONFIRMED, on fixtures, by three parties independently** — the implementer, the
+independent reviewer on a fixture it built without reading the implementer's, and the correction
+reviewer. The eleven prior counts are §0.10's exactly and no quantity was adjusted to match.
+**Prediction 7 is falsified in letter and confirmed in substance; §2 carries why, and the cause was
+the controller's own later dispatch.** Neither has met the workspace: the live arm is T8's.
+
+#### THE SHARPEST ARTEFACT OF THE TASK IS ONE CHARACTER
+
+The controller instructed: exclude the incident's own run **by identity, not by a timestamp
+comparison**. **The implementer refused it as under-specified and was right.** With the natural
+`started_at < own_gate_start`, the identity predicate `job_run_id <> :batch_id` is **provably
+unreachable** — the anchor is `MIN(started_at)` over the incident's own rows, so every own-run row
+satisfies `started_at >= anchor`. **The controller's own defence would have shipped as dead code**,
+and dead code that looks like a guard is this repository's most-hunted species. The shipped query
+uses `<=`, which makes the identity load-bearing.
+
+**And then the review found that nothing held the decision.** *Reported*, measured:
+
+| mutation | result |
+|---|---|
+| `<=` → `<` | **36 passed** — silent |
+| then delete the now-dead identity predicate too | **36 passed** — still silent |
+| control: delete the identity predicate, keep `<=` | **10 failed, 26 passed** |
+
+**One character turned a load-bearing predicate into decoration with no test going red, and the
+correct decision was protected only by the fact that somebody had thought about it.** It is pinned
+behaviourally now, by a constructed **tie** — two gate runs of one job sharing an instant, which
+`<` drops and `<=` keeps (7 against 6).
+
+> **THE TIE LIVES INSIDE THE MEASURED FIXTURE AND THAT WAS CHALLENGED, THEN CLEARED BY
+> MEASUREMENT.** T3 put its constructed cases in separate labelled relations so that *"they were
+> read from different views"* could never explain a result, and the controller asked whether
+> injecting a tie into the measured corpus broke that discipline. **Disabling the retiming fails
+> exactly one test — the tie test, on its own self-check** (`assert 2 == 1`, *"the fixture lost its
+> tie"*) — so it moves no measured quantity, and it is labelled INVENTED in three places. The
+> reviewer's argument for injecting rather than separating is the better one and is adopted: the
+> tie's whole content **is a relationship between two runs of the measured schedule**, so a
+> separate relation would have had to restate the schedule to hold it, which is exactly how *"they
+> were read from different views"* becomes available again.
+
+#### A FOURTH SILENT DEFECT THAT NOBODY PREDICTED, FOUND BY AN IMPLEMENTER REFUSING AN INSTRUCTION
+
+§0.10 named three. The implementer named a fourth and broke a controller instruction to close it:
+**a batch whose `check_bad_rows` row has aged out of the telemetry has no anchor, so every naive
+spelling returns `0` prior executions** — indistinguishable from *never gated before*. It needs no
+drift at all: F4's ~25-day retention floor ages the telemetry out while a quarantine keeps its
+`_batch_id` forever.
+
+The controller had instructed that the number found be on every row. **The module emits
+`gate_run_absent` with NULL counts instead** — *a number that was not measured is not published as
+`0`* — and the refusal is right for T2's reason one level up. **Three absence words, not one:**
+`gate_run_absent` is *"I could not look"*, `no_prior_execution` is *"nothing has ever been gated"*,
+`insufficient_history` is *"fewer than N exist"*. The eleven read **8 / 2 / 1**.
+
+#### TWO CORRECTIONS, AND THE SIXTH INSTANCE OF THIS PHASE'S PATTERN
+
+The first correction closed the HIGH and four MEDIUM. **Its review found that it had replaced a
+false header claim with a different false header claim, in the same paragraph, while fixing it** —
+*"EACH LINK MOVES ONE THING FROM THE ONE BEFORE IT"*, where the four constants in chain order move
+**one, then three, then two**, and the bullets underneath silently changed baseline mid-list. **The
+sixth time on this phase that a correction's defect landed in a new claim rather than in the bug it
+fixed.** The second correction **deleted the umbrella rather than writing a third**; each bullet now
+names the query it is measured against.
+
+The same review upheld a suspicion the controller had raised and the first correction had answered
+honestly: **three assertions in the bundle sweep that no test fired**, inside a file whose own
+header promises *"EVERY LOCK HAS A MUTATION BESIDE IT"* — the shape T1's review already condemned in
+this package. **The second correction refused the controller's count**: the sweep carries **four**
+asserts, not three, plus a fifth check elsewhere and a sixth lock with no mutation at all. It fired
+all six, so the header's sentence is now true of every lock that reads a file.
+
+> **AND THE CONTROLLER BROKE ITS OWN PUBLISHED RULE IN THE ENTRY ABOUT ENTRIES GOING STALE.** §3's
+> declaration-file bullet was corrected from "TWO files" to "THREE" and the argument **two
+> paragraphs below it** was left saying *"There are two files now."* The rule this document
+> publishes — *a retraction closes by `grep -i`, not by fixing the paragraph you happened to open*
+> — was written by the controller and then not followed by the controller, inside the section about
+> exactly that failure. **Third occurrence of the species, and §3 carries it in place.**
+
+#### AND THE HISTORY OF THIS FILE'S CAP IS NOW A STANDING FACT
+
+`tests/triage_agent/test_history.py` closes the task at **788 of 800**. Two files in this package
+have already been split after reaching **845** and **798**, each costing a review pass.
+**The next addition to that file splits first**, and T4 built its declaration half as a separate
+file from the start rather than splitting into one later, which is the lesson applied rather than
+recorded.
+
 ---
 
 ## 2. Predictions, published before the runs that test them
@@ -965,7 +1084,7 @@ Each names what falsifies it, and each falsifier is a real outcome rather than a
 | 4 | The LLM control returns a confident, fluent root cause for a `job_run_id` that exists nowhere | **OPEN** — T7 |
 | 5 | The LLM control assigns the **same** severity band to the 2,000-row and the 1-row incident when the counts are stripped | **OPEN** — T7 |
 | 6 | The shipped history module reproduces §0.10's eleven prior-execution counts **exactly** | **OPEN** — T4 |
-| 7 | **Ten of eleven** incidents report `insufficient_history` at N = 5, and **two** report zero prior executions | **OPEN** — T4 |
+| 7 | ~~**Ten of eleven** incidents report `insufficient_history` at N = 5~~, and **two** report zero prior executions | **FALSIFIED IN LETTER, CONFIRMED IN SUBSTANCE** — and by the controller's own later instruction; live arm still T8's |
 | 8 | The lookup's three incidents still return **4 / 3 / 1** on the stable key against the LIVE view at T8 | **OPEN** — T4/T8 |
 
 **1 — CONFIRMED, and on live data rather than on the fixture.** T1's independent reviewer ran the
@@ -1004,11 +1123,33 @@ shipped module are two spellings of one question, **and §0.10 records that the 
 spelling of it was wrong by one on all eleven.** If they disagree, this document says which was
 corrected and how it was decided, rather than adopting the module's answer because it is newer.
 
-**7** — *Falsified by:* fewer than ten, which at N = 5 would require history this workspace does
-not have; or more than ten, which would mean the estabelecimentos incident lost prior runs to
-retention between 2026-08-25 and the run. **The two zeroes are the load-bearing half**: they are
-the only incidents for which *"no prior execution exists"* and *"the query counted its own run"*
-give different answers, and §0.10 measures that the naive spelling reports `1` for both.
+**7 — FALSIFIED IN LETTER, AND THE CONTROLLER FALSIFIED IT ITSELF, AFTER PUBLISHING IT.** The
+shipped module reads **8** `insufficient_history`, **2** `no_prior_execution`, **1**
+`history_complete`. Ten of eleven are still short of N and two still have none — *the substance
+holds* — but only eight carry the word the prediction named.
+
+**What changed it was T4's dispatch, written by the controller three hours after the prediction.**
+That dispatch required *"fewer than N exist"* to be a distinct state with its own word and cited
+T2's two-word absence split approvingly, including that T2's implementer had been right to refuse
+the controller's single word. The implementer applied it and then split once more, for a reason
+the prediction had no way to contain: **`gate_run_absent` is a third absence** — the batch whose
+gate run has aged out of the telemetry — and it is NOT *"fewer than N"* at all, it is *"I could
+not look"*. So the eleven distribute across three words where the prediction assumed one.
+
+> **A PREDICTION IS NOT FALSIFIED BY BEING OUT-DESIGNED, AND THIS ONE IS RECORDED AS FALSIFIED
+> ANYWAY.** The alternative — restating it in the vocabulary the design later adopted — is how a
+> prediction stops being able to be wrong. The number that was checkable was `10 × insufficient_
+> history`; it came out `8`. **What this costs the controller is the right to say the prediction
+> was confirmed; what it buys the reader is that §2 still contains a claim that could fail.**
+
+**The two zeroes remain the load-bearing half**: they are the only incidents for which *"no prior
+execution exists"* and *"the query counted its own run"* give different answers, and §0.10 measures
+that the naive spelling reports `1` for both. **Both are now `no_prior_execution`, not `0` on an
+`insufficient_history` row** — a stronger separation than the prediction asked for.
+
+**Confirmed ON FIXTURES ONLY, by two parties independently** — T4's implementer and T4's reviewer,
+the latter on a fixture it built itself without reading the former's. *Reported.* **Nothing has run
+against the workspace**; the live arm is T8's, and prediction 8 is what it turns on.
 
 **8 — the one prediction here that the controller genuinely does not know the answer to.** The
 lookup's four, three and one prior runs are all `dq_gate` rows dated **2026-07-24**. F4 measured a
@@ -1029,13 +1170,29 @@ code and the record rather than measured.
 
 ### Properties this phase chose NOT to guard, and the choice is recorded
 
-- **"The declaration half is free of Spark" is enforced by nothing, and it is now TWO files.**
-  T1's split bought a ~1.4 s no-JVM file and T3's bought a second — `tests/triage_agent/test_
-  severity_declaration.py`, measured at **~1.09 s wall with no JVM gateway** (*Reported*, from the
-  implementer, who established it by reading `SparkContext._gateway` at session finish rather than
-  off the clock, and fired a control on a Spark run that printed a live gateway). Adding a Spark
-  test to either would silently cost that, and no test would go red. `tests/test_size_caps.py`
-  covers the line count and nothing covers the JVM.
+- **"The declaration half is free of Spark" is enforced by nothing, and it is now THREE files.**
+  T1's split bought a ~1.4 s no-JVM file, T3's split bought a second — `tests/triage_agent/test_
+  severity_declaration.py`, **~1.09 s wall with no JVM gateway** — and **T4 built its third from
+  the start rather than splitting into it**: `tests/triage_agent/test_history_declaration.py`,
+  **23 tests in 1.69 s**. Adding a Spark test to any of the three would silently cost the property
+  and no test would go red. `tests/test_size_caps.py` covers the line count and nothing covers the
+  JVM.
+
+  **The third file's no-JVM property is the best-established of the three and is *Reported*:**
+  T4's reviewer ran it under a plugin replacing `pyspark.java_gateway.launch_gateway`,
+  `pyspark.context.launch_gateway` **and** `subprocess.Popen` (tripping on any argv naming java or
+  spark-submit), got `tripped=[]`, **and fired the positive control** — the same plugin on
+  `test_history.py` raises `A JVM GATEWAY WAS LAUNCHED`. That is a guard proven able to fire,
+  which is the half the first two files' measurements did not have.
+
+  > **AND THIS ENTRY WENT STALE IN PLACE FOR THE SECOND TIME, THE SAME WAY, ONE TASK APART.** It
+  > said "TWO files" while T4's declaration file cited it as the third — the citing file was
+  > right and the cited entry was wrong, which is the exact inversion of the T3 occurrence, where
+  > the record was right and the citing file wrong. **The rule adopted in §1.4 — freeze the record
+  > while an agent holds a file that cites it — prevented the first failure mode and has no
+  > purchase on this one**, because here the agent correctly anticipated an update the controller
+  > then did not make. A frozen record is not a current one. *Found by T4's independent reviewer,
+  > following the citation rather than reading the sentence.*
 
   **The guard was considered and deliberately not built**, on the narrow reviewer's argument:
   every cheap spelling of it is this repository's hunted species one level down — a signature scan
@@ -1046,13 +1203,21 @@ code and the record rather than measured.
 
   **THAT ARGUMENT IS RE-READ HERE RATHER THAN RE-CITED, BECAUSE ONE OF ITS TWO LEGS NO LONGER
   HOLDS.** It was refused as a *one-file special case inside a repo-wide sweep* — scope the phase
-  spec says to resist. There are two files now, so that leg is gone; the other leg, that every
-  cheap spelling of the guard is blind, is untouched and is the one that still decides it. **The
+  spec says to resist. There are **three** files now, so that leg is gone; the other leg, that
+  every cheap spelling of the guard is blind, is untouched and is the one that still decides it.
+
+  > **AND "two" STOOD IN THIS SENTENCE AFTER THE ENTRY ABOVE IT WAS CORRECTED TO "three" — THE
+  > THIRD OCCURRENCE, INSIDE THE PARAGRAPH THAT DIAGNOSES THE SPECIES.** The controller fixed the
+  > bullet it had opened and not the argument two paragraphs below, which is **exactly** the
+  > failure the phase's own rule names: *a retraction closes by `grep -i`, not by fixing the
+  > paragraph you happened to open.* The rule was written down, published in this document, and
+  > then not followed by the person who published it — in the entry about entries going stale.
+  > *Found by T4's correction reviewer, reading the section rather than the bullet.* **The**
   entry stood literally true while its subject doubled**, because a bullet that names its subject
   by name cannot notice a sibling — this phase's second species, the defect moving out of the code
   and into the document that judges it, arriving in the ledger of what is *not* guarded. It stays
   unbuilt for this phase, recorded as a decision whose stated reason is now half of what it was.
-  *What would exercise it: someone adding a Spark test to either file and nobody noticing.*
+  *What would exercise it: someone adding a Spark test to any of the three and nobody noticing.*
 - **A SEVENTH recommended action, reached by nothing, would leave every test green.** The
   severity ladder is closed: `test_the_rank_and_the_word_are_one_ladder_and_cannot_disagree`
   holds `tuple(_EXPECTED_RANKS) == SEVERITIES` and then `{reached} == set(_EXPECTED_RANKS)`,
@@ -1079,6 +1244,36 @@ code and the record rather than measured.
   `sorted` rationale in `table_of_job_sql`. They are true as of `56773b6` and would go stale
   silently. *What would exercise them: nothing. They are prose, and are listed so that a later
   reader knows they carry no test.*
+
+### Carried out of T4, and every entry names what would exercise it
+
+- **`history.py` has never run against the DEPLOYED view over real system tables.** It now runs
+  against the shipped `task_telemetry_sql` **over empty system tables**, which proves the four
+  column names resolve against the view definition this project deploys — and **nothing more**: no
+  count is checked by it, and `result_state` is not among the four. *What would exercise it: T8's
+  workspace run.* **This is the difference between prediction 6 confirmed on a fixture, which it
+  is, and prediction 6 confirmed, which it is not.**
+- **Nothing permutes the reading ladder's arms.** The order of the `no_prior_execution` /
+  `insufficient_history` pair decides the answer and is read off SQL's first-match rule rather than
+  executed; the absent arm's *position* is vacuous while its *presence* is fired (removing it turns
+  *"I could not look"* into `history_complete`). *What would exercise it: a test that reorders
+  `_READING_LADDER` and asserts the answer moves.* It was considered and not built.
+- **`own_gate` returning two rows is unexercised.** The module groups by `job_id` rather than
+  `MAX()`-ing it, on `incidents.py`'s reasoning — the two spellings agree on every input and differ
+  in how they FAIL, and grouping was chosen because it breaks the one-row-per-incident property a
+  reader can check instead of silently labelling a row with the larger of two values. **That "loud
+  wrong answer" has never been made to happen.** *What would exercise it: one `job_run_id`
+  appearing under two `job_id`s in the telemetry.*
+- **The gate-spelling lock cannot recover history recorded under a name nobody declared.** It
+  catches a future rename, in the commit that makes it — six checks, each now fired on the drift it
+  refuses. It does not and cannot see runs already in the telemetry under a retired spelling, which
+  is §0.8's unclosable half arriving one task later. *What would exercise it: nothing in the wheel.
+  A person would have to widen the declaration by hand.*
+- **Nothing asks the module about a batch whose gate ran and found nothing — except in one file.**
+  Closed during T4's second correction, and named here because the gap is what let a mutation
+  (anchor and bound moved together) pass all fourteen tests in `test_history.py` while being
+  refused one file away. *What would exercise it: it now is exercised; the entry records that the
+  coverage lives in `test_history_absence.py` and not beside the tests it protects.*
 
 ### Latent in T1's projection reader, and neither shape exists today
 
