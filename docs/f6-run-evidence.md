@@ -449,6 +449,104 @@ ADR 0018 already records this shape once, in a privacy deploy check where *"`***
 under all four possible outcomes"*. **T2's sampler is built so the question cannot arise** — it
 emits the word `masked` from the declaration and **never reads the column** (§1.2).
 
+### 0.10 THE COMPARISON BASELINE, MEASURED PER INCIDENT — and three silent ways to get it wrong
+
+§0.8 established which task key is safe. **This is the same question one grain finer: for each of
+the eleven incidents, how many prior gate executions actually exist to compare it against.** T4 is
+the module that answers it, so the answer is measured here first and T4 reproduces it or one of
+the two is wrong.
+
+**Controller-verified 2026-08-25**, three statements against the live workspace.
+
+#### The gate history, per job, on the stable key
+
+`check_bad_rows` job runs grouped by `job_id` — statement `01f1a0ac-7ca0-1b71-abdc-cad9432050f6`:
+
+```
+8 · 6 · 5 · 4 · 3 · 2 · 1  =  29
+```
+
+**Seven `job_id`s, each with exactly one `job_name`, and NO run carries a NULL `job_name`.** Both
+halves matter: the counts reconcile with §0.8's `check_bad_rows (29)` exactly, and the absence of
+NULLs means the history could be keyed on either column *today*. It is keyed on `job_id` anyway —
+`telemetry.py` keeps task runs whose job has aged out of `system.lakeflow.jobs`, and those rows
+carry a NULL name and a live id. **That is a property of this corpus on this date, not a guarantee,
+and it is written down as the former.**
+
+**Also measured: `check_bad_rows` runs ONCE per job run** — 29 task runs over 29 job runs, on every
+one of the seven jobs. The two-attempt fan-out §0.4 measures is `fail_on_dq`'s alone: the retry
+re-ran the *failing* task, not the whole job. **So the 2× trap does not bite this key in this
+corpus — which is exactly why a test over this corpus cannot see a missing fold.** The fold to
+`job_run_id` belongs in the query regardless, and only a constructed doubled row can prove it is
+there.
+
+#### The prior-execution count per incident, and it is the phase's own numbers
+
+Statement `01f1a0ac-9340-13d4-b55f-e756e11950a7`. Job names resolved through §0.3:
+
+| job_run_id | table | prior runs, **stable key** | same, **naive timestamp** | same, **naive key** | prior incidents |
+|---|---|---|---|---|---|
+| `128878829411613` | estab | **7** | 8 | 7 | 2 |
+| `184706631093131` | lookup | **4** | 5 | **0** | 2 |
+| `187805471003061` | estab | **3** | 4 | 3 | 1 |
+| `241387611390862` | lookup | **3** | 4 | **0** | 1 |
+| `409962018634322` | socios | **3** | 4 | 3 | 1 |
+| `315230730740144` | estab | **2** | 3 | 2 | 0 |
+| `592660596679630` | payments | **2** | 3 | 2 | 0 |
+| `371067950667703` | empresas | **1** | 2 | 1 | 1 |
+| `996871467498110` | lookup | **1** | 2 | **0** | 0 |
+| `1121645114029617` | socios | **0** | 1 | 0 | 0 |
+| `321750543973966` | empresas | **0** | 1 | 0 | 0 |
+
+**It reconciles in both directions, which is what makes it a measurement rather than a query that
+ran.** The estabelecimentos job has 8 gate runs and its three incidents sit at prior 7, 3 and 2 —
+runs #8, #4 and #3. The lookup job has 6, five of them on 2026-07-24 under `dq_gate` and one on
+2026-07-31 under `dq_gate_batch`; its three incidents are runs #5, #4 and #2, **all five of the
+`dq_gate` day**. Socios' and empresas' zero-history incidents are each that job's FIRST gate run
+ever. Every column is derivable from the others and none was typed twice.
+
+#### THE THREE WAYS TO GET IT WRONG, AND ALL THREE RETURN A PLAUSIBLE NUMBER
+
+**1. The naive timestamp comparison inflates EVERY incident by exactly one — including the two
+zeroes.** `check_bad_rows` starts *before* `fail_on_dq` inside the same job run, so "gate runs that
+started before this incident started" counts **the incident's own gate run** as prior history. The
+middle column above is that query. It is wrong by one on all eleven, nothing raises, and **`1` is
+the answer it gives for the two incidents whose true history is `0`** — so the one state a triager
+most needs to see, *this table has never been gated before*, is the state the defect deletes. This
+is the fourth silent off-by-one or 2× this project has measured, after §0.4's fan-out, F4's
+hour-sliced durations and F4's telemetry join.
+
+> **AND IT IS THE CONTROLLER'S OWN, CAUGHT IN THE CONTROLLER'S OWN PROBE.** Statement
+> `01f1a0ac-5fe2-17d0-8896-c2b9ffa853ff` is that query, run first and read as the answer. It was
+> caught not by review but by **arithmetic that refused to close**: it reported 8 prior runs for an
+> incident on a job with 8 gate runs *in total*, which requires a ninth run that does not exist.
+> **A number that cannot be true is a cheaper defect than a number that merely is not** — every
+> other cell in that statement was off by one and looked fine.
+
+**2. The naive KEY does not shorten the lookup's history; it ERASES it.** Keyed on
+`dq_gate_batch`, all three lookup incidents return **0** prior executions rather than 4, 3 and 1.
+§0.8 measured the retired-name hazard as *"wrong by 5"* at table grain; at incident grain it is
+total, because the only `dq_gate_batch` run the lookup ever had is dated **after** all three of its
+incidents. **The three incidents whose quarantine evidence is already gone (§0.5) are exactly the
+three whose history the naive key also deletes.**
+
+**3. `check_bad_rows.result_state` cannot tell a fired gate from a clean one.** Statement
+`01f1a0ac-d078-154b-b9bf-94c1e0b4b44a`: **`check_bad_rows` is `SUCCEEDED` on all 29 runs**,
+`dq_gate` on all 5, `dq_gate_batch` on all 24. The condition task succeeds whether its answer is
+true or false. So a history that counted "clean prior runs" off the terminal state would report
+**29 SUCCEEDED — the same number a workspace with zero incidents would report.** ADR 0018's
+standing instruction, arriving in the column that looks most like the answer. **The only signal
+that a gate found rejected rows is the PRESENCE of a `fail_on_dq` task run**, which is what the
+`prior incidents` column above is counted from, and it is `FAILED` on all 22 of its rows.
+
+#### WHAT THIS DOES TO `insufficient_history`
+
+Against the spec's *"last N executions"* at **N = 5**: **exactly one incident of the eleven has
+five prior gate runs.** Ten do not, and two have none at all. §0.8 called
+`insufficient_history` the majority state at table grain; at incident grain it is **ten of
+eleven**, and *"compared against the last 5, nothing anomalous"* would be a sentence about a
+comparison that did not happen for ten of the eleven incidents this phase exists to triage.
+
 ---
 
 ## 1. What has been built and run
@@ -758,11 +856,167 @@ the latent hazard is still open.
 > structurally blind to `*`. **The correction is the most dangerous commit in a task** — it is
 > trusted, it writes fresh prose, and nobody has read it.
 
+### 1.4 The split of `test_severity.py`, and the first defect this phase created by writing two files at once
+
+Committed at `66f3e96`, **free of behaviour**, against the baseline `0503761` that exists precisely
+so this one could be checked. `test_severity.py` **798 → 575** (12 `probe` tests), new
+`test_severity_declaration.py` **328** (10 tests, no JVM), `_HELD_BATCH` relocated to `conftest.py`,
+two docstrings repointed, one phantom citation fixed in `severity.py`.
+
+**Controller-verified:** `88 passed in 279.14s` across `tests/triage_agent/` and
+`tests/test_size_caps.py`, read from the output file. **66 at T2's close + T3's 22 = 88**, and
+12 + 10 = 22, so the arithmetic closes in both directions and no test was lost or duplicated —
+which is the check this phase added after a killed subagent resurrected a deleted file and a suite
+went green with 150 instead of 135. `ruff` clean; every touched file LF, zero CR bytes.
+
+**Reported**, and by two agents using different methods, which is what makes it a proof rather than
+a second opinion: an AST comparison over all 30 top-level definitions, and a raw-source block
+comparison that also sees comments, string spelling and blank lines. The 22 test names after equal
+the 22 before **in both directions**; every free name in every moved body resolves to the **same
+object** in its new module; no module-level name was gained or lost. The no-JVM property was
+established twice, once by reading `SparkContext._gateway` at session finish with a control that
+printed a live gateway, and once by **deleting Java from `PATH` entirely** and still getting
+`10 passed in 0.11s`, with a control that errored inside `launch_gateway`.
+
+#### THE PROOF SCRIPT WAS BLIND TO NINETEEN TWENTIETHS OF WHAT THE CHANGE ADDED
+
+The implementer's script compared **30 named functions and 8 named constants**. Of the ~95 lines the
+change added, roughly **90 were module-docstring prose** — which that script cannot see at all,
+along with comments, imports, module-level statements outside those eight names, and free-name
+rebinding.
+
+**Reported**, and demonstrated rather than argued: the reviewer rewrote both module headers into
+flat falsehoods — *"EVERY TEST HERE BUILDS A JVM"*, *"section 3 DOES NOT EXIST AND NEVER DID"* — and
+got **`14 passed`** and a clean `ruff`.
+
+> **The verification artefact was itself the species it was built to refuse.** Its author's own
+> red-arm control — changing a literal inside a function body — probed the one bucket it covers
+> well. ADR 0018's instruction is *ask what else would produce that value*; what else produces
+> `compared 30 functions; 0 differ` is **a change that rewrote every header into a lie**.
+
+#### THREE CITATIONS POINTED AT NOTHING AND ONLY ONE WAS THE SPLIT'S FAULT
+
+- `test_evidence_sample.py` named a test that had moved files — the known cost of a split, and the
+  reason `5a401ef` is called *"repoint what then pointed at nothing"*.
+- **`severity.py` cited a test name that has never existed in this repository.**
+  `...flips_the_recommendation_on_the_one_batch_that_carries_one`; the real name ends
+  `_on_that_batch`. Introduced **already broken** by `0503761` and invisible because the name is
+  wrapped mid-token across two lines, so no `grep` for it could match. `git log --all -S` on the
+  phantom fragment returns only the commit that wrote it.
+- **A date naming a day on which the thing it described did not exist.** The same docstring dated
+  its `SELECT *` leak measurement `2026-08-24`; `severity_sql` and `test_severity.py` are both
+  created by `0503761`, dated **2026-08-25**, which is also the date §1.3 gives that measurement.
+  A sweep over **all 18** ISO dates in `src/opl/triage_agent/` and `tests/triage_agent/` — each
+  checked against the earliest commit whose blob contains the exact line, by two agents using
+  different methods — found **that one and no other**.
+
+#### THE ONE DEFECT NEITHER AGENT COULD HAVE PREVENTED, AND IT IS THE CONTROLLER'S PROCESS
+
+The implementer wrote, in the new file's header, that `docs/f6-run-evidence.md` §3 *"does not yet
+name this one, so as of this commit the property here is unguarded AND unrecorded."* **That was true
+when it was written.** The controller was widening §3 **in the same working tree at the same time**,
+and both changes were bound for the same commit — so the sentence was false at the moment it would
+have shipped.
+
+> **NEITHER PARTY WAS WRONG AND THE RESULT WAS WRONG ANYWAY.** This is a hazard with no precedent in
+> the phase's rules: the standing instruction is that the code cites the record, and the record is
+> the controller's, so **a controller who edits the record while an agent writes code that cites it
+> can falsify a correct sentence without either of them making a mistake.** The reviewer found it,
+> and found it by opening §3 rather than by reading the sentence.
+>
+> **The rule this phase adopts for the rest of its tasks:** while an agent holds a file that cites
+> the record, the record is frozen — or the agent is told which section is moving under it. The
+> cheaper half is that the controller stopped editing `docs/` for the whole of the correction pass
+> once this was understood, which is why the second and third passes produced no repeat.
+
+#### AND THE CONTROLLER'S OWN FIX SHIPPED THE PHASE'S PATTERN FOR THE FIFTH TIME
+
+Recorded in full in §3's second bullet, and named here so §1.4 is not the section that omits it: the
+header's *"five of the six recommended actions"* had **understated** since the day it was written —
+wrong in the one direction that costs a reader nothing and trips nothing, which is why T3's review
+and the split's review both passed over it. The controller corrected the count and, in the same
+edit, wrote *"AND NOTHING ASSERTS EITHER COUNT"* — **false, eleven lines above the assertion that
+refutes it.** The review of the correction refuted it with two mutations.
+
+**The fifth time in this phase that a correction's defect landed in the NEW claim rather than in the
+bug it fixed, and the first time the new claim was the controller's own.** The retraction ships
+struck through in the header rather than deleted, and §3 now carries the narrower true gap: **a
+seventh recommended action, reached by nothing, would leave every test in this repository green.**
+
 ---
 
 ## 2. Predictions, published before the runs that test them
 
-*(Written before the runs. See §2 of this document as tasks reach their runs.)*
+**WHERE THESE WERE FIRST WRITTEN, AND WHY IT HAS TO BE SAID.** Predictions 1–5 were published in
+the phase plan on **2026-08-24**, before T1 ran and before any of them was tested. That plan lives
+in a git-ignored working directory (see the preamble), **so a reader of this repository has no way
+to check that claim** — it is reproduced here for the reason the preamble gives, and the honest
+label is that the *provenance* of the date is Reported while each prediction's *outcome* below
+carries its own label. Predictions **6–8 are new, are T4's, and are written here BEFORE the module
+that tests them exists.**
+
+Each names what falsifies it, and each falsifier is a real outcome rather than a hedge.
+
+| # | prediction | status |
+|---|---|---|
+| 1 | The feed returns **11** incidents over **22** task runs, and the naive spelling returns 22 | **CONFIRMED** |
+| 2 | **Five** incidents classify `evidence_missing` and **six** carry rows | **OPEN** — closed by T8 |
+| 3 | A `permissions: issues: write` block opens an issue despite `default_workflow_permissions: read` | **OPEN** — T6 |
+| 4 | The LLM control returns a confident, fluent root cause for a `job_run_id` that exists nowhere | **OPEN** — T7 |
+| 5 | The LLM control assigns the **same** severity band to the 2,000-row and the 1-row incident when the counts are stripped | **OPEN** — T7 |
+| 6 | The shipped history module reproduces §0.10's eleven prior-execution counts **exactly** | **OPEN** — T4 |
+| 7 | **Ten of eleven** incidents report `insufficient_history` at N = 5, and **two** report zero prior executions | **OPEN** — T4 |
+| 8 | The lookup's three incidents still return **4 / 3 / 1** on the stable key against the LIVE view at T8 | **OPEN** — T4/T8 |
+
+**1 — CONFIRMED, and on live data rather than on the fixture.** T1's independent reviewer ran the
+shipped SQL against the real `dataops_task_telemetry` — statement `01f19fda-f4bf-159f-a9ea-adf5f
+003d51f`, **11 rows, every one `attempts = 2`** — and the fan-out statement `01f19fdb-041d-1884-bd
+88-71e714604bab` carries the naive answer beside the right one (4,000 against 2,000 for a 2,000-row
+quarantine). *Reported*, from the reviewer. §0.3's 22-over-11 is Controller-verified separately.
+*Falsified by:* either number moving, which would have meant §0.3 measured a smaller population
+than it claimed. Neither moved.
+
+**2 — OPEN, and it is listed as open on purpose.** T2 and T3 built the classification and their
+tests exercise it, but **on a fixture**. §0.3 measured the live corpus's five-and-six split, which
+is the same *fact about the workspace* — it is **not** the same claim as *"the shipped module
+classifies them that way against the live tables"*, and only T8's workspace run closes that.
+*Falsified by:* any of the six coming back empty (the quarantine recreated since §0.3) or any of
+the five acquiring rows (a repromote nobody recorded).
+
+**3** — *Falsified by:* a 403 from the API, in which case the local `gh` path stands and the CI
+path is reported as **refused**, not as untried. Asserted by nobody and quoted from no
+documentation (§0.2).
+
+**4** — *Falsified by:* the model declining, which would be a genuinely interesting result, would
+weaken plan decision §1.1, and would be published as weakening it.
+
+**5** — *Falsified by:* it separating them anyway, which would mean it inferred from the table name
+rather than from the numbers. **That is a third outcome, neither pass nor fail**, and this
+prediction is written so it can be seen.
+
+> **PREDICTIONS 4 AND 5 ARE ABOUT A STOCHASTIC INSTRUMENT AND A SINGLE SAMPLE IS NOT A RESULT.**
+> Each sweep runs the same prompt **n ≥ 5 times** and reports the spread, and any clause that
+> cannot survive being restated as a rate over n trials is rewritten **before** it is published.
+
+**6** — the eleven counts are **7 · 4 · 3 · 3 · 3 · 2 · 2 · 1 · 1 · 0 · 0** (§0.10, per incident).
+*Falsified by:* any count differing. That is not a hedge — the controller's hand query and the
+shipped module are two spellings of one question, **and §0.10 records that the controller's first
+spelling of it was wrong by one on all eleven.** If they disagree, this document says which was
+corrected and how it was decided, rather than adopting the module's answer because it is newer.
+
+**7** — *Falsified by:* fewer than ten, which at N = 5 would require history this workspace does
+not have; or more than ten, which would mean the estabelecimentos incident lost prior runs to
+retention between 2026-08-25 and the run. **The two zeroes are the load-bearing half**: they are
+the only incidents for which *"no prior execution exists"* and *"the query counted its own run"*
+give different answers, and §0.10 measures that the naive spelling reports `1` for both.
+
+**8 — the one prediction here that the controller genuinely does not know the answer to.** The
+lookup's four, three and one prior runs are all `dq_gate` rows dated **2026-07-24**. F4 measured a
+**~25-day retention floor** — on `system.query.history`, not on `system.lakeflow.job_task_run_
+timeline`, and the two are different tables with no established common floor. Those rows are
+**32 days old on 2026-08-25 and still present**, which is already past that floor. *Falsified by:*
+them having aged out by the workspace run — **which would not be a failure but the phase's first
+measurement of the timeline's own retention**, and would be published as that.
 
 ## 3. What is still unexercised
 
@@ -775,17 +1029,51 @@ code and the record rather than measured.
 
 ### Properties this phase chose NOT to guard, and the choice is recorded
 
-- **"The declaration half of T1's tests touches no Spark" is enforced by nothing.** The split
-  bought a ~1.4 s no-JVM file; adding a Spark test to it would silently cost that, and no test
-  would go red. `tests/test_size_caps.py` covers the line count and nothing covers the JVM.
+- **"The declaration half is free of Spark" is enforced by nothing, and it is now TWO files.**
+  T1's split bought a ~1.4 s no-JVM file and T3's bought a second — `tests/triage_agent/test_
+  severity_declaration.py`, measured at **~1.09 s wall with no JVM gateway** (*Reported*, from the
+  implementer, who established it by reading `SparkContext._gateway` at session finish rather than
+  off the clock, and fired a control on a Spark run that printed a live gateway). Adding a Spark
+  test to either would silently cost that, and no test would go red. `tests/test_size_caps.py`
+  covers the line count and nothing covers the JVM.
+
   **The guard was considered and deliberately not built**, on the narrow reviewer's argument:
-  every cheap spelling of it is this repository's hunted species one level down — a signature
-  scan for a `spark`/`probe` parameter passes while a module-scope `SparkSession.builder`, an
-  autouse fixture or a transitive `pyspark` import still starts a JVM, and a wall-clock assertion
-  is flaky on this box. The honest spelling is ~15 lines in `test_size_caps.py`'s style **with a
-  control asserting the same reader finds those tokens in the sibling file** — a one-file special
-  case inside a repo-wide sweep, which is scope the phase spec says to resist. *What would
-  exercise it: someone adding a Spark test to that file and nobody noticing.*
+  every cheap spelling of it is this repository's hunted species one level down — a signature scan
+  for a `spark`/`probe` parameter passes while a module-scope `SparkSession.builder`, an autouse
+  fixture or a transitive `pyspark` import still starts a JVM, and a wall-clock assertion is flaky
+  on this box. The honest spelling is ~15 lines in `test_size_caps.py`'s style **with a control
+  asserting the same reader finds those tokens in the sibling file**.
+
+  **THAT ARGUMENT IS RE-READ HERE RATHER THAN RE-CITED, BECAUSE ONE OF ITS TWO LEGS NO LONGER
+  HOLDS.** It was refused as a *one-file special case inside a repo-wide sweep* — scope the phase
+  spec says to resist. There are two files now, so that leg is gone; the other leg, that every
+  cheap spelling of the guard is blind, is untouched and is the one that still decides it. **The
+  entry stood literally true while its subject doubled**, because a bullet that names its subject
+  by name cannot notice a sibling — this phase's second species, the defect moving out of the code
+  and into the document that judges it, arriving in the ledger of what is *not* guarded. It stays
+  unbuilt for this phase, recorded as a decision whose stated reason is now half of what it was.
+  *What would exercise it: someone adding a Spark test to either file and nobody noticing.*
+- **A SEVENTH recommended action, reached by nothing, would leave every test green.** The
+  severity ladder is closed: `test_the_rank_and_the_word_are_one_ladder_and_cannot_disagree`
+  holds `tuple(_EXPECTED_RANKS) == SEVERITIES` and then `{reached} == set(_EXPECTED_RANKS)`,
+  so a fifth severity fails it. The action ladder has no counterpart — that test checks only
+  `recommended_action in RECOMMENDED_ACTIONS`, which is membership. All six ARE each pinned
+  by an equality on a `_graded(...)` row, so an action that stops being reachable reddens a
+  named test (*Reported*, demonstrated by mutation); **nothing compares the reached set
+  against the tuple**, so the gap is one-directional. *What would exercise it: adding a
+  seventh recommended action.*
+
+  > **THIS ENTRY IS THE SECOND VERSION OF ITSELF AND THE FIRST WAS THE CONTROLLER'S, WRONG,
+  > AND WRONG IN THE SENTENCE JUSTIFYING WHY NO GUARD WAS BUILT.** T3's header claimed *"all
+  > four severities and five of the six recommended actions are reached"*; a correction pass
+  > asked to CHECK rather than carry it found **all six** — the claim UNDERSTATED, which is
+  > the one direction nobody audits, so it had survived T3's own review and the split's. The
+  > controller then corrected the count and added *"AND NOTHING ASSERTS EITHER COUNT … what
+  > would exercise them: nothing"*. **That was false for both halves**, and the review of the
+  > correction refuted it with two mutations: the severity coverage is asserted **eleven lines
+  > below the paragraph denying it**, and every action is individually pinned. **The fifth
+  > time this phase has watched a correction ship its defect in the NEW claim rather than in
+  > the bug it fixed, and the first time the new claim was the controller's own.**
 - **Four prose corrections in T1 are asserted by nothing** — the "three of seven" job-name count,
   the "two names across three sibling views" phrasing, the `view`-versus-`source` wording, and the
   `sorted` rationale in `table_of_job_sql`. They are true as of `56773b6` and would go stale
