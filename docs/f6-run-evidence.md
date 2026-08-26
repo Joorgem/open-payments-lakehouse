@@ -1415,6 +1415,36 @@ about GitHub's trigger semantics would be that mistake wearing a different hat.
 *What would exercise the suite: a CI run on this branch. Until one exists, no claim in this
 document about tests outside `tests/triage_agent/` and `tests/test_size_caps.py` has been made.*
 
+#### THE PROBE CAME BACK, AND IT IS THE FIFTH EVENT TO PRODUCE NOTHING
+
+**Controller-verified.** The commit above was pushed to the open PR's head branch, which fires
+`synchronize` — a default `pull_request` type. **No run.** So the absence spans **five** distinct
+events: `opened` (as a draft), `ready_for_review`, `reopened`, `synchronize`, and the
+feature-branch `push` that `ci.yml` correctly ignores by design.
+
+Further state, all measured and none of it explaining the absence: the repository is **public**,
+not a fork, **not archived**, `disabled: false`; Actions are `enabled: true` with
+`allowed_actions: all`; `default_workflow_permissions` is `read` (§0.2's figure, unchanged); the
+`CI` workflow is registered and `active`; `ci.yml` is present on the branch; and PR #28 is open,
+non-draft and `MERGEABLE` against `main`. The account-level Actions billing endpoint now returns
+**HTTP 410 "This endpoint has been moved"**, so that reading was not taken — and a public
+repository's minutes are not metered, so it is unlikely to be the cause.
+
+> **STILL NO CAUSE IS ASSERTED, AND THAT IS THE POINT RATHER THAN A GAP IN THE WORK.** Five events,
+> one absence, and every setting that could plausibly explain it measured and found innocent. The
+> honest output of this probe is *"CI does not run on this branch and the reason is not in anything
+> this session can read"* — which is a **result**, and is what gets carried to whoever can look at
+> the account's own Actions settings.
+
+**THE TWO THINGS THIS BLOCKS, NAMED SO NEITHER IS DISCOVERED LATE:**
+
+1. **Protocol §9.3** — *CI green on the merged PR* — cannot be satisfied while no run occurs.
+2. **Prediction 3**, which is closed by *a workflow run that tries to open an issue* with a
+   job-level `permissions: issues: write` against the repository default of `read`. **A prediction
+   that needs a run cannot be settled on a branch where runs do not happen.** T6's local `gh` path
+   is unaffected — the phase's one real issue does not depend on CI — but the CI half of §0.2's
+   open question stays open, and is reported as **refused by circumstance rather than untried**.
+
 ### Carried out of T5, and every entry names what would exercise it
 
 - **A bronze registry key becoming a gold table name is guarded by NOTHING.** The leg-3 rule
