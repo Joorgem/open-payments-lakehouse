@@ -1062,6 +1062,138 @@ have already been split after reaching **845** and **798**, each costing a revie
 file from the start rather than splitting into one later, which is the lesson applied rather than
 recorded.
 
+### 1.6 T5 — the blast radius, the leg the brief did not have, and a claim about a claim
+
+Committed at `2bf510c`. `opl.triage_agent.blast_radius` answers **which** tables are downstream of
+an incident's bronze table, never how much. **Controller-verified:** `174 passed in 120.43s` across
+`tests/triage_agent/` and `tests/test_size_caps.py`, read from the output file — 166 before the
+task plus 8. `ruff` clean; zero CR bytes; longest function 49 against the 50 cap.
+
+**No proportion, and the reason is measured.** The shared fixture chose counts so each batch
+reconciles — socios reads 1,800 staged against 55,830,826 live rows, and only payments' counts are
+real — so any proportion classifies socios near 100% here and near 0% in the deploy. T3 refused it
+for this, and the phase plan predicted T5 would meet the same wall. Nothing the module emits is a
+magnitude, checked by dumping every f-string it can produce.
+
+#### THE CONTROLLER'S BRIEF HAD THREE LEGS AND THE GRAPH HAS FOUR
+
+bronze→vault is declared in the bundle and keyed on the loader task's **parameter**; vault→gold is
+derived from the gold registry's own spec fields plus `parent_hub`; bronze→gold direct is read out
+of the entry points the bundle names. **The fourth is the gold→gold closure, and the implementer
+added it against the brief.** `fact_payment` names no vault table, so without the closure it is
+unreachable from `empresas` and `estabelecimentos` — **the one table the whole layer exists to
+produce, missing from two of seven answers.**
+
+> **THE CONTROLLER THEN REPEATED THE ERROR IN THE OPPOSITE DIRECTION.** The review dispatch said
+> the closure was needed for `empresas`, `estabelecimentos` **and `ptax`**. `ptax` reaches
+> `fact_payment` through the direct leg with no closure at all. **Reported by the reviewer against
+> the dispatch**, and it is the same defect twice: a controller reasoning about a graph it had
+> derived incompletely, once by omission and once by over-extension.
+
+**An independent reviewer re-derived all four legs from its own code** — parsing every job YAML
+itself, walking the gold registry itself, reading the four entry points by hand — **and reproduced
+the declaration table for table**, all seven bronze tables. *Reported.*
+
+#### THE EMPTY ANSWER IS REFUSED AT IMPORT, AND IT IS THE PHASE'S SPECIES
+
+`payments` and `ptax` reach gold without touching the vault, so a bronze→vault→gold walk returns
+**nothing** for them — and `payments` is `592660596679630`'s table, the largest incident in the
+corpus and the one whose recommendation is *do not promote*. **"Nothing downstream" raises nothing,
+is plausible for any bronze table, and is the most reassuring answer available.**
+`_assert_no_bronze_table_reaches_nothing` fails the **import**: deleting `payments` from the direct
+declaration stops both test files at **collection, exit 2**, rather than reporting a comfortable
+green.
+
+#### THE GUARDS WERE DECORATION UNTIL A REVIEW MEASURED THEM
+
+**Five of seven import-time guard calls could be deleted with the suite green** — and one of the
+five, the guard for the only leg no sweep attests, had **no `pytest.raises` sibling, no firing
+test, and was not imported by either test file at all**. Its own docstring said a typo in
+`"fact_payments"` *"would drop the star's only fact out of the workspace's largest incident"*, and
+nothing had ever watched it say so.
+
+**The file's own header had named the hazard verbatim** — *"Deleting the calls at the foot of
+`incidents.py` left this suite green once, which is how that was learned"* — so it promised what it
+did not deliver, and the helper that closes it already existed in the file and was already used
+twice. **Controller-verified**, one call at a time: each deletion reddens **exactly one** test,
+seven distinct names, `1 failed, 39 passed` each, the file restored to hash after every one.
+
+#### THE SEVENTH INSTANCE, AND THIS TIME EVERY FINDING WAS IN THE CORRECTION'S OWN PROSE
+
+A narrow review of the correction — sent at nothing but what the correction had *written* —
+returned **three HIGH, one MEDIUM and two LOW, all prose, none touching a mechanism.**
+
+- **A collision argument false in half.** It claimed the leg-3 rule cannot collide with a bronze
+  task's first parameter because a gold guard refuses names bronze holds. That guard holds bronze's
+  **Delta names** (`bronze_payments`); a bronze task's first parameter is the **registry key**
+  (`payments`), which the guard never sees. Demonstrated: register a gold table named `payments`
+  and **five bronze tasks classify as gold entry points.** Nothing breaks today; the *reason given*
+  was wrong.
+- **A claim contradicting one the same pass wrote two files away** — *"`ptax`, whose only read in
+  the whole repository"* against its own DataOps bullet asserting three views read `bronze_ptax`.
+- **A boundary sentence that re-scoped between its halves**, naming "a script that reads a bronze
+  table" and then citing a totality that is over gold **tables** — which such a script does not
+  build.
+
+> **AND THE FIX THAT MATTERS IS A SHAPE, NOT A SENTENCE.** The correction had claimed **exactly
+> two** blind spellings in its `ast` sweep, derived by reading two `isinstance` guards. The review
+> constructed **seven**, one of them `databricks/src`'s own live idiom. **A cardinality over an
+> unbounded complement cannot be true.** The second correction deleted the count and restated the
+> docstring as the **accept set** — a transcription of the five conditions the loop applies, ending
+> *"anything else contributes nothing"*. **Total by construction rather than by enumeration**, and
+> no new spelling can falsify it. *Controller-verified against the loop's five conditions.*
+
+**A judgement the correction made by DELETING, and the review confirmed it for a stronger reason
+than the correction had.** Asked whether to name two adjacent `test_conformed.py` tests beside
+*"no test in this repository holds it"*, the correction declined — naming them would cost a second
+claim, phrased as a negative over two other files. The reviewer then checked what the correction
+had declined to check: **those tests would not discriminate**, because the fixture fact reaches
+every member of both enumerated dimensions, so a `SELECT DISTINCT`-from-fact implementation passes
+them identically. **Declining to check was right, and checking established why.**
+
+#### THE POTENTIALLY BLOCKING CALL, SETTLED BY READING RATHER THAN ASSUMING
+
+`payments` reaches `dim_date` but **not** `dim_channel`/`dim_currency`. Settled in
+`load_conformed_dimension`: `_refuse_a_mismatched_source` **raises** if an enumerated dimension is
+handed a date source, so `span` is provably `None`; the rows are written from the declared contract
+domain **before** `fact_side_cardinality` is evaluated; and the only pre-write refusal reads the
+spec, not the data. **The exclusion is correct under the definition the header states — tables
+whose CONTENT is affected.** Had it been wrong it would have been a blocking under-report on the
+headline incident's table.
+
+#### AN INTERRUPTED REVIEWER, AND THE CHECK THAT MADE ITS OUTPUT USABLE
+
+T5's independent review was **killed mid-run while it held mutations**. The tree was verified
+before anything else — `git status` at the four expected entries, every line count unchanged, HEAD
+unchanged, **and `174 passed` with all thirteen per-file counts matched** — which is the check this
+phase adopted after a killed subagent once resurrected a deleted file and a suite went green with
+150 instead of 135. Every mutation had been reverted. **The review was then resumed from its
+transcript rather than re-run**, and returned complete. The only residue was one stale `.pyc` from
+a scratch module whose source it had already removed.
+
+**And a pre-existing hole was reported rather than fixed**: a loader task added to an existing,
+already-classified non-`vault_*` job file is invisible to `tests/test_vault_job_wiring.py`'s
+totality lock while still passing it. A brand-new YAML file **is** caught. T5's own sweep is
+strictly stronger — keyed on the parameter, over every `*.yml` — and the hole is left for whoever
+owns that file.
+
+#### AND ONE TOOLING TRAP DESTROYED A FINISHED MODULE, BECAUSE TWO CORRECT RULES COMBINE
+
+`tests/test_size_caps.py` reads `git ls-files` and is **blind to untracked files** — it has produced
+a false green four times in this project — so every new file is `git add -N`'d before the cap test
+is believed. **An intent-to-add file holds the EMPTY blob in the index.** So `git checkout -- <that
+file>` does not restore it; it **truncates it to nothing**.
+
+**Both rules are right and the combination deletes work.** It took `src/opl/triage_agent/history.py`
+out mid-task during T4, after a mutation, at the moment the agent reached for the ordinary way to
+undo one. Every T4 and T5 agent since has reverted by **inverse substitution from its own copy with
+a hash proof**, which is now the phase's standing method and is why the killed T5 reviewer cost
+nothing.
+
+**It is recorded here as well as in `CLAUDE.md` because `CLAUDE.md` is git-ignored in this
+repository** — a reader of the committed history would otherwise find the practice everywhere in
+these commit messages and the reason for it nowhere.
+
 ---
 
 ## 2. Predictions, published before the runs that test them
@@ -1244,6 +1376,47 @@ code and the record rather than measured.
   `sorted` rationale in `table_of_job_sql`. They are true as of `56773b6` and would go stale
   silently. *What would exercise them: nothing. They are prose, and are listed so that a later
   reader knows they carry no test.*
+
+### Carried out of T5, and every entry names what would exercise it
+
+- **A bronze registry key becoming a gold table name is guarded by NOTHING.** The leg-3 rule
+  classifies a task as a gold loader iff its first parameter names a registered gold table.
+  `opl.gold.registry_guards._assert_no_gold_name_is_owned_by_another_layer` refuses a gold name the
+  **vault** holds, and refuses one that collides with a bronze **Delta** name (`bronze_payments`) —
+  **but a bronze task's first parameter is the registry KEY** (`payments`), and all seven keys are
+  accepted as gold table names. Measured: with a gold table named `payments` registered, **five
+  bronze tasks classify as gold entry points**. No key is a gold name today. *What would exercise
+  it: registering a gold table named `payments`, `socios`, `lookup`, `merchant`, `ptax`, `empresas`
+  or `estabelecimentos`.*
+- **A script that reads a bronze table while the bundle hands its task no gold table name is
+  SILENT to the sweep, and nothing narrows it.** Measured: a new `gold_prepare_fx.py` reading
+  `merchant`, wired into the fact job with first parameter `"ptax"`, is invisible while all three
+  of the sweep's assertions stay green — the totality it was once claimed to be narrowed by is
+  total over gold **tables**, and such a script builds none. The other two arms of the rule's
+  failure profile are loud and are written down beside this one. *What would exercise it: a gold
+  job task that reads bronze without being handed a gold table name.*
+- **The `ast` reader recognises exactly one spelling and anything else contributes nothing.** That
+  is stated as an accept set rather than as a count of misses, so it cannot be falsified by a new
+  spelling — but it also means **a new, undeclared bronze read in any other spelling is invisible**,
+  and one of those spellings (`table_spec(args[0] if args else "")`) is `databricks/src`'s own live
+  idiom for the bronze reader. An indirection applied to a read that IS declared is caught, because
+  the sweep then disagrees with the declaration. *What would exercise it: a new gold entry point
+  reading bronze through anything but a bare-name call on a `from opl.contracts import <module>`
+  alias.*
+- **`tests/test_vault_job_wiring.py`'s totality lock cannot see a loader task added to an existing,
+  already-classified non-`vault_*` job file.** Pre-existing, confirmed by mutation — injecting a
+  `vault_load_satellite.py` task into `smoke_job.yml` leaves the job-wiring files green and reddens
+  only T5's lock. A brand-new YAML file **is** caught, by
+  `test_every_yaml_under_resources_is_classified`. **Reported, not fixed:** that lock is not this
+  task's, and T5's own sweep — keyed on the parameter, over every `*.yml` — is strictly stronger.
+  *What would exercise it: whoever next owns that file.*
+- **T5's own split cannot be certified as behaviour-free.** `test_blast_radius.py` reached 807
+  lines before `tests/test_size_caps.py` caught it, and was split at a measured seam — but the
+  pre-split file exists in **no commit and nowhere on disk**, so there is nothing to diff the moved
+  bodies against. This is T1's position exactly, and the procedural fix adopted then (*commit the
+  task before splitting it*) does not reach a file that hit the cap **inside** its own task. *What
+  would exercise it: nothing. It is recorded so a later reader knows the claim rests on the
+  implementer's word.*
 
 ### Carried out of T4, and every entry names what would exercise it
 
