@@ -58,4 +58,51 @@ a manifest walked bronze -> vault -> gold answers "nothing downstream" for exact
 incident that most needs the opposite -- and an import-time guard refuses a registered
 bronze table whose downstream set is empty, rather than printing the most reassuring wrong
 answer this package can give.
+
+`issue` is the assembly point for all five, and it emits the issue as DATA rather than as a
+string: a record with named fields, so that "what would we say about this incident" is a
+value a test can diff between two incidents rather than a paragraph built at the moment
+somebody presses send. It REFUSES more than it renders -- facts that are not all about one
+incident, a census that does not sum to the number the grade was computed from, a job
+name still wearing the bundle's development prefix, which carries an operator's username
+into what is about to become a public artefact, and a `produced_by` shaped like a filesystem
+path, which carries the same username by another route. THE LAST THREE ARE REFUSED AT BOTH
+DOORS -- the assembler and the JSON reader -- because the publisher reads a FILE and the
+sum check was, for one review pass, made only at the door the publisher does not use. What
+is refused at the assembler only is the identity check: a file carries one record and has no
+second fact to disagree with. AND THE FILE DOOR REFUSES FOUR THINGS THE ASSEMBLER DOES NOT,
+because a CASE ladder over declared literals cannot produce them and a JSON file can: a
+severity, an action or a verdict that is not a word this package declares, a rank that is
+not the one `SEVERITIES` gives that severity, a hold note this repository never wrote, and a
+string where the body prints a bare number. Its field names are the other modules' SQL
+aliases and nothing but a test can hold those two spellings equal, so every field is read
+through a reader that RAISES on a missing key: a rename upstream refuses to build the issue
+instead of publishing a body with a blank where the grade goes.
+
+`report` turns one such record into markdown, and it is written against one failure: a body
+that reads like competent analysis for ANY incident is not triage, it is this phase's
+species wearing markdown. So every sentence is a constant or a function of a field, and the
+tests assert the DIFFERENCES between the workspace's largest incident and its smallest
+rather than two golden files. It states the number of prior executions FOUND beside the
+number asked for and says in the same breath that no comparison was made, because
+"compared against the last 5, nothing anomalous" is false for ten of eleven incidents here;
+it renders the blast radius as table NAMES with no magnitude anywhere in the section; it
+gives the two evidence removals two sentences so the unexplained pair cannot borrow the
+explained trio's account; and it separates what a statement measured from what this
+repository declares, so a reader can tell which trust each line is asking for. That last
+separation is now three-way and not two: the relations an issue read are DERIVED there
+rather than taken from the payload, and the two things that stay the caller's unchecked word
+-- which run produced this, and which telemetry view it read -- are labelled in the body as
+the caller's word. A backtick in a reject reason is a row value turning `@handle` into a
+notification on a public repository, so the values a body prints are fenced by CommonMark's
+rule -- and `report.py`'s own header names the exceptions, which is why no sentence here
+states that as a universal: it was written as one, and it was false in six places.
+
+NOTHING IN THIS PACKAGE POSTS ANYTHING. The publisher is `scripts/open_triage_issue.py`,
+which is outside the wheel -- `pyproject.toml` packages only `src/opl` -- so no task running
+in the workspace can import it. That is a credential boundary and not a filing convention:
+`gh` on the operator's box already carries `repo` scope, while a Databricks task calling the
+GitHub API would need a PAT in a secret scope, which is a new credential, a new human gate,
+and a token with repository write sitting beside 55.8M rows of personal data. It prints by
+default, posts only under an explicit flag, and takes exactly one incident id.
 """
