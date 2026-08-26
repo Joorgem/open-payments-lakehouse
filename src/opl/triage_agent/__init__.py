@@ -45,4 +45,17 @@ number actually found is on every row, and the two ways of having less than N --
 none -- are two words rather than one. It reads the same F4 view `incidents` reads, on a key
 (`check_bad_rows`) chosen because it survives a gate task that was renamed mid-project and
 whose old runs the telemetry still serves under a name nothing marks as superseded.
+
+`blast_radius` answers what ELSE is downstream of the table that was gated -- WHICH tables,
+never how much of them, because a proportion classifies socios near 100% in this package's
+fixture and near 0% on the deploy with no test able to tell the two apart. It reads nothing
+and emits no SQL: the bundle declares which bronze table each vault loader is handed and
+`opl.gold.registry` declares which vault table each gold table is built from, so this is a
+declaration plus a derivation over registries the wheel already carries, locked by tests
+that sweep the job YAMLs and the gold entry points. TWO BRONZE TABLES REACH GOLD WITHOUT A
+VAULT TABLE IN BETWEEN and one of them is `payments`, the workspace's largest incident, so
+a manifest walked bronze -> vault -> gold answers "nothing downstream" for exactly the
+incident that most needs the opposite -- and an import-time guard refuses a registered
+bronze table whose downstream set is empty, rather than printing the most reassuring wrong
+answer this package can give.
 """
