@@ -1377,6 +1377,44 @@ code and the record rather than measured.
   silently. *What would exercise them: nothing. They are prose, and are listed so that a later
   reader knows they carry no test.*
 
+### THE FULL SUITE HAS NEVER RUN ON THIS BRANCH, AND CI DID NOT FIRE WHEN ASKED
+
+**Controller-verified 2026-08-26.** Everything this phase has verified is
+`tests/triage_agent/` plus `tests/test_size_caps.py` — **174 tests of the repository's 2,683**, on
+one Windows box. That nothing outside `opl.triage_agent` broke across five tasks is an **argument
+an implementer made** (nothing outside the package imports the new modules) and **has never been
+run.** `CLAUDE.md` says to quote CI for "the suite passes"; **this phase has never had a CI run to
+quote.**
+
+The branch was pushed and PR **#28** opened against `main` to close that gap before T6–T9 stack
+four more tasks on top. **The `pull_request` trigger did not fire.** Measured, in this order:
+
+| step | result |
+|---|---|
+| `git push -u origin feat/f6-rca-agent` | branch created; `ci.yml` triggers only on `push: [main]` and `pull_request`, so a feature-branch push runs nothing **by design** |
+| PR #28 opened as a **draft** | **no run** |
+| `gh pr ready 28` | **no run** — `ready_for_review` is not in `pull_request`'s default types (`opened`, `synchronize`, `reopened`) |
+| `gh pr close 28 && gh pr reopen 28` | **no run**, though `reopened` **is** a default type |
+| `.../actions/permissions` | `enabled: true`, `allowed_actions: all` |
+| the `CI` workflow | registered, `state: active`, `.github/workflows/ci.yml` present on the branch |
+| check-runs for head `6ce1a56` | **0** |
+| newest run in the whole repository | `2026-08-24T13:35:43Z` — the F5 merge, two days before |
+
+**No cause is asserted here.** The workflow is active, Actions are enabled, the PR is open,
+non-draft and `MERGEABLE`, and a `reopened` event that should be a default trigger produced
+nothing. **What is measured is the absence, not the reason** — and this repository has already paid
+once for a `ci.yml` claim written from memory and "verified" against a weak source, so a guess
+about GitHub's trigger semantics would be that mistake wearing a different hat.
+
+> **THIS IS A THREAT TO THE PHASE'S OWN CLOSING CONDITION.** Protocol §9.3 is *CI green on the
+> merged PR*. A phase that cannot make CI run cannot satisfy it, and discovering that at T9 costs
+> more than discovering it now. **The commit carrying this section is pushed as the next probe** —
+> it fires `synchronize`, which is a default type, and the result is recorded here rather than
+> assumed either way.
+
+*What would exercise the suite: a CI run on this branch. Until one exists, no claim in this
+document about tests outside `tests/triage_agent/` and `tests/test_size_caps.py` has been made.*
+
 ### Carried out of T5, and every entry names what would exercise it
 
 - **A bronze registry key becoming a gold table name is guarded by NOTHING.** The leg-3 rule
