@@ -1194,6 +1194,96 @@ nothing.
 repository** — a reader of the committed history would otherwise find the practice everywhere in
 these commit messages and the reason for it nowhere.
 
+### 1.7 T6 — the issue as data, and an escape that guarded a third of itself
+
+Committed at `0a74b48`. `opl.triage_agent.issue` assembles one incident into a payload, `report`
+renders it, `scripts/open_triage_issue.py` posts it. **Controller-verified:** `280 passed in
+124.60s` across `tests/triage_agent/`, `tests/test_size_caps.py` and `tests/bronze/test_reconcile.py`
+— the last because T6 adds `VERDICTS` to `reconcile.py`. `ruff` clean; zero CR bytes; no function
+at or over 50; no file at or over 800.
+
+**NO ISSUE WAS OPENED.** The publisher prints unless told twice, and the phase's one real issue
+**waits for T8** so its provenance names a run that happened rather than the placeholder the
+fixture carries. That is a controller decision and it costs nothing.
+
+#### THE CREDENTIAL BOUNDARY IS A DIRECTORY, AND THAT IS THE WHOLE DESIGN
+
+The agent emits the issue as **data**; a thin publisher posts it. `scripts/` is outside the wheel
+— `pyproject.toml` packages only `src/opl` — and `grep -rn "open_triage_issue" databricks/` returns
+nothing, so **no Databricks task can reach the publisher.** That is what keeps a GitHub PAT out of
+a Databricks secret scope, where obtaining one would be a human gate. *Reported*, verified from
+both sides by T6's reviewer.
+
+#### A PII PATH NEITHER PRIVACY ARM HAD
+
+`job_name` carries the bundle's `[dev <operator>]` prefix — **a real Windows username** — into what
+becomes a public issue. T1 strips it in SQL; nothing stopped a caller reading the raw timeline and
+handing the payload an unstripped name. Refused now at **both** doors, each proven by its own
+deletion, plus a test that reads `databricks.yml` and refuses a target prefixing job names any
+other way. `produced_by` — documented as *"the command a human typed"*, which on this box is
+`uv run python C:\Users\jorge\…` — was found by the reviewer asking what the field's documented
+intent was, and is constrained, escaped and labelled.
+
+#### THE PROVENANCE SECTION PROMISED MEASUREMENT AND CHECKED NOTHING
+
+`_provenance` claimed *"a number in this body is either something a statement returned in a run
+that can be named, or something a human typed into this repository and a test holds against the
+bundle."* **The first half was held by nothing.** Hardcoding a wrong relation left **52 passed**
+with every body naming the payments quarantine and no test objecting.
+
+**Closed by DERIVING rather than validating**, which is the general lesson: `read_from` is
+**deleted**; the quarantine and the reconciliation view are recomputed at render from `source` and
+the config; the telemetry view is a named field labelled the caller's word; `statements` are
+constrained to the four facts and print `not recorded` where a run recorded none. **The body now
+labels every line `DERIVED by this wheel` / `THE CALLER'S WORD, checked by nothing` / `DECLARED,
+not measured`** — and the closing claim that all four declared things are locked by a test was
+**deleted**, because it is true of the map and the manifest and false of the window.
+
+#### AND THE ESCAPE GUARDED A THIRD OF ITSELF — THE EIGHTH INSTANCE, AND THE FIRST WITH A PUBLIC CONSEQUENCE
+
+`_code` fences a value by CommonMark's rule. It has **four** arms and carried **one** test.
+*Controller-verified*, one mutation at a time, each reverted to the exact baseline hash:
+
+| arm removed | before the fix | now reddens |
+|---|---|---|
+| space padding | **green** | `test_a_value_that_begins_with_a_backtick_is_padded_or_no_code_span_opens_at_all` |
+| `\n` fold | **green** | `test_a_blank_line_in_a_row_value_cannot_end_the_paragraph_the_span_sits_in` |
+| `\r` fold | **green** | same test |
+| empty fallback | **green** | `test_an_empty_value_renders_a_code_span_and_not_two_literal_backticks` |
+
+**Two of the four are live breakouts, not cosmetics.** Without the pad, a value beginning with a
+backtick opens a three-run with no three-closer, CommonMark emits **no code span at all**, and the
+rest of the value is live markdown. Without the fold, a blank line ends the paragraph and the span
+never closes. **The reachable input for both is `reject_reason` — a quarantine row value — which is
+the exact input `_code`'s own docstring says it exists for.**
+
+**Four more fields bypassed the fence entirely and three more reached the body with no formatter at
+all**, two of them inside `**`. Routed through the fence, constrained at the file door against
+vocabularies read from the modules that declare them, and **`bool` refused beside `str`** because
+`True == 1` would pass the rank arm and print `True` where a count goes.
+
+> **ONE THING IS RULED RATHER THAN GUARDED, AND SAYS SO IN THE SOURCE.** `_reconciliation`'s absent
+> arm is entered only when the value **equals** a constant this package declares, so no crafted
+> value reaches it, **no mutation reddens it, and none should.** A guard there would be decoration;
+> the fence stays for uniformity and the docstring says it is not counted as a defence.
+
+#### A CLAIM THAT REACHED PRODUCTION SOURCE THROUGH THREE AGENTS WITHOUT ANYONE MEASURING IT
+
+`render_title` fences its batch id because **GitHub renders code spans in issue titles**. That
+reached the docstring as *fact* through a chain — a GitHub community discussion, quoted by T6's
+reviewer, repeated by the controller's dispatch, written into the code by the correction. **Nobody
+in that chain rendered anything.** §0.2 records what this repository already paid for a documented
+behaviour quoted from memory and checked against a weak source.
+
+**The docstring now calls it what it is:** a cheap precaution on an unverified claim, not a defence
+resting on a measurement the way the body's does. **The phase's one real issue carries exactly that
+construction in its title, so opening it settles the question by observation.**
+
+A smaller instance of the same shape, and it is the controller's: a reviewer wrote that the
+quarantine expression is printed *"eleven lines above"*; the controller repeated it in a dispatch;
+the correction wrote it into a production docstring. **It is 147 lines.** The correction flagged it
+as the one claim of its own it doubted, and was right.
+
 ---
 
 ## 2. Predictions, published before the runs that test them
@@ -1302,54 +1392,44 @@ code and the record rather than measured.
 
 ### Properties this phase chose NOT to guard, and the choice is recorded
 
-- **"The declaration half is free of Spark" is enforced by nothing, and it is now THREE files.**
-  T1's split bought a ~1.4 s no-JVM file, T3's split bought a second — `tests/triage_agent/test_
-  severity_declaration.py`, **~1.09 s wall with no JVM gateway** — and **T4 built its third from
-  the start rather than splitting into it**: `tests/triage_agent/test_history_declaration.py`,
-  **23 tests in 1.69 s**. Adding a Spark test to any of the three would silently cost the property
-  and no test would go red. `tests/test_size_caps.py` covers the line count and nothing covers the
-  JVM.
+- **"The declaration half is free of Spark" is enforced by nothing, and THE COUNT IN THIS ENTRY
+  HAS NOW GONE STALE THREE TIMES.** It said two files, then three, and the T6 implementer read it
+  as six. **Measured 2026-08-26, by deleting `java` from `PATH` and running each file of
+  `tests/triage_agent/` alone — the only reading that is about a JVM rather than about a word:**
 
-  **The third file's no-JVM property is the best-established of the three and is *Reported*:**
-  T4's reviewer ran it under a plugin replacing `pyspark.java_gateway.launch_gateway`,
-  `pyspark.context.launch_gateway` **and** `subprocess.Popen` (tripping on any argv naming java or
-  spark-submit), got `tripped=[]`, **and fired the positive control** — the same plugin on
-  `test_history.py` raises `A JVM GATEWAY WAS LAUNCHED`. That is a guard proven able to fire,
-  which is the half the first two files' measurements did not have.
+  ```
+  no JVM   blast_radius 29 · blast_radius_lock 11 · evidence_contract 24 · history_declaration 29
+           incidents_declaration 10 · issue_payload 18 · issue_publisher 12 · issue_report 22
+           severity_declaration 10                                        = NINE files, 165 tests
+  JVM      evidence_census · evidence_sample · history · history_absence · incidents · issue
+           severity                                                       = seven files
+  ```
 
-  > **AND THIS ENTRY WENT STALE IN PLACE FOR THE SECOND TIME, THE SAME WAY, ONE TASK APART.** It
-  > said "TWO files" while T4's declaration file cited it as the third — the citing file was
-  > right and the cited entry was wrong, which is the exact inversion of the T3 occurrence, where
-  > the record was right and the citing file wrong. **The rule adopted in §1.4 — freeze the record
-  > while an agent holds a file that cites it — prevented the first failure mode and has no
-  > purchase on this one**, because here the agent correctly anticipated an update the controller
-  > then did not make. A frozen record is not a current one. *Found by T4's independent reviewer,
-  > following the citation rather than reading the sentence.*
+  **Nine, and `test_evidence_contract.py` — twenty-four of them — has been JVM-free since T2 and was
+  never counted by anybody.** Adding a Spark test to any of the nine would silently cost the
+  property and no test would go red: `tests/test_size_caps.py` covers line counts and nothing
+  covers the JVM.
 
-  **The guard was considered and deliberately not built**, on the narrow reviewer's argument:
-  every cheap spelling of it is this repository's hunted species one level down — a signature scan
-  for a `spark`/`probe` parameter passes while a module-scope `SparkSession.builder`, an autouse
-  fixture or a transitive `pyspark` import still starts a JVM, and a wall-clock assertion is flaky
-  on this box. The honest spelling is ~15 lines in `test_size_caps.py`'s style **with a control
-  asserting the same reader finds those tokens in the sibling file**.
+  > **THE CONTROLLER ALMOST UPDATED THIS ENTRY FROM A `grep` AND THAT WOULD HAVE BEEN WRONG TOO.**
+  > A token search for `spark`/`probe` over the files classifies all three `_declaration` files as
+  > Spark, because the word appears in their prose. **That is this repository's substring blindness,
+  > arriving in the controller's own attempt to fix a stale count** — the fourth time this entry has
+  > been mis-stated, and the first time by the instrument rather than by the neglect.
+  >
+  > **So the number is removed from the claim and the MEASUREMENT is put in its place.** A count in
+  > prose goes stale on the next task; `PATH` with no `java` in it does not. Whoever next needs this
+  > figure runs the command rather than trusting the paragraph.
 
-  **THAT ARGUMENT IS RE-READ HERE RATHER THAN RE-CITED, BECAUSE ONE OF ITS TWO LEGS NO LONGER
-  HOLDS.** It was refused as a *one-file special case inside a repo-wide sweep* — scope the phase
-  spec says to resist. There are **three** files now, so that leg is gone; the other leg, that
-  every cheap spelling of the guard is blind, is untouched and is the one that still decides it.
+  **The guard was considered and deliberately not built**, on the narrow reviewer's argument: every
+  cheap spelling of it is this repository's hunted species one level down — a signature scan for a
+  `spark`/`probe` parameter passes while a module-scope `SparkSession.builder`, an autouse fixture
+  or a transitive `pyspark` import still starts a JVM, and a wall-clock assertion is flaky on this
+  box. **The one leg of that argument which has since collapsed** is that it would be a *one-file
+  special case inside a repo-wide sweep*: there are nine. The other leg — that every cheap spelling
+  is blind — is untouched and is the one that still decides it. The honest spelling is the `PATH`
+  experiment above, which is not a unit test.
 
-  > **AND "two" STOOD IN THIS SENTENCE AFTER THE ENTRY ABOVE IT WAS CORRECTED TO "three" — THE
-  > THIRD OCCURRENCE, INSIDE THE PARAGRAPH THAT DIAGNOSES THE SPECIES.** The controller fixed the
-  > bullet it had opened and not the argument two paragraphs below, which is **exactly** the
-  > failure the phase's own rule names: *a retraction closes by `grep -i`, not by fixing the
-  > paragraph you happened to open.* The rule was written down, published in this document, and
-  > then not followed by the person who published it — in the entry about entries going stale.
-  > *Found by T4's correction reviewer, reading the section rather than the bullet.* **The**
-  entry stood literally true while its subject doubled**, because a bullet that names its subject
-  by name cannot notice a sibling — this phase's second species, the defect moving out of the code
-  and into the document that judges it, arriving in the ledger of what is *not* guarded. It stays
-  unbuilt for this phase, recorded as a decision whose stated reason is now half of what it was.
-  *What would exercise it: someone adding a Spark test to any of the three and nobody noticing.*
+  *What would exercise it: someone adding a Spark test to any of the nine and nobody noticing.*
 - **A SEVENTH recommended action, reached by nothing, would leave every test green.** The
   severity ladder is closed: `test_the_rank_and_the_word_are_one_ladder_and_cannot_disagree`
   holds `tuple(_EXPECTED_RANKS) == SEVERITIES` and then `{reached} == set(_EXPECTED_RANKS)`,
@@ -1444,6 +1524,30 @@ repository's minutes are not metered, so it is unlikely to be the cause.
    that needs a run cannot be settled on a branch where runs do not happen.** T6's local `gh` path
    is unaffected — the phase's one real issue does not depend on CI — but the CI half of §0.2's
    open question stays open, and is reported as **refused by circumstance rather than untried**.
+
+### Carried out of T6, and every entry names what would exercise it
+
+- **NOTHING IN THIS PHASE HAS BEEN RENDERED BY A MARKDOWN ENGINE.** Every escaping claim — the
+  three-run opener with no closer, a blank line ending the paragraph, `` `` `` as two literal
+  backticks, the bounding-space trim — is reasoned from the CommonMark spec and asserted against
+  the **emitted string**, never against rendered HTML. The body is otherwise the most carefully
+  checked artefact of the phase. *What would exercise it: opening the issue and looking at it.*
+- **That GitHub renders code spans in issue titles is UNVERIFIED**, and the fencing of the title
+  rests on it. It reached the source through a community discussion quoted by a reviewer and
+  repeated by the controller. Whether `@` and `#` linkify in a title is unproven **in both
+  directions**. *What would exercise it: the phase's one real issue, whose title carries a fenced
+  batch id.*
+- **`gh issue create` has never been invoked.** Every publisher test replaces `subprocess.run` with
+  a recorder that refuses `shell=True`; the argv, the stdin body delivery and gh's exit codes are
+  untested against the real CLI. *What would exercise it: the one real issue.*
+- **The Spark arm does not exercise the file door.** T6's new refusals — the vocabularies, the
+  whole-number check, the hold-note re-derivation — are held entirely by the no-JVM files.
+  `test_issue.py` passes unchanged and none of its assertions reaches `from_mapping`. *What would
+  exercise it: a workspace run whose emitted JSON is read back by the publisher, which is T8.*
+- **`hold_note` is re-derived at the file door and NOT refused when absent.** A held batch carrying
+  no note is a state the report tests build on purpose, so the check is one-directional. *What
+  would exercise it: a payload claiming a hold the repository does not declare — refused — against
+  one dropping a note it does — accepted.*
 
 ### Carried out of T5, and every entry names what would exercise it
 
