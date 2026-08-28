@@ -954,8 +954,9 @@ here because the reason they are absent from §1 and §2 is that nothing ran the
   `tests/test_streaming_watermarked_dedup.py` at **793**.~~ **FALSIFIED BY THIS PHASE'S OWN CLOSING
   COMMIT, and corrected from F6.** `2d077a8` — the commit that carries this very bullet — split
   both files and created `src/opl/streaming/lateness.py`. **Measured 2026-08-28: 459 and 292.**
-  The cap is strict (800 is over) and the rule stands; the two files it applies to today are
-  `tests/vault/test_socios_vault.py` (799) and `src/opl/gold/facts.py` (799).
+  The cap is strict (800 is over) and the rule stands; **on `feat/f6-rca-agent` it applies to
+  three** — `tests/vault/test_socios_vault.py` (799), `src/opl/gold/facts.py` (799) and
+  `databricks/src/triage_llm_control.py` (792), the last created by F6.
   `docs/f6-run-evidence.md` §0.7 carries the trace, and the reason this stood for five days is
   F5's own closing lesson arriving on schedule: **the defect had moved out of the code and into
   the document that judges it.**

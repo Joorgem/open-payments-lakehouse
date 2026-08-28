@@ -158,23 +158,36 @@ balance because four control-plane endpoints returned `NOT_FOUND` and Prometheus
 > for the second time in this section.** The first retraction was right to be made; its
 > replacement was wrong for a reason the replacement could not see.
 >
-> **What this does NOT rescue, and the distinction is measured rather than argued:** T7 still
+> ~~**What this does NOT rescue, and the distinction is measured rather than argued:** T7 still
 > publishes **no** cost delta for its own sweep window, because the rows for 2026-08-28 **have not
-> landed** — `PREMIUM_SERVERLESS_SQL_COMPUTE_US_EAST_OHIO` stops at 2026-08-25. *"The delta is
-> zero"* and *"the rows have not arrived"* are two worlds and one number, and they are separated
-> here by a second reading: `system.query.history` shows **zero statements on 08-26 and 08-27**,
-> so billing is current through the last day that produced usage rather than lagging behind one
-> that did. The lag itself is bounded only loosely — the 08-24 rows were absent on 08-24 and
-> present on 08-28, so it is **more than zero and at most four days**, and no tighter figure is
-> claimed.
+> landed** — `PREMIUM_SERVERLESS_SQL_COMPUTE_US_EAST_OHIO` stops at 2026-08-25.~~ **THEY LANDED
+> THE SAME DAY, AND THE FIGURES ARE PUBLISHED HERE.** *Controller-verified 2026-08-28T22:09Z,
+> statement `01f1a32d-1be2-11e3-af0e-2ca3db4d8774`* —
+> `PREMIUM_SERVERLESS_REAL_TIME_INFERENCE_US_EAST_OHIO`, endpoint `databricks-gpt-oss-20b`:
 >
-> **AND WHOEVER READS 2026-08-28's INFERENCE ROWS MUST NOT READ THEM AS THE SWEEP.** T7's shipped
-> sweeps are fifteen trials; its review permuted the menu across seventy more and its correction
-> added a fourth arm of five. **That day's `PREMIUM_SERVERLESS_REAL_TIME_INFERENCE` rows will
-> therefore cover roughly ninety `ai_query` trials, not fifteen** — plus the pilots. A figure
-> quoted from that day as *"what the sweep cost"* would be wrong by about six times, and it would
-> be wrong in the direction that flatters nobody. The corpus file is the authority on which trials
-> were published.
+> | hour | product | DBU | rows |
+> |---|---|---|---|
+> | 2026-08-24T15:00Z | MODEL_SERVING | **0.446427** | 1 |
+> | 2026-08-24T15:00Z | AI_GATEWAY | 0.000001 | 1 |
+> | 2026-08-28T15:00Z | MODEL_SERVING | **7.812481** | 20 |
+> | 2026-08-28T15:00Z | AI_GATEWAY | 0.001022 | 2 |
+> | 2026-08-28T16:00Z | MODEL_SERVING | **42.857040** | 78 |
+> | 2026-08-28T16:00Z | AI_GATEWAY | 0.004729 | 4 |
+>
+> The 08-24 row is this section's own two probe calls. `PREMIUM_SERVERLESS_SQL_COMPUTE_US_EAST_
+> OHIO` now reaches 2026-08-28T19:00Z too (statement `01f1a32d-b9bc-1c61-a789-3c4d3ab426c5`), so
+> the horizon that grounded the refusal has moved past the sweep. **The observed lag is at most
+> ~5 hours** — the 16:00Z rows were readable at 22:09Z the same day. The struck paragraph bounded
+> that lag only as *more than zero and at most four days*, which was **loose but not wrong**.
+>
+> **AND WHOEVER READS 2026-08-28's INFERENCE ROWS MUST NOT READ THEM AS THE SWEEP.**
+> **08-28's `MODEL_SERVING` total is 50.669521 DBU over 98 rows, and that is NOT what the sweeps
+> cost.** The published corpus is **twenty trials over four sweeps**; the review permuted the menu
+> across seventy more, and the pilots are in there as well — so that figure covers roughly ninety
+> `ai_query` trials, not twenty. A figure quoted from that day as *"what the sweep cost"* would be
+> wrong by roughly four to five times, and it would be wrong in the direction that flatters
+> nobody.
+> The corpus file is the authority on which trials were published.
 >
 > **The consequence for the phase:** the labelled-upper-bound framing that plan §1.2 and T7
 > mandate was correct when it was written and is **obsolete going forward**. T7's own inference
@@ -1301,7 +1314,8 @@ not measured`** — and the closing claim that all four declared things are lock
 
 #### AND THE ESCAPE GUARDED A THIRD OF ITSELF — THE EIGHTH INSTANCE, AND THE FIRST WITH A PUBLIC CONSEQUENCE
 
-`_code` fences a value by CommonMark's rule. It has **four** arms and carried **one** test.
+`_code` fences a value by CommonMark's rule. **The fence itself was the only part of it a test
+pinned**; each arm below was deleted on its own and the suite stayed green.
 *Controller-verified*, one mutation at a time, each reverted to the exact baseline hash:
 
 | arm removed | before the fix | now reddens |
@@ -1403,8 +1417,9 @@ is why the 36/55 is not a low number badly explained.
 
 `does_not_reconcile` was returned **14 times in the facts sweep, every one of them on an incident
 that has NO reconciliation row** — the five of §0.5, whose fact is `no_reconciliation_row`. It was
-returned **0 times of 50** on `592660596679630`, the one incident in this workspace whose verdict
-genuinely is a non-reconciling verdict (`stranded_gated`).
+returned **0 times in the 15 responses the published corpus holds for it** on `592660596679630`,
+the one incident in this workspace whose verdict genuinely is a non-reconciling verdict
+(`stranded_gated`).
 
 **The model used the reconciliation word exclusively where reconciliation could not be evaluated,
 and never once where it actually failed.** *Reported*, extended by the independent reviewer across
@@ -1439,22 +1454,27 @@ reconciliation findings above (**0.9 and 0.95**). **Ask what else would produce 
 is everything.**
 
 **And the instrument is not simply emitting a constant, which is what makes this sharp rather than
-cheap:** across the declines the same field spreads over seven distinct values. **Confidence
-discriminates only once the model has already decided it cannot answer** — precisely backwards from
-what triage needs, and unusable as a filter in the direction anyone would reach for it.
+cheap:** across the **34** declines of the first three sweeps the same field spreads over **eight**
+distinct values — 0.0, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9. (Seven is true of `numbers_stripped`
+alone.) **Confidence discriminates only once the model has already decided it cannot answer** —
+precisely backwards from what triage needs, and unusable as a filter in the direction anyone would reach for it.
 
-#### THE COST, AND WHY NO DELTA IS PUBLISHED
+#### THE COST, MEASURED — AND WHY THE DAY'S TOTAL IS NOT THE SWEEP'S
 
-**No cost delta is published for T7's window**, and *"the delta is zero"* was separated from *"the
-rows have not arrived"* rather than fused: `PREMIUM_SERVERLESS_SQL_COMPUTE_US_EAST_OHIO` stops at
-**2026-08-25**, and `system.query.history` shows **zero statements on 08-26 and 08-27** — so
-billing is current through the last day that produced usage rather than lagging one that did.
-Sweep window for a later reader: **2026-08-28T15:56:24Z → 15:59:32Z**.
+**There are TWO sweep windows and a later reader needs both**: the first three sweeps ran
+**2026-08-28T15:56:24Z → 15:59:32Z**, and the correction's fourth arm ran
+**16:57:03Z → 16:58:02Z**, which is the corpus file's own `ended_at`. A cost attributed to the
+first window alone misses a quarter of the published trials.
+
+~~**No cost delta is published for T7's window**, because the rows have not arrived~~ — **they
+arrived the same day.** `MODEL_SERVING` on `PREMIUM_SERVERLESS_REAL_TIME_INFERENCE_US_EAST_OHIO`
+totals **50.669521 DBU over 98 rows** for 2026-08-28; §0.1's amendment carries the hourly split
+and the statement id, *Controller-verified*. **That total is NOT this sweep's cost** — the same
+day carries T7's pilots, the review's ~70 permutation trials and the correction's fourth arm, so
+roughly ninety trials sit behind it and the published corpus's twenty are only part of them.
 
 **And §0.1's withdrawal was falsified in the process** — the inference SKU exists and is
-attributable per endpoint. The amendment at the end of §0.1 carries the measurement, and it also
-carries the warning that 2026-08-28's inference rows cover roughly ninety trials rather than the
-fifteen the shipped sweeps published.
+attributable per endpoint.
 
 #### FIVE PASSES, AND THE FIFTH FOUND TWO HIGH DEFECTS IN THE FOURTH'S OWN NEW PROSE
 
@@ -1505,6 +1525,8 @@ also verified the **synced entry point** (`b5c546f0…`), which `assert_deployed
 docstring says it does not re-read — **that half was uncovered, and it is the half this task lives
 in.**
 
+*Controller-verified, read back from the runs themselves:*
+
 | run | job `run_id` | result |
 |---|---|---|
 | first, rev `9293313` | `883121603089733` | SUCCESS, 11 incidents |
@@ -1512,7 +1534,8 @@ in.**
 | final, rev `8df888d` | **`1119885373986326`** | SUCCESS, 11 incidents |
 
 The two successful runs, 35 minutes and one revision apart, produced **byte-identical payloads
-apart from `produced_by`**.
+apart from `produced_by`**. ***Reported*, and it cannot be raised**: the first run's payload was
+not retained, so nobody can check it.
 
 #### THE FOUR PREDICTIONS, LIVE — Controller-verified, derived from the payload rather than read off the report
 
@@ -1523,9 +1546,9 @@ apart from `produced_by`**.
 | 7 live | 8 / 2 / 1 | **8** `insufficient_history`, **2** `no_prior_execution`, **1** `history_complete`, **0** `gate_run_absent` |
 | 8 | the lookup still returns 4 / 3 / 1 | **4 · 3 · 1.** The rows have **not** aged out |
 
-**No spelling needed correcting.** The shipped module and the controller's hand query agree
-incident for incident, which is what §2's prediction 6 asked and is the outcome it could not
-assume.
+**No spelling needed correcting.** The shipped module agrees incident for incident with
+**§0.10's hand query of 2026-08-25** — no hand query was re-run at T8 — which is what §2's
+prediction 6 asked and is the outcome it could not assume.
 
 **The five zero-row incidents publish `quarantined: null`, not `0`** — the module refuses to print a
 count it did not measure, which is §0.10's own amended lesson arriving in the payload.
@@ -1534,8 +1557,8 @@ count it did not measure, which is §0.10's own amended lesson arriving in the p
 
 Prediction 8's falsifier was the rows ageing out, *"which would not be a failure but the phase's
 first measurement of the timeline's own retention"*. They did not, so the measurement is a **lower
-bound rather than a floor**: `system.lakeflow.job_task_run_timeline` on 2026-08-28 still serves
-`check_bad_rows` 29/29, `dq_gate` 5/5, `dq_gate_batch` 24/24 and `fail_on_dq` 22 rows over 11 job
+bound rather than a floor**. *Controller-verified:* `system.lakeflow.job_task_run_timeline` on
+2026-08-28 still serves `check_bad_rows` 29/29, `dq_gate` 5/5, `dq_gate_batch` 24/24 and `fail_on_dq` 22 rows over 11 job
 runs, **oldest row 2026-07-24 — 35 days** (statement `01f1a30b-2869-127a-bb98-9e22540354d8`).
 F4's ~25-day floor was measured on `system.query.history`; **the timeline's is at least 35 days,
 and nothing here says where it cuts.**
@@ -1548,15 +1571,18 @@ and nothing here says where it cuts.**
 
 #### AND `max_retries: 0` FAILED TO PREVENT A RETRY ON THIS PHASE'S OWN TASK, LIVE
 
-The failure-arm run `940537760125301` shows `triage_dq_incident` at **attempt 0 FAILED and attempt
-1 FAILED** — one `job_run_id` wearing two task-run rows, **§0.3's exact shape, produced by the task
-built to read that corpus.** Both attempts re-ran every statement and left nothing behind. *That is
+*Controller-verified* on the run itself: the failure arm `940537760125301` shows
+`triage_dq_incident` at **attempt 0 FAILED (`117486604282256`) and attempt 1 FAILED
+(`499322268897276`)** — one `job_run_id` wearing two task-run rows, **§0.3's exact shape,
+produced by the task built to read that corpus.** Both attempts re-ran every statement and left nothing behind. *That is
 plan §1.3's justification arriving as evidence rather than as an argument*, and it is the fourth
 time this repository has measured the same platform behaviour.
 
 **The agent also cannot contaminate the corpus it triages**, which is a property worth stating
 because nothing enforces it: its task keys are disjoint from the three roles `history.py` declares,
-and after three triage runs `check_bad_rows` is still 29/29 and `fail_on_dq` still 22 over 11.
+and after three triage runs `check_bad_rows` is still 29/29 and `fail_on_dq` still 22 over 11 —
+*Controller-verified*, the same statement `01f1a30b-2869-127a-bb98-9e22540354d8` as the retention
+reading above.
 
 ### 1.10 T8b — the one real issue, and two allegations settled by a markdown engine
 
@@ -1636,7 +1662,7 @@ Each names what falsifies it, and each falsifier is a real outcome rather than a
 |---|---|---|
 | 1 | The feed returns **11** incidents over **22** task runs, and the naive spelling returns 22 | **CONFIRMED** |
 | 2 | **Five** incidents classify `evidence_missing` and **six** carry rows | **CONFIRMED** — live at T8, 3 + 2 and 6, summing to F4's 5,589 |
-| 3 | A `permissions: issues: write` block opens an issue despite `default_workflow_permissions: read` | **OPEN** — T6 |
+| 3 | A `permissions: issues: write` block opens an issue despite `default_workflow_permissions: read` | **OPEN** — **untried**; only a workflow run that attempts it closes this (§3) |
 | 4 | ~~The LLM control returns a confident, fluent root cause for a `job_run_id` that exists nowhere~~ | **FALSIFIED** — it declined, 5/5, and 24/25 across four menu orders |
 | 5 | ~~The LLM control assigns the **same** severity band to the 2,000-row and the 1-row incident when the counts are stripped~~ | **FALSIFIED IN LETTER** — it assigned **no** band to either; the substance holds by another route |
 | 6 | The shipped history module reproduces §0.10's eleven prior-execution counts **exactly** | **CONFIRMED** — live at T8, and `prior_incidents` too |
@@ -1698,8 +1724,9 @@ prediction stops being able to be wrong."* Rewriting 5 as *"returns the same ans
 > as support for the thesis would be this phase's species inside its own scorecard.
 
 **The shipped sweep 2 tested neither the prediction nor its falsifier, and that is an instrument
-defect rather than a result** — `present, count withheld` induces a decline on 27–29 of 30
-rows-present responses at **every** menu position, so the sweep cannot ask a band question at all.
+defect rather than a result** — `present, count withheld` induces a decline on **29 of 30**
+rows-present responses in the shipped sweep and on **25 of 30** with the option mid-menu, so the
+sweep cannot ask a band question at all.
 Found by the independent reviewer, against a test docstring announcing itself as *"PREDICTION 5's
 INSTRUMENT"*; the framing was deleted rather than reworded.
 
@@ -1786,17 +1813,22 @@ code and the record rather than measured.
   `tests/triage_agent/` alone — the only reading that is about a JVM rather than about a word:**
 
   ```
-  no JVM   blast_radius 29 · blast_radius_lock 11 · evidence_contract 24 · history_declaration 29
-           incidents_declaration 10 · issue_payload 18 · issue_publisher 12 · issue_report 22
-           severity_declaration 10                                        = NINE files, 165 tests
+  no JVM   blast_radius · blast_radius_lock · evidence_contract · history_declaration
+           incidents_declaration · issue_payload · issue_publisher · issue_report
+           severity_declaration
   JVM      evidence_census · evidence_sample · history · history_absence · incidents · issue
-           severity                                                       = seven files
+           severity
   ```
 
-  **Nine, and `test_evidence_contract.py` — twenty-four of them — has been JVM-free since T2 and was
-  never counted by anybody.** Adding a Spark test to any of the nine would silently cost the
-  property and no test would go red: `tests/test_size_caps.py` covers line counts and nothing
-  covers the JVM.
+  **THE PER-FILE COUNTS ARE DROPPED AND THE LIST IS PUBLISHED AS INCOMPLETE**, which is the same
+  lesson as the box below arriving one step later. Two files' counts have since moved, and
+  **`tests/triage_agent/test_issue_markdown.py` — created by T6 in `0a74b48` and on disk before
+  `9bbd343` published this entry — is in neither list and has never been put through the
+  experiment.** The directory holds seventeen test files today; sixteen were classified.
+
+  **`test_evidence_contract.py` has been JVM-free since T2 and was never counted by anybody.**
+  Adding a Spark test to any of the no-JVM files would silently cost the property and no test would
+  go red: `tests/test_size_caps.py` covers line counts and nothing covers the JVM.
 
   > **THE CONTROLLER ALMOST UPDATED THIS ENTRY FROM A `grep` AND THAT WOULD HAVE BEEN WRONG TOO.**
   > A token search for `spark`/`probe` over the files classifies all three `_declaration` files as
@@ -1813,11 +1845,12 @@ code and the record rather than measured.
   `spark`/`probe` parameter passes while a module-scope `SparkSession.builder`, an autouse fixture
   or a transitive `pyspark` import still starts a JVM, and a wall-clock assertion is flaky on this
   box. **The one leg of that argument which has since collapsed** is that it would be a *one-file
-  special case inside a repo-wide sweep*: there are nine. The other leg — that every cheap spelling
-  is blind — is untouched and is the one that still decides it. The honest spelling is the `PATH`
-  experiment above, which is not a unit test.
+  special case inside a repo-wide sweep*: it is most of the directory. The other leg — that every
+  cheap spelling is blind — is untouched and is the one that still decides it. The honest spelling
+  is the `PATH` experiment above, which is not a unit test.
 
-  *What would exercise it: someone adding a Spark test to any of the nine and nobody noticing.*
+  *What would exercise it: someone adding a Spark test to any of the no-JVM files and nobody
+  noticing.*
 - **A SEVENTH recommended action, reached by nothing, would leave every test green.** The
   severity ladder is closed: `test_the_rank_and_the_word_are_one_ladder_and_cannot_disagree`
   holds `tuple(_EXPECTED_RANKS) == SEVERITIES` and then `{reached} == set(_EXPECTED_RANKS)`,
@@ -1915,7 +1948,7 @@ repository's minutes are not metered, so it is unlikely to be the cause.
    open question stays open, and is reported as **refused by circumstance rather than untried**.
 
 
-#### AND THE WHOLE SECTION ABOVE IS FALSIFIED — WHAT WAS MEASURED WAS A LATENCY, NOT AN ABSENCE
+#### AND THE WHOLE SECTION ABOVE IS FALSIFIED — THE RUNS EXIST, AND THEY APPEARED AFTER THE READING
 
 **Controller-verified 2026-08-28.** `gh run list` returns **three** completed runs on this branch,
 **two of them green**, and the newest push queued a fourth within seconds:
@@ -1927,8 +1960,16 @@ repository's minutes are not metered, so it is unlikely to be the cause.
 | `33068096648` | **`9bbd343`** | 2026-08-27T11:36:07Z | **success** — all four jobs green, 2h14m47s |
 
 **`6ce1a56` IS THE EXACT HEAD THE TABLE ABOVE RECORDS AS HAVING ZERO CHECK-RUNS.** The reading was
-correct when it was taken and the run appeared afterwards. So the five events did not produce one
-absence; they produced one absence **at the moment they were read**.
+correct when it was taken and the run appeared afterwards — **18–20 minutes after it, for at least
+two of the five events.** So the five events did not produce one absence; they produced one absence
+**at the moment they were read**.
+
+**WHY THE RUNS WERE NOT CREATED AT EVENT TIME IS NOT ESTABLISHED HERE, AND NOTHING BELOW SHOULD BE
+READ AS SAYING IT IS.** What is measured is this: **two runs against three run-eligible events**
+(`opened`, `reopened`, `synchronize`); **the run for the OLDER head `6ce1a56` was created two
+minutes AFTER the run for the newer `32c671c`**; and **the newest push's run record appeared
+within seconds**, so a gap of this size is not this repository's ordinary behaviour. None of that
+names a cause, and none is offered.
 
 **The one failure is not a defect in this branch:** `32c671c` died on
 `ConnectionRefusedError: [Errno 111] Connection refused` across the vault suite — `47 failed,
@@ -1956,7 +1997,8 @@ than as refused by circumstance, which is the opposite of what the paragraph abo
 > too: *"no cause is asserted"* is exactly what should have been written. **What went wrong is the
 > one inference nobody flagged as an inference:** *"CI does not run on this branch"* and *"CI has
 > not run on this branch YET"* are two worlds, and **check-runs = 0 is the same reading in both.**
-> Ask what else would produce a zero there, and the answer is *a queue*.
+> Ask what else would produce a zero there, and the answer is *a run that does not exist yet* —
+> which says nothing about **why** it did not.
 >
 > **The fix was never a better setting to check. It was a later read** — and no amount of care
 > inside a single session could have supplied one, which is why this is recorded as a lesson about
@@ -1984,12 +2026,27 @@ than as refused by circumstance, which is the opposite of what the paragraph abo
   load-bearing and stays. **Whether `@` and `#` LINKIFY in an issue title is still unmeasured** —
   #29's title contains neither, so opening it did not settle that half. *What would exercise it: a
   title carrying either character, which no incident id can produce.*
+- **`assert_deployed_revision` does not re-read the SYNCED ENTRY POINT** — its own docstring says
+  so, and that is the half `databricks/src/triage_dq_incident.py` actually lives in. The wheel's
+  sha256 and `opl/_revision.py` inside it were checked; the entry point was read **once, by hand,
+  by T8's implementer** (`b5c546f0…`), and nothing in the job does it. A stale `databricks/src`
+  sync against a fresh wheel passes the guard. *What would exercise it: deploying a wheel while
+  the sync of `databricks/src` fails or is skipped.*
 - **The facts payload is git-ignored** (`.plans/`), so a public reader reaches the run's numbers
   only through issue #29 and through this section. *What would change it: committing a redacted
   payload, which no condition of this phase asks for.*
 
 ### Carried out of T7, and every entry names what would exercise it
 
+- **THE INDEPENDENT REVIEWER'S 85-TRIAL, TEN-CONFIGURATION CORPUS IS NOT COMMITTED**, so
+  *"142 on the five"*, *"0 of 50 on `592660596679630`"*, *"24/25 declines"* and every
+  per-menu-position rate quoted from it rest on a *Reported* label with **nothing a reader can
+  recompute**. `docs/f6-llm-control-responses.json` holds four sweeps, 20 trials and 170
+  responses, and none of those figures is derivable from it. **This is §9 condition 6 applied to
+  a measurement rather than to a code path**, and the conclusions those figures carry — that the
+  decline is robust to menu order, and that the reconciliation inversion holds at scale — are the
+  two the phase leans on hardest. *What would change it: committing that corpus, redacted the way
+  the published one is.*
 - **`Warehouse` is untested in its entirety** — `run`, `_get`, `cache_flag`, `_rows_of` and `main`.
   The reviewer deleted a row-truncating mutation and a `None`-to-`False` mutation together and the
   suite stayed green at 344. *What would exercise it: a fake-transport test over `requests.Session`.*
@@ -2032,23 +2089,22 @@ than as refused by circumstance, which is the opposite of what the paragraph abo
 
 ### Carried out of T6, and every entry names what would exercise it
 
-- **NOTHING IN THIS PHASE HAS BEEN RENDERED BY A MARKDOWN ENGINE.** Every escaping claim — the
-  three-run opener with no closer, a blank line ending the paragraph, `` `` `` as two literal
-  backticks, the bounding-space trim — is reasoned from the CommonMark spec and asserted against
-  the **emitted string**, never against rendered HTML. The body is otherwise the most carefully
-  checked artefact of the phase. *What would exercise it: opening the issue and looking at it.*
-- **That GitHub renders code spans in issue titles is UNVERIFIED**, and the fencing of the title
-  rests on it. It reached the source through a community discussion quoted by a reviewer and
-  repeated by the controller. Whether `@` and `#` linkify in a title is unproven **in both
-  directions**. *What would exercise it: the phase's one real issue, whose title carries a fenced
-  batch id.*
-- **`gh issue create` has never been invoked.** Every publisher test replaces `subprocess.run` with
-  a recorder that refuses `shell=True`; the argv, the stdin body delivery and gh's exit codes are
-  untested against the real CLI. *What would exercise it: the one real issue.*
-- **The Spark arm does not exercise the file door.** T6's new refusals — the vocabularies, the
-  whole-number check, the hold-note re-derivation — are held entirely by the no-JVM files.
-  `test_issue.py` passes unchanged and none of its assertions reaches `from_mapping`. *What would
-  exercise it: a workspace run whose emitted JSON is read back by the publisher, which is T8.*
+**THE FIRST FOUR ENTRIES OF THIS BLOCK WERE CLOSED BY THE PHASE THAT WROTE THEM — T8 and T8b did
+exactly what each of them named, and §1.10 carries the readings.** They are struck rather than
+deleted because §3 carried the second of them as *UNVERIFIED* while the T8b block above already
+carried its retraction, and a reader meeting one before the other should see both.
+
+- ~~**NOTHING IN THIS PHASE HAS BEEN RENDERED BY A MARKDOWN ENGINE.**~~ Every escaping claim was
+  reasoned from the CommonMark spec and asserted against the **emitted string**, never against
+  rendered HTML — **until issue #29 was opened, rendered and read in full (§1.10).**
+- ~~**That GitHub renders code spans in issue titles is UNVERIFIED**~~ — **MEASURED TRUE at T8b
+  (§1.10), and the fence stays.** **Whether `@` and `#` LINKIFY in a title is still unmeasured**;
+  #29's title carries neither.
+- ~~**`gh issue create` has never been invoked.**~~ **It was, once, for issue #29.** The publisher
+  tests still stub `subprocess.run`, so only the success path has met the real CLI. *What would
+  exercise the rest: a `gh` invocation that fails.*
+- ~~**The Spark arm does not exercise the file door.**~~ **T8 did what this entry named** — the
+  workspace run's emitted JSON was read back through `from_mapping` and became #29's body.
 - **`hold_note` is re-derived at the file door and NOT refused when absent.** A held batch carrying
   no note is a state the report tests build on purpose, so the check is one-directional. *What
   would exercise it: a payload claiming a hold the repository does not declare — refused — against

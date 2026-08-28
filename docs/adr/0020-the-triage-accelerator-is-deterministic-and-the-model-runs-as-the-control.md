@@ -74,9 +74,10 @@ it.
 
 This is the decision that makes Decision 1 rest on a measurement instead of an argument. The
 cheapest demonstration that the shipped classifier is not a text generator is to **run a text
-generator on the same corpus and measure where it disagrees** — three sweeps, n ≥ 5 each, over the
-real incidents, the same incidents with the counts stripped, and one fabricated incident that
-exists nowhere.
+generator on the same corpus and measure where it disagrees** — **four sweeps, n = 5 each, 20
+trials and 170 responses** in `docs/f6-llm-control-responses.json`: the real incidents, the same
+incidents with the counts stripped, one fabricated incident that exists nowhere, and the stripped
+sweep re-run with the decline option mid-menu.
 
 **What it returned (§1.8), including the half that weakens Decision 1:**
 
