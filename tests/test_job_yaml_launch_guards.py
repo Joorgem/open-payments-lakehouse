@@ -201,6 +201,20 @@ _GUARDED_JOBS = (
     # and unlike a wrong row, there is nothing left afterwards that could be re-read to
     # find out.
     "streaming_managed_broker_job.yml",
+    # F6 T8's workspace run, and it is the SECOND guarded job that writes nothing -- so
+    # the row argument every entry above leans on is unavailable here twice over. The
+    # views job at least leaves a view behind that a later reader could re-read; this one
+    # leaves a LOG. Its product is a set of GRADES -- a severity, a recommended action, a
+    # comparison reading and a blast radius -- and every one of them is a function of a
+    # ladder, a declaration and a manifest that live in the wheel and in nothing else. A
+    # wheel from another revision emits a payload naming real batch ids and real reject
+    # counts, carrying verdicts nobody reviewed, which then becomes a public GitHub issue
+    # and the numbers in this phase's evidence document. That is
+    # `streaming_managed_broker_job.yml`'s answer -- the output IS the product, and there
+    # is nothing left afterwards to re-read -- with the additional property that a wrong
+    # grade is not a wrong measurement of the workspace but a wrong JUDGEMENT of it,
+    # published under this repository's name.
+    "triage_job.yml",
 )
 
 _UNGUARDED_JOBS = {
