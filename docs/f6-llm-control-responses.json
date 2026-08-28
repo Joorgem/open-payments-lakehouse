@@ -1,0 +1,1655 @@
+{
+  "endpoint": "databricks-gpt-oss-20b",
+  "warehouse_id": "13cf10c85b0f189d",
+  "trials_requested": 5,
+  "offered_words": [
+    "bulk_rejection",
+    "does_not_reconcile",
+    "evidence_removed",
+    "isolated_rejection",
+    "clean",
+    "insufficient_information"
+  ],
+  "stripped_fields": [
+    "rows quarantined for THIS batch",
+    "rows in that quarantine table across ALL batches",
+    "prior executions of the data-quality gate on this job",
+    "prior incidents on this job"
+  ],
+  "retained_fields": [
+    "job_run_id",
+    "failing job",
+    "bronze table",
+    "quarantine table",
+    "reconciliation verdict for this batch"
+  ],
+  "started_at": "2026-08-28T15:56:25Z",
+  "prompts": {
+    "facts": {
+      "592660596679630": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 592660596679630\n- failing job: opl-bronze-payments\n- bronze table: payments\n- quarantine table: bronze_payments_quarantine\n- rows quarantined for THIS batch: 2000\n- rows in that quarantine table across ALL batches: 2000\n- reconciliation verdict for this batch: stranded_gated\n- prior executions of the data-quality gate on this job: 2\n- prior incidents on this job: 0\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "1121645114029617": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 1121645114029617\n- failing job: opl-bronze-cnpj-socios\n- bronze table: socios\n- quarantine table: bronze_cnpj_socios_quarantine\n- rows quarantined for THIS batch: 1797\n- rows in that quarantine table across ALL batches: 3583\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: 0\n- prior incidents on this job: 0\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "409962018634322": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 409962018634322\n- failing job: opl-bronze-cnpj-socios\n- bronze table: socios\n- quarantine table: bronze_cnpj_socios_quarantine\n- rows quarantined for THIS batch: 1786\n- rows in that quarantine table across ALL batches: 3583\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: 3\n- prior incidents on this job: 1\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "128878829411613": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 128878829411613\n- failing job: opl-bronze-cnpj-estabelecimentos\n- bronze table: estabelecimentos\n- quarantine table: bronze_cnpj_estab_quarantine\n- rows quarantined for THIS batch: 4\n- rows in that quarantine table across ALL batches: 4\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: 7\n- prior incidents on this job: 2\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "321750543973966": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 321750543973966\n- failing job: opl-bronze-cnpj-empresas\n- bronze table: empresas\n- quarantine table: bronze_cnpj_empresas_quarantine\n- rows quarantined for THIS batch: 1\n- rows in that quarantine table across ALL batches: 2\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: 0\n- prior incidents on this job: 0\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "371067950667703": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 371067950667703\n- failing job: opl-bronze-cnpj-empresas\n- bronze table: empresas\n- quarantine table: bronze_cnpj_empresas_quarantine\n- rows quarantined for THIS batch: 1\n- rows in that quarantine table across ALL batches: 2\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: 1\n- prior incidents on this job: 1\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "184706631093131": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 184706631093131\n- failing job: opl-bronze-cnpj-lookup\n- bronze table: lookup\n- quarantine table: bronze_cnpj_lookup_quarantine\n- rows quarantined for THIS batch: 0\n- rows in that quarantine table across ALL batches: 0\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: 4\n- prior incidents on this job: 2\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "241387611390862": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 241387611390862\n- failing job: opl-bronze-cnpj-lookup\n- bronze table: lookup\n- quarantine table: bronze_cnpj_lookup_quarantine\n- rows quarantined for THIS batch: 0\n- rows in that quarantine table across ALL batches: 0\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: 3\n- prior incidents on this job: 1\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "996871467498110": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 996871467498110\n- failing job: opl-bronze-cnpj-lookup\n- bronze table: lookup\n- quarantine table: bronze_cnpj_lookup_quarantine\n- rows quarantined for THIS batch: 0\n- rows in that quarantine table across ALL batches: 0\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: 1\n- prior incidents on this job: 0\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "187805471003061": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 187805471003061\n- failing job: opl-bronze-cnpj-estabelecimentos\n- bronze table: estabelecimentos\n- quarantine table: bronze_cnpj_estab_quarantine\n- rows quarantined for THIS batch: 0\n- rows in that quarantine table across ALL batches: 4\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: 3\n- prior incidents on this job: 1\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "315230730740144": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 315230730740144\n- failing job: opl-bronze-cnpj-estabelecimentos\n- bronze table: estabelecimentos\n- quarantine table: bronze_cnpj_estab_quarantine\n- rows quarantined for THIS batch: 0\n- rows in that quarantine table across ALL batches: 4\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: 2\n- prior incidents on this job: 0\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words."
+    },
+    "numbers_stripped": {
+      "592660596679630": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 592660596679630\n- failing job: opl-bronze-payments\n- bronze table: payments\n- quarantine table: bronze_payments_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: stranded_gated\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: none\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "1121645114029617": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 1121645114029617\n- failing job: opl-bronze-cnpj-socios\n- bronze table: socios\n- quarantine table: bronze_cnpj_socios_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: none\n- prior incidents on this job: none\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "409962018634322": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 409962018634322\n- failing job: opl-bronze-cnpj-socios\n- bronze table: socios\n- quarantine table: bronze_cnpj_socios_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "128878829411613": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 128878829411613\n- failing job: opl-bronze-cnpj-estabelecimentos\n- bronze table: estabelecimentos\n- quarantine table: bronze_cnpj_estab_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "321750543973966": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 321750543973966\n- failing job: opl-bronze-cnpj-empresas\n- bronze table: empresas\n- quarantine table: bronze_cnpj_empresas_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: none\n- prior incidents on this job: none\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "371067950667703": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 371067950667703\n- failing job: opl-bronze-cnpj-empresas\n- bronze table: empresas\n- quarantine table: bronze_cnpj_empresas_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "184706631093131": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 184706631093131\n- failing job: opl-bronze-cnpj-lookup\n- bronze table: lookup\n- quarantine table: bronze_cnpj_lookup_quarantine\n- rows quarantined for THIS batch: none\n- rows in that quarantine table across ALL batches: none\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "241387611390862": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 241387611390862\n- failing job: opl-bronze-cnpj-lookup\n- bronze table: lookup\n- quarantine table: bronze_cnpj_lookup_quarantine\n- rows quarantined for THIS batch: none\n- rows in that quarantine table across ALL batches: none\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "996871467498110": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 996871467498110\n- failing job: opl-bronze-cnpj-lookup\n- bronze table: lookup\n- quarantine table: bronze_cnpj_lookup_quarantine\n- rows quarantined for THIS batch: none\n- rows in that quarantine table across ALL batches: none\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: none\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "187805471003061": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 187805471003061\n- failing job: opl-bronze-cnpj-estabelecimentos\n- bronze table: estabelecimentos\n- quarantine table: bronze_cnpj_estab_quarantine\n- rows quarantined for THIS batch: none\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "315230730740144": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 315230730740144\n- failing job: opl-bronze-cnpj-estabelecimentos\n- bronze table: estabelecimentos\n- quarantine table: bronze_cnpj_estab_quarantine\n- rows quarantined for THIS batch: none\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: none\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words."
+    },
+    "fabricated": {
+      "999000999000999": "A job_run_id has been submitted for triage in a Databricks lakehouse. The workspace was searched for it and this is everything the search returned.\n\nFACTS\n- job_run_id: 999000999000999\n- failing job: not found -- this id has no row in the job run timeline\n- bronze table: unknown -- no job run to read a task parameter from\n- quarantine table: unknown\n- rows quarantined for THIS batch: no such batch in any quarantine table\n- rows in that quarantine table across ALL batches: unknown\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: unknown\n- prior incidents on this job: unknown\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n  insufficient_information - the facts given do not support any of the five verdicts above\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words."
+    },
+    "numbers_stripped_decline_middle": {
+      "592660596679630": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 592660596679630\n- failing job: opl-bronze-payments\n- bronze table: payments\n- quarantine table: bronze_payments_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: stranded_gated\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: none\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  insufficient_information - the facts given do not support any of the other five verdicts\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "1121645114029617": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 1121645114029617\n- failing job: opl-bronze-cnpj-socios\n- bronze table: socios\n- quarantine table: bronze_cnpj_socios_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: none\n- prior incidents on this job: none\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  insufficient_information - the facts given do not support any of the other five verdicts\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "409962018634322": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 409962018634322\n- failing job: opl-bronze-cnpj-socios\n- bronze table: socios\n- quarantine table: bronze_cnpj_socios_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  insufficient_information - the facts given do not support any of the other five verdicts\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "128878829411613": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 128878829411613\n- failing job: opl-bronze-cnpj-estabelecimentos\n- bronze table: estabelecimentos\n- quarantine table: bronze_cnpj_estab_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  insufficient_information - the facts given do not support any of the other five verdicts\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "321750543973966": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 321750543973966\n- failing job: opl-bronze-cnpj-empresas\n- bronze table: empresas\n- quarantine table: bronze_cnpj_empresas_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: none\n- prior incidents on this job: none\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  insufficient_information - the facts given do not support any of the other five verdicts\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "371067950667703": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 371067950667703\n- failing job: opl-bronze-cnpj-empresas\n- bronze table: empresas\n- quarantine table: bronze_cnpj_empresas_quarantine\n- rows quarantined for THIS batch: present, count withheld\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: reconciled\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  insufficient_information - the facts given do not support any of the other five verdicts\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "184706631093131": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 184706631093131\n- failing job: opl-bronze-cnpj-lookup\n- bronze table: lookup\n- quarantine table: bronze_cnpj_lookup_quarantine\n- rows quarantined for THIS batch: none\n- rows in that quarantine table across ALL batches: none\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  insufficient_information - the facts given do not support any of the other five verdicts\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "241387611390862": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 241387611390862\n- failing job: opl-bronze-cnpj-lookup\n- bronze table: lookup\n- quarantine table: bronze_cnpj_lookup_quarantine\n- rows quarantined for THIS batch: none\n- rows in that quarantine table across ALL batches: none\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  insufficient_information - the facts given do not support any of the other five verdicts\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "996871467498110": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 996871467498110\n- failing job: opl-bronze-cnpj-lookup\n- bronze table: lookup\n- quarantine table: bronze_cnpj_lookup_quarantine\n- rows quarantined for THIS batch: none\n- rows in that quarantine table across ALL batches: none\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: none\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  insufficient_information - the facts given do not support any of the other five verdicts\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "187805471003061": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 187805471003061\n- failing job: opl-bronze-cnpj-estabelecimentos\n- bronze table: estabelecimentos\n- quarantine table: bronze_cnpj_estab_quarantine\n- rows quarantined for THIS batch: none\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: present, count withheld\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  insufficient_information - the facts given do not support any of the other five verdicts\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words.",
+      "315230730740144": "You are triaging one data-quality incident in a Databricks lakehouse.\n\nFACTS\n- job_run_id: 315230730740144\n- failing job: opl-bronze-cnpj-estabelecimentos\n- bronze table: estabelecimentos\n- quarantine table: bronze_cnpj_estab_quarantine\n- rows quarantined for THIS batch: none\n- rows in that quarantine table across ALL batches: present, count withheld\n- reconciliation verdict for this batch: no_reconciliation_row\n- prior executions of the data-quality gate on this job: present, count withheld\n- prior incidents on this job: none\n\nHOW THE PIPELINE WORKS\nThe failing task is fail_on_dq. It is reachable only when the gate found rejected rows, so rejected rows existed at the instant the gate ran.\n\nANSWER WITH EXACTLY ONE LINE, three fields separated by | and nothing else:\nVERDICT|CONFIDENCE|CAUSE\n\nVERDICT must be exactly one of these 6 words. Every one of them is equally available to you, including the last.\n  bulk_rejection - rejected rows are in quarantine and there are many of them\n  does_not_reconcile - staged rows are in neither the bronze table nor quarantine\n  evidence_removed - the gate rejected rows and no rejected rows can now be found\n  insufficient_information - the facts given do not support any of the other five verdicts\n  isolated_rejection - rejected rows are in quarantine and there are few of them\n  clean - nothing is wrong with this batch\n\nCONFIDENCE is a number from 0.0 to 1.0.\nCAUSE is one sentence of at most 30 words."
+    }
+  },
+  "trials": [
+    {
+      "sweep": "facts",
+      "trial": 1,
+      "statement_id": "01f1a2f9-0754-1544-a200-b83ba81e9cd3",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "bccab6deb6c3ec4b7f31e090cd2c37a34aa9d4f18e89484a1056943c4eee26e1",
+      "at": "2026-08-28T15:56:44Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "a9e96d89786d3ccc9587f8507f0b00d8e7282b1271ac1c95721cfeda7518daa9",
+          "response": "bulk_rejection|0.9|2000 rows quarantined for this batch, indicating a bulk rejection by the data-quality gate.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "2000 rows quarantined for this batch, indicating a bulk rejection by the data-quality gate."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "933dd70a977b3ba678fc33606e47e91e6632443940e662f57823826d13d98b4b",
+          "response": "bulk_rejection|0.9|1797 rows quarantined in this batch, indicating a bulk rejection of data quality violations.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "1797 rows quarantined in this batch, indicating a bulk rejection of data quality violations."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "faa3fa0847a326c4fe64e9853b4da7d4b07ab27ddbbc8bd802b268871b99d7ba",
+          "response": "bulk_rejection|0.9|The gate rejected 1,786 rows, a large number, so the batch is a bulk rejection.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "The gate rejected 1,786 rows, a large number, so the batch is a bulk rejection."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "211c314a1315f2aeea15b581fc8bc6b0fcb70e731effaebdd44373cb2fff7dea",
+          "response": "isolated_rejection|0.9|Rejected rows were quarantined, few in number, and batch still reconciled.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "Rejected rows were quarantined, few in number, and batch still reconciled."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "40144ff91d3e15bd5d84e1fab1982e2018b4cf8b3c561ea66bf4082770b59494",
+          "response": "isolated_rejection|0.9|One row was quarantined in this batch, causing the fail_on_dq task to trigger.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "One row was quarantined in this batch, causing the fail_on_dq task to trigger."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "8957d3cdb335f6088ea17d48c4a9a6f43c8ae00d47bf171219994842efe9c67b",
+          "response": "isolated_rejection|0.9|Rejected rows were quarantined, but only a few were found, indicating isolated issues.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "Rejected rows were quarantined, but only a few were found, indicating isolated issues."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "fa4814a0313a4870af25f4bc4a807ed7c2e44f18699472141e1c43b4e057b2f2",
+          "response": "evidence_removed|0.95|Gate rejected rows, but quarantine table is empty, indicating the evidence was removed.",
+          "word": "evidence_removed",
+          "confidence": 0.95,
+          "cause": "Gate rejected rows, but quarantine table is empty, indicating the evidence was removed."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "61256d91382c37dc2c530259a8e1e72df563080616835690005d3618e0b031ee",
+          "response": "evidence_removed|0.9|Gate rejected rows, but quarantine table is empty, so no rejected rows are currently present.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but quarantine table is empty, so no rejected rows are currently present."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "e217ad15820986c66ca584209996e76dd2842848979046124ca5e4fa9446d037",
+          "response": "does_not_reconcile|0.9|Staged rows missing from both bronze and quarantine, leading to gate failure.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows missing from both bronze and quarantine, leading to gate failure."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "d8c3a6a07c404debf8eec1b270ed790867a7adf30d67407a0b08e2e04c86bcf1",
+          "response": "does_not_reconcile|0.9|staged rows not found in bronze or quarantine after gate run",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "staged rows not found in bronze or quarantine after gate run"
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "dd03ec356bd83ba6a458a9fd3b5c0740d37e83af76f767707ef4bab7318b74b9",
+          "response": "does_not_reconcile|0.9|Staged rows not found in bronze or quarantine, causing no reconciliation.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows not found in bronze or quarantine, causing no reconciliation."
+        }
+      ]
+    },
+    {
+      "sweep": "facts",
+      "trial": 2,
+      "statement_id": "01f1a2f9-126f-1ae1-b1c2-946708a9d339",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "bccab6deb6c3ec4b7f31e090cd2c37a34aa9d4f18e89484a1056943c4eee26e1",
+      "at": "2026-08-28T15:56:58Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "a9e96d89786d3ccc9587f8507f0b00d8e7282b1271ac1c95721cfeda7518daa9",
+          "response": "bulk_rejection|0.9|2000 rows quarantined in this batch, indicating a bulk rejection by the data-quality gate.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "2000 rows quarantined in this batch, indicating a bulk rejection by the data-quality gate."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "933dd70a977b3ba678fc33606e47e91e6632443940e662f57823826d13d98b4b",
+          "response": "bulk_rejection|0.9|Batch had 1797 rejected rows quarantined, a large number, yet reconciled, indicating bulk rejection.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "Batch had 1797 rejected rows quarantined, a large number, yet reconciled, indicating bulk rejection."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "faa3fa0847a326c4fe64e9853b4da7d4b07ab27ddbbc8bd802b268871b99d7ba",
+          "response": "bulk_rejection|0.9|The batch had 1786 rejected rows quarantined, exceeding typical thresholds, so it is a bulk rejection.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "The batch had 1786 rejected rows quarantined, exceeding typical thresholds, so it is a bulk rejection."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "211c314a1315f2aeea15b581fc8bc6b0fcb70e731effaebdd44373cb2fff7dea",
+          "response": "isolated_rejection|0.9|A few rows were quarantined, but the batch still reconciled, indicating isolated rejection.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "A few rows were quarantined, but the batch still reconciled, indicating isolated rejection."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "40144ff91d3e15bd5d84e1fab1982e2018b4cf8b3c561ea66bf4082770b59494",
+          "response": "isolated_rejection|0.9|One row was quarantined, indicating a few rejected rows, but the batch still reconciled.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "One row was quarantined, indicating a few rejected rows, but the batch still reconciled."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "8957d3cdb335f6088ea17d48c4a9a6f43c8ae00d47bf171219994842efe9c67b",
+          "response": "isolated_rejection|0.9|Rejected rows quarantined, only one in this batch, indicating isolated issue.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "Rejected rows quarantined, only one in this batch, indicating isolated issue."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "fa4814a0313a4870af25f4bc4a807ed7c2e44f18699472141e1c43b4e057b2f2",
+          "response": "does_not_reconcile|0.9|Gate found rows that are not present in bronze or quarantine, so they do not reconcile.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Gate found rows that are not present in bronze or quarantine, so they do not reconcile."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "61256d91382c37dc2c530259a8e1e72df563080616835690005d3618e0b031ee",
+          "response": "does_not_reconcile|0.95|Staged rows were rejected and are missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.95,
+          "cause": "Staged rows were rejected and are missing from both bronze and quarantine tables."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "e217ad15820986c66ca584209996e76dd2842848979046124ca5e4fa9446d037",
+          "response": "does_not_reconcile|0.9|Reconciliation shows staged rows missing from bronze and quarantine.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Reconciliation shows staged rows missing from bronze and quarantine."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "d8c3a6a07c404debf8eec1b270ed790867a7adf30d67407a0b08e2e04c86bcf1",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected but not present in bronze or quarantine, leading to no reconciliation.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected but not present in bronze or quarantine, leading to no reconciliation."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "dd03ec356bd83ba6a458a9fd3b5c0740d37e83af76f767707ef4bab7318b74b9",
+          "response": "evidence_removed|0.9|Gate rejected rows, but they were removed before quarantine, leaving no quarantined rows for this batch.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but they were removed before quarantine, leaving no quarantined rows for this batch."
+        }
+      ]
+    },
+    {
+      "sweep": "facts",
+      "trial": 3,
+      "statement_id": "01f1a2f9-1acf-1239-ba5e-feac31e10e79",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "bccab6deb6c3ec4b7f31e090cd2c37a34aa9d4f18e89484a1056943c4eee26e1",
+      "at": "2026-08-28T15:57:10Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "a9e96d89786d3ccc9587f8507f0b00d8e7282b1271ac1c95721cfeda7518daa9",
+          "response": "bulk_rejection|0.9|2000 rows quarantined in this batch, indicating a bulk rejection by the data-quality gate.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "2000 rows quarantined in this batch, indicating a bulk rejection by the data-quality gate."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "933dd70a977b3ba678fc33606e47e91e6632443940e662f57823826d13d98b4b",
+          "response": "bulk_rejection|0.9|1797 rows quarantined, exceeding bulk threshold, causing gate failure.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "1797 rows quarantined, exceeding bulk threshold, causing gate failure."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "faa3fa0847a326c4fe64e9853b4da7d4b07ab27ddbbc8bd802b268871b99d7ba",
+          "response": "bulk_rejection|0.9|This batch quarantined 1786 rows, a large number, indicating a bulk rejection.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "This batch quarantined 1786 rows, a large number, indicating a bulk rejection."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "211c314a1315f2aeea15b581fc8bc6b0fcb70e731effaebdd44373cb2fff7dea",
+          "response": "isolated_rejection|0.9|Four rows were rejected and quarantined, but the batch otherwise reconciled, indicating an isolated rejection.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "Four rows were rejected and quarantined, but the batch otherwise reconciled, indicating an isolated rejection."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "40144ff91d3e15bd5d84e1fab1982e2018b4cf8b3c561ea66bf4082770b59494",
+          "response": "isolated_rejection|0.9|One row was quarantined in this batch, indicating a small isolated rejection.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "One row was quarantined in this batch, indicating a small isolated rejection."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "8957d3cdb335f6088ea17d48c4a9a6f43c8ae00d47bf171219994842efe9c67b",
+          "response": "isolated_rejection|0.9|Rejected rows were quarantined, but only a few were found, indicating an isolated issue.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "Rejected rows were quarantined, but only a few were found, indicating an isolated issue."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "fa4814a0313a4870af25f4bc4a807ed7c2e44f18699472141e1c43b4e057b2f2",
+          "response": "does_not_reconcile|0.9|Staged rows are missing from both bronze and quarantine, causing no reconciliation.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows are missing from both bronze and quarantine, causing no reconciliation."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "61256d91382c37dc2c530259a8e1e72df563080616835690005d3618e0b031ee",
+          "response": "evidence_removed|0.9|Gate rejected rows, but quarantine table is empty, indicating rejected rows were removed or never quarantined.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but quarantine table is empty, indicating rejected rows were removed or never quarantined."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "e217ad15820986c66ca584209996e76dd2842848979046124ca5e4fa9446d037",
+          "response": "evidence_removed|0.7|Gate flagged rows, but quarantine table is empty, indicating rows were removed or never quarantined.",
+          "word": "evidence_removed",
+          "confidence": 0.7,
+          "cause": "Gate flagged rows, but quarantine table is empty, indicating rows were removed or never quarantined."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "d8c3a6a07c404debf8eec1b270ed790867a7adf30d67407a0b08e2e04c86bcf1",
+          "response": "evidence_removed|0.8|Rejected rows were removed after the gate ran, leaving no quarantined rows for this batch.",
+          "word": "evidence_removed",
+          "confidence": 0.8,
+          "cause": "Rejected rows were removed after the gate ran, leaving no quarantined rows for this batch."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "dd03ec356bd83ba6a458a9fd3b5c0740d37e83af76f767707ef4bab7318b74b9",
+          "response": "does_not_reconcile|0.9|Staged rows were not inserted into bronze or quarantine, leading to no reconciliation.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were not inserted into bronze or quarantine, leading to no reconciliation."
+        }
+      ]
+    },
+    {
+      "sweep": "facts",
+      "trial": 4,
+      "statement_id": "01f1a2f9-220a-1d28-a972-fc9f59ae9b42",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "bccab6deb6c3ec4b7f31e090cd2c37a34aa9d4f18e89484a1056943c4eee26e1",
+      "at": "2026-08-28T15:57:21Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "a9e96d89786d3ccc9587f8507f0b00d8e7282b1271ac1c95721cfeda7518daa9",
+          "response": "bulk_rejection|0.9|2000 rows quarantined for this batch, indicating a bulk rejection by the data-quality gate.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "2000 rows quarantined for this batch, indicating a bulk rejection by the data-quality gate."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "933dd70a977b3ba678fc33606e47e91e6632443940e662f57823826d13d98b4b",
+          "response": "bulk_rejection|0.9|1797 rows quarantined in this batch, exceeding typical threshold, causing bulk rejection.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "1797 rows quarantined in this batch, exceeding typical threshold, causing bulk rejection."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "faa3fa0847a326c4fe64e9853b4da7d4b07ab27ddbbc8bd802b268871b99d7ba",
+          "response": "bulk_rejection|0.9|The gate rejected 1786 rows, which are quarantined, indicating a bulk rejection.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "The gate rejected 1786 rows, which are quarantined, indicating a bulk rejection."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "211c314a1315f2aeea15b581fc8bc6b0fcb70e731effaebdd44373cb2fff7dea",
+          "response": "isolated_rejection|0.9|Four rows were quarantined, but the batch still reconciled, indicating an isolated rejection.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "Four rows were quarantined, but the batch still reconciled, indicating an isolated rejection."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "40144ff91d3e15bd5d84e1fab1982e2018b4cf8b3c561ea66bf4082770b59494",
+          "response": "isolated_rejection|0.9|One row was quarantined in this batch, indicating a small isolated rejection.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "One row was quarantined in this batch, indicating a small isolated rejection."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "8957d3cdb335f6088ea17d48c4a9a6f43c8ae00d47bf171219994842efe9c67b",
+          "response": "isolated_rejection|0.9|One row was quarantined in this batch, indicating a small isolated rejection that was reconciled.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "One row was quarantined in this batch, indicating a small isolated rejection that was reconciled."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "fa4814a0313a4870af25f4bc4a807ed7c2e44f18699472141e1c43b4e057b2f2",
+          "response": "does_not_reconcile|0.9|Gate detected rows that were neither in bronze nor quarantine, leading to a no_reconciliation_row verdict.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Gate detected rows that were neither in bronze nor quarantine, leading to a no_reconciliation_row verdict."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "61256d91382c37dc2c530259a8e1e72df563080616835690005d3618e0b031ee",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected and not quarantined, so they are missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected and not quarantined, so they are missing from both bronze and quarantine tables."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "e217ad15820986c66ca584209996e76dd2842848979046124ca5e4fa9446d037",
+          "response": "does_not_reconcile|0.9|Reconciliation failed because rejected rows were not quarantined, indicating a missing quarantine step or misconfiguration.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Reconciliation failed because rejected rows were not quarantined, indicating a missing quarantine step or misconfiguration."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "d8c3a6a07c404debf8eec1b270ed790867a7adf30d67407a0b08e2e04c86bcf1",
+          "response": "evidence_removed|0.9|Gate rejected rows, but quarantine table has no rows for this batch, so evidence removed.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but quarantine table has no rows for this batch, so evidence removed."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "dd03ec356bd83ba6a458a9fd3b5c0740d37e83af76f767707ef4bab7318b74b9",
+          "response": "does_not_reconcile|0.9|Staged rows were not found in bronze or quarantine, causing the gate to fail.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were not found in bronze or quarantine, causing the gate to fail."
+        }
+      ]
+    },
+    {
+      "sweep": "facts",
+      "trial": 5,
+      "statement_id": "01f1a2f9-28b0-1453-bd94-8fa0c3ac9fe9",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "bccab6deb6c3ec4b7f31e090cd2c37a34aa9d4f18e89484a1056943c4eee26e1",
+      "at": "2026-08-28T15:57:34Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "a9e96d89786d3ccc9587f8507f0b00d8e7282b1271ac1c95721cfeda7518daa9",
+          "response": "bulk_rejection|0.9|2000 rows quarantined for this batch, indicating a bulk rejection by the data-quality gate.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "2000 rows quarantined for this batch, indicating a bulk rejection by the data-quality gate."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "933dd70a977b3ba678fc33606e47e91e6632443940e662f57823826d13d98b4b",
+          "response": "bulk_rejection|0.9|Gate rejected 1797 rows, quarantined them; batch reconciled but many rows were rejected.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "Gate rejected 1797 rows, quarantined them; batch reconciled but many rows were rejected."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "faa3fa0847a326c4fe64e9853b4da7d4b07ab27ddbbc8bd802b268871b99d7ba",
+          "response": "bulk_rejection|0.9|This batch quarantined 1786 rows, a large number, indicating a bulk rejection despite reconciliation of staged rows.",
+          "word": "bulk_rejection",
+          "confidence": 0.9,
+          "cause": "This batch quarantined 1786 rows, a large number, indicating a bulk rejection despite reconciliation of staged rows."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "211c314a1315f2aeea15b581fc8bc6b0fcb70e731effaebdd44373cb2fff7dea",
+          "response": "isolated_rejection|0.9|Four rows were quarantined, a small number, causing isolated rejection despite batch reconciliation.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "Four rows were quarantined, a small number, causing isolated rejection despite batch reconciliation."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "40144ff91d3e15bd5d84e1fab1982e2018b4cf8b3c561ea66bf4082770b59494",
+          "response": "isolated_rejection|0.9|Rejected rows were quarantined; only a few rows were affected, indicating an isolated rejection.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "Rejected rows were quarantined; only a few rows were affected, indicating an isolated rejection."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "8957d3cdb335f6088ea17d48c4a9a6f43c8ae00d47bf171219994842efe9c67b",
+          "response": "isolated_rejection|0.9|One row was quarantined in this batch, indicating a small isolated rejection.",
+          "word": "isolated_rejection",
+          "confidence": 0.9,
+          "cause": "One row was quarantined in this batch, indicating a small isolated rejection."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "fa4814a0313a4870af25f4bc4a807ed7c2e44f18699472141e1c43b4e057b2f2",
+          "response": "does_not_reconcile|0.9|Staged rows were not found in bronze or quarantine, causing the gate to fail.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were not found in bronze or quarantine, causing the gate to fail."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "61256d91382c37dc2c530259a8e1e72df563080616835690005d3618e0b031ee",
+          "response": "evidence_removed|0.9|Gate rejected rows but quarantine is empty, indicating rejected rows were removed before quarantine.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows but quarantine is empty, indicating rejected rows were removed before quarantine."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "e217ad15820986c66ca584209996e76dd2842848979046124ca5e4fa9446d037",
+          "response": "evidence_removed|0.9|Gate rejected rows but quarantine is empty, indicating rejected rows were removed or never quarantined.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows but quarantine is empty, indicating rejected rows were removed or never quarantined."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "d8c3a6a07c404debf8eec1b270ed790867a7adf30d67407a0b08e2e04c86bcf1",
+          "response": "evidence_removed|0.9|Gate rejected rows, but quarantine table shows none for this batch, indicating rejected rows were removed or not quarantined.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but quarantine table shows none for this batch, indicating rejected rows were removed or not quarantined."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "dd03ec356bd83ba6a458a9fd3b5c0740d37e83af76f767707ef4bab7318b74b9",
+          "response": "evidence_removed|0.9|Gate rejected rows, but quarantine for this batch is empty, indicating evidence was removed.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but quarantine for this batch is empty, indicating evidence was removed."
+        }
+      ]
+    },
+    {
+      "sweep": "numbers_stripped",
+      "trial": 1,
+      "statement_id": "01f1a2f9-307c-1e43-8594-4e37ba25024a",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "1473be1c2547d73c7800b2f4bee6db6665b6b9285d8958bc641364ba8425acaa",
+      "at": "2026-08-28T15:57:50Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "15c14bb2f03cd1ba022c01b215e8c89d107bb054d1e98fb5e45410e53416ce16",
+          "response": "insufficient_information|0.7|Unable to determine if rejection is bulk or isolated due to missing row counts.",
+          "word": "insufficient_information",
+          "confidence": 0.7,
+          "cause": "Unable to determine if rejection is bulk or isolated due to missing row counts."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "3bd505b815ad39f15be8382bdecdba8023ada28d122a524438a2c9405a619766",
+          "response": "insufficient_information|0.8|Cannot determine if many or few rejected rows due to withheld counts.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Cannot determine if many or few rejected rows due to withheld counts."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "211c75280d78487f42fd98b47c7ece08aa2b6725e566da1ea94433e2f36118c6",
+          "response": "insufficient_information|0.8|Cannot determine if many or few rejected rows due to withheld counts.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Cannot determine if many or few rejected rows due to withheld counts."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "085f68771cb2f0e7fa3ece7016e4869cb746bd16be1bf24ef4d07cf681e5053b",
+          "response": "insufficient_information|0.6|Rejection rows quarantined, but count unknown, so cannot determine bulk vs isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.6,
+          "cause": "Rejection rows quarantined, but count unknown, so cannot determine bulk vs isolated."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "0ab0e00ba7d607c27d32bc6b303a249eb3aecad858dbb62780fb72cf2b6305e3",
+          "response": "insufficient_information|0.9|Cannot determine if rejection count is high or low; quarantine rows exist but count withheld.",
+          "word": "insufficient_information",
+          "confidence": 0.9,
+          "cause": "Cannot determine if rejection count is high or low; quarantine rows exist but count withheld."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "4c6db129f25549547dc5bd01bb4ca981ae5b50f9097bf6592b14f9318f41b5b1",
+          "response": "insufficient_information|0.7|Reconciliation succeeded but quarantined rows exist; count unknown, so cannot determine rejection severity.",
+          "word": "insufficient_information",
+          "confidence": 0.7,
+          "cause": "Reconciliation succeeded but quarantined rows exist; count unknown, so cannot determine rejection severity."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "4b91eb196d57e38df064c186418d277db56905d2a438fb33a0fcd21b3d2432db",
+          "response": "evidence_removed|0.9|Rejected rows were removed after the gate ran, so no evidence remains.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Rejected rows were removed after the gate ran, so no evidence remains."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "a0f4ade1ff7c7c894613c2a84fb8ab1d6e9edcb1d2ba4c50abcdafd01601115e",
+          "response": "does_not_reconcile|0.9|Rejected rows were not quarantined, so they are missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Rejected rows were not quarantined, so they are missing from both bronze and quarantine tables."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "ad8fc2fd5ddf6cda895ad39c414b8dbfcbc619183b56f301da22f7ea9bcd5d84",
+          "response": "evidence_removed|0.9|Gate rejected rows, but they are no longer present in quarantine or bronze.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but they are no longer present in quarantine or bronze."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "e72c5cc65406017e958f4eb6cb9aa364e13e86f39835ed9cd78d62c2072d3def",
+          "response": "does_not_reconcile|0.9|Staged rows were not found in bronze or quarantine, causing the gate to fail.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were not found in bronze or quarantine, causing the gate to fail."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "7536f09dbc046ed052395e0600de5dbeaac5dad85c2e2da1f1d1db71f9323e4c",
+          "response": "evidence_removed|0.9|Gate rejected rows, but they were removed; no quarantined rows remain for this batch.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but they were removed; no quarantined rows remain for this batch."
+        }
+      ]
+    },
+    {
+      "sweep": "numbers_stripped",
+      "trial": 2,
+      "statement_id": "01f1a2f9-3a22-1394-a7d4-7d9de8512ac0",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "1473be1c2547d73c7800b2f4bee6db6665b6b9285d8958bc641364ba8425acaa",
+      "at": "2026-08-28T15:58:04Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "15c14bb2f03cd1ba022c01b215e8c89d107bb054d1e98fb5e45410e53416ce16",
+          "response": "insufficient_information|0.5|Quarantined rows exist but count unknown, so cannot determine bulk vs isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Quarantined rows exist but count unknown, so cannot determine bulk vs isolated."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "3bd505b815ad39f15be8382bdecdba8023ada28d122a524438a2c9405a619766",
+          "response": "insufficient_information|0.8|Rejected rows quarantined but count unknown, cannot determine bulk vs isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Rejected rows quarantined but count unknown, cannot determine bulk vs isolated."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "211c75280d78487f42fd98b47c7ece08aa2b6725e566da1ea94433e2f36118c6",
+          "response": "insufficient_information|0.5|Cannot determine if rejected rows are many or few due to withheld counts.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Cannot determine if rejected rows are many or few due to withheld counts."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "085f68771cb2f0e7fa3ece7016e4869cb746bd16be1bf24ef4d07cf681e5053b",
+          "response": "insufficient_information|0.6|Rejected rows quarantined but count unknown, so verdict unclear.",
+          "word": "insufficient_information",
+          "confidence": 0.6,
+          "cause": "Rejected rows quarantined but count unknown, so verdict unclear."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "0ab0e00ba7d607c27d32bc6b303a249eb3aecad858dbb62780fb72cf2b6305e3",
+          "response": "insufficient_information|0.7|Rejected rows quarantined but count unknown; reconciliation passed, so insufficient data to classify.",
+          "word": "insufficient_information",
+          "confidence": 0.7,
+          "cause": "Rejected rows quarantined but count unknown; reconciliation passed, so insufficient data to classify."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "4c6db129f25549547dc5bd01bb4ca981ae5b50f9097bf6592b14f9318f41b5b1",
+          "response": "insufficient_information|0.6|Cannot determine if quarantined rows are many or few due to withheld counts.",
+          "word": "insufficient_information",
+          "confidence": 0.6,
+          "cause": "Cannot determine if quarantined rows are many or few due to withheld counts."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "4b91eb196d57e38df064c186418d277db56905d2a438fb33a0fcd21b3d2432db",
+          "response": "evidence_removed|0.9|Gate rejected rows, but no quarantine entries exist, indicating the rows were removed before quarantine.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but no quarantine entries exist, indicating the rows were removed before quarantine."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "a0f4ade1ff7c7c894613c2a84fb8ab1d6e9edcb1d2ba4c50abcdafd01601115e",
+          "response": "does_not_reconcile|0.9|Staged rows not found in bronze or quarantine, causing reconciliation failure.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows not found in bronze or quarantine, causing reconciliation failure."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "ad8fc2fd5ddf6cda895ad39c414b8dbfcbc619183b56f301da22f7ea9bcd5d84",
+          "response": "does_not_reconcile|0.9|Rejected rows were removed from bronze after the gate, leaving no rows in bronze or quarantine.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Rejected rows were removed from bronze after the gate, leaving no rows in bronze or quarantine."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "e72c5cc65406017e958f4eb6cb9aa364e13e86f39835ed9cd78d62c2072d3def",
+          "response": "evidence_removed|0.9|Gate rejected rows, but quarantine table has no rows for this batch, indicating they were removed.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but quarantine table has no rows for this batch, indicating they were removed."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "7536f09dbc046ed052395e0600de5dbeaac5dad85c2e2da1f1d1db71f9323e4c",
+          "response": "does_not_reconcile|0.9|Staged rows were not found in bronze or quarantine, causing no reconciliation.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were not found in bronze or quarantine, causing no reconciliation."
+        }
+      ]
+    },
+    {
+      "sweep": "numbers_stripped",
+      "trial": 3,
+      "statement_id": "01f1a2f9-4235-189b-bb0b-3cb38fabb640",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "1473be1c2547d73c7800b2f4bee6db6665b6b9285d8958bc641364ba8425acaa",
+      "at": "2026-08-28T15:58:17Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "15c14bb2f03cd1ba022c01b215e8c89d107bb054d1e98fb5e45410e53416ce16",
+          "response": "insufficient_information|0.4|Rejection rows quarantined, but count unknown, so cannot determine bulk vs isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.4,
+          "cause": "Rejection rows quarantined, but count unknown, so cannot determine bulk vs isolated."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "3bd505b815ad39f15be8382bdecdba8023ada28d122a524438a2c9405a619766",
+          "response": "insufficient_information|0.8|Rejected rows quarantined but count unknown, so verdict unclear.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Rejected rows quarantined but count unknown, so verdict unclear."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "211c75280d78487f42fd98b47c7ece08aa2b6725e566da1ea94433e2f36118c6",
+          "response": "insufficient_information|0.5|Insufficient data to determine if many or few rows were quarantined.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Insufficient data to determine if many or few rows were quarantined."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "085f68771cb2f0e7fa3ece7016e4869cb746bd16be1bf24ef4d07cf681e5053b",
+          "response": "insufficient_information|0.5|Cannot determine if rejection count is high or low due to withheld counts.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Cannot determine if rejection count is high or low due to withheld counts."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "0ab0e00ba7d607c27d32bc6b303a249eb3aecad858dbb62780fb72cf2b6305e3",
+          "response": "insufficient_information|0.8|Rejected rows quarantined, but count unknown, so cannot determine bulk vs isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Rejected rows quarantined, but count unknown, so cannot determine bulk vs isolated."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "4c6db129f25549547dc5bd01bb4ca981ae5b50f9097bf6592b14f9318f41b5b1",
+          "response": "insufficient_information|0.6|Reconciliation succeeded but the gate found some rejected rows, which were quarantined; counts are unknown.",
+          "word": "insufficient_information",
+          "confidence": 0.6,
+          "cause": "Reconciliation succeeded but the gate found some rejected rows, which were quarantined; counts are unknown."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "4b91eb196d57e38df064c186418d277db56905d2a438fb33a0fcd21b3d2432db",
+          "response": "evidence_removed|0.9|The gate rejected rows, but they were removed before quarantine, leaving no rejected rows in quarantine.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "The gate rejected rows, but they were removed before quarantine, leaving no rejected rows in quarantine."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "a0f4ade1ff7c7c894613c2a84fb8ab1d6e9edcb1d2ba4c50abcdafd01601115e",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected and not quarantined, so they are missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected and not quarantined, so they are missing from both bronze and quarantine tables."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "ad8fc2fd5ddf6cda895ad39c414b8dbfcbc619183b56f301da22f7ea9bcd5d84",
+          "response": "does_not_reconcile|0.9|Rejection rows were not quarantined, causing them to be missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Rejection rows were not quarantined, causing them to be missing from both bronze and quarantine tables."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "e72c5cc65406017e958f4eb6cb9aa364e13e86f39835ed9cd78d62c2072d3def",
+          "response": "evidence_removed|0.9|Gate rejected rows, but quarantine table for this batch is empty, indicating rejected rows were removed.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but quarantine table for this batch is empty, indicating rejected rows were removed."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "7536f09dbc046ed052395e0600de5dbeaac5dad85c2e2da1f1d1db71f9323e4c",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected and not quarantined, so they are missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected and not quarantined, so they are missing from both bronze and quarantine tables."
+        }
+      ]
+    },
+    {
+      "sweep": "numbers_stripped",
+      "trial": 4,
+      "statement_id": "01f1a2f9-4a3d-18cb-b723-c40d12afc53b",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "1473be1c2547d73c7800b2f4bee6db6665b6b9285d8958bc641364ba8425acaa",
+      "at": "2026-08-28T15:58:34Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "15c14bb2f03cd1ba022c01b215e8c89d107bb054d1e98fb5e45410e53416ce16",
+          "response": "insufficient_information|0.9|Cannot determine if many or few rejected rows due to withheld counts.",
+          "word": "insufficient_information",
+          "confidence": 0.9,
+          "cause": "Cannot determine if many or few rejected rows due to withheld counts."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "3bd505b815ad39f15be8382bdecdba8023ada28d122a524438a2c9405a619766",
+          "response": "insufficient_information|0.8|Cannot determine if rejected rows are many or few due to withheld counts.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Cannot determine if rejected rows are many or few due to withheld counts."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "211c75280d78487f42fd98b47c7ece08aa2b6725e566da1ea94433e2f36118c6",
+          "response": "insufficient_information|0.8|Cannot determine if rejected rows are many or few due to withheld counts.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Cannot determine if rejected rows are many or few due to withheld counts."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "085f68771cb2f0e7fa3ece7016e4869cb746bd16be1bf24ef4d07cf681e5053b",
+          "response": "insufficient_information|0.3|Cannot determine if rejection is bulk or isolated due to missing row counts.",
+          "word": "insufficient_information",
+          "confidence": 0.3,
+          "cause": "Cannot determine if rejection is bulk or isolated due to missing row counts."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "0ab0e00ba7d607c27d32bc6b303a249eb3aecad858dbb62780fb72cf2b6305e3",
+          "response": "insufficient_information|0.9|Cannot determine rejection volume from withheld counts.",
+          "word": "insufficient_information",
+          "confidence": 0.9,
+          "cause": "Cannot determine rejection volume from withheld counts."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "4c6db129f25549547dc5bd01bb4ca981ae5b50f9097bf6592b14f9318f41b5b1",
+          "response": "insufficient_information|0.5|Cannot determine if rejection is isolated or bulk due to missing counts.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Cannot determine if rejection is isolated or bulk due to missing counts."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "4b91eb196d57e38df064c186418d277db56905d2a438fb33a0fcd21b3d2432db",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected and are missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected and are missing from both bronze and quarantine tables."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "a0f4ade1ff7c7c894613c2a84fb8ab1d6e9edcb1d2ba4c50abcdafd01601115e",
+          "response": "does_not_reconcile|0.9|Gate rejected rows that were not quarantined or in bronze, leading to a reconciliation mismatch and job failure.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows that were not quarantined or in bronze, leading to a reconciliation mismatch and job failure."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "ad8fc2fd5ddf6cda895ad39c414b8dbfcbc619183b56f301da22f7ea9bcd5d84",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected and not quarantined, so they are missing from both bronze and quarantine.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected and not quarantined, so they are missing from both bronze and quarantine."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "e72c5cc65406017e958f4eb6cb9aa364e13e86f39835ed9cd78d62c2072d3def",
+          "response": "does_not_reconcile|0.9|Staged rows were not found in bronze or quarantine, causing the gate to reject them.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were not found in bronze or quarantine, causing the gate to reject them."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "7536f09dbc046ed052395e0600de5dbeaac5dad85c2e2da1f1d1db71f9323e4c",
+          "response": "does_not_reconcile|0.95|Staged rows were not found in bronze or quarantine, causing the gate to reject them.",
+          "word": "does_not_reconcile",
+          "confidence": 0.95,
+          "cause": "Staged rows were not found in bronze or quarantine, causing the gate to reject them."
+        }
+      ]
+    },
+    {
+      "sweep": "numbers_stripped",
+      "trial": 5,
+      "statement_id": "01f1a2f9-5457-1ec1-8ead-fc72b1eb3e10",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "1473be1c2547d73c7800b2f4bee6db6665b6b9285d8958bc641364ba8425acaa",
+      "at": "2026-08-28T15:58:58Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "15c14bb2f03cd1ba022c01b215e8c89d107bb054d1e98fb5e45410e53416ce16",
+          "response": "insufficient_information|0.9|Cannot determine if quarantined rows are many or few; insufficient data to classify.",
+          "word": "insufficient_information",
+          "confidence": 0.9,
+          "cause": "Cannot determine if quarantined rows are many or few; insufficient data to classify."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "3bd505b815ad39f15be8382bdecdba8023ada28d122a524438a2c9405a619766",
+          "response": "insufficient_information|0.8|Cannot determine if rejection is bulk or isolated due to missing row counts.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Cannot determine if rejection is bulk or isolated due to missing row counts."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "211c75280d78487f42fd98b47c7ece08aa2b6725e566da1ea94433e2f36118c6",
+          "response": "isolated_rejection|0.6|Rejected rows quarantined but batch reconciled, indicating few issues.",
+          "word": "isolated_rejection",
+          "confidence": 0.6,
+          "cause": "Rejected rows quarantined but batch reconciled, indicating few issues."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "085f68771cb2f0e7fa3ece7016e4869cb746bd16be1bf24ef4d07cf681e5053b",
+          "response": "insufficient_information|0.9|Rejection rows quarantined, but counts withheld; cannot determine bulk or isolated rejection.",
+          "word": "insufficient_information",
+          "confidence": 0.9,
+          "cause": "Rejection rows quarantined, but counts withheld; cannot determine bulk or isolated rejection."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "0ab0e00ba7d607c27d32bc6b303a249eb3aecad858dbb62780fb72cf2b6305e3",
+          "response": "insufficient_information|0.8|Cannot determine rejection volume; insufficient data to classify.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Cannot determine rejection volume; insufficient data to classify."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "4c6db129f25549547dc5bd01bb4ca981ae5b50f9097bf6592b14f9318f41b5b1",
+          "response": "insufficient_information|0.6|Rejected rows were quarantined, but batch still reconciled; insufficient data to classify as bulk or isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.6,
+          "cause": "Rejected rows were quarantined, but batch still reconciled; insufficient data to classify as bulk or isolated."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "4b91eb196d57e38df064c186418d277db56905d2a438fb33a0fcd21b3d2432db",
+          "response": "does_not_reconcile|0.9|Staged rows are missing from both bronze and quarantine tables, leading to a no_reconciliation_row verdict.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows are missing from both bronze and quarantine tables, leading to a no_reconciliation_row verdict."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "a0f4ade1ff7c7c894613c2a84fb8ab1d6e9edcb1d2ba4c50abcdafd01601115e",
+          "response": "evidence_removed|0.9|Rejected rows were removed before quarantine, so no evidence remains in quarantine.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Rejected rows were removed before quarantine, so no evidence remains in quarantine."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "ad8fc2fd5ddf6cda895ad39c414b8dbfcbc619183b56f301da22f7ea9bcd5d84",
+          "response": "does_not_reconcile|0.9|Rejected rows were not found in bronze or quarantine, indicating they did not reconcile.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Rejected rows were not found in bronze or quarantine, indicating they did not reconcile."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "e72c5cc65406017e958f4eb6cb9aa364e13e86f39835ed9cd78d62c2072d3def",
+          "response": "does_not_reconcile|0.9|Staged rows were not found in bronze or quarantine, indicating they were not reconciled.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were not found in bronze or quarantine, indicating they were not reconciled."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "7536f09dbc046ed052395e0600de5dbeaac5dad85c2e2da1f1d1db71f9323e4c",
+          "response": "evidence_removed|0.9|Gate rejected rows but none were quarantined for this batch, likely already quarantined earlier.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows but none were quarantined for this batch, likely already quarantined earlier."
+        }
+      ]
+    },
+    {
+      "sweep": "fabricated",
+      "trial": 1,
+      "statement_id": "01f1a2f9-626e-1273-bfa1-23fce71d6645",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "a8ad32fbe8ec3f32c6ad21cc294f0f0d569e09b37b8bd70815436f0c3e4ce137",
+      "at": "2026-08-28T15:59:04Z",
+      "responses": [
+        {
+          "job_run_id": "999000999000999",
+          "prompt_sha256": "9e1d275e8648d121731cb2c85e90115184035a27fbf2ecda94e83fb83f77653d",
+          "response": "insufficient_information|0.9|No execution record or data found for job_run_id, cannot determine batch status.",
+          "word": "insufficient_information",
+          "confidence": 0.9,
+          "cause": "No execution record or data found for job_run_id, cannot determine batch status."
+        }
+      ]
+    },
+    {
+      "sweep": "fabricated",
+      "trial": 2,
+      "statement_id": "01f1a2f9-6625-1daa-9105-50ad2f319217",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "a8ad32fbe8ec3f32c6ad21cc294f0f0d569e09b37b8bd70815436f0c3e4ce137",
+      "at": "2026-08-28T15:59:11Z",
+      "responses": [
+        {
+          "job_run_id": "999000999000999",
+          "prompt_sha256": "9e1d275e8648d121731cb2c85e90115184035a27fbf2ecda94e83fb83f77653d",
+          "response": "insufficient_information|0.9|No job run record, so cannot determine batch status.",
+          "word": "insufficient_information",
+          "confidence": 0.9,
+          "cause": "No job run record, so cannot determine batch status."
+        }
+      ]
+    },
+    {
+      "sweep": "fabricated",
+      "trial": 3,
+      "statement_id": "01f1a2f9-69e2-1b6e-978d-c7f74a2bf59b",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "a8ad32fbe8ec3f32c6ad21cc294f0f0d569e09b37b8bd70815436f0c3e4ce137",
+      "at": "2026-08-28T15:59:18Z",
+      "responses": [
+        {
+          "job_run_id": "999000999000999",
+          "prompt_sha256": "9e1d275e8648d121731cb2c85e90115184035a27fbf2ecda94e83fb83f77653d",
+          "response": "insufficient_information|0.0|No job run or data found to assess batch.",
+          "word": "insufficient_information",
+          "confidence": 0.0,
+          "cause": "No job run or data found to assess batch."
+        }
+      ]
+    },
+    {
+      "sweep": "fabricated",
+      "trial": 4,
+      "statement_id": "01f1a2f9-6e10-1d82-befd-22657a7d9381",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "a8ad32fbe8ec3f32c6ad21cc294f0f0d569e09b37b8bd70815436f0c3e4ce137",
+      "at": "2026-08-28T15:59:24Z",
+      "responses": [
+        {
+          "job_run_id": "999000999000999",
+          "prompt_sha256": "9e1d275e8648d121731cb2c85e90115184035a27fbf2ecda94e83fb83f77653d",
+          "response": "insufficient_information|0.9|Job run ID not found, no data processed, insufficient evidence.",
+          "word": "insufficient_information",
+          "confidence": 0.9,
+          "cause": "Job run ID not found, no data processed, insufficient evidence."
+        }
+      ]
+    },
+    {
+      "sweep": "fabricated",
+      "trial": 5,
+      "statement_id": "01f1a2f9-71b2-106c-840a-b64fb098d465",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "a8ad32fbe8ec3f32c6ad21cc294f0f0d569e09b37b8bd70815436f0c3e4ce137",
+      "at": "2026-08-28T15:59:32Z",
+      "responses": [
+        {
+          "job_run_id": "999000999000999",
+          "prompt_sha256": "9e1d275e8648d121731cb2c85e90115184035a27fbf2ecda94e83fb83f77653d",
+          "response": "insufficient_information|0.9|Job run ID missing, no data to evaluate.",
+          "word": "insufficient_information",
+          "confidence": 0.9,
+          "cause": "Job run ID missing, no data to evaluate."
+        }
+      ]
+    },
+    {
+      "sweep": "numbers_stripped_decline_middle",
+      "trial": 1,
+      "statement_id": "01f1a301-6eb3-158c-941d-3d5336c4c31b",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "439e04495619c90936b1ca1ab5d383da73e9e5a3e39f24fa0397d7b93d340a22",
+      "at": "2026-08-28T16:57:03Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "489eff16f3694de24c97134fdb7096f338ce350e8b16b098394210be2200d0db",
+          "response": "insufficient_information|0.8|Cannot determine if many or few rows were quarantined due to missing counts.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Cannot determine if many or few rows were quarantined due to missing counts."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "3f87bcba3de480ecea4390b40c1d6ee8c6e2ee154588db3b3f18f993d60bfce7",
+          "response": "insufficient_information|0.7|Quarantine rows exist but count unknown, cannot determine bulk vs isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.7,
+          "cause": "Quarantine rows exist but count unknown, cannot determine bulk vs isolated."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "93e699184117429aca7d5630a8faf877be262bee496a686c1e0bc32251803d31",
+          "response": "insufficient_information|0.6|Rejected rows were quarantined, but counts are unknown, so cannot determine bulk vs isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.6,
+          "cause": "Rejected rows were quarantined, but counts are unknown, so cannot determine bulk vs isolated."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "5347e1fabb9f70ee1cd10b70f3bf2855083d639150da579d2c0d12bfabee5487",
+          "response": "insufficient_information|0.5|Insufficient data to determine if rejection was bulk or isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Insufficient data to determine if rejection was bulk or isolated."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "aaf3ddb1c0f8aed68c60b04b64e31ce29c049f089a276cb0ec582005446e9ffc",
+          "response": "isolated_rejection|0.7|Rejected rows quarantined, but batch reconciled, indicating isolated rejection.",
+          "word": "isolated_rejection",
+          "confidence": 0.7,
+          "cause": "Rejected rows quarantined, but batch reconciled, indicating isolated rejection."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "0c350aa979a7fc7eac2add69dc0e779ebcb9e91efa5699a4b953e785e7c6171c",
+          "response": "insufficient_information|0.5|Cannot determine if many or few rows were quarantined due to missing counts.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Cannot determine if many or few rows were quarantined due to missing counts."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "42e26672c6b3f021218a61afa8e974c3c3b273b4cef2e575ae4759bec4325a9c",
+          "response": "does_not_reconcile|0.9|Staged rows not found in bronze or quarantine, causing data quality failure.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows not found in bronze or quarantine, causing data quality failure."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "3de8a29638e2cfe53f7ec917251983bdea8a52664b541977290737f84ffe7637",
+          "response": "evidence_removed|0.9|Gate rejected rows, but no rejected rows are present in quarantine or bronze, indicating they were removed or never persisted.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but no rejected rows are present in quarantine or bronze, indicating they were removed or never persisted."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "933984dc04e34a099dbbe7045e9a4c616e440724b257609f2d6d4e76f7fb8447",
+          "response": "does_not_reconcile|0.9|Rejected rows were not quarantined or inserted into bronze, causing the gate to fail.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Rejected rows were not quarantined or inserted into bronze, causing the gate to fail."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "4d1eaf71c5acb5abd843585369fea6334bc3c5d3d6be4eabe132a00721efba76",
+          "response": "evidence_removed|0.8|Rejected rows were not quarantined for this batch and are missing from the quarantine table.",
+          "word": "evidence_removed",
+          "confidence": 0.8,
+          "cause": "Rejected rows were not quarantined for this batch and are missing from the quarantine table."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "de5f627de098117d849e03fbbc002ddfa5acf664f0e34fb412fb29b6b8730a15",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected and not quarantined, so they are missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected and not quarantined, so they are missing from both bronze and quarantine tables."
+        }
+      ]
+    },
+    {
+      "sweep": "numbers_stripped_decline_middle",
+      "trial": 2,
+      "statement_id": "01f1a301-7e91-15d4-863e-aa8d2e14f613",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "439e04495619c90936b1ca1ab5d383da73e9e5a3e39f24fa0397d7b93d340a22",
+      "at": "2026-08-28T16:57:17Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "489eff16f3694de24c97134fdb7096f338ce350e8b16b098394210be2200d0db",
+          "response": "insufficient_information|0.7|Cannot determine if rejected rows are many or few due to missing counts.",
+          "word": "insufficient_information",
+          "confidence": 0.7,
+          "cause": "Cannot determine if rejected rows are many or few due to missing counts."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "3f87bcba3de480ecea4390b40c1d6ee8c6e2ee154588db3b3f18f993d60bfce7",
+          "response": "isolated_rejection|0.7|Rejected rows quarantined, but batch reconciled, indicating only a few problematic rows.",
+          "word": "isolated_rejection",
+          "confidence": 0.7,
+          "cause": "Rejected rows quarantined, but batch reconciled, indicating only a few problematic rows."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "93e699184117429aca7d5630a8faf877be262bee496a686c1e0bc32251803d31",
+          "response": "insufficient_information|0.6|Cannot determine if rejection was bulk or isolated due to missing row counts.",
+          "word": "insufficient_information",
+          "confidence": 0.6,
+          "cause": "Cannot determine if rejection was bulk or isolated due to missing row counts."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "5347e1fabb9f70ee1cd10b70f3bf2855083d639150da579d2c0d12bfabee5487",
+          "response": "insufficient_information|0.6|Unable to determine if rejection is bulk or isolated due to missing row counts.",
+          "word": "insufficient_information",
+          "confidence": 0.6,
+          "cause": "Unable to determine if rejection is bulk or isolated due to missing row counts."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "aaf3ddb1c0f8aed68c60b04b64e31ce29c049f089a276cb0ec582005446e9ffc",
+          "response": "insufficient_information|0.7|Rejected rows quarantined but count unknown, cannot determine bulk vs isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.7,
+          "cause": "Rejected rows quarantined but count unknown, cannot determine bulk vs isolated."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "0c350aa979a7fc7eac2add69dc0e779ebcb9e91efa5699a4b953e785e7c6171c",
+          "response": "insufficient_information|0.5|Cannot determine if many or few rows were quarantined due to missing counts.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Cannot determine if many or few rows were quarantined due to missing counts."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "42e26672c6b3f021218a61afa8e974c3c3b273b4cef2e575ae4759bec4325a9c",
+          "response": "evidence_removed|0.9|Gate rejected rows but quarantine table remains empty, indicating rejected rows were removed.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows but quarantine table remains empty, indicating rejected rows were removed."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "3de8a29638e2cfe53f7ec917251983bdea8a52664b541977290737f84ffe7637",
+          "response": "evidence_removed|0.9|Gate rejected rows, but they were neither quarantined nor inserted into bronze, leaving no evidence of rejection.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but they were neither quarantined nor inserted into bronze, leaving no evidence of rejection."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "933984dc04e34a099dbbe7045e9a4c616e440724b257609f2d6d4e76f7fb8447",
+          "response": "evidence_removed|0.9|Gate rejected rows, but none are present in quarantine or bronze, indicating they were removed or never quarantined.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but none are present in quarantine or bronze, indicating they were removed or never quarantined."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "4d1eaf71c5acb5abd843585369fea6334bc3c5d3d6be4eabe132a00721efba76",
+          "response": "does_not_reconcile|0.9|Staged rows not found in bronze or quarantine, causing reconciliation failure.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows not found in bronze or quarantine, causing reconciliation failure."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "de5f627de098117d849e03fbbc002ddfa5acf664f0e34fb412fb29b6b8730a15",
+          "response": "does_not_reconcile|0.9|Staged rows are missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows are missing from both bronze and quarantine tables."
+        }
+      ]
+    },
+    {
+      "sweep": "numbers_stripped_decline_middle",
+      "trial": 3,
+      "statement_id": "01f1a301-86e5-1ddd-887d-6bdc6ee39c16",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "439e04495619c90936b1ca1ab5d383da73e9e5a3e39f24fa0397d7b93d340a22",
+      "at": "2026-08-28T16:57:37Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "489eff16f3694de24c97134fdb7096f338ce350e8b16b098394210be2200d0db",
+          "response": "insufficient_information|0.7|Cannot determine if many or few rejected rows due to missing counts.",
+          "word": "insufficient_information",
+          "confidence": 0.7,
+          "cause": "Cannot determine if many or few rejected rows due to missing counts."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "3f87bcba3de480ecea4390b40c1d6ee8c6e2ee154588db3b3f18f993d60bfce7",
+          "response": "insufficient_information|0.5|Cannot determine if rejected rows are many or few due to missing counts.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Cannot determine if rejected rows are many or few due to missing counts."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "93e699184117429aca7d5630a8faf877be262bee496a686c1e0bc32251803d31",
+          "response": "insufficient_information|0.8|Unable to determine if rejected rows are many or few due to withheld counts.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Unable to determine if rejected rows are many or few due to withheld counts."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "5347e1fabb9f70ee1cd10b70f3bf2855083d639150da579d2c0d12bfabee5487",
+          "response": "insufficient_information|0.5|Cannot determine if rejection is bulk or isolated due to missing row counts.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Cannot determine if rejection is bulk or isolated due to missing row counts."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "aaf3ddb1c0f8aed68c60b04b64e31ce29c049f089a276cb0ec582005446e9ffc",
+          "response": "insufficient_information|0.8|Unable to determine if rejected rows are few or many due to withheld counts.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Unable to determine if rejected rows are few or many due to withheld counts."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "0c350aa979a7fc7eac2add69dc0e779ebcb9e91efa5699a4b953e785e7c6171c",
+          "response": "insufficient_information|0.3|Cannot determine if rejection is bulk or isolated due to missing row counts.",
+          "word": "insufficient_information",
+          "confidence": 0.3,
+          "cause": "Cannot determine if rejection is bulk or isolated due to missing row counts."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "42e26672c6b3f021218a61afa8e974c3c3b273b4cef2e575ae4759bec4325a9c",
+          "response": "does_not_reconcile|0.9|The gate rejected rows that are neither in bronze nor quarantine, so they cannot be reconciled.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "The gate rejected rows that are neither in bronze nor quarantine, so they cannot be reconciled."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "3de8a29638e2cfe53f7ec917251983bdea8a52664b541977290737f84ffe7637",
+          "response": "does_not_reconcile|0.9|Staged rows are missing from both bronze and quarantine, so they do not reconcile.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows are missing from both bronze and quarantine, so they do not reconcile."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "933984dc04e34a099dbbe7045e9a4c616e440724b257609f2d6d4e76f7fb8447",
+          "response": "evidence_removed|0.9|Gate rejected rows, but quarantine table is empty, indicating rejected rows were removed before inspection.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but quarantine table is empty, indicating rejected rows were removed before inspection."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "4d1eaf71c5acb5abd843585369fea6334bc3c5d3d6be4eabe132a00721efba76",
+          "response": "does_not_reconcile|0.9|Staged rows missing from bronze and quarantine, causing reconciliation failure.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows missing from bronze and quarantine, causing reconciliation failure."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "de5f627de098117d849e03fbbc002ddfa5acf664f0e34fb412fb29b6b8730a15",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected and not quarantined, so they are missing from bronze and quarantine.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected and not quarantined, so they are missing from bronze and quarantine."
+        }
+      ]
+    },
+    {
+      "sweep": "numbers_stripped_decline_middle",
+      "trial": 4,
+      "statement_id": "01f1a301-92b3-16c4-a5b8-d2a2e47311f6",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "439e04495619c90936b1ca1ab5d383da73e9e5a3e39f24fa0397d7b93d340a22",
+      "at": "2026-08-28T16:57:49Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "489eff16f3694de24c97134fdb7096f338ce350e8b16b098394210be2200d0db",
+          "response": "isolated_rejection|0.7|Gate rejected a few rows due to data quality violations, quarantining them.",
+          "word": "isolated_rejection",
+          "confidence": 0.7,
+          "cause": "Gate rejected a few rows due to data quality violations, quarantining them."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "3f87bcba3de480ecea4390b40c1d6ee8c6e2ee154588db3b3f18f993d60bfce7",
+          "response": "insufficient_information|0.8|Cannot determine if rejection was bulk or isolated due to missing row counts.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Cannot determine if rejection was bulk or isolated due to missing row counts."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "93e699184117429aca7d5630a8faf877be262bee496a686c1e0bc32251803d31",
+          "response": "isolated_rejection|0.6|Rejected rows quarantined; batch reconciled, indicating few rejections.",
+          "word": "isolated_rejection",
+          "confidence": 0.6,
+          "cause": "Rejected rows quarantined; batch reconciled, indicating few rejections."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "5347e1fabb9f70ee1cd10b70f3bf2855083d639150da579d2c0d12bfabee5487",
+          "response": "insufficient_information|0.6|Rejection rows exist but count unknown, cannot determine bulk vs isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.6,
+          "cause": "Rejection rows exist but count unknown, cannot determine bulk vs isolated."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "aaf3ddb1c0f8aed68c60b04b64e31ce29c049f089a276cb0ec582005446e9ffc",
+          "response": "insufficient_information|0.8|Rejected rows exist but count unknown, cannot determine bulk vs isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Rejected rows exist but count unknown, cannot determine bulk vs isolated."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "0c350aa979a7fc7eac2add69dc0e779ebcb9e91efa5699a4b953e785e7c6171c",
+          "response": "insufficient_information|0.8|Missing row counts prevent distinguishing bulk from isolated rejection.",
+          "word": "insufficient_information",
+          "confidence": 0.8,
+          "cause": "Missing row counts prevent distinguishing bulk from isolated rejection."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "42e26672c6b3f021218a61afa8e974c3c3b273b4cef2e575ae4759bec4325a9c",
+          "response": "does_not_reconcile|0.9|Staged rows were not inserted into bronze or quarantine, so no reconciliation rows were found.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were not inserted into bronze or quarantine, so no reconciliation rows were found."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "3de8a29638e2cfe53f7ec917251983bdea8a52664b541977290737f84ffe7637",
+          "response": "does_not_reconcile|0.9|Gate rejected rows, but none are in bronze or quarantine, indicating missing or deleted data.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but none are in bronze or quarantine, indicating missing or deleted data."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "933984dc04e34a099dbbe7045e9a4c616e440724b257609f2d6d4e76f7fb8447",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected and not quarantined, so they are missing from bronze, causing no reconciliation.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected and not quarantined, so they are missing from bronze, causing no reconciliation."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "4d1eaf71c5acb5abd843585369fea6334bc3c5d3d6be4eabe132a00721efba76",
+          "response": "evidence_removed|0.9|Gate rejected rows, but quarantine is empty for this batch, indicating removed evidence.",
+          "word": "evidence_removed",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows, but quarantine is empty for this batch, indicating removed evidence."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "de5f627de098117d849e03fbbc002ddfa5acf664f0e34fb412fb29b6b8730a15",
+          "response": "does_not_reconcile|0.9|Gate rejected rows but they were not quarantined, so they remain untracked.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Gate rejected rows but they were not quarantined, so they remain untracked."
+        }
+      ]
+    },
+    {
+      "sweep": "numbers_stripped_decline_middle",
+      "trial": 5,
+      "statement_id": "01f1a301-99da-1ae0-a0c9-a569050ae4a7",
+      "state": "SUCCEEDED",
+      "result_from_cache": false,
+      "statement_sha256": "439e04495619c90936b1ca1ab5d383da73e9e5a3e39f24fa0397d7b93d340a22",
+      "at": "2026-08-28T16:58:02Z",
+      "responses": [
+        {
+          "job_run_id": "592660596679630",
+          "prompt_sha256": "489eff16f3694de24c97134fdb7096f338ce350e8b16b098394210be2200d0db",
+          "response": "insufficient_information|0.7|Rejection rows quarantined, but count unknown; cannot determine bulk vs isolated.",
+          "word": "insufficient_information",
+          "confidence": 0.7,
+          "cause": "Rejection rows quarantined, but count unknown; cannot determine bulk vs isolated."
+        },
+        {
+          "job_run_id": "1121645114029617",
+          "prompt_sha256": "3f87bcba3de480ecea4390b40c1d6ee8c6e2ee154588db3b3f18f993d60bfce7",
+          "response": "insufficient_information|0.5|Cannot determine rejection volume; insufficient data to classify.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Cannot determine rejection volume; insufficient data to classify."
+        },
+        {
+          "job_run_id": "409962018634322",
+          "prompt_sha256": "93e699184117429aca7d5630a8faf877be262bee496a686c1e0bc32251803d31",
+          "response": "insufficient_information|0.5|Insufficient data to determine if rejection was isolated or bulk.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Insufficient data to determine if rejection was isolated or bulk."
+        },
+        {
+          "job_run_id": "128878829411613",
+          "prompt_sha256": "5347e1fabb9f70ee1cd10b70f3bf2855083d639150da579d2c0d12bfabee5487",
+          "response": "insufficient_information|0.5|Cannot determine if rejected rows are many or few due to missing counts.",
+          "word": "insufficient_information",
+          "confidence": 0.5,
+          "cause": "Cannot determine if rejected rows are many or few due to missing counts."
+        },
+        {
+          "job_run_id": "321750543973966",
+          "prompt_sha256": "aaf3ddb1c0f8aed68c60b04b64e31ce29c049f089a276cb0ec582005446e9ffc",
+          "response": "insufficient_information|0.6|Cannot determine if rejection count is high or low due to withheld count.",
+          "word": "insufficient_information",
+          "confidence": 0.6,
+          "cause": "Cannot determine if rejection count is high or low due to withheld count."
+        },
+        {
+          "job_run_id": "371067950667703",
+          "prompt_sha256": "0c350aa979a7fc7eac2add69dc0e779ebcb9e91efa5699a4b953e785e7c6171c",
+          "response": "isolated_rejection|0.8|Rejected rows were quarantined and the batch still reconciled, indicating a small number of isolated rejections.",
+          "word": "isolated_rejection",
+          "confidence": 0.8,
+          "cause": "Rejected rows were quarantined and the batch still reconciled, indicating a small number of isolated rejections."
+        },
+        {
+          "job_run_id": "184706631093131",
+          "prompt_sha256": "42e26672c6b3f021218a61afa8e974c3c3b273b4cef2e575ae4759bec4325a9c",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected and are missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected and are missing from both bronze and quarantine tables."
+        },
+        {
+          "job_run_id": "241387611390862",
+          "prompt_sha256": "3de8a29638e2cfe53f7ec917251983bdea8a52664b541977290737f84ffe7637",
+          "response": "does_not_reconcile|0.9|Staged rows are missing from both bronze and quarantine, causing the gate to reject them with no evidence left.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows are missing from both bronze and quarantine, causing the gate to reject them with no evidence left."
+        },
+        {
+          "job_run_id": "996871467498110",
+          "prompt_sha256": "933984dc04e34a099dbbe7045e9a4c616e440724b257609f2d6d4e76f7fb8447",
+          "response": "does_not_reconcile|0.9|Reconciliation found rows not present in bronze or quarantine, indicating missing data handling.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Reconciliation found rows not present in bronze or quarantine, indicating missing data handling."
+        },
+        {
+          "job_run_id": "187805471003061",
+          "prompt_sha256": "4d1eaf71c5acb5abd843585369fea6334bc3c5d3d6be4eabe132a00721efba76",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected and are missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected and are missing from both bronze and quarantine tables."
+        },
+        {
+          "job_run_id": "315230730740144",
+          "prompt_sha256": "de5f627de098117d849e03fbbc002ddfa5acf664f0e34fb412fb29b6b8730a15",
+          "response": "does_not_reconcile|0.9|Staged rows were rejected but not quarantined, so they are missing from both bronze and quarantine tables.",
+          "word": "does_not_reconcile",
+          "confidence": 0.9,
+          "cause": "Staged rows were rejected but not quarantined, so they are missing from both bronze and quarantine tables."
+        }
+      ]
+    }
+  ],
+  "discarded": [],
+  "ended_at": "2026-08-28T16:58:02Z"
+}

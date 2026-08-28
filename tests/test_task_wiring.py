@@ -104,6 +104,16 @@ _SRC = _REPO / "databricks" / "src"
 # asks "did a task spell a name the registry should have given it"; there, there is
 # no registry entry to give one, and the argument for that lives in the task's own
 # header and in its job YAML.
+#
+# AND `triage_llm_control.py` IS NOT A JOB TASK AT ALL, which is the newest reason for
+# an absence here and the only one on this list that is not about table resolution. F6
+# T7's negative control runs from the operator's box against the `opl-free` warehouse,
+# is in no bundle resource, and is imported by nothing under `src/opl/` -- plan 1.2
+# keeps the model arm outside the shipped path on purpose. It DOES resolve a table: it
+# reads `REGISTRY[incident.table].quarantine` rather than spelling a quarantine name,
+# which is what this lock would have asked of it. It is left out because the lock's
+# subject is job tasks, and adding it would say this file's list is "scripts that touch
+# tables" when its docstring says "job tasks that resolve one".
 _TABLE_TASKS = [
     "bronze_ingest",
     "bronze_lookup_ingest",
