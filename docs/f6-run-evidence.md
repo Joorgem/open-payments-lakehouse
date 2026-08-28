@@ -1644,6 +1644,76 @@ the **timeline returned**, not a word this repository chose, and GitHub renders 
 and `#` LINKIFY in a title is a different question and is still unmeasured** — #29's title contains
 neither, so opening it did not settle that half.
 
+### 1.11 T9 — the divided closing review, and the blocking defect was the controller's
+
+The closing pass reads the branch as **two disjoint packages — code and record — by different
+agents**, neither seeing the other's findings. On F5 that returned four blockers in the code and
+five in the record that **seven per-task reviews had already missed**. It did it again.
+
+#### THE CODE HALF — 62 mutations, 49 red, and THIRTEEN GREEN
+
+*Reported.* Every mutation applied, run and reverted by inverse substitution with sha256 identity;
+no `git checkout` on any file.
+
+**The HIGH is a seam and no module read alone could show it.** `evidence`, `severity` and `history`
+each **hand-typed the four reconcile verdicts** inside the very guard that refuses a cross-module
+word collision. **This phase introduced `reconcile.VERDICTS`** — derived from `_VERDICT_LADDER`
+precisely so a fifth arm reaches every consumer in the commit that adds it — **and wired it into
+exactly one of four consumers.**
+
+So the guards caught a collision with the four verdicts that exist and were **structurally blind to
+a collision with a fifth, which is the only way the collision can arrive.** The reviewer added a
+fifth verdict named `bulk_rejection` — simultaneously `severity.BULK_REJECTION`, the exact *one
+string answering two questions on one incident* all three docstrings say they refuse — and got
+**`270 passed`**, with all three guards passing over it.
+
+> **AND THE TESTS THAT PINNED THOSE GUARDS WERE BLIND IN THE SAME WAY, WHICH IS THE SHARPER HALF.**
+> They mutated **a rename of one of the four** — and a rename onto a word these files declare is
+> **unreachable**, so the old mutation could never have been the failing input. A guard whose test
+> fires only on an impossible input is a guard with no test. Both now mutate a fifth verdict, and
+> **Controller-verified**: the fix turns that mutation into `ValueError: ['bulk_rejection'] are
+> graded words here AND verdicts published on the same row`.
+
+**Why a per-task review structurally could not see it:** `VERDICTS` was added under T6, for
+`issue.py`. The three guards were written under T2, T3 and T4, **before it existed**. Each file,
+read alone, shows a guard with a correct-looking list.
+
+The other two seam findings have the same shape — something derived on one side and frozen on the
+other:
+
+- **A privacy asymmetry in the provenance.** `issue.py` shape-checks `produced_by` against seven
+  path forms; `Provenance` carries **two more caller strings** — `telemetry_view` and every
+  statement id — that reach the public body verbatim, checked by nothing. The reviewer drove a
+  Windows operator path through the **file door**, the publisher's own entry, whose docstring says
+  *"A FILE IS NOT A TRUSTED CALLER"*, and read the username out of the rendered body. Not reachable
+  from the shipped task, and closed anyway: one renamed helper, one shape list, all three fields.
+- **`report.py` claimed the absence arm was THE ONLY unguarded `_code` fence in the file.** It is
+  one of **five**.
+
+#### THE RECORD HALF — and the BLOCKING defect is the controller's own
+
+**One BLOCKING, four HIGH, seven MEDIUM, five LOW.** The blocking one is the sharpest thing in this
+phase and it is worth stating without softening:
+
+> **THE CONTROLLER RETRACTED A TRUE CLAIM, ON EVIDENCE THAT COULD NOT BEAR ON IT, IN THE SECTION
+> WHOSE WHOLE SUBJECT WAS A CLAIM NOBODY HAD CHECKED.** §1.10 carries the full account. The
+> reviewer **refused the controller's chosen evidence and went to the artefact** — which no
+> task-level review had any reason to do, because the controller had presented a measurement.
+
+The other four HIGH were all in the controller's own prose too: §2 contradicting itself on two of
+eight predictions, an unrestricted universal about the corpus that its own file falsifies, a
+prediction-5 rescue that read a band answer off the sweep the same section calls incapable of
+asking a band question, and a §0.1 amendment that misdiagnosed its own error as something subtler
+than the billing lag it actually was.
+
+**What that adds up to, and it is the phase's closing lesson rather than a tally.** F5's lesson was
+that *the defect had moved out of the code and into the document that judges it*. F6 tested that by
+splitting the pass, and the split returned **one blocking defect in the record and none in the
+code**. The record half's findings were almost entirely **cross-section** — a claim in §1.9 that
+only contradicts something in §2, a §3 entry only falsified by §1.10 on the same page — and every
+one of them was written by the same author on the same day. **Nobody but its author had read most
+of this document**, and that is exactly the condition the divided pass exists to end.
+
 ---
 
 ## 2. Predictions, published before the runs that test them
