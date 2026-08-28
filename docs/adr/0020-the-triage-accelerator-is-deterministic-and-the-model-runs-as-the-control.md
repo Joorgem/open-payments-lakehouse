@@ -228,8 +228,9 @@ stable-key argument unnecessary rather than wrong.
   also falsified a prediction *against* the phase, which is the outcome that makes the rest
   credible.
 - **Two claims that had never touched a markdown engine are now measured** (§1.10): the body
-  renders as expected; **GitHub does not render code spans in issue titles**, so the title's
-  fencing protects nothing and is kept only because the published artefact already carries it.
+  renders as expected, **and so does the title** — GitHub renders code spans in issue titles, which
+  this ADR asserted the opposite of for one commit before the closing review caught it. The
+  title fence is load-bearing, not decoration.
 - **`insufficient_history` is the majority state in this workspace, and the agent says so on every
   row.** An accelerator that reported a comparison it did not make would be this phase's species
   wearing a number.

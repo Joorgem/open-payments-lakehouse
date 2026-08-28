@@ -1373,8 +1373,12 @@ cache**, so no mechanism could be assumed.
 byte-identical across the trials of an arm, and that is measured rather than claimed —
 **Controller-verified**, exactly **one `statement_sha256` per arm** in the results file. The flag
 was still read on every trial: **20/20 `result_from_cache: False`, 0 discarded.** The independent
-reviewer carried the same reading across **85** trials and added a disproof the flag cannot give:
-**every prompt returned five DISTINCT response strings.**
+reviewer carried the same reading across **85** trials. *Reported*, on that reviewer's own corpus
+which **is not committed** (§3): that every prompt there returned five distinct response strings.
+**That does NOT hold of the published corpus and is not claimed of it** — 3 of its 34 prompt-groups
+repeat a string, `592660596679630`'s facts prompt worst at 2 distinct strings over 5 trials. The
+cache conclusion does not rest on it: **20/20 `result_from_cache: False` with real bytes read is
+the reading, and it is Controller-verified.**
 
 **The dispersion below is therefore the model's, and the two worlds are separated.**
 
@@ -1573,19 +1577,46 @@ answer is the least like *"it is big"*.
 | claim | reading |
 |---|---|
 | the body renders as expected | **TRUE** — the API's `body_html` carries `<code class="notranslate">` around every fenced value, plus `<strong>` and real lists. **The first markdown engine anything in this phase has touched.** |
-| ~~GitHub renders code spans in issue titles~~ | **FALSE.** The API serves `body_html` and has **no `title_html` field at all**; the rendered page's `<title>`, `og:title` and `twitter:title` each carry the backticks **literally** |
+| GitHub renders code spans in issue titles | **TRUE.** The page's `data-testid="issue-title"` element contains `[triage] payments batch <code>592660596679630</code>: …`, and GitHub's own GraphQL payload embedded in the page names the field **`titleHTML`**. The fence works. |
 
-**So the claim that reached production source through a chain of three agents with nobody rendering
-anything was wrong**, and §1.7 named that risk before this measurement existed. `report.py`'s
-header no longer asserts it; the struck sentence is kept in place and `render_title`'s docstring
-carries the reading.
+**So the claim that reached production source through a chain of three agents was RIGHT**, and this
+document said the opposite for one commit. The correction is below and it is the controller's.
 
-**The fencing is KEPT, and that is a decision:** a literal backtick in a title is harmless, #29 is
-already published carrying them, and changing the renderer now would make the one published
-artefact disagree with the code that produced it. **What is not kept is the reason.** Removing the
-fence is listed in §3 as a candidate. It would buy no safety either way — backticks that do not
-render also cannot protect — and **whether `@` and `#` linkify in a title is a different question
-this reading did not settle.**
+> #### ~~THE TITLE IS NOT RENDERED~~ — RETRACTED WITHIN A DAY, AND IT IS THE THIRD RETRACTION-OF-A-RETRACTION IN THIS DOCUMENT
+>
+> **What this section said in `21da2f5`:** that GitHub does **not** render code spans in issue
+> titles, on two readings — that the REST v3 issue endpoint serves `body_html` and **no
+> `title_html`**, and that the rendered page's `<title>`, `og:title` and `twitter:title` carry the
+> backticks **literally**. Both readings are true. **Neither can bear on the question, and the
+> conclusion drawn from them was false.**
+>
+> - **An HTML `<title>` element cannot contain markup**, and OpenGraph/Twitter `content`
+>   attributes are plain-text slots. **Literal backticks appear there whether or not the H1 renders
+>   a span** — so that reading returns the same string in both worlds.
+> - **`title_html`'s absence is a fact about REST v3**, not about GitHub. The GraphQL API serves
+>   `titleHTML`, and the page embeds it.
+>
+> **Found by the divided closing review's documentation half, which refused the controller's chosen
+> evidence and went to the artefact.** The rendered H1 was in the very page the controller had
+> already downloaded; the controller grepped `<title>` and the meta tags and never looked at the
+> issue-title element.
+>
+> **THIS IS THE PHASE'S OWN HUNTED SPECIES, IN THE MEASUREMENT WRITTEN TO END A CHAIN OF UNVERIFIED
+> CLAIMS.** ADR 0018's instruction is *ask what else would produce that value*. A literal backtick
+> in `<title>` is produced by **every** world, including the one where the title renders. The
+> controller published a retraction of a true claim on a reading that could not distinguish them —
+> and did it in the section whose whole subject is a claim nobody had ever checked.
+>
+> **It reached five places and one is permanent:** this table, §3, `report.py`'s header,
+> `render_title`'s docstring, and ADR 0020's Consequences. All four editable sites are corrected in
+> the same commit as this paragraph. **`21da2f5`'s commit message is not editable and states the
+> false claim outright** — a reader following `git log` will meet it, which is why this paragraph
+> names the commit.
+
+**The fencing is KEPT, and now for the reason it was written:** the title's `batch_id` is a value
+the **timeline returned**, not a word this repository chose, and GitHub renders it. **Whether `@`
+and `#` LINKIFY in a title is a different question and is still unmeasured** — #29's title contains
+neither, so opening it did not settle that half.
 
 ---
 
@@ -1620,10 +1651,11 @@ quarantine). *Reported*, from the reviewer. §0.3's 22-over-11 is Controller-ver
 *Falsified by:* either number moving, which would have meant §0.3 measured a smaller population
 than it claimed. Neither moved.
 
-**2 — OPEN, and it is listed as open on purpose.** T2 and T3 built the classification and their
-tests exercise it, but **on a fixture**. §0.3 measured the live corpus's five-and-six split, which
-is the same *fact about the workspace* — it is **not** the same claim as *"the shipped module
-classifies them that way against the live tables"*, and only T8's workspace run closes that.
+**2 — CONFIRMED at T8, and it was listed as open until the workspace run closed it.** T2 and T3
+built the classification and their tests exercised it **on a fixture**; §0.3's five-and-six split is
+the same *fact about the workspace* but **not** the same claim as *"the shipped module classifies
+them that way against the live tables"*. **T8's run `1119885373986326` closed it** — 3
+`quarantine_empty` + 2 `batch_absent` and 6 `rows_present`, summing to F4's 5,589 (§1.9).
 *Falsified by:* any of the six coming back empty (the quarantine recreated since §0.3) or any of
 the five acquiring rows (a repromote nobody recorded).
 
@@ -1671,13 +1703,24 @@ rows-present responses at **every** menu position, so the sweep cannot ask a ban
 Found by the independent reviewer, against a test docstring announcing itself as *"PREDICTION 5's
 INSTRUMENT"*; the framing was deleted rather than reworded.
 
-**The substance is nonetheless confirmed, on the shipped corpus, by a route that does not need the
-pair. Controller-verified:** with the counts present the three large incidents (2,000 / 1,797 /
-1,786) read `bulk_rejection` **15/15** and the three small (4 / 1 / 1) read `isolated_rejection`
-**15/15** — perfect and unanimous. Across **110** stripped responses spanning two menu arms,
-**`bulk_rejection` is emitted 0 times**, and every band the three large incidents received was
-`isolated_rejection`, the same band as the small ones. **The threshold behaviour is carried
-entirely by the digits, and prediction 5's third outcome occurs 0 times in 110.**
+**What can be said about the substance, stated as rates because §5's rule requires it.
+Controller-verified:** with the counts present the separation is perfect and unanimous — the three
+large incidents (2,000 / 1,797 / 1,786) read `bulk_rejection` **15/15** and the three small
+(4 / 1 / 1) read `isolated_rejection` **15/15**. **With the counts stripped, `bulk_rejection` is
+emitted 0 times in 110 responses.** So the threshold behaviour is carried entirely by the digits,
+and that much is a rate over n.
+
+> **AND THE BAND COMPARISON IS NOT, WHICH THE FIRST DRAFT OF THIS PARAGRAPH BORROWED A DENOMINATOR
+> TO HIDE.** *Corrected from the divided closing review.* Of the **60** stripped responses on the
+> six incidents that carry rows, only **6** assigned a band at all: n = 4 across the three large
+> and n = 2 across the three small, five of the six from a single arm, and
+> `128878829411613` **never received one**. The **110** in the sentence above belongs to the
+> `bulk_rejection` absence and lent its size to a claim measured on six observations.
+>
+> **This section calls sweep 2 an instrument that cannot ask a band question, and then read a band
+> answer off it.** The rescue is deleted rather than restated: the counts-present arm carries
+> *"the threshold behaviour is carried entirely by the digits"* on its own, at 15/15 and 15/15,
+> **without borrowing from a sweep this document calls defective.**
 
 > **PREDICTIONS 4 AND 5 ARE ABOUT A STOCHASTIC INSTRUMENT AND A SINGLE SAMPLE IS NOT A RESULT.**
 > Each sweep runs the same prompt **n ≥ 5 times** and reports the spread, and any clause that
@@ -1713,9 +1756,10 @@ execution exists"* and *"the query counted its own run"* give different answers,
 that the naive spelling reports `1` for both. **Both are now `no_prior_execution`, not `0` on an
 `insufficient_history` row** — a stronger separation than the prediction asked for.
 
-**Confirmed ON FIXTURES ONLY, by two parties independently** — T4's implementer and T4's reviewer,
-the latter on a fixture it built itself without reading the former's. *Reported.* **Nothing has run
-against the workspace**; the live arm is T8's, and prediction 8 is what it turns on.
+**Confirmed on fixtures by two parties independently** — T4's implementer and T4's reviewer, the
+latter on a fixture it built itself without reading the former's. *Reported.* ~~**Nothing has run
+against the workspace**~~ — **T8 ran it: 8 `insufficient_history`, 2 `no_prior_execution`, 1
+`history_complete`, 0 `gate_run_absent` (§1.9), Controller-verified from the payload.**
 
 **8 — the one prediction here that the controller genuinely does not know the answer to.** The
 lookup's four, three and one prior runs are all `dq_gate` rows dated **2026-07-24**. F4 measured a
@@ -1935,9 +1979,11 @@ than as refused by circumstance, which is the opposite of what the paragraph abo
   so **only a constructed doubled row can prove the fold is there.** §0.10 says this outright and
   the live run does not change it.
 - **`emit`'s fence refusal** — no live reject reason contains the marker.
-- **The title fence is now known to protect nothing** (§1.10) and is kept deliberately. *Removing
-  it is a candidate for a later phase.* **Whether `@` and `#` LINKIFY in an issue title is still
-  unmeasured** — #29's title contains neither, so opening it did not settle that half.
+- ~~**The title fence is now known to protect nothing**~~ — **that entry was itself false and is
+  retracted in §1.10.** GitHub **does** render code spans in issue titles; the fence is
+  load-bearing and stays. **Whether `@` and `#` LINKIFY in an issue title is still unmeasured** —
+  #29's title contains neither, so opening it did not settle that half. *What would exercise it: a
+  title carrying either character, which no incident id can produce.*
 - **The facts payload is git-ignored** (`.plans/`), so a public reader reaches the run's numbers
   only through issue #29 and through this section. *What would change it: committing a redacted
   payload, which no condition of this phase asks for.*
