@@ -108,15 +108,27 @@ def test_the_printed_output_names_the_command_that_would_post_it(tmp_path, capsy
     """`promote.require_batch_id`, `reclaim_landing._report_nothing_proven` and
     `backfill_prewrite.refuse_non_empty_quarantine` all print the command that resolves what
     they refused. A publisher that stopped without saying how to proceed would print less
-    than this project's own refusals do."""
+    than this project's own refusals do.
+
+    WHAT IS ASSERTED IS A PROPERTY AND NOT THE JOIN. This test used to restate
+    `" ".join(gh_command(...))`, which passes for any rendering of those words -- including
+    the space-joined one it was reading. The title carries BACKTICKS (the first assertion is
+    that control), so a joined line is a shell line an operator will paste and a shell will
+    run `git rev-parse HEAD` out of. So: every argument is named, and the joined form is
+    absent."""
     monkeypatch.setattr(cli.subprocess, "run", _refuse_to_run)
     drafted = issue(PAYMENTS)
 
     cli.main(["--facts", str(_facts_file(tmp_path, drafted)), "--batch-id", drafted.batch_id])
 
-    printed = capsys.readouterr().out
+    printed = capsys.readouterr().out.split("NOT POSTED")[-1]
+    argv = cli.gh_command(drafted, None)
+
+    assert "`" in render_title(drafted), "the control: the title really does carry backticks"
     assert "--post" in printed
-    assert " ".join(cli.gh_command(drafted, None)) in printed
+    for element in argv:
+        assert repr(element) in printed, f"{element!r} is not named in the printed argv"
+    assert " ".join(argv) not in printed, "a joined argv is a shell line, and this one is not"
 
 
 def test_with_the_flag_it_hands_the_body_to_gh_on_stdin(tmp_path, monkeypatch):

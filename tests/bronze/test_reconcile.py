@@ -23,6 +23,8 @@ that already cannot be run end to end on this box.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from opl.bronze.reconcile import (
@@ -32,10 +34,12 @@ from opl.bronze.reconcile import (
     RECONCILED,
     STRANDED_GATED,
     STRANDED_UNEXPLAINED,
+    VERDICTS,
     batch_grain_sql,
     create_view_ddl,
     file_accounts_sql,
     file_grain_sql,
+    verdict_case_sql,
 )
 from opl.bronze.registry import REGISTRY
 from opl.config import OplConfig
@@ -201,6 +205,29 @@ def test_the_batch_grain_cannot_see_what_the_file_grain_decides(probe):
         if row["source"] == "payments" and row["reclaimable"]
     ]
     assert reclaimable == ["fa"]
+
+
+def test_VERDICTS_is_exactly_what_the_shipped_CASE_can_emit():
+    """The tuple every consumer of this column reads, held against the SQL that fills it.
+
+    IT IS READ OUT OF `verdict_case_sql()` AND NOT RETYPED HERE, so this is a comparison of
+    two derivations rather than of a derivation against a list -- a list would go stale on
+    the commit that adds an arm, which is the one commit it exists for.
+
+    BOTH DIRECTIONS, BECAUSE THEY FAIL OPPOSITE WAYS AND BOTH WERE MEASURED GREEN. Losing a
+    word (deleting the `ELSE`, whose `stranded_unexplained` is in no arm) leaves
+    `issue.from_mapping` refusing a verdict the view really does publish -- an incident that
+    cannot be read back. Gaining one the ladder cannot produce leaves that same door
+    ACCEPTING a word no view can emit and `report._reconciliation` printing it, which is the
+    fail-open direction and the reason this constant exists at all.
+
+    THE DUPLICATE ARM IS THE THIRD DIRECTION: two arms spelled the same collapse in every
+    set this tuple is unioned into, and `severity.py`'s and `history.py`'s collision guards
+    would then range over one word where the ladder has two."""
+    emitted = set(re.findall(r"(?:THEN|ELSE) '([^']+)'", verdict_case_sql()))
+
+    assert emitted == set(VERDICTS)
+    assert len(VERDICTS) == len(set(VERDICTS))
 
 
 def test_every_registered_table_is_reconciled():

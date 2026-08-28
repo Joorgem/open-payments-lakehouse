@@ -62,6 +62,7 @@ from opl.triage_agent.blast_radius import (
     _assert_the_direct_gold_declaration_names_registered_tables,
     _assert_the_unreached_gold_tables_are_the_declared_ones,
     _assert_the_vault_declaration_is_total_over_both_registries,
+    _names_in,
     blast_radius,
     blast_radius_note,
     gold_sources_of,
@@ -329,6 +330,38 @@ def test_the_scd2_derivation_returns_the_hub_the_loader_reads_and_no_field_names
     )
     assert vault_sources_of(GOLD_REGISTRY["dim_channel"]) == ()
     assert vault_sources_of(GOLD_REGISTRY["fact_payment"]) == ()
+
+
+def test_the_sweep_the_two_gold_field_guards_run_on_reads_into_tuples():
+    """WHAT THE TWO GUARDS BELOW ARE ALLOWED TO SEE, held against the registry they sweep.
+
+    `_names_in` reads one level into tuples, and dropping that branch changes no answer
+    TODAY -- every tuple-carried name the sweep would lose is already returned by
+    `vault_sources_of` or `gold_sources_of`, so both guards stay silent either way. What it
+    changes is what the guards RANGE OVER: a scalars-only sweep cannot see a vault or gold
+    table named in a tuple field, which is the one place a new source field is most likely
+    to arrive -- `fact_payment.conformed` and `pit_estabelecimento`'s satellites are both
+    tuples already.
+
+    IT IS COMPUTED AND NOT LISTED. `carried` re-derives the tuple-borne strings from the
+    dataclass fields, so this asserts a relation between two readings of the live registry
+    rather than a copy of today's names, and the first assertion is the control: if no gold
+    spec carried a tuple of strings any more, the branch would be unreachable and this test
+    would be proving nothing."""
+    def carried(table) -> set[str]:
+        return {
+            item
+            for spec in fields(table)
+            if isinstance(getattr(table, spec.name), tuple)
+            for item in getattr(table, spec.name)
+            if isinstance(item, str)
+        }
+
+    exercised = {name for name, table in GOLD_REGISTRY.items() if carried(table)}
+    assert exercised, "no gold spec carries a tuple of strings -- the branch is unreachable"
+
+    for name, table in GOLD_REGISTRY.items():
+        assert carried(table) <= _names_in(table), f"{name}: a tuple-borne name is unswept"
 
 
 def test_the_star_edges_are_the_facts_own_declaration_and_nothing_elses():

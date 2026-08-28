@@ -232,6 +232,21 @@ def _source_view_sql(rows: tuple[tuple, ...]) -> str:
     return f"SELECT * FROM VALUES\n    {values}\n  AS t({names})"
 
 
+def _widened(view: str) -> str:
+    """`telemetry_measured` with `job_run_id` as a BIGINT and every other column untouched.
+
+    THE ONE INPUT THAT CAN TELL `CAST(job_run_id AS STRING)` FROM A NO-OP. The source view
+    types that column STRING today, so the cast is unobservable over every other fixture in
+    this file and deleting it leaves them all green. The projection is built from
+    `_SOURCE_COLUMNS` rather than retyped, so a column added to the contract is carried
+    here with no edit and this view cannot silently narrow the one it widens."""
+    projected = ", ".join(
+        f"CAST({name} AS BIGINT) AS {name}" if name == "job_run_id" else name
+        for name, _ in _SOURCE_COLUMNS
+    )
+    return f"SELECT {projected} FROM {view}"
+
+
 def _quarantine_sql() -> str:
     values = ", ".join(f"('{batch}')" for batch in _QUARANTINE_ROWS)
     return f"SELECT * FROM VALUES {values} AS t({BATCH_COLUMN})"
@@ -262,6 +277,7 @@ def probe(spark):
         ("telemetry_uneven", _source_view_sql(_uneven_rows())),
         ("telemetry_empty", task_telemetry_sql(_EMPTY_SYSTEM)),
         ("quarantine", _quarantine_sql()),
+        ("telemetry_bigint", _widened(_table("telemetry_measured"))),
     ):
         spark.sql(f"CREATE OR REPLACE VIEW {_table(name)} AS {body}")
     yield spark
@@ -413,6 +429,31 @@ def test_the_batch_key_is_a_string_and_the_bigint_cast_matches_nothing(probe):
     assert len(batch) == len(_MEASURED_INCIDENTS), "one row per incident, before collapsing"
     assert {row["kind"] for row in batch} == {"string"}
     assert {row["batch_id"] for row in batch} == {run for run, _ in _MEASURED_INCIDENTS}
+
+
+def test_the_batch_id_is_still_a_string_when_the_platform_widens_the_run_id(probe):
+    """THE CAST, OVER THE ONE SOURCE SHAPE THAT CAN OBSERVE IT.
+
+    `CAST(job_run_id AS STRING)` is a no-op against every other fixture here, because the
+    source view already types that column STRING -- so the sibling above asserts
+    `typeof(batch_id) == 'string'` and would go on asserting it with the cast deleted. What
+    the cast is FOR is the day the platform widens `job_run_id` to a BIGINT, and on that day
+    the failure is a join that silently matches nothing against a quarantine whose
+    `_batch_id` is a STRING: the same zero rows, raising nothing, that this file's other
+    test measures for the wrong key.
+
+    THE FIRST ASSERTION IS THE CONTROL. Without it a fixture that quietly stayed STRING
+    would make this test a second copy of the sibling, passing for the wrong reason."""
+    source_kind = probe.sql(
+        f"SELECT typeof(job_run_id) AS kind FROM {_table('telemetry_bigint')} LIMIT 1"
+    ).collect()[0]["kind"]
+    assert source_kind == "bigint", "the control: the widened fixture really is widened"
+
+    feed = incident_feed_sql(view=_table("telemetry_bigint"))
+    rows = probe.sql(f"SELECT batch_id, typeof(batch_id) AS kind FROM ({feed})").collect()
+
+    assert {row["kind"] for row in rows} == {"string"}
+    assert {row["batch_id"] for row in rows} == {run for run, _ in _MEASURED_INCIDENTS}
 
 
 # ----------------------------------------------------------------------------------

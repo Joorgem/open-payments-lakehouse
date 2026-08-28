@@ -44,6 +44,7 @@ import yaml
 from job_yaml import RESOURCES
 
 from opl.bronze import reconcile as reconcile_module
+from opl.bronze.reconcile import VERDICTS
 from opl.config import DEFAULT
 from opl.dataops.telemetry import TASK_TELEMETRY_VIEW
 from opl.triage_agent import history as history_module
@@ -575,9 +576,12 @@ def test_the_THIRD_guard_runs_at_import_and_is_fired_from_the_module_it_reads(mo
 def test_the_FOURTH_guard_runs_at_import_and_is_fired_from_the_module_it_reads(monkeypatch):
     """The word collision, fired from `reconcile.py`, for T3's reason at one more remove.
 
-    A verdict renamed onto one of these readings would put a single string on a row that
-    carries both columns. `history.py` reads the four verdict names at import, so the
-    rename that would cause it is the input this test supplies."""
-    monkeypatch.setattr(reconcile_module, "RECONCILED", HISTORY_READINGS[0])
+    A FIFTH VERDICT spelled like one of these readings would put a single string on a row
+    that carries both columns, and that is the input this test supplies -- not a rename of
+    one of the four, which cannot reach a word this file declares without also being a
+    rename ONTO it. `history.py` reads `reconcile.VERDICTS` at import, which is derived
+    from the ladder, so the commit that adds the arm is the commit this raises on. With
+    four literals here instead, that commit was measured green."""
+    monkeypatch.setattr(reconcile_module, "VERDICTS", (*VERDICTS, HISTORY_READINGS[0]))
     with pytest.raises(ValueError, match="answer two questions"):
         _reimported_history()

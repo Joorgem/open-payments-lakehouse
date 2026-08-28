@@ -220,9 +220,9 @@ from dataclasses import dataclass
 
 from opl.bronze.reconcile import (
     OVER_PROMOTED,
-    RECONCILED,
     STRANDED_GATED,
     STRANDED_UNEXPLAINED,
+    VERDICTS,
 )
 from opl.bronze.registry import REGISTRY
 from opl.config import DEFAULT, OplConfig
@@ -516,7 +516,11 @@ def _assert_no_grade_is_spelled_twice() -> None:
     string on a row that already carries both of those columns, and a consumer joining or
     formatting them could not tell which question it was reading the answer to. That is
     the same requirement `evidence._assert_the_absence_word_is_not_a_reconciliation_
-    verdict` states for its own word, applied to eight more."""
+    verdict` states for its own word, applied to eight more -- INCLUDING ITS RANGE. The
+    verdicts come from `reconcile.VERDICTS`, so a fifth arm of that ladder is checked
+    against these ten words in the commit that adds it; the four literals that stood here
+    could only refuse a collision with the four that already exist, which is the one
+    collision the import of this file already rules out."""
     for kind, words in (("severity", SEVERITIES), ("recommended action", RECOMMENDED_ACTIONS)):
         if len(set(words)) != len(words):
             raise ValueError(
@@ -526,10 +530,7 @@ def _assert_no_grade_is_spelled_twice() -> None:
     borrowed = sorted(
         set(SEVERITIES + RECOMMENDED_ACTIONS)
         & {
-            RECONCILED,
-            STRANDED_GATED,
-            STRANDED_UNEXPLAINED,
-            OVER_PROMOTED,
+            *VERDICTS,
             NO_RECONCILIATION_ROW,
             ROWS_PRESENT,
             *_EVIDENCE_ABSENT,

@@ -224,13 +224,7 @@ from opl.bronze.autoloader import SOURCE_FILE_COLUMN
 from opl.bronze.dq import REJECT_COLUMN, RESCUED_DATA_COLUMN
 from opl.bronze.masking import MASKED_COLUMNS
 from opl.bronze.promote import BATCH_COLUMN
-from opl.bronze.reconcile import (
-    BATCH_GRAIN_VIEW,
-    OVER_PROMOTED,
-    RECONCILED,
-    STRANDED_GATED,
-    STRANDED_UNEXPLAINED,
-)
+from opl.bronze.reconcile import BATCH_GRAIN_VIEW, VERDICTS
 from opl.bronze.registry import BronzeTable, UnknownTable, table_spec
 from opl.config import DEFAULT, OplConfig
 from opl.contracts.catalogue import columns_for, is_known
@@ -581,12 +575,20 @@ def _assert_the_absence_word_is_not_a_reconciliation_verdict() -> None:
     The whole requirement on that column is that absence is reported AS absence -- not as
     `reconciled`, not as NULL. A rename in `reconcile.py` that collided with this word
     would break that silently: the column would keep emitting one string for two worlds,
-    which is this repository's most-hunted species and the reason this file exists."""
-    verdicts = (RECONCILED, STRANDED_GATED, STRANDED_UNEXPLAINED, OVER_PROMOTED)
-    if NO_RECONCILIATION_ROW in verdicts:
+    which is this repository's most-hunted species and the reason this file exists.
+
+    IT RANGES OVER `reconcile.VERDICTS` AND NOT OVER FOUR LITERALS, and that is the
+    difference between a guard and a decoration. Hand-typed, it could only catch a
+    collision with the four words that already exist -- and a word this module declares
+    cannot collide with those, or this file would not import. The only way the collision
+    can ARRIVE is a verdict added later, so a check blind to a fifth arm is blind to every
+    input it will ever get. `VERDICTS` is derived from `_VERDICT_LADDER`, which is why the
+    fifth arm reaches this line in the commit that adds it. Measured: a fifth verdict
+    spelled like this word left all three of this package's collision guards green."""
+    if NO_RECONCILIATION_ROW in VERDICTS:
         raise ValueError(
             f"{NO_RECONCILIATION_ROW!r} is also one of `reconcile.py`'s verdicts "
-            f"({', '.join(verdicts)}), so a batch the reconciliation cannot speak for "
+            f"({', '.join(VERDICTS)}), so a batch the reconciliation cannot speak for "
             "would be indistinguishable from one it judged"
         )
 

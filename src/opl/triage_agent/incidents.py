@@ -87,8 +87,10 @@ So `batch_id` is published as its own column, `CAST(job_run_id AS STRING)`. The 
 no-op today -- `job_run_id` is already STRING in the source view -- and it is written
 anyway, because it is the column's TYPE that is the contract with the quarantine, and a
 platform that ever widened `job_run_id` to a BIGINT would otherwise break the join in the
-workspace and nowhere else. `tests/triage_agent/test_incidents.py` pins the discipline by
-running the wrong join and asserting the zero, rather than by a comment saying not to.
+workspace and nowhere else. `tests/triage_agent/test_incidents.py` pins both halves by
+RUNNING them: the wrong join, whose zero it asserts beside a non-empty control, and the cast,
+over a fixture whose `job_run_id` really is a BIGINT -- which is the only input that can tell
+the cast from the no-op it is today.
 
 THE JOB NAME CARRIES A BUNDLE PREFIX AND IT MUST NOT BE PINNED. `databricks.yml`'s only
 target is `mode: development`, which prefixes every deployed job name with

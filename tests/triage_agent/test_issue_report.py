@@ -574,6 +574,34 @@ def test_the_statement_lines_name_every_fact_and_not_only_the_ones_a_run_recorde
     assert "id-sev" in two and "id-cen" in two
 
 
+def test_the_headline_says_which_absence_each_of_its_three_arms_met():
+    """THE THREE LINES NOBODY WATCHED, in the section every body opens with.
+
+    `job_name`, the terminal states and `first_started_at` each have an absence arm and none
+    of them had a test. All three are reachable: `incidents.py` reads `job_name` from
+    `system.lakeflow.jobs`, which forgets a deleted job; `result_states` is a `COLLECT_LIST`
+    that skips NULLs, so an attempt with no terminal state yet contributes nothing; and
+    `first_started_at` is NULL for a run the timeline has no started attempt for. In a
+    package whose doctrine is that an absence must never render as a measurement, these were
+    the three renderings with nothing behind them.
+
+    THE PRESENT ARM IS THE CONTROL AND IS ASSERTED ON THE SAME FIELDS: without it, a headline
+    that printed the absence word unconditionally would pass every line below."""
+    present = _sections(render_body(issue(PAYMENTS)))["the headline"]
+    assert f"- job: `{PAYMENTS['incident']['job_name']}`" in present
+    assert f"- first attempt started: `{PAYMENTS['incident']['first_started_at']}`" in present
+    assert "terminal states `FAILED`, `FAILED`" in present
+
+    absent = _sections(render_body(issue(PAYMENTS, incident={
+        "job_name": None, "first_started_at": None, "result_states": [],
+    })))["the headline"]
+
+    assert "- job: `not recorded in the telemetry`" in absent
+    assert "terminal states none recorded" in absent
+    assert "- first attempt started: `not recorded`" in absent
+    assert "None" not in absent, "the word for the absence, never the value's repr"
+
+
 def test_the_relations_the_body_names_are_derived_and_the_one_that_is_not_says_so():
     """B1: `read_from` was a free tuple a caller filled in and no test held -- demonstrated
     by hardcoding a wrong relation and watching every body in the corpus name the payments

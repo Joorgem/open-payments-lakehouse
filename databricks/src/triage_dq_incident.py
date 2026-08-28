@@ -125,7 +125,7 @@ def produced_by(run_id: str) -> str:
     reference it does not recognise through VERBATIM -- so a typo in the YAML arrives here
     as a plausible-looking string, not as an error.
 
-    IT MUST ALSO SURVIVE `issue._assert_the_run_is_named_without_naming_a_person`, which
+    IT MUST ALSO SURVIVE `issue._assert_no_operator_path_reaches_the_issue`, which
     refuses a filesystem path and the bundle's development prefix. A digit string and two
     English words carry neither, which is a second reason not to build a URL here."""
     if not run_id.isdigit():

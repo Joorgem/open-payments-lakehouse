@@ -36,6 +36,7 @@ from dataclasses import replace
 import pytest
 
 from opl.triage_agent import report as report_module
+from opl.triage_agent.issue import Provenance
 from opl.triage_agent.report import _code, render_body, render_title
 from opl.triage_agent.severity import SEVERITIES
 
@@ -216,6 +217,43 @@ def test_the_title_fences_the_batch_id_because_github_renders_code_spans_in_titl
     assert f"batch ``592660596679630` {_LIVE}``:" in title
     assert crafted.batch_id in title, "fencing must not redact the value"
     assert title.startswith("[triage] payments batch ")
+
+
+def test_every_free_text_field_the_provenance_carries_is_fenced_and_not_hand_spanned():
+    """THE FOUR `_code` CALLS NO VOCABULARY STANDS BEHIND, driven in one body.
+
+    `report.py` used to say the absence arm was the only fence in the file that no test
+    held. It was one of five. `job_name` is a TELEMETRY ROW VALUE and `produced_by`, the
+    statement ids and `telemetry_view` are three strings a caller typed into a file the
+    publisher reads -- and `from_mapping` checks none of them against a vocabulary, because
+    none of them has one. So `_code` is the whole defence on all four, and each was measured
+    replaceable by a hand-written span with the suite green.
+
+    ONE CRAFTED VALUE THROUGH FOUR FIELDS RATHER THAN FOUR TESTS, because the mutation is
+    the same at every site and four near-identical bodies would cost four times as much to
+    read for the same red. The expected strings are WRITTEN OUT rather than computed with
+    `_code`, or this would assert that the renderer calls the function it calls.
+
+    WHY THE VALUE STARTS WITH A LETTER: `` `v` `` closes the hand-written span at the second
+    backtick, so what follows -- `@torvalds`, `#1` -- is live markdown in a public issue,
+    which is the breakout rather than a cosmetic difference. The two-backtick fence
+    `_code` emits is what stops it."""
+    crafted = f"v`{_LIVE}"
+    fenced = f"``v`{_LIVE}``"
+    body = render_body(issue(
+        PAYMENTS,
+        incident={"job_name": crafted},
+        provenance=Provenance(
+            produced_by=crafted,
+            statements=(("severity", crafted),),
+            telemetry_view=crafted,
+        ),
+    ))
+
+    assert f"- job: {fenced}" in body
+    assert f"- produced by, THE CALLER'S WORD: {fenced}." in body
+    assert f"  - severity: {fenced}" in body
+    assert f"the task telemetry view {fenced}," in body
 
 
 # ----------------------------------------------------------------------------------

@@ -71,13 +71,7 @@ from opl.bronze import reconcile as reconcile_module
 from opl.bronze.autoloader import SOURCE_FILE_COLUMN
 from opl.bronze.dq import RESCUED_DATA_COLUMN
 from opl.bronze.masking import MASKED_COLUMNS
-from opl.bronze.reconcile import (
-    BATCH_GRAIN_VIEW,
-    OVER_PROMOTED,
-    RECONCILED,
-    STRANDED_GATED,
-    STRANDED_UNEXPLAINED,
-)
+from opl.bronze.reconcile import BATCH_GRAIN_VIEW, RECONCILED, VERDICTS
 from opl.bronze.registry import REGISTRY, UnknownTable, table_spec
 from opl.bronze.rule_predicates import _REPLACEMENT_CHAR
 from opl.config import DEFAULT
@@ -311,10 +305,11 @@ def test_the_absence_word_is_none_of_the_reconciliation_verdicts():
 
     `reconciled` would claim the batch is finished and NULL is read as nothing wrong by the
     first consumer that formats it, so the column emits neither. Five of eleven incidents
-    land here, which makes this the majority rendering rather than an edge."""
-    verdicts = (RECONCILED, STRANDED_GATED, STRANDED_UNEXPLAINED, OVER_PROMOTED)
+    land here, which makes this the majority rendering rather than an edge.
 
-    assert NO_RECONCILIATION_ROW not in verdicts
+    RANGED OVER `VERDICTS` AND NOT OVER FOUR NAMES SPELLED HERE, so this assertion covers
+    a verdict added after it was written -- which is the only kind that can collide."""
+    assert NO_RECONCILIATION_ROW not in VERDICTS
     assert NO_RECONCILIATION_ROW not in CENSUS_VERDICTS
     assert len(set(CENSUS_VERDICTS)) == 3 and len(set(VALUE_STATES)) == 5
 
@@ -426,15 +421,21 @@ def test_the_guards_run_at_import_so_deleting_the_call_is_a_failure_not_a_silent
 
 
 def test_the_second_guard_runs_at_import_too_and_is_fired_from_the_other_module(monkeypatch):
-    """The collision this one refuses is caused ELSEWHERE -- a rename in `reconcile.py` --
-    so the mutation is made there and the import is what has to notice. `evidence.py` reads
-    those four names at import, so a re-execution against a renamed verdict is exactly the
-    commit that would ship the collision.
+    """The collision this one refuses is caused ELSEWHERE -- in `reconcile.py` -- so the
+    mutation is made there and the import is what has to notice.
+
+    THE MUTATION IS A FIFTH VERDICT AND NOT A RENAME OF ONE OF THE FOUR, because a rename
+    onto this word is not how the collision can arrive: the four that exist are already
+    distinct from it, and any commit that renamed one onto it would be spelling a word this
+    file declares. A verdict ADDED is the reachable input, and a guard listing four
+    literals was measured green under exactly this. `VERDICTS` is patched rather than
+    `_VERDICT_LADDER` because the derivation between them is pinned separately, by
+    `tests/bronze/test_reconcile.py`.
 
     Two guards, two import-time calls, and each of them fired separately: a single test
     covering both would pass with one of the calls deleted."""
     assert _reimported_evidence().NO_RECONCILIATION_ROW == NO_RECONCILIATION_ROW
 
-    monkeypatch.setattr(reconcile_module, "RECONCILED", NO_RECONCILIATION_ROW)
+    monkeypatch.setattr(reconcile_module, "VERDICTS", (*VERDICTS, NO_RECONCILIATION_ROW))
     with pytest.raises(ValueError, match="also one of"):
         _reimported_evidence()

@@ -71,9 +71,9 @@ quarantine ROW VALUE, so this is the same crafted input the name sweep already r
 about, arriving as a notification rather than as a leak. `_code` fences by CommonMark's own
 rule -- one backtick longer than the longest run inside, padded, folded to one line -- and
 each of those three arms is deleted on its own by a test in
-`tests/triage_agent/test_issue_markdown.py`. THE TITLE IS FENCED TOO, AND THE MEASUREMENT
-SAYS IT NEED NOT BE: GitHub does NOT render code spans in issue titles -- see the docstring on
-`render_title`, which carries the reading.
+`tests/triage_agent/test_issue_markdown.py`. THE TITLE IS FENCED TOO AND THE FENCE IS
+LOAD-BEARING THERE AS WELL: GitHub DOES render code spans in issue titles, measured on this
+phase's own issue #29 -- see the docstring on `render_title`, which carries the reading.
 
 EXACTLY ONE VALUE IS STILL INTERPOLATED AS PROSE AND IT IS NAMED HERE: `hold_note`, quoted
 whole as a blockquote, because a decision rendered as code is one nobody reads. Every line
@@ -275,27 +275,22 @@ def render_title(issue: TriageIssue) -> str:
     incidents of one job -- socios has two, three weeks apart -- and the two things a
     reader triages by are the grade and what it says to do.
 
-    ~~THE TITLE IS TREATED AS NOT INERT~~ -- AND THE CLAIM BEHIND THAT IS NOW MEASURED, AND
-    IS FALSE. That GitHub renders code spans in issue and PR titles reached this docstring
-    through a chain -- a GitHub community discussion, quoted by a reviewer, repeated by the
-    controller's dispatch -- and NOBODY IN THAT CHAIN RENDERED ANYTHING. **Measured 2026-08-28
-    by opening the phase's one real issue, #29:** the API serves `body_html` and has NO
-    `title_html` field at all, and the rendered page's `<title>`, `og:title` and
-    `twitter:title` each carry the backticks LITERALLY. The body's fencing is confirmed in the
-    same reading -- `<code class="notranslate">` around every fenced value -- so this file's
-    body defence rests on a measurement and its TITLE fencing protects nothing.
+    THE TITLE IS NOT INERT, AND THAT IS MEASURED. GitHub renders code spans in issue
+    titles: the phase's own issue #29 serves `titleHTML` as `[triage] payments batch
+    <code>592660596679630</code>: ...`, and the rendered page carries the same `<code>` in
+    its `data-testid="issue-title"` element. So `_code` here is the body's defence applied
+    to the one line a reader sees first, and not a decoration.
 
-    THE FENCING IS KEPT ANYWAY, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT: a literal
-    backtick in a title is harmless, issue #29 is already published carrying them, and
-    changing the renderer now would make the one published artefact disagree with the code
-    that produced it. What is NOT kept is the reason -- the sentence that called the title
-    "not inert" is struck above rather than softened. Removing the fence is a candidate for a
-    later phase and is listed in `docs/f6-run-evidence.md` 3 as one. Note that it would not
-    buy safety either way: backticks that do not render also cannot protect, and whether `@`
-    and `#` LINKIFY in a title is a different question this reading did not settle.
-    `batch_id` is fenced
-    for the reason `_headline` fences it -- it is a value the TIMELINE returned rather than a
-    word this repository chose -- and the other three are words the wheel constrains:
+    THIS FILE ONCE CARRIED THE OPPOSITE, MEASURED, AND THE MEASUREMENT WAS THE DEFECT. It
+    read `<title>` and `og:title` -- slots that are plain text by definition, so they carry
+    literal backticks in a world where the title renders and in a world where it does not --
+    and REST v3's lack of a `title_html`, which is a fact about REST v3. Neither can
+    distinguish the two worlds, so neither was evidence. `docs/f6-run-evidence.md` 1.10
+    carries how that reached three agents and how it left; it is not restated here.
+
+    `batch_id` is fenced for the reason `_headline` fences it -- it is a value the TIMELINE
+    returned rather than a word this repository chose -- and the other three are words the
+    wheel constrains:
     `source` by `table_spec`, which raises `UnknownTable` at both doors, and the grade and
     the action by the vocabularies `issue.from_mapping` now checks a file against.
 
@@ -453,13 +448,16 @@ def _reconciliation(issue: TriageIssue) -> str:
     published on one, changing on the twelfth with nothing in this repository able to
     notice. What replaces it is the same fact about THIS batch.
 
-    THE ABSENCE ARM'S FENCE IS RULED, NOT GUARDED, AND THIS IS THE ONLY SUCH LINE IN THE
-    FILE. `_code(issue.verdict)` there was mutated back to a hand-written span and NO TEST
-    WENT RED -- correctly, because that branch is entered only when the value EQUALS
-    `NO_RECONCILIATION_ROW`, so the only string it can print is a constant this package
-    declares and no crafted verdict can reach it. The fence stays for uniformity with the
-    other arm, where the value is whatever the graded row carried; it is not a defence and
-    is not counted as one."""
+    THE ABSENCE ARM'S FENCE IS RULED, NOT GUARDED, AND FOUR MORE IN THIS FILE ARE NEITHER.
+    `_code(issue.verdict)` there was mutated back to a hand-written span and NO TEST WENT
+    RED -- correctly, because that branch is entered only when the value EQUALS
+    `NO_RECONCILIATION_ROW`, so no crafted verdict can reach it. THIS IS THE ONLY SUCH LINE
+    WITH A RULE BEHIND IT, which is what the sentence here used to claim of the count: the
+    same mutation on `job_name`, `produced_by`, the statement ids and `telemetry_view` was
+    green too, and those four carry values no vocabulary constrains -- a telemetry row and
+    three strings a caller typed -- so there the fence is the whole defence.
+    `test_issue_markdown.py` drives a crafted value through all four now. This one stays for
+    uniformity with the other arm and is still not counted as a defence."""
     if issue.verdict == NO_RECONCILIATION_ROW:
         return (
             "## Whether the batch reconciles\n\n"
@@ -548,11 +546,17 @@ def _read_from(issue: TriageIssue) -> str:
 
     THE FIRST TWO ARE NOT VALIDATED, THEY ARE RECOMPUTED HERE. The quarantine is
     `table_spec(source).quarantine`, the same expression `_rejected` already prints earlier in
-    this file; the reconciliation view is `opl.bronze.reconcile`'s own constant, which is
-    what `severity_sql` reads. They were a free tuple a caller filled in, held by no test --
-    a heading promising measurement over three strings, which was demonstrated by hardcoding
-    a wrong relation and watching every body name the payments quarantine with nothing
-    objecting.
+    this file; the reconciliation view is `opl.bronze.reconcile`'s own constant. They were a
+    free tuple a caller filled in, held by no test -- a heading promising measurement over
+    three strings, which was demonstrated by hardcoding a wrong relation and watching every
+    body name the payments quarantine with nothing objecting.
+
+    AND THE SECOND IS DERIVED WITHOUT BEING GUARANTEED, WHICH THE LINE NOW SAYS. `severity_
+    sql` takes a `view=` seam -- T2's, so a test can drive the three verdicts this workspace
+    has never produced -- and a run that used it read a relation this record does not carry.
+    The name here is the view this wheel DEPLOYS; that it is also the one the graded row read
+    is true of every shipped caller and of nothing this file can check. Plumbing the value
+    through would buy a fourth caller-supplied string; saying less is cheaper and true.
 
     THE TELEMETRY VIEW STAYS THE CALLER'S WORD AND IS LABELLED AS SUCH IN THE BODY. It is
     an argument to `incident_feed_sql` and to `history_sql` -- a seam those modules have on
@@ -579,7 +583,8 @@ def _read_from(issue: TriageIssue) -> str:
         f"  - DERIVED by this wheel: the quarantine {_code(table_spec(issue.source).quarantine)}"
         ", which the census and the graded row read.",
         f"  - DERIVED by this wheel: the reconciliation view {_code(BATCH_GRAIN_VIEW)}, "
-        "which the graded row reads.",
+        "which the graded row reads unless a caller pointed `severity_sql` at another "
+        "relation -- a seam this record does not carry.",
         f"  - THE CALLER'S WORD, checked by nothing: {named}",
         "  - The two derived names are UNQUALIFIED: the catalog and schema are the run's "
         "own configuration, which this issue does not carry.",

@@ -163,12 +163,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from opl.bronze.reconcile import (
-    OVER_PROMOTED,
-    RECONCILED,
-    STRANDED_GATED,
-    STRANDED_UNEXPLAINED,
-)
+from opl.bronze.reconcile import VERDICTS
 from opl.config import DEFAULT, OplConfig
 from opl.dataops.telemetry import TASK_TELEMETRY_VIEW
 from opl.triage_agent.evidence import CENSUS_VERDICTS, NO_RECONCILIATION_ROW
@@ -497,7 +492,8 @@ def _assert_no_reading_word_is_another_modules() -> None:
     that already carries those columns, and a consumer formatting them could not tell
     which question it was reading the answer to. That is
     `severity._assert_no_grade_is_spelled_twice` applied to four more words, and it is
-    stated there for this row's neighbours."""
+    stated there for this row's neighbours -- range included: the verdicts are
+    `reconcile.VERDICTS`, so a fifth arm is checked here in the commit that adds it."""
     if len(set(HISTORY_READINGS)) != len(HISTORY_READINGS):
         raise ValueError(
             f"the history vocabulary spells a word twice ({list(HISTORY_READINGS)}), so "
@@ -506,10 +502,7 @@ def _assert_no_reading_word_is_another_modules() -> None:
     borrowed = sorted(
         set(HISTORY_READINGS)
         & {
-            RECONCILED,
-            STRANDED_GATED,
-            STRANDED_UNEXPLAINED,
-            OVER_PROMOTED,
+            *VERDICTS,
             NO_RECONCILIATION_ROW,
             *CENSUS_VERDICTS,
             *SEVERITIES,

@@ -52,6 +52,10 @@ from .issue_facts import CONSTRUCTED, EMPRESAS, LOOKUP, PAYMENTS, PROVENANCE, is
 
 _REPO = Path(__file__).resolve().parents[2]
 
+# The one path shape this file drives at the two carriers `produced_by`'s own test does
+# not reach. INVENTED, like every operator name in that test and for its reason.
+_OPERATOR_PATH = r"C:\Users\an_operator\repo\out\facts.json"
+
 
 def _json(*records) -> str:
     """What a producer writes: a list of payload mappings, as JSON."""
@@ -240,6 +244,44 @@ def test_a_produced_by_shaped_like_a_path_or_a_bundle_prefix_is_refused(produced
 
     with pytest.raises(MismatchedFacts, match="filesystem path"):
         Provenance(produced_by=r"uv run python .\scripts\open_triage_issue.py")
+
+
+@pytest.mark.parametrize(
+    "provenance",
+    (
+        {"telemetry_view": _OPERATOR_PATH},
+        {"statements": [["census", _OPERATOR_PATH]]},
+    ),
+    ids=["telemetry-view", "statement-id"],
+)
+def test_the_other_two_provenance_strings_are_refused_the_path_produced_by_is(provenance):
+    """`produced_by` IS NOT THE ONLY FREE TEXT THIS RECORD PUTS IN A PUBLIC BODY.
+
+    `telemetry_view` and every statement id are caller-supplied, are printed verbatim by
+    `report._read_from` and `report._measured`, and were checked by nothing -- so the same
+    Windows path the sibling above refuses reached the rendered body through the door the
+    PUBLISHER uses. Driven through `from_mapping` for that reason: `triage_dq_incident.py`
+    sets the view from `OplConfig` and records no statement ids, so the in-process caller
+    cannot produce this, and the file can. `from_mapping`'s own docstring is where the rule
+    is written: a file is not a trusted caller.
+
+    ONE SHAPE LIST BEHIND ALL THREE FIELDS, which is why the shapes are parametrised on the
+    sibling and not here: a second list for these two would be the second spelling this
+    package refuses, and a test that re-drove seven shapes against it would make one look
+    correct. The control is the second half -- an unmodified payload, and a qualified
+    relation name, both of which must read back."""
+    carried = as_mapping(issue(PAYMENTS, provenance=PROVENANCE))
+    crafted = {**carried, "provenance": {**carried["provenance"], **provenance}}
+
+    with pytest.raises(MismatchedFacts, match="filesystem path"):
+        from_mapping(crafted)
+    with pytest.raises(MismatchedFacts, match="filesystem path"):
+        payloads_from_json(json.dumps([crafted]))
+
+    assert from_mapping(carried).batch_id == carried["batch_id"]
+    assert Provenance(
+        produced_by="a run", telemetry_view="opl.dataops.dataops_task_telemetry"
+    ).telemetry_view == "opl.dataops.dataops_task_telemetry"
 
 
 def test_the_bundle_declares_no_target_that_prefixes_a_job_name_without_brackets():

@@ -137,7 +137,13 @@ def main(argv: list[str] | None = None) -> int:
 
     THE PRINTED FORM IS THE POSTED FORM -- one `render_body` call in each arm, of the same
     record -- so what a reviewer reads on the terminal is what a stranger would read on
-    GitHub, rather than a preview built by a second code path."""
+    GitHub, rather than a preview built by a second code path.
+
+    AND THE COMMAND IS PRINTED AS AN ARGV LIST, NOT AS A SPACE-JOINED LINE. It was joined,
+    which reads as something to paste -- and the title it carries has BACKTICKS in it, which
+    a shell treats as command substitution. That is the hazard `gh_command`'s own docstring
+    is about, offered back to the operator by the one arm of this script that runs nothing.
+    A list cannot be pasted, which is the whole of the fix."""
     args = parse_args(argv)
     issue = select(payloads_from_json(args.facts.read_text(encoding="utf-8")), args.batch_id)
     if not args.post:
@@ -145,8 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print(render_body(issue))
         print()
-        print(f"NOT POSTED. This printed one issue and opened none. To open it, add --post, "
-              f"which runs: {' '.join(gh_command(issue, args.repo))}")
+        print("NOT POSTED. This printed one issue and opened none. To open it, add --post, "
+              f"which runs this ARGV and no shell: {gh_command(issue, args.repo)!r}")
         return 0
     return post(issue, args.repo)
 

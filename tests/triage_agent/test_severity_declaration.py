@@ -63,7 +63,7 @@ from pathlib import Path
 import pytest
 
 from opl.bronze import reconcile as reconcile_module
-from opl.bronze.reconcile import RECONCILED
+from opl.bronze.reconcile import RECONCILED, VERDICTS
 from opl.bronze.registry import REGISTRY, UnknownTable
 from opl.contracts.catalogue import columns_for
 from opl.triage_agent import severity as severity_module
@@ -260,15 +260,18 @@ def test_the_FIRST_guard_runs_at_import_so_deleting_the_call_is_a_failure_not_a_
 def test_the_SECOND_guard_runs_at_import_too_and_is_fired_from_the_other_module(monkeypatch):
     """The other import-time call, fired the way T2 fires its own second guard.
 
-    THE MUTATION IS MADE IN `reconcile.py` BECAUSE THAT IS WHERE THE COLLISION COMES FROM.
-    This guard refuses a graded word that is also a verdict published on the same row, and
-    the way that ships is a rename one module away. `severity.py` reads those four verdict
-    names at import, so re-executing its body against a renamed one is exactly the commit
-    that would put one string on a row answering two questions. First line is the
-    control."""
+    THE MUTATION IS MADE IN `reconcile.py` BECAUSE THAT IS WHERE THE COLLISION COMES FROM,
+    and it is a FIFTH VERDICT rather than a rename of one of the four. Renaming a verdict
+    onto `bulk_rejection` and adding a fifth one called `bulk_rejection` ship the same
+    collision, but only the second is reachable: the four that exist are already distinct
+    from every graded word, so nothing but an addition can introduce one. `severity.py`
+    reads `reconcile.VERDICTS` at import and that tuple is derived from the ladder, so the
+    commit adding the arm is the commit this raises on -- which the four literals that
+    stood in the guard could not do, measured green under this exact input. First line is
+    the control."""
     assert _reimported_severity().SEVERITIES == SEVERITIES
 
-    monkeypatch.setattr(reconcile_module, "RECONCILED", BULK_REJECTION)
+    monkeypatch.setattr(reconcile_module, "VERDICTS", (*VERDICTS, BULK_REJECTION))
     with pytest.raises(ValueError, match="graded words here AND verdicts"):
         _reimported_severity()
 

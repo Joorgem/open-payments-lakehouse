@@ -188,35 +188,42 @@ _DRIVE_PATH = re.compile(r"(?<![A-Za-z])[A-Za-z]:\S")
 _HOME_SHORTHAND = re.compile(r"~[A-Za-z0-9_.-]*[\\/]")
 
 
-def _assert_the_run_is_named_without_naming_a_person(produced_by: str) -> None:
-    """`produced_by` reaches a PUBLIC issue verbatim, so it may not carry a path or a prefix.
+def _assert_no_operator_path_reaches_the_issue(field: str, value: str) -> None:
+    """A `Provenance` string reaches a PUBLIC issue verbatim, so it may not carry a path.
 
-    The documented values for this field were "a Databricks job run URL, or the command a
-    human typed", and on this project's own box that command is `uv run python
-    C:\\Users\\<operator>\\...\\open_triage_issue.py` -- a username, rendered into the
-    section a reader is told to trust most, in a repository that is about to be public.
-    CLAUDE.md forbids committing that string and the run-evidence documents redact it.
+    THREE FIELDS, ONE SHAPE LIST, AND THE FIELD NAMES ITSELF IN THE REFUSAL. `produced_by`,
+    `telemetry_view` and every statement id are caller-supplied free text that `report.py`
+    prints into the body, and no vocabulary constrains any of them. The documented value for
+    the first was "a Databricks job run URL, or the command a human typed", and on this
+    project's own box that command is `uv run python
+    C:\\Users\\<operator>\\...\\open_triage_issue.py` -- a username, in the section a reader is
+    told to trust most, in a repository about to be public. CLAUDE.md forbids committing that
+    string. THE OTHER TWO WERE CHECKED BY NOTHING until the same Windows path was driven
+    through `as_mapping` -> `from_mapping` -- the publisher's own entry, whose own docstring
+    says a file is not a trusted caller -- and reached the rendered body. A second shape list
+    for them would be the defect this package hunts, so there is one and it is this.
 
     WHAT IT REFUSES IS A SHAPE and the shapes are a path's and the bundle prefix's. WHAT IT
     DOES NOT REFUSE, and no check in this file can: a username spelled as a bare word, an
     email address, a hostname, or the workspace id a job-run URL carries. A POSIX relative
     path (`scripts/x.py`) is not refused either; a WINDOWS one (`.\\scripts\\x.py`) is, by
     the backslash shape, and the two were one line in this docstring until the complement was
-    measured. `report.py` labels this field THE CALLER'S WORD in the body rather than letting
-    the heading imply it was checked."""
-    lowered = produced_by.lower()
+    measured. `report.py` labels the run and the view THE CALLER'S WORD in the body rather
+    than letting the heading imply they were checked."""
+    lowered = value.lower()
     found = [shape for shape in _OPERATOR_SHAPES if shape in lowered]
-    if "[" in produced_by:
+    if "[" in value:
         found.append("[")
-    if _DRIVE_PATH.search(produced_by):
+    if _DRIVE_PATH.search(value):
         found.append("<drive>:")
-    if _HOME_SHORTHAND.search(produced_by):
+    if _HOME_SHORTHAND.search(value):
         found.append("~/")
     if found:
         raise MismatchedFacts(
-            f"`produced_by` carries {found}, which is the shape of a filesystem path or of "
+            f"`{field}` carries {found}, which is the shape of a filesystem path or of "
             "the bundle's `[dev <operator>] ` prefix, and both carry an operator's username "
-            "into a public issue. Name the run by its URL, or by a command with no path in it"
+            "into a public issue. Name the run by its URL and the relation by its qualified "
+            "name; neither is a path"
         )
 
 
@@ -252,8 +259,9 @@ class Provenance:
     required because it is the one thing a reader of a public issue cannot recover from the
     body -- every other line can be re-derived by running the statements again, and this
     one says WHICH running of them is being read. IT IS THE CALLER'S WORD and is checked
-    only for the shapes an operator identifier arrives in; `_assert_the_run_is_named_
-    without_naming_a_person` names what that does and does not reach.
+    only for the shapes an operator identifier arrives in, which
+    `_assert_no_operator_path_reaches_the_issue` names -- and which the other two fields
+    are now checked against, on that same one list.
 
     `statements` is (fact, statement id) for whatever the run recorded. THE FACT MUST BE ONE
     OF `FACTS`, once, with a non-blank id. It may still be empty and it may be partial: both
@@ -278,8 +286,12 @@ class Provenance:
                 "body whose numbers cannot be traced to a run is the artefact this phase "
                 "exists to refuse"
             )
-        _assert_the_run_is_named_without_naming_a_person(self.produced_by)
         _assert_every_statement_names_one_fact(self.statements)
+        _assert_no_operator_path_reaches_the_issue("produced_by", self.produced_by)
+        if self.telemetry_view is not None:
+            _assert_no_operator_path_reaches_the_issue("telemetry_view", self.telemetry_view)
+        for fact, identifier in self.statements:
+            _assert_no_operator_path_reaches_the_issue(f"the {fact} statement id", identifier)
 
 
 @dataclass(frozen=True, kw_only=True)
