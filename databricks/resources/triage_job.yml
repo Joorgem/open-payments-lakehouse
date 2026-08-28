@@ -23,8 +23,9 @@
 # print. It cannot narrow the payload: every incident in the feed is emitted either way,
 # so a wrong value here costs a refusal naming the ids the feed held, and never a quiet
 # triage of fewer incidents than the workspace has. That asymmetry is the reason it is
-# safe for this job to carry a batch coordinate at all when `bronze_payments_job.yml`'s
-# equivalent is a sentinel that must refuse.
+# safe for this job to carry a batch coordinate at all when the only other `batch_id`
+# parameter in this bundle -- `repromote_batch_job.yml`'s -- has to be a sentinel that
+# refuses, because there an unset value promotes something nobody chose.
 #
 # THE GUARD IS HERE, AND THE ANSWER TO THIS BUNDLE'S STANDING QUESTION -- "does a run of
 # this job against a wheel built from another revision matter?" -- IS THE ONE

@@ -36,8 +36,9 @@ and the route is THIS RUN'S OWN STDOUT, read back with `databricks jobs get-run-
   header says it never writes. It also needs a volume path constant that nothing else in
   this project reads. The payload is small and the operator fetches it minutes later, so
   durability buys nothing here that the run id does not already buy.
-  REJECTED: `dbutils.jobs.taskValues.set`. It is capped and it is readable by DOWNSTREAM
-  TASKS, not by an operator asking the Jobs API for this task's output.
+  REJECTED: `dbutils.jobs.taskValues.set`. It is a channel to DOWNSTREAM TASKS -- which is
+  what `dq_gate_batch` uses it for, publishing `bad_row_count` to a condition task -- and
+  nothing in this repository reads one from outside a run.
   REJECTED: a notebook task with `dbutils.notebook.exit(json)`. That moves the entry point
   out of `databricks/src/*.py`, which is the set two of this repository's sweeps read --
   the serverless-capability AST guard and the git-at-runtime ban. An artefact that escapes
@@ -197,9 +198,8 @@ def facts_for(spark: SparkSession, record: dict) -> dict:
     field names from whatever the query happened to return, and the whole point of the
     payload's four key tuples is that the names are declared.
 
-    ONE BINDING SERVES ALL THREE. Every statement in this package takes exactly
-    `args={"batch_id": ...}` and projects `source` as a literal, which is `evidence_sql`'s
-    stated contract and is why this loop needs no per-statement argument table."""
+    ONE BINDING SERVES ALL THREE, which is why this loop needs no per-statement argument
+    table: every statement in this package takes exactly `args={"batch_id": ...}`."""
     batch_id, source = str(record["batch_id"]), record["source"]
     args = {"batch_id": batch_id}
     read = {
@@ -317,7 +317,11 @@ def _assert_this_task_answers_every_fact_the_payload_needs() -> None:
     costing serverless compute for a column nothing reads. Neither is visible to `ruff` or to
     a reader, because the two spellings are a tuple in one module and dict keys in another
     and no import runs between them. Refused at IMPORT rather than in `main`, on
-    `incidents.py`'s pattern, so a deployed wheel carrying the drift cannot start.
+    `incidents.py`'s pattern -- and the two spellings live on OPPOSITE SIDES OF THE DEPLOY
+    here, which that module's guard does not have to contend with: `FACTS` is in the wheel
+    and this file is a synced entry point, so a partial deploy can move one and not the
+    other. A run whose task file and wheel disagree refuses at import rather than at the
+    assembler.
 
     `bound_statements` is CALLED rather than having its keys retyped here, so the guard
     reads the real key set instead of a hand-written copy of it -- which would be the drift

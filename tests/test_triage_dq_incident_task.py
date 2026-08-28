@@ -146,8 +146,9 @@ def test_the_task_answers_exactly_the_four_facts_the_payload_is_assembled_from()
 
 
 def test_the_guard_runs_at_import_so_deleting_the_call_is_a_failure_not_a_silent_loss():
-    """THE CALL, NOT THE BODY. Re-executing the module with `FACTS` widened must raise;
-    re-executing the same mutated source with the invocation line removed must not.
+    """THE CALL, NOT THE BODY. Re-executing the module with `FEED_FACT` renamed to a word
+    no payload declares must raise; re-executing that same mutated source with the
+    invocation line removed must not.
 
     The second arm is what makes the first one about the guard being CALLED. Without it
     this test passes over a module whose guard is a function nobody runs -- which is the
