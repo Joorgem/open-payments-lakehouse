@@ -1690,7 +1690,8 @@ code and the record rather than measured.
   silently. *What would exercise them: nothing. They are prose, and are listed so that a later
   reader knows they carry no test.*
 
-### THE FULL SUITE HAS NEVER RUN ON THIS BRANCH, AND CI DID NOT FIRE WHEN ASKED
+### ~~THE FULL SUITE HAS NEVER RUN ON THIS BRANCH, AND CI DID NOT FIRE WHEN ASKED~~
+### BOTH HALVES FALSIFIED 2026-08-28 — CI RUNS HERE, AND THE SUITE HAS PASSED ON THIS BRANCH TWICE
 
 **Controller-verified 2026-08-26.** Everything this phase has verified is
 `tests/triage_agent/` plus `tests/test_size_caps.py` — **174 tests of the repository's 2,683**, on
@@ -1757,6 +1758,54 @@ repository's minutes are not metered, so it is unlikely to be the cause.
    that needs a run cannot be settled on a branch where runs do not happen.** T6's local `gh` path
    is unaffected — the phase's one real issue does not depend on CI — but the CI half of §0.2's
    open question stays open, and is reported as **refused by circumstance rather than untried**.
+
+
+#### AND THE WHOLE SECTION ABOVE IS FALSIFIED — WHAT WAS MEASURED WAS A LATENCY, NOT AN ABSENCE
+
+**Controller-verified 2026-08-28.** `gh run list` returns **three** completed runs on this branch,
+**two of them green**, and the newest push queued a fourth within seconds:
+
+| run | head | created | conclusion |
+|---|---|---|---|
+| `32988424065` | **`6ce1a56`** | 2026-08-26T16:26:46Z | **success** — `test`, `postgres`, `secret-scan`, `redpanda` all green |
+| `32988241383` | `32c671c` | 2026-08-26T16:24:46Z | failure — `test` only |
+| `33068096648` | **`9bbd343`** | 2026-08-27T11:36:07Z | **success** — all four jobs green, 2h14m47s |
+
+**`6ce1a56` IS THE EXACT HEAD THE TABLE ABOVE RECORDS AS HAVING ZERO CHECK-RUNS.** The reading was
+correct when it was taken and the run appeared afterwards. So the five events did not produce one
+absence; they produced one absence **at the moment they were read**.
+
+**The one failure is not a defect in this branch:** `32c671c` died on
+`ConnectionRefusedError: [Errno 111] Connection refused` across the vault suite — `47 failed,
+2828 passed, 1 skipped, 172 errors in 4686.48s` — which is Spark failing to come up on the runner,
+not an assertion. The commits on either side of it are green.
+
+**THE TWO THINGS THE SECTION ABOVE SAID WERE BLOCKED, RESOLVED:**
+
+1. **The full suite HAS run on this branch and passed.** `CLAUDE.md`'s instruction to *quote CI*
+   for "the suite passes" is satisfiable for the first time in this phase, and the figure to quote
+   is `9bbd343`, all four jobs, 2026-08-27. **The self-imposed restriction in this section — that
+   no claim had been made about tests outside `tests/triage_agent/` and `tests/test_size_caps.py`
+   — is lifted.** Note the shape of the job list: **four** jobs, not the two a partial read of
+   `ci.yml` shows; `postgres`, `secret-scan` and `redpanda` are the others.
+2. **Protocol §9.3 is achievable.** It was never blocked; it was believed to be.
+
+**Prediction 3 is NOT resolved by this.** It is closed by *a workflow run that tries to open an
+issue* with a job-level `permissions: issues: write` against the repository default of `read`. No
+run has attempted that, so the CI half of §0.2's question stays open — now as **untried** rather
+than as refused by circumstance, which is the opposite of what the paragraph above concluded.
+
+> **AND THIS IS THE PHASE'S OWN SPECIES, IN THE PROBE WRITTEN TO BE CAREFUL ABOUT IT.** Every
+> individual measurement above was right. Actions enabled, `allowed_actions: all`, workflow active,
+> `ci.yml` present, PR `MERGEABLE`, check-runs 0 — all true when read. The discipline was right
+> too: *"no cause is asserted"* is exactly what should have been written. **What went wrong is the
+> one inference nobody flagged as an inference:** *"CI does not run on this branch"* and *"CI has
+> not run on this branch YET"* are two worlds, and **check-runs = 0 is the same reading in both.**
+> Ask what else would produce a zero there, and the answer is *a queue*.
+>
+> **The fix was never a better setting to check. It was a later read** — and no amount of care
+> inside a single session could have supplied one, which is why this is recorded as a lesson about
+> when a measurement is taken rather than about how carefully.
 
 ### Carried out of T7, and every entry names what would exercise it
 
