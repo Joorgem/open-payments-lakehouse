@@ -85,7 +85,7 @@ credential this project already has**. No account, no token, no new secret. **Th
 dissolved by measurement rather than waived by judgement.** What remains is spend, and master
 protocol §5 lists spending Free Edition compute as explicitly **not** a gate.
 
-#### ~~AND UNLIKE F5's TRIAL, THE SPEND IS MEASURABLE~~ — THE TABLE IS READABLE AND IT DOES NOT ITEMISE INFERENCE
+#### ~~AND UNLIKE F5's TRIAL, THE SPEND IS MEASURABLE~~ — THE TABLE IS READABLE AND ~~IT DOES NOT ITEMISE INFERENCE~~ **IT DOES, MEASURED 2026-08-28 — SEE THE AMENDMENT AT THE END OF THIS SECTION**
 
 `system.billing.usage` **is** readable on this workspace: **1,654 rows, 2026-07-23 → 2026-08-24**,
 statement `01f19fd0-3f5e-1065-8587-cdf527a4d117`. F5 published **no** figure for its Redpanda trial
@@ -123,6 +123,66 @@ balance because four control-plane endpoints returned `NOT_FOUND` and Prometheus
 > on the *absence of the SKU across the whole history*, not on today's row being missing. If an
 > inference SKU appears later, this bullet is what gets corrected, and the correction is a
 > measurement rather than a hope.
+
+> #### AND THE WITHDRAWAL IS ITSELF FALSIFIED — THE SKU EXISTS, AND THE BULLET ABOVE IS THE ONE THAT SAID SO
+>
+> **Controller-verified 2026-08-28**, statement `01f1a2fa-6af6-18a8-a443-c66d484ba75a`, and first
+> found by T7's implementer at `01f1a2f7-4477-1b70-b473-309076a5b0c0`. The sentence above says
+> *"if an inference SKU appears later, this bullet is what gets corrected, and the correction is
+> a measurement rather than a hope."* **This is that measurement.**
+>
+> `system.billing.usage` now carries **ten** distinct `(sku_name, billing_origin_product)` pairs,
+> not eight, and two of them are inference:
+>
+> | pair | rows | DBU | window |
+> |---|---|---|---|
+> | `PREMIUM_SERVERLESS_REAL_TIME_INFERENCE_US_EAST_OHIO` / `MODEL_SERVING` | 1 | **0.446427500** | 2026-08-24T15:10 -> 15:20Z |
+> | `PREMIUM_SERVERLESS_REAL_TIME_INFERENCE_US_EAST_OHIO` / `AI_GATEWAY` | 1 | 0.000001429 | same |
+>
+> **That window is §0.1's OWN probe** — the two `ai_query` calls of the positive and negative
+> arms. `usage_metadata.endpoint_name` reads `databricks-gpt-oss-20b`. **So inference is itemised
+> on this workspace, is attributable per endpoint, and the cost of a model call is separable from
+> the warehouse after all.**
+>
+> **AND THE REASON THE WITHDRAWAL WAS WRONG IS NOT THE ONE IT RULED OUT, WHICH IS WHAT MAKES IT
+> WORTH THIS MUCH SPACE.** It considered a lag and rejected it on a ground that was sound as
+> stated: the claim rested on *"the absence of the SKU across the whole history"* rather than on
+> today's row being missing. **What neither half noticed is that at that instant the whole history
+> contained ZERO INFERENCE EVENTS.** §0.1's own two `ai_query` calls, minutes earlier, were the
+> first inference this workspace had ever run. So the census was taken over a history that
+> contained none of the thing being censused, and **"this platform does not bill inference" and
+> "inference has never happened here" produced one reading.**
+>
+> **That is ADR 0018's species, inside the paragraph written to avoid ADR 0018's species, in the
+> document whose purpose is separating measured from assumed — and it is the controller's own,
+> for the second time in this section.** The first retraction was right to be made; its
+> replacement was wrong for a reason the replacement could not see.
+>
+> **What this does NOT rescue, and the distinction is measured rather than argued:** T7 still
+> publishes **no** cost delta for its own sweep window, because the rows for 2026-08-28 **have not
+> landed** — `PREMIUM_SERVERLESS_SQL_COMPUTE_US_EAST_OHIO` stops at 2026-08-25. *"The delta is
+> zero"* and *"the rows have not arrived"* are two worlds and one number, and they are separated
+> here by a second reading: `system.query.history` shows **zero statements on 08-26 and 08-27**,
+> so billing is current through the last day that produced usage rather than lagging behind one
+> that did. The lag itself is bounded only loosely — the 08-24 rows were absent on 08-24 and
+> present on 08-28, so it is **more than zero and at most four days**, and no tighter figure is
+> claimed.
+>
+> **AND WHOEVER READS 2026-08-28's INFERENCE ROWS MUST NOT READ THEM AS THE SWEEP.** T7's shipped
+> sweeps are fifteen trials; its review permuted the menu across seventy more and its correction
+> added a fourth arm of five. **That day's `PREMIUM_SERVERLESS_REAL_TIME_INFERENCE` rows will
+> therefore cover roughly ninety `ai_query` trials, not fifteen** — plus the pilots. A figure
+> quoted from that day as *"what the sweep cost"* would be wrong by about six times, and it would
+> be wrong in the direction that flatters nobody. The corpus file is the authority on which trials
+> were published.
+>
+> **The consequence for the phase:** the labelled-upper-bound framing that plan §1.2 and T7
+> mandate was correct when it was written and is **obsolete going forward**. T7's own inference
+> cost becomes separately attributable once 08-28 lands. Three sentences in the plan still carry
+> the superseded instruction; they are historical and are left standing as such, and **this
+> paragraph is what a reader should reach first** — the retraction closes here, by `grep -i`, and
+> the four other hits for the word in this repository are logical inference in three ADRs and in
+> `.plans/HANDOFF.md`, a different word that must not be swept up with it.
 
 ### 0.2 THE GITHUB GATE DOES NOT EXIST EITHER — for the path this phase takes
 
@@ -1286,6 +1346,138 @@ as the one claim of its own it doubted, and was right.
 
 ---
 
+### 1.8 T7 — the text generator run on the same corpus, and the column that means nothing
+
+Committed at `2679cb1`. Plan §1.2. The shipped classifier is deterministic **by choice** — §0.1
+measured that a model is reachable on the credential this project already holds — so the cheapest
+demonstration that it is not a text generator is to run a text generator on the same eleven
+incidents and measure where it disagrees. `databricks/src/triage_llm_control.py` is outside the
+shipped path: nothing under `src/opl/` imports it and it is in no bundle YAML.
+
+#### THE RESULT CACHE WAS THE THREAT TO THE WHOLE MEASUREMENT, AND IT WAS MEASURED RATHER THAN ASSUMED
+
+n = 5 trials of a textually identical statement is exactly the shape the DBSQL result cache
+answers. Then *"five of five agreed"* measures the cache, and **"the model is deterministic" and
+"the cache answered" produce one string** — ADR 0018's species inside the experiment built to hunt
+it. `.plans/sql.sh`'s header already records, measured, that a **comment nonce does not defeat this
+cache**, so no mechanism could be assumed.
+
+**Two arms, and the first is what makes the second mean anything. Reported**, from T7's implementer:
+
+| arm | statements | result |
+|---|---|---|
+| **positive control** — the same `SELECT COUNT(*)` twice | `01f1a2f6-b696-1362-8235-6185d0940f3c`, `01f1a2f6-de01-1548-865c-f91d0a46518e` | `False` (**71,874,352 bytes read**) then **`True`** (**0 bytes**) |
+| **the arm that matters** — the same `ai_query` twice | `01f1a2f6-e72c-1f09-b28f-8b6a176bd616`, `01f1a2f6-ec7e-1656-8e0f-57cdd61cd8b3` | **`False` both**, both reading real bytes |
+
+**The result cache does not serve `ai_query`.** So no prompt alteration was needed: the prompts are
+byte-identical across the trials of an arm, and that is measured rather than claimed —
+**Controller-verified**, exactly **one `statement_sha256` per arm** in the results file. The flag
+was still read on every trial: **20/20 `result_from_cache: False`, 0 discarded.** The independent
+reviewer carried the same reading across **85** trials and added a disproof the flag cannot give:
+**every prompt returned five DISTINCT response strings.**
+
+**The dispersion below is therefore the model's, and the two worlds are separated.**
+
+#### THE SWEEPS, AS RATES OVER n = 5
+
+**Controller-verified**, recomputed from `docs/f6-llm-control-responses.json` independently of the
+implementer's report; every figure reproduced.
+
+| sweep | responses | declines | `clean` | unparseable | agreement with the shipped ladder |
+|---|---|---|---|---|---|
+| the eleven with their facts | 55 | **0/55** | **0/25** on the five evidence-missing | 0/55 | **36/55** |
+| the same eleven, counts stripped | 55 | 29/55 (29/30 rows-present, **0/25** zero-row) | 0/25 | 0/55 | 9/55 |
+| the fabricated incident | 5 | **5/5** | — | 0/5 | — |
+| stripped again, decline mid-menu | 55 | 25/30 rows-present | 0/25 | 0/55 | — |
+
+The six incidents that carry rows were graded **purely on size, 30/30**: `bulk_rejection` for
+2,000 / 1,797 / 1,786 and `isolated_rejection` for 4 / 1 / 1, unanimously, reproducing
+`_POPULATION_SCALE_ROWS`'s `>= 10` line exactly. **That is the half the control gets right**, and it
+is why the 36/55 is not a low number badly explained.
+
+#### AND THE WORD IT GETS WRONG IS WRONG IN A SHAPE NOBODY PREDICTED
+
+`does_not_reconcile` was returned **14 times in the facts sweep, every one of them on an incident
+that has NO reconciliation row** — the five of §0.5, whose fact is `no_reconciliation_row`. It was
+returned **0 times of 50** on `592660596679630`, the one incident in this workspace whose verdict
+genuinely is a non-reconciling verdict (`stranded_gated`).
+
+**The model used the reconciliation word exclusively where reconciliation could not be evaluated,
+and never once where it actually failed.** *Reported*, extended by the independent reviewer across
+85 trials and ten prompt configurations: **142** on the five, **0 of 50** on `592660596679630`.
+
+And the causes it wrote there do not merely pick a wrong word — they **convert an absence of data
+into an asserted finding**:
+
+- *"Reconciliation shows staged rows missing from bronze and quarantine."*
+- *"Staged rows are missing from both bronze and quarantine, leading to a no_reconciliation_row
+  verdict."* — `no_reconciliation_row` was the **input**; it is reported as the **conclusion**.
+
+**Plan §4's falsifier 2 named the failure as the word `clean`. It came back 0/25 — and 0/25 again
+with the pipeline premise removed, 0 in all 170 responses.** So the control passed the test as
+written and failed a harsher one nobody had written down. *Reported*, the no-premise arm is the
+reviewer's: strip the premise and the five zero-row incidents go `does_not_reconcile` **25/25**,
+`evidence_removed` **0/25** — so the 11/25 shipped-correct answers exist **only because the prompt
+hands the model the pipeline chain**.
+
+#### THE CONFIDENCE COLUMN IS ADR 0018's SPECIES, IN THE FIELD A TRIAGER WOULD FILTER ON
+
+**Controller-verified**, over the 115 responses of the first three sweeps:
+
+| | n | confidence >= 0.9 |
+|---|---|---|
+| the model **asserted a verdict** | 81 | **78 (96%)** — 75 of them exactly `0.9` |
+| the model **declined** | 34 | 9 (26%), spread across 0.0 – 0.9 |
+
+`0.9` is what it returns for the six it grades correctly, for `592660596679630` graded on size
+against the ladder's `does_not_reconcile` (**0.9, five of five**), and for the invented
+reconciliation findings above (**0.9 and 0.95**). **Ask what else would produce a 0.9 and the answer
+is everything.**
+
+**And the instrument is not simply emitting a constant, which is what makes this sharp rather than
+cheap:** across the declines the same field spreads over seven distinct values. **Confidence
+discriminates only once the model has already decided it cannot answer** — precisely backwards from
+what triage needs, and unusable as a filter in the direction anyone would reach for it.
+
+#### THE COST, AND WHY NO DELTA IS PUBLISHED
+
+**No cost delta is published for T7's window**, and *"the delta is zero"* was separated from *"the
+rows have not arrived"* rather than fused: `PREMIUM_SERVERLESS_SQL_COMPUTE_US_EAST_OHIO` stops at
+**2026-08-25**, and `system.query.history` shows **zero statements on 08-26 and 08-27** — so
+billing is current through the last day that produced usage rather than lagging one that did.
+Sweep window for a later reader: **2026-08-28T15:56:24Z → 15:59:32Z**.
+
+**And §0.1's withdrawal was falsified in the process** — the inference SKU exists and is
+attributable per endpoint. The amendment at the end of §0.1 carries the measurement, and it also
+carries the warning that 2026-08-28's inference rows cover roughly ninety trials rather than the
+fifteen the shipped sweeps published.
+
+#### FIVE PASSES, AND THE FIFTH FOUND TWO HIGH DEFECTS IN THE FOURTH'S OWN NEW PROSE
+
+**The ninth instance of this phase's pattern, and it is nine for nine.**
+
+- The correction justified deleting pagination from the cache-flag reader by claiming `page_token`
+  **may not** be sent with `include_metrics` — *"measured"*. The review sent it: HTTP 200, the
+  token honoured, `metrics` on all 100 rows, and it then built the paged reader the docstring
+  called impossible and read a real `False` off it. **What had been measured was the correction's
+  own omission of the flag on the follow-up request, published as a server-side prohibition** —
+  the **third** `from_cache` claim in this file's history printed in the shape of a measurement,
+  which is the species the module's own header names. The sentence is deleted; the 1,000-row window
+  stands as a **choice** rather than a forced move.
+- *"The five zero-row incidents lose nothing in these four fields"* — **false in 10 of 20 cells.**
+  The premise is true (`0` maps to `none`, losslessly) and the inference does not follow, because
+  three of the four stripped fields on a zero-row incident are **not** zero. It appeared in three
+  places, and the test that claimed to pin it checked only which presence word each cell maps to.
+  Deleted in all three.
+
+**What the fifth pass also established, and it is the better half of the audit:** the correction's
+prompt-render lock closes the guard gap **more completely than it claimed** — the reviewer mutated
+**every one of the 66 declared cells** one at a time and none escaped. The lock is a **drift** lock
+and its docstring says so: a cell mistyped *before* the sweeps ran leaves file and corpus agreeing,
+and that residue is in §3.
+
+---
+
 ## 2. Predictions, published before the runs that test them
 
 **WHERE THESE WERE FIRST WRITTEN, AND WHY IT HAS TO BE SAID.** Predictions 1–5 were published in
@@ -1303,8 +1495,8 @@ Each names what falsifies it, and each falsifier is a real outcome rather than a
 | 1 | The feed returns **11** incidents over **22** task runs, and the naive spelling returns 22 | **CONFIRMED** |
 | 2 | **Five** incidents classify `evidence_missing` and **six** carry rows | **OPEN** — closed by T8 |
 | 3 | A `permissions: issues: write` block opens an issue despite `default_workflow_permissions: read` | **OPEN** — T6 |
-| 4 | The LLM control returns a confident, fluent root cause for a `job_run_id` that exists nowhere | **OPEN** — T7 |
-| 5 | The LLM control assigns the **same** severity band to the 2,000-row and the 1-row incident when the counts are stripped | **OPEN** — T7 |
+| 4 | ~~The LLM control returns a confident, fluent root cause for a `job_run_id` that exists nowhere~~ | **FALSIFIED** — it declined, 5/5, and 24/25 across four menu orders |
+| 5 | ~~The LLM control assigns the **same** severity band to the 2,000-row and the 1-row incident when the counts are stripped~~ | **FALSIFIED IN LETTER** — it assigned **no** band to either; the substance holds by another route |
 | 6 | The shipped history module reproduces §0.10's eleven prior-execution counts **exactly** | **OPEN** — T4 |
 | 7 | ~~**Ten of eleven** incidents report `insufficient_history` at N = 5~~, and **two** report zero prior executions | **FALSIFIED IN LETTER, CONFIRMED IN SUBSTANCE** — and by the controller's own later instruction; live arm still T8's |
 | 8 | The lookup's three incidents still return **4 / 3 / 1** on the stable key against the LIVE view at T8 | **OPEN** — T4/T8 |
@@ -1328,12 +1520,53 @@ the five acquiring rows (a repromote nobody recorded).
 path is reported as **refused**, not as untried. Asserted by nobody and quoted from no
 documentation (§0.2).
 
-**4** — *Falsified by:* the model declining, which would be a genuinely interesting result, would
-weaken plan decision §1.1, and would be published as weakening it.
+**4 — FALSIFIED, AND PUBLISHED AS WEAKENING §1.1 BECAUSE THAT IS WHAT THE PREDICTION SAID WOULD
+HAPPEN.** *Falsified by:* the model declining. It declined — `insufficient_information` **5/5** on
+a `job_run_id` proved to exist in neither id column of the timeline nor any of the seven
+registered quarantine tables. §1.8 carries the run.
 
-**5** — *Falsified by:* it separating them anyway, which would mean it inferred from the table name
-rather than from the numbers. **That is a third outcome, neither pass nor fail**, and this
-prediction is written so it can be seen.
+**And the falsification was itself confounded until somebody measured it.** The decline option sat
+**last** in a six-word menu, so the rate was inseparable from the option's position — a fact about
+the prompt wearing the shape of a fact about the model. The independent reviewer permuted the
+order rather than arguing about it: **24 of 25 declines across four menu configurations.** The
+result is robust. *Reported.*
+
+> **WHAT THE PERMUTATION FOUND INSTEAD IS WORTH MORE THAN WHAT IT WAS SENT FOR.** A first arm moved
+> the decline while leaving its own gloss reading *"the facts given do not support any of the five
+> verdicts **above**"* — which moving it makes **false**. There the decline fell to **2/5**. So the
+> rate tracks the **gloss's semantic validity**, not its position, and an import guard the module
+> defended on argument alone is now known to be load-bearing by measurement.
+
+**5 — FALSIFIED IN LETTER.** *Falsified by:* it separating them anyway, which would mean it
+inferred from the table name — a **third** outcome, neither pass nor fail, and the prediction was
+written so it could be seen. **A fourth outcome arrived instead: it assigned no band at all.** Both
+incidents came back `insufficient_information` 5/5. A sentence asserting that it assigns *the same
+band* is false when it assigns none.
+
+**§2's own precedent forbids the rescue.** Prediction 7 above was falsified in letter and kept
+struck, with the reason stated: *"restating it in the vocabulary the design later adopted is how a
+prediction stops being able to be wrong."* Rewriting 5 as *"returns the same answer"* is that move.
+
+> **AND THE DIFFERENCE FROM PREDICTION 7 HAS TO BE SAID, OR §2 GAINS A FALSE SYMMETRY.** Prediction
+> 7 was falsified in letter and **confirmed in substance** — the shortfall was really there, in a
+> finer vocabulary. **Prediction 5 gets no such comfort from its own run.** A decline is not a
+> weaker form of *"same band"*: a model that declines **because scale is missing** has signalled
+> that scale matters, which cuts **against** the fusion §4 hunts rather than for it. Booking that
+> as support for the thesis would be this phase's species inside its own scorecard.
+
+**The shipped sweep 2 tested neither the prediction nor its falsifier, and that is an instrument
+defect rather than a result** — `present, count withheld` induces a decline on 27–29 of 30
+rows-present responses at **every** menu position, so the sweep cannot ask a band question at all.
+Found by the independent reviewer, against a test docstring announcing itself as *"PREDICTION 5's
+INSTRUMENT"*; the framing was deleted rather than reworded.
+
+**The substance is nonetheless confirmed, on the shipped corpus, by a route that does not need the
+pair. Controller-verified:** with the counts present the three large incidents (2,000 / 1,797 /
+1,786) read `bulk_rejection` **15/15** and the three small (4 / 1 / 1) read `isolated_rejection`
+**15/15** — perfect and unanimous. Across **110** stripped responses spanning two menu arms,
+**`bulk_rejection` is emitted 0 times**, and every band the three large incidents received was
+`isolated_rejection`, the same band as the small ones. **The threshold behaviour is carried
+entirely by the digits, and prediction 5's third outcome occurs 0 times in 110.**
 
 > **PREDICTIONS 4 AND 5 ARE ABOUT A STOCHASTIC INSTRUMENT AND A SINGLE SAMPLE IS NOT A RESULT.**
 > Each sweep runs the same prompt **n ≥ 5 times** and reports the spread, and any clause that
@@ -1524,6 +1757,48 @@ repository's minutes are not metered, so it is unlikely to be the cause.
    that needs a run cannot be settled on a branch where runs do not happen.** T6's local `gh` path
    is unaffected — the phase's one real issue does not depend on CI — but the CI half of §0.2's
    open question stays open, and is reported as **refused by circumstance rather than untried**.
+
+### Carried out of T7, and every entry names what would exercise it
+
+- **`Warehouse` is untested in its entirety** — `run`, `_get`, `cache_flag`, `_rows_of` and `main`.
+  The reviewer deleted a row-truncating mutation and a `None`-to-`False` mutation together and the
+  suite stayed green at 344. *What would exercise it: a fake-transport test over `requests.Session`.*
+  One half is now closed rather than listed: `run_trial` asserts `set(rows) == keys`, so a
+  truncated statement no longer publishes as an empty response.
+- **`is_publishable`'s discard path has never fired at runtime** — 0 of 90 trials. The predicate is
+  pinned by unit test in all four cells; the code that produces its input has never produced
+  anything but `False`. *What would exercise it: a trial whose flag reads `True` or never fills.*
+- **`manifest.total_row_count` and `manifest.truncated` are never read.** *What would exercise it:
+  a statement the warehouse truncates.*
+- **The 1,000-row cache-flag window has no test** and is exercised only live (1001 returns HTTP
+  400). Past 1,000 statements, *"outside the window"* and *"metrics unfilled"* both read `None`;
+  `.plans/cache_flag.sh` separates them with exit 3 and exit 2 because an operator acts differently
+  on each, and the module accepts the conflation because **both discard the trial**. *What would
+  exercise it: reading a flag for a statement more than 1,000 statements old.*
+- **The declared corpus is QUOTED from §0.3/§0.5/§0.10, not queried**, and its lock is a **drift**
+  lock: every one of the 66 cells is held equal to the published prompts, so nothing can move now,
+  **but a cell mistyped before the sweeps ran would leave file and corpus agreeing.** *What would
+  exercise it: T8's live run disagreeing with §0.5 or §0.10 — and if it does, `CORPUS` is what gets
+  corrected.*
+- **`--append`'s clobber path**, now refused by an assertion rather than by intent. *What would
+  exercise it: appending an arm whose name is already published.*
+- **One endpoint, one prompt design, no temperature or seed control.** Every rate in §1.8 is
+  conditional on `databricks-gpt-oss-20b` at endpoint defaults and on one prompt, which is why the
+  prompts are published verbatim in the corpus. Ten other READY endpoints are untried and the
+  module takes no `--endpoint`. *What would exercise it: the flag, and a re-run.*
+- **The corpus file's header names the SHIPPED menu order only.** A quarter of the trials ran the
+  decline mid-menu, and that arm differs from the shipped one in **two** lines plus one thing that
+  changes with no byte changing — the instruction's *"including the last"* points at the decline in
+  the shipped arm and at `clean` in the fourth. **So the fourth arm is not a one-variable
+  experiment on menu position**, each arm's real menu is recoverable only from its own published
+  prompt, and this sentence is where a reader of the corpus meets that.
+- **The model was handed the un-prefixed job name** (`opl-bronze-payments`), which is not what the
+  workspace uses — the runtime name carries the bundle's development prefix, and §0.6 records why
+  that must not be committed. Uniform across all eleven, so it cannot separate them.
+- **The fabricated-incident prompt discloses that every lookup came back empty.** So what
+  prediction 4 falsified is *"it produces an RCA when the facts say nothing was found"*, **not**
+  *"it cannot be induced to"*. *What would exercise the harder question: an arm handing only the
+  id, with no search results at all.*
 
 ### Carried out of T6, and every entry names what would exercise it
 
