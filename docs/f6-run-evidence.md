@@ -1478,6 +1478,117 @@ and that residue is in §3.
 
 ---
 
+### 1.9 T8 — the workspace run, and the four predictions that did not move a number
+
+Committed at `9293313` and `8df888d`. `databricks/src/triage_dq_incident.py` runs the shipped
+`opl.triage_agent` path on serverless against the live corpus and emits the facts payload as one
+fenced JSON array. **It writes nothing** — no table, no view, no volume file, no task value.
+
+**THE OUTPUT CHANNEL IS THE RUN'S OWN STDOUT, AND THAT WAS MEASURED BEFORE IT WAS DESIGNED.**
+*Reported:* `databricks jobs get-run-output` on a 26-day-old serverless `spark_python_task`
+returned this project's own stdout with `logs_truncated: false`, and both T8 runs came back the
+same way. **A UC volume file was rejected because it is a WRITE** — workspace state on a path a
+second attempt overwrites, inside the one package whose header says it never writes. A notebook
+task with `dbutils.notebook.exit` was rejected because it moves the entry point out of
+`databricks/src/*.py`, the set the serverless-capability guard and the git-at-runtime ban sweep:
+**escaping the guards to make output easier to fetch is the wrong trade.** *Reverses it:*
+`logs_truncated: true`.
+
+**Deploy verified BY ARTEFACT, never by the success line** (plan §7 rule 11). *Reported:* the
+wheel's sha256 is identical on both sides (`2bc8c9b7…`, 766,765 B) and `opl/_revision.py` **inside
+the downloaded wheel** reads `8df888de90d1b8b0bbd7f0bc1cc166d78cd12f47` = HEAD. The implementer
+also verified the **synced entry point** (`b5c546f0…`), which `assert_deployed_revision`'s own
+docstring says it does not re-read — **that half was uncovered, and it is the half this task lives
+in.**
+
+| run | job `run_id` | result |
+|---|---|---|
+| first, rev `9293313` | `883121603089733` | SUCCESS, 11 incidents |
+| **deliberate failure arm** | `940537760125301` | FAILED, as designed |
+| final, rev `8df888d` | **`1119885373986326`** | SUCCESS, 11 incidents |
+
+The two successful runs, 35 minutes and one revision apart, produced **byte-identical payloads
+apart from `produced_by`**.
+
+#### THE FOUR PREDICTIONS, LIVE — Controller-verified, derived from the payload rather than read off the report
+
+| # | prediction | live |
+|---|---|---|
+| 2 | five `evidence_missing`, six carrying rows | **3** `quarantine_empty` + **2** `batch_absent` = 5; **6** `rows_present`; rejected rows sum **5,589** = F4's census; `attempts = 2` and `["FAILED","FAILED"]` on all eleven; verdicts **5** `no_reconciliation_row` / **5** `reconciled` / **1** `stranded_gated` |
+| 6 | §0.10's eleven counts exactly | **`7 · 4 · 3 · 3 · 3 · 2 · 2 · 1 · 1 · 0 · 0`** — and `prior_incidents` matches §0.10's last column too, a column the prediction did not name |
+| 7 live | 8 / 2 / 1 | **8** `insufficient_history`, **2** `no_prior_execution`, **1** `history_complete`, **0** `gate_run_absent` |
+| 8 | the lookup still returns 4 / 3 / 1 | **4 · 3 · 1.** The rows have **not** aged out |
+
+**No spelling needed correcting.** The shipped module and the controller's hand query agree
+incident for incident, which is what §2's prediction 6 asked and is the outcome it could not
+assume.
+
+**The five zero-row incidents publish `quarantined: null`, not `0`** — the module refuses to print a
+count it did not measure, which is §0.10's own amended lesson arriving in the payload.
+
+#### THE RETENTION MEASUREMENT, PUBLISHED BECAUSE IT IS NEW AND NOT BECAUSE IT WAS ASKED FOR
+
+Prediction 8's falsifier was the rows ageing out, *"which would not be a failure but the phase's
+first measurement of the timeline's own retention"*. They did not, so the measurement is a **lower
+bound rather than a floor**: `system.lakeflow.job_task_run_timeline` on 2026-08-28 still serves
+`check_bad_rows` 29/29, `dq_gate` 5/5, `dq_gate_batch` 24/24 and `fail_on_dq` 22 rows over 11 job
+runs, **oldest row 2026-07-24 — 35 days** (statement `01f1a30b-2869-127a-bb98-9e22540354d8`).
+F4's ~25-day floor was measured on `system.query.history`; **the timeline's is at least 35 days,
+and nothing here says where it cuts.**
+
+> **THE BRIEF CALLED THOSE ROWS `dq_gate` ROWS AND THE IMPLEMENTER REFUSED IT, CORRECTLY.**
+> `history.py` anchors and counts on **`check_bad_rows`** — §0.10's own 2026-08-25 amendment says
+> so, and it is the whole reason the retired-spelling hazard does not bite. Both spellings survived
+> here so the conclusion is unchanged, **but the retention claim is about `check_bad_rows` task
+> runs of 2026-07-24 and is published that way.**
+
+#### AND `max_retries: 0` FAILED TO PREVENT A RETRY ON THIS PHASE'S OWN TASK, LIVE
+
+The failure-arm run `940537760125301` shows `triage_dq_incident` at **attempt 0 FAILED and attempt
+1 FAILED** — one `job_run_id` wearing two task-run rows, **§0.3's exact shape, produced by the task
+built to read that corpus.** Both attempts re-ran every statement and left nothing behind. *That is
+plan §1.3's justification arriving as evidence rather than as an argument*, and it is the fourth
+time this repository has measured the same platform behaviour.
+
+**The agent also cannot contaminate the corpus it triages**, which is a property worth stating
+because nothing enforces it: its task keys are disjoint from the three roles `history.py` declares,
+and after three triage runs `check_bad_rows` is still 29/29 and `fail_on_dq` still 22 over 11.
+
+### 1.10 T8b — the one real issue, and two allegations settled by a markdown engine
+
+**Issue #29 is open**, on `592660596679630`, the incident whose recommendation is *not to promote*.
+It is the phase's public, permanent artefact and it was rendered, read in full and scanned for a
+host, an organisation id, a token and an operator username before it was posted.
+
+**The live grade is the phase's thesis in one row.** The shipped classifier reads
+`592660596679630` as **`does_not_reconcile` → `hold_do_not_promote`**, because the reconciliation
+arm outranks the size arm and a declared hold outranks every derivation. **§1.8's text generator
+read the same incident as `bulk_rejection`, confidence 0.9, five times out of five, and never
+mentioned the stranding once.** The largest incident in the workspace is the one whose correct
+answer is the least like *"it is big"*.
+
+**THE TWO THINGS §1.7 AND §3 RECORDED AS UNVERIFIED ARE NOW MEASURED, AND THEY SPLIT.**
+*Controller-verified 2026-08-28 on issue #29:*
+
+| claim | reading |
+|---|---|
+| the body renders as expected | **TRUE** — the API's `body_html` carries `<code class="notranslate">` around every fenced value, plus `<strong>` and real lists. **The first markdown engine anything in this phase has touched.** |
+| ~~GitHub renders code spans in issue titles~~ | **FALSE.** The API serves `body_html` and has **no `title_html` field at all**; the rendered page's `<title>`, `og:title` and `twitter:title` each carry the backticks **literally** |
+
+**So the claim that reached production source through a chain of three agents with nobody rendering
+anything was wrong**, and §1.7 named that risk before this measurement existed. `report.py`'s
+header no longer asserts it; the struck sentence is kept in place and `render_title`'s docstring
+carries the reading.
+
+**The fencing is KEPT, and that is a decision:** a literal backtick in a title is harmless, #29 is
+already published carrying them, and changing the renderer now would make the one published
+artefact disagree with the code that produced it. **What is not kept is the reason.** Removing the
+fence is listed in §3 as a candidate. It would buy no safety either way — backticks that do not
+render also cannot protect — and **whether `@` and `#` linkify in a title is a different question
+this reading did not settle.**
+
+---
+
 ## 2. Predictions, published before the runs that test them
 
 **WHERE THESE WERE FIRST WRITTEN, AND WHY IT HAS TO BE SAID.** Predictions 1–5 were published in
@@ -1493,13 +1604,13 @@ Each names what falsifies it, and each falsifier is a real outcome rather than a
 | # | prediction | status |
 |---|---|---|
 | 1 | The feed returns **11** incidents over **22** task runs, and the naive spelling returns 22 | **CONFIRMED** |
-| 2 | **Five** incidents classify `evidence_missing` and **six** carry rows | **OPEN** — closed by T8 |
+| 2 | **Five** incidents classify `evidence_missing` and **six** carry rows | **CONFIRMED** — live at T8, 3 + 2 and 6, summing to F4's 5,589 |
 | 3 | A `permissions: issues: write` block opens an issue despite `default_workflow_permissions: read` | **OPEN** — T6 |
 | 4 | ~~The LLM control returns a confident, fluent root cause for a `job_run_id` that exists nowhere~~ | **FALSIFIED** — it declined, 5/5, and 24/25 across four menu orders |
 | 5 | ~~The LLM control assigns the **same** severity band to the 2,000-row and the 1-row incident when the counts are stripped~~ | **FALSIFIED IN LETTER** — it assigned **no** band to either; the substance holds by another route |
-| 6 | The shipped history module reproduces §0.10's eleven prior-execution counts **exactly** | **OPEN** — T4 |
-| 7 | ~~**Ten of eleven** incidents report `insufficient_history` at N = 5~~, and **two** report zero prior executions | **FALSIFIED IN LETTER, CONFIRMED IN SUBSTANCE** — and by the controller's own later instruction; live arm still T8's |
-| 8 | The lookup's three incidents still return **4 / 3 / 1** on the stable key against the LIVE view at T8 | **OPEN** — T4/T8 |
+| 6 | The shipped history module reproduces §0.10's eleven prior-execution counts **exactly** | **CONFIRMED** — live at T8, and `prior_incidents` too |
+| 7 | ~~**Ten of eleven** incidents report `insufficient_history` at N = 5~~, and **two** report zero prior executions | **FALSIFIED IN LETTER, CONFIRMED IN SUBSTANCE** — and by the controller's own later instruction; **live arm CONFIRMED at T8**, 8 / 2 / 1 / 0 |
+| 8 | The lookup's three incidents still return **4 / 3 / 1** on the stable key against the LIVE view at T8 | **CONFIRMED** — 4 · 3 · 1 live; the rows did not age out |
 
 **1 — CONFIRMED, and on live data rather than on the fixture.** T1's independent reviewer ran the
 shipped SQL against the real `dataops_task_telemetry` — statement `01f19fda-f4bf-159f-a9ea-adf5f
@@ -1806,6 +1917,30 @@ than as refused by circumstance, which is the opposite of what the paragraph abo
 > **The fix was never a better setting to check. It was a later read** — and no amount of care
 > inside a single session could have supplied one, which is why this is recorded as a lesson about
 > when a measurement is taken rather than about how carefully.
+
+### Carried out of T8 and T8b, and every entry names what would exercise it
+
+- **`gate_run_absent` has never occurred in the workspace** — 0 of 11 live, reached only on
+  fixtures. It needs an incident whose `check_bad_rows` row has aged out while its quarantine keeps
+  its `_batch_id`, and the timeline's 35-day-and-counting retention is why it has not happened.
+- **The `UnknownTable` arm of the live task.** All eleven resolved, so *"one bad incident fails the
+  whole run"* is exercised only against a fake session. *What would exercise it: renaming a bronze
+  job in the bundle and firing its gate.*
+- **`logs_truncated: true` has never been observed** — and it is the output fork's own stated
+  reversal condition. 21,213 characters against a cap nothing here measures. *What would exercise
+  it: a deliberate oversized probe.*
+- **`stranded_unexplained` and `over_promoted`** — two of severity's three unreconciled verdicts
+  are still unreachable from this corpus.
+- **The history query's `job_run_id` fold** — `check_bad_rows` still runs once per job run (29/29),
+  so **only a constructed doubled row can prove the fold is there.** §0.10 says this outright and
+  the live run does not change it.
+- **`emit`'s fence refusal** — no live reject reason contains the marker.
+- **The title fence is now known to protect nothing** (§1.10) and is kept deliberately. *Removing
+  it is a candidate for a later phase.* **Whether `@` and `#` LINKIFY in an issue title is still
+  unmeasured** — #29's title contains neither, so opening it did not settle that half.
+- **The facts payload is git-ignored** (`.plans/`), so a public reader reaches the run's numbers
+  only through issue #29 and through this section. *What would change it: committing a redacted
+  payload, which no condition of this phase asks for.*
 
 ### Carried out of T7, and every entry names what would exercise it
 

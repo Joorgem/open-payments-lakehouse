@@ -71,8 +71,9 @@ quarantine ROW VALUE, so this is the same crafted input the name sweep already r
 about, arriving as a notification rather than as a leak. `_code` fences by CommonMark's own
 rule -- one backtick longer than the longest run inside, padded, folded to one line -- and
 each of those three arms is deleted on its own by a test in
-`tests/triage_agent/test_issue_markdown.py`. THE TITLE IS FENCED TOO: GitHub renders code
-spans in issue titles, so it is not the inert string it was treated as.
+`tests/triage_agent/test_issue_markdown.py`. THE TITLE IS FENCED TOO, AND THE MEASUREMENT
+SAYS IT NEED NOT BE: GitHub does NOT render code spans in issue titles -- see the docstring on
+`render_title`, which carries the reading.
 
 EXACTLY ONE VALUE IS STILL INTERPOLATED AS PROSE AND IT IS NAMED HERE: `hold_note`, quoted
 whole as a blockquote, because a decision rendered as code is one nobody reads. Every line
@@ -274,14 +275,25 @@ def render_title(issue: TriageIssue) -> str:
     incidents of one job -- socios has two, three weeks apart -- and the two things a
     reader triages by are the grade and what it says to do.
 
-    THE TITLE IS TREATED AS NOT INERT, AND THE GROUND FOR THAT IS WEAKER THAN THE REST OF
-    THIS FILE'S. That GitHub renders code spans in issue and PR titles reached this docstring
+    ~~THE TITLE IS TREATED AS NOT INERT~~ -- AND THE CLAIM BEHIND THAT IS NOW MEASURED, AND
+    IS FALSE. That GitHub renders code spans in issue and PR titles reached this docstring
     through a chain -- a GitHub community discussion, quoted by a reviewer, repeated by the
-    controller's dispatch -- and NOBODY IN THAT CHAIN RENDERED ANYTHING. `docs/f6-run-
-    evidence.md` 0.2 records what this repository already paid for a documented behaviour
-    quoted from memory and checked against a weak source. So the fencing here is a CHEAP
-    PRECAUTION taken on an unverified claim, which is the honest description of it, and not a
-    defence resting on a measurement the way the body's does. `batch_id` is fenced
+    controller's dispatch -- and NOBODY IN THAT CHAIN RENDERED ANYTHING. **Measured 2026-08-28
+    by opening the phase's one real issue, #29:** the API serves `body_html` and has NO
+    `title_html` field at all, and the rendered page's `<title>`, `og:title` and
+    `twitter:title` each carry the backticks LITERALLY. The body's fencing is confirmed in the
+    same reading -- `<code class="notranslate">` around every fenced value -- so this file's
+    body defence rests on a measurement and its TITLE fencing protects nothing.
+
+    THE FENCING IS KEPT ANYWAY, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT: a literal
+    backtick in a title is harmless, issue #29 is already published carrying them, and
+    changing the renderer now would make the one published artefact disagree with the code
+    that produced it. What is NOT kept is the reason -- the sentence that called the title
+    "not inert" is struck above rather than softened. Removing the fence is a candidate for a
+    later phase and is listed in `docs/f6-run-evidence.md` 3 as one. Note that it would not
+    buy safety either way: backticks that do not render also cannot protect, and whether `@`
+    and `#` LINKIFY in a title is a different question this reading did not settle.
+    `batch_id` is fenced
     for the reason `_headline` fences it -- it is a value the TIMELINE returned rather than a
     word this repository chose -- and the other three are words the wheel constrains:
     `source` by `table_spec`, which raises `UnknownTable` at both doors, and the grade and
