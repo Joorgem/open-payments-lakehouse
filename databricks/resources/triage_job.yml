@@ -1,0 +1,99 @@
+# databricks/resources/triage_job.yml
+#
+# F6's workspace run: the shipped `opl.triage_agent` path, on serverless, against the
+# real incident corpus. It is the only job in this bundle whose product is a PAYLOAD
+# rather than a table, a view or a file -- what leaves the run is JSON on this task's
+# stdout, which an operator reads back with
+#
+#     databricks jobs get-run-output --run-id <the TASK run id>
+#
+# and hands to the publisher under `scripts/`. The task's own header carries why that
+# route was chosen over a Volume file and what would reverse it.
+#
+# WHY THIS JOB TAKES NO `table` PARAMETER, unlike every ingestion job. Its subject is the
+# whole incident feed, and the feed decides what an incident is -- `opl.triage_agent.
+# incidents` reads F4's task-telemetry view and resolves each incident's bronze table from
+# the job name, against a declaration the bundle is locked to. A `table` parameter here
+# would be a coordinate that can be wrong for no gain: the triage of a table is whatever
+# incidents that table has, and this job is not the thing that decides which those are.
+#
+# IT TAKES A `batch_id` ANYWAY, AND IT SELECTS NOTHING. Empty -- the default -- triages
+# the whole feed and prints no markdown. Set, the run ALSO renders that one incident's
+# issue title and body, which is the report this phase's plan asks the workspace run to
+# print. It cannot narrow the payload: every incident in the feed is emitted either way,
+# so a wrong value here costs a refusal naming the ids the feed held, and never a quiet
+# triage of fewer incidents than the workspace has. That asymmetry is the reason it is
+# safe for this job to carry a batch coordinate at all when the only other `batch_id`
+# parameter in this bundle -- `repromote_batch_job.yml`'s -- has to be a sentinel that
+# refuses, because there an unset value promotes something nobody chose.
+#
+# THE GUARD IS HERE, AND THE ANSWER TO THIS BUNDLE'S STANDING QUESTION -- "does a run of
+# this job against a wheel built from another revision matter?" -- IS THE ONE
+# `streaming_managed_broker_job.yml` GIVES, SHARPENED. That job's output is a row count
+# quoted in an evidence document. This job's output is a set of GRADES: a severity, a
+# recommended action, a comparison reading and a blast radius, every one of them a
+# function of a ladder, a declaration and a manifest that live in the wheel. A wheel from
+# another revision produces a payload that is individually well-formed, that names real
+# batch ids and real reject counts, and whose verdicts nobody reviewed -- and that payload
+# then becomes a public GitHub issue and the numbers in this phase's record. Unlike a
+# wrong row there is nothing left afterwards to re-read: the run's log is the artefact.
+# So `assert_deployed_revision` runs first and everything waits for it, as everywhere else.
+#
+# NOTHING IN THIS JOB WRITES. Not a table, not a view, not a Volume file, not a task
+# value. That is plan section 1.3 and ADR 0018 Decision 3 -- the agent reads, ranks and
+# drafts, and a person decides -- and it is also what makes `max_retries: 0` safe here in
+# a way it is not elsewhere: this repository has measured three times that the setting
+# does not prevent a retry, and the corpus this job reads is eleven incidents wearing
+# twenty-two rows because of it. A second attempt of a task that writes nothing re-reads
+# the same relations and re-prints the same payload.
+resources:
+  jobs:
+    triage_dq_incident:
+      name: opl-triage-dq-incident
+      parameters:
+        - name: revision
+          # The same sentinel every guarded job declares
+          # (opl.bronze.provenance.SENTINEL_REVISION), and the same reason: a job
+          # parameter default cannot validate anything, so its only job is to be a
+          # value the code refuses.
+          #
+          #     databricks bundle run triage_dq_incident -t free \
+          #       --params revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
+        - name: batch_id
+          # EMPTY IS A REAL SETTING AND NOT A MISSING ONE, which is why this default is
+          # not a sentinel like `repromote_batch_job.yml`'s. There, an unset batch id
+          # would promote something nobody chose, so the default has to refuse. Here it
+          # means "render no markdown", the payload is unaffected, and a value that
+          # matches no incident refuses in the task with the feed's own ids in the
+          # message. There is nothing for a sentinel to protect.
+          default: ""
+      tasks:
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        - task_key: triage_dq_incident
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/triage_dq_incident.py
+            # THE RUN'S OWN ID, and it is the payload's provenance rather than a
+            # coordinate. `produced_by` reaches a public issue verbatim, so the task
+            # builds it from this value and refuses anything that is not all digits --
+            # which is what an unresolved dynamic-value reference looks like, since the
+            # platform passes a reference it does not recognise through literally.
+            # A run page URL was rejected in its place: it carries this workspace's host
+            # and organisation id into a public artefact and is unopenable by the
+            # stranger reading it, while the id is what a later reader follows.
+            parameters: ["{{job.run_id}}", "{{job.parameters.batch_id}}"]
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl   # opl wheel, built + uploaded by the artifacts block

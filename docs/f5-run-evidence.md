@@ -949,11 +949,17 @@ here because the reason they are absent from §1 and §2 is that nothing ran the
   **second spelling** of the broker's launch arguments. The prose is stale in the one direction
   that matters (it names the rejected design), and it is left rather than patched because the
   correction belongs with whoever next touches that module.
-- **Two files sit within single digits of the 800-line cap**, measured with `wc -l`:
+- ~~**Two files sit within single digits of the 800-line cap**, measured with `wc -l`:
   `src/opl/streaming/watermarked_dedup.py` at **795** and
-  `tests/test_streaming_watermarked_dedup.py` at **793**. The cap is strict — 800 is over — so
-  whoever touches either splits it first, which is the standing rule two files at 799 already
-  carried out of F-DB.
+  `tests/test_streaming_watermarked_dedup.py` at **793**.~~ **FALSIFIED BY THIS PHASE'S OWN CLOSING
+  COMMIT, and corrected from F6.** `2d077a8` — the commit that carries this very bullet — split
+  both files and created `src/opl/streaming/lateness.py`. **Measured 2026-08-28: 459 and 292.**
+  The cap is strict (800 is over) and the rule stands; **on `feat/f6-rca-agent` it applies to
+  three** — `tests/vault/test_socios_vault.py` (799), `src/opl/gold/facts.py` (799) and
+  `databricks/src/triage_llm_control.py` (792), the last created by F6.
+  `docs/f6-run-evidence.md` §0.7 carries the trace, and the reason this stood for five days is
+  F5's own closing lesson arriving on schedule: **the defect had moved out of the code and into
+  the document that judges it.**
 - **`describe_reader_options` does not cover the logical plan**, reported by T8's independent
   reviewer and recorded in §2.5. Nothing this task runs calls `explain()`, so **the exposure has
   never occurred in a run**; what covers it is the platform's scrubbing of a secret's value, not

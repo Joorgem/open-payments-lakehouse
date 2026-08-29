@@ -104,6 +104,35 @@ _SRC = _REPO / "databricks" / "src"
 # asks "did a task spell a name the registry should have given it"; there, there is
 # no registry entry to give one, and the argument for that lives in the task's own
 # header and in its job YAML.
+#
+# AND `triage_llm_control.py` IS NOT A JOB TASK AT ALL, which is the newest reason for
+# an absence here and the only one on this list that is not about table resolution. F6
+# T7's negative control runs from the operator's box against the `opl-free` warehouse,
+# is in no bundle resource, and is imported by nothing under `src/opl/` -- plan 1.2
+# keeps the model arm outside the shipped path on purpose. It DOES resolve a table: it
+# reads `REGISTRY[incident.table].quarantine` rather than spelling a quarantine name,
+# which is what this lock would have asked of it. It is left out because the lock's
+# subject is job tasks, and adding it would say this file's list is "scripts that touch
+# tables" when its docstring says "job tasks that resolve one".
+#
+# AND `triage_dq_incident.py` IS A JOB TASK AND IS STILL NOT HERE, which is the first
+# absence on this list that had to be argued against a script the lock's subject does
+# reach. F6 T8's entry point runs in a bundle job, on serverless, under the revision
+# guard, like every entry below it. It is left out because it resolves NO table: it takes
+# no table argument, and the table an incident is about is a COLUMN OF THE FEED --
+# `opl.triage_agent.incidents` resolves it from the job name against a declaration the
+# bundle YAMLs are locked to, and `opl.triage_agent.evidence._spec_of_incident` is the one
+# place that turns that key into a spec. The lock's second assertion is `"table_spec(" in
+# code`, and satisfying it would mean the entry point resolving a spec of its own beside
+# the one the wheel already resolved -- a SECOND resolution site for one incident's
+# coordinates, which is precisely the drift ("sent estab triagers to a table full of
+# unrelated F1.2 lookup rows") this list exists to prevent. So adding it would not tighten
+# the lock; it would require the defect.
+#
+# WHAT COVERS IT INSTEAD, named so this is an exclusion and not a gap: it spells no
+# registered table name at all, which `tests/test_triage_dq_incident_task.py` asserts by
+# the same registry-derived sweep this file uses -- so the half of the property that
+# applies is held, in the file that can also say what the other half means here.
 _TABLE_TASKS = [
     "bronze_ingest",
     "bronze_lookup_ingest",

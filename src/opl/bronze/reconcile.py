@@ -145,6 +145,13 @@ _VERDICT_LADDER = (
     (STRANDED_GATED, "quarantined > 0"),
 )
 
+# EVERY WORD THIS VIEW'S `verdict` COLUMN CAN CARRY: the ladder's arms plus its `ELSE`.
+# DERIVED from the ladder rather than listed, which is `severity.SEVERITIES`' shape and its
+# reason -- a fifth arm reaches this tuple in the commit that adds it. It exists because
+# `opl.triage_agent.issue` refuses a verdict word a serialised payload made up, and a second
+# spelling of the ladder there would fail open at exactly the door that check is for.
+VERDICTS = (*(name for name, _ in _VERDICT_LADDER), STRANDED_UNEXPLAINED)
+
 # What resolves a stranding, printed beside the verdict.
 #
 # `source` IS the `--params table=` value, not a second spelling of it: the view's
