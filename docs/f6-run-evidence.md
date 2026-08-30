@@ -2074,6 +2074,46 @@ than as refused by circumstance, which is the opposite of what the paragraph abo
 > inside a single session could have supplied one, which is why this is recorded as a lesson about
 > when a measurement is taken rather than about how carefully.
 
+### §9.3 IS CLOSED, AND IT TOOK TWO ATTEMPTS FOR A REASON THAT IS NOT THIS BRANCH
+
+**Controller-verified 2026-08-29.** PR #28 merged at `ef123ac`; CI on the merge commit is
+**green on all four jobs** — `test`, `postgres`, `secret-scan`, `redpanda` — run
+`33226013099`, **attempt 2**.
+
+**Attempt 1 failed, and it was not the code.** It died at **2:37:43** with
+`ConnectionRefusedError: [Errno 111] Connection refused` across the vault suite —
+**45 failed, 2,994 passed, 177 errors, and not one failed assertion.** That is Spark's driver
+failing to come up on the runner.
+
+**The discrimination was derived before it was re-run, and here it is shorter than F5's
+version of the same argument:** `ef123ac` is a merge commit whose **tree hash is identical**
+to `038f7c7`'s (`4a86232e…`), and `038f7c7` had passed `test` on the branch ~3 h earlier.
+Where T8 had to argue *"the diff contains no executable line"*, here **there is no diff at
+all** — a tree that already passed cannot have regressed. `gh run rerun --failed` was the
+action; no code was touched.
+
+> **THIS IS THE SECOND MEASURED OCCURRENCE, AND THE ENTRY EXISTS BECAUSE THE FAILURE LOOKS
+> CATASTROPHIC AND THE WRONG REACTION IS EXPENSIVE.**
+>
+> | run | head | result | duration |
+> |---|---|---|---|
+> | `32988241383` | `32c671c` (branch) | 47 failed, 2,828 passed, 172 errors | 1:18:06 |
+> | `33226013099` attempt 1 | `ef123ac` (main) | 45 failed, 2,994 passed, 177 errors | **2:37:43** |
+>
+> **Three ways to tell it from a real failure:** a mass `ConnectionRefusedError` with **no
+> `assert`** in the failure lines means no test decided anything; **compare the tree, not the
+> diff** (`git rev-parse <a>^{tree} <b>^{tree} | uniq -c`); and **duration is the tell** —
+> healthy `test` on this suite is ~1 h 32 m, and F6 also saw a 2 h 55 m run that was
+> cancelled.
+>
+> **Do NOT "fix" anything on a mass `ConnectionRefusedError`.** There is nothing there to
+> fix, and a code change made under that misreading is a real defect introduced to chase a
+> phantom — which is this phase's own hunted species arriving in the CI log.
+
+*What remains unexercised: nothing measures where this flake comes from, or how often. Two
+occurrences in one week is a rate over an unknown denominator. What would exercise it: a
+run-history sweep counting `ConnectionRefusedError` failures against total `test` runs.*
+
 ### Carried out of T8 and T8b, and every entry names what would exercise it
 
 - **`gate_run_absent` has never occurred in the workspace** — 0 of 11 live, reached only on
