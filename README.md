@@ -37,7 +37,7 @@ any project; the only defence is that a reader can re-run it.**
 | **Deployment** | Databricks Asset Bundle jobs / their tasks | **21 / 99** |
 | **Decisions** | ADRs in [`docs/adr/`](docs/adr/) | **20** |
 | **Evidence** | run-evidence and validation documents in [`docs/`](docs/) | **17** |
-| **Tests** | selected by a default `uv run pytest`, of 3,277 collected (the rest need Docker) | **3,230** |
+| **Tests** | selected by a default `uv run pytest`, of 3,295 collected (the rest need Docker) | **3,248** |
 
 The data it has actually held: **337,712,651 rows** of CNPJ bronze across `empresas`,
 `socios` and `estabelecimentos`, at **two monthly snapshots each** (2026-06 and 2026-07).
