@@ -68,7 +68,7 @@ written in.
 
 ## 2. The five runs
 
-Sequenced as `.plans/HANDOFF.md` prescribed: the fourth payment stream first, so the fact
+Sequenced as the phase plan prescribed: the fourth payment stream first, so the fact
 has a "before" side of 2026-07-11 to find; then the dimension the fact's two role keys
 resolve into; then the conformed three; then the fact; then the PIT table, last and
 droppable.
@@ -410,8 +410,17 @@ genuinely uncertain — the two wall clocks — are both in the falsified rows.
 
 | | published before the run | published where | **actual** | error |
 |---|---|---|---|---|
-| `dim_company` | ~35 min – 1 h 40 m (2,100–6,000 s) | `.plans/HANDOFF.md`'s run sequence | **120 s** | **17–50× over** |
+| `dim_company` | ~35 min – 1 h 40 m (2,100–6,000 s) | the phase's run sequence, git-ignored — restated below | **120 s** | **17–50× over** |
 | `pit_estabelecimento` | 0.5–3 h (1,800–10,800 s), central ~1.5 h | `databricks/resources/gold_pit_estabelecimento_job.yml` | **168 s** | **11–64× over** |
+
+**Both figures were written down before the runs that tested them, and one of the two places
+they were written down is not published.** `pit_estabelecimento`'s is a comment in
+`databricks/resources/gold_pit_estabelecimento_job.yml`, which anyone can open, labelled
+there as an extrapolation and not a measurement. `dim_company`'s was one cell of the
+phase's five-row table of *expected* values, against run `30161267975961`:
+**69,202,818 rows, ~35 min – 1 h 40 m (extrapolated)**. The row-count half of that same
+cell landed exactly, at 69,202,818 (§3) — which is the half a reader can check, and a
+duration invented after the run would not have been paired with a row count that landed.
 
 **Both were built from F2's satellite loads and both overestimated by more than an order
 of magnitude, for one reason.** F2 measured the vault's satellites at 5,428–5,635 s for

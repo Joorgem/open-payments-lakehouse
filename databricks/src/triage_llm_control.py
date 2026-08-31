@@ -509,7 +509,7 @@ class Warehouse:
     `tests/test_revision_stamp.py` bans `subprocess` from every file under
     `databricks/src` at AST level, because there is no repository beside a deployed
     artefact. The same ban makes this the only shape available, which is fine -- the two
-    endpoints are the ones that script and `.plans/cache_flag.sh` document."""
+    endpoints are the ones that script and the operator flag reader document."""
 
     def __init__(self, host: str, token: str) -> None:
         self.host = host.rstrip("/")
@@ -548,8 +548,8 @@ class Warehouse:
     def cache_flag(self, statement_id: str, max_polls: int = 12) -> bool | None:
         """`result_from_cache`, POLLED, and `None` means NO READING -- never False.
 
-        The statements API manifest has no such key at all; `.plans/sql.sh` header records
-        that every `from_cache: None` in this repository was a structural absence printed
+        The statements API manifest has no such key at all; `docs/f-db-run-evidence.md`
+        §0.5 records every `from_cache: None` in this repository as a structural absence
         in the shape of a measurement. The flag lives on the history endpoint, and that
         endpoint fills its metrics object a few seconds late for UNCACHED runs while a
         cached one is complete on the first read -- so a single read prints null for
@@ -562,7 +562,7 @@ class Warehouse:
         all 1000 rows carry metrics.
 
         `None` STILL COVERS TWO FAILURES AND THIS METHOD DOES NOT SEPARATE THEM: past
-        1,000 statements, and metrics unfilled. `.plans/cache_flag.sh` exits 3 and 2 for
+        1,000 statements, and metrics unfilled. The operator flag reader exits 3 and 2 for
         those because an operator acts differently on each; here both discard the trial,
         so separating them would publish a field that no decision reads."""
         for _ in range(max_polls):
@@ -642,7 +642,7 @@ def is_publishable(trial: dict) -> bool:
     """A trial reaches the corpus only if the statement succeeded AND the cache is
     MEASURED off. `None` is "the flag never filled" and is a measurement that was not
     taken; `True` is a reading of the cache rather than of the model. Both are discarded,
-    and `.plans/cache_flag.sh` exits non-zero for the same reason."""
+    and the operator flag reader exits non-zero for the same reason."""
     return trial["state"] == "SUCCEEDED" and trial["result_from_cache"] is False
 
 

@@ -38,8 +38,7 @@ an entity genuinely leaving the registry.
 ### What Data Vault 2.0 prescribes, and what it presumes
 
 The literature has three named artefacts for "the row is not in this load", and
-they are different things (full quotes, URLs and evidence strength in
-`.plans/f2-research-snapshot-dv2.md`):
+they are different things:
 
 - **Record tracking satellite (RTS)** — no payload at all, "one row per hashkey
   per load date that it appeared" (DataVault4dbt, *How to Track Effectivity*,
@@ -148,10 +147,9 @@ the wired path.
 > citation is that document.
 DataVault4dbt acknowledges the growth ("can lead to significant data growth over
 time") and offers no mitigation; **the search behind this ADR looked for a
-compression pattern for an RTS and found none** (`.plans/f2-research-snapshot-dv2.md`,
-"What I looked for and could not find" #5 — a negative search result, not a claim
-that none exists), and inventing one would break the insert-only property that is
-why the standard does not do it.
+compression pattern for an RTS and found none** — a negative search result, not a
+claim that none exists — and inventing one would break the insert-only property
+that is why the standard does not do it.
 
 **3b. Derive the ledger from what is already stored.** *Chosen — see below.*
 

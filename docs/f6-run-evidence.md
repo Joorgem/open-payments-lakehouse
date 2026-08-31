@@ -403,8 +403,8 @@ and F5 established the same rule for the winget packages directory.
 
 ### 0.7 A DEFECT IN THE RECORD F5 CLOSED FIVE DAYS AGO
 
-`.plans/HANDOFF.md`'s **"TWO STANDING FACTS THAT MUST NOT BE LOST"** item 1, and
-`docs/f5-run-evidence.md` §3's *"Carried out of the phase as follow-ups"*, both state that
+`docs/f5-run-evidence.md` §3's *"Carried out of the phase as follow-ups"*, and the working
+handoff's standing-facts list, both state that
 `src/opl/streaming/watermarked_dedup.py` sits at **795** of the 800-line cap and
 `tests/test_streaming_watermarked_dedup.py` at **793**, and instruct whoever touches either to
 split it first.
@@ -1373,8 +1373,11 @@ shipped path: nothing under `src/opl/` imports it and it is in no bundle YAML.
 n = 5 trials of a textually identical statement is exactly the shape the DBSQL result cache
 answers. Then *"five of five agreed"* measures the cache, and **"the model is deterministic" and
 "the cache answered" produce one string** — ADR 0018's species inside the experiment built to hunt
-it. `.plans/sql.sh`'s header already records, measured, that a **comment nonce does not defeat this
-cache**, so no mechanism could be assumed.
+it. `docs/f1.4b-pr-b-run-evidence.md` §24.7 already records, measured, that a **comment nonce
+does not defeat this cache**: DBSQL strips comments before computing the key, and the key is on
+the normalised logical plan rather than the text, so `VERSION AS OF` and an output-column alias
+were cached too. **16 of 24 executions there came back cached and had to be discarded.** So no
+mechanism could be assumed here, and the positive control below is why.
 
 **Two arms, and the first is what makes the second mean anything. Reported**, from T7's implementer:
 
@@ -2188,7 +2191,7 @@ run-history sweep counting `ConnectionRefusedError` failures against total `test
   a statement the warehouse truncates.*
 - **The 1,000-row cache-flag window has no test** and is exercised only live (1001 returns HTTP
   400). Past 1,000 statements, *"outside the window"* and *"metrics unfilled"* both read `None`;
-  `.plans/cache_flag.sh` separates them with exit 3 and exit 2 because an operator acts differently
+  the operator tooling separates them with exit 3 and exit 2 because an operator acts differently
   on each, and the module accepts the conflation because **both discard the trial**. *What would
   exercise it: reading a flag for a statement more than 1,000 statements old.*
 - **The declared corpus is QUOTED from §0.3/§0.5/§0.10, not queried**, and its lock is a **drift**

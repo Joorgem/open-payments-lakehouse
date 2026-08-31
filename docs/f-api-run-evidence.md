@@ -367,10 +367,10 @@ only**: they are not the digests of the files in the Volume, which were derived 
 | `drifting` | `F1B-DRIFTING-2026-08` | 10,000 | 2,989,447 | `54db876f678396631edf7c2287cbf83c3b59d52360730612f611f760cc921425` |
 | `between-snapshots` | `F3-BETWEEN-SNAPSHOTS` | 10,000 | 2,926,409 | `3381ba267d857f3fbb7cc7b25ff0df1bb87b25f0a340719dfb44f1d8d8be9dac` |
 
-The first three byte counts are the ones `.plans/HANDOFF.md` published at F3's close and they
-reproduce **exactly**, which is the evidence that this probe is the same probe. The fourth was
-never published and is recorded here so the next edit to `profiles.py` has four rows to
-compare against rather than three.
+The first three byte counts are the ones F3 published at its close, pinned as `_BASELINE` in
+`scripts/probe_byte_identity.py`, and they reproduce **exactly**, which is the evidence that
+this probe is the same probe. The fourth was never published and is recorded here so the next
+edit to `profiles.py` has four rows to compare against rather than three.
 
 ### 1.2 What Task 3 then measured locally — every §1.1 number reproduced
 
@@ -1324,8 +1324,8 @@ a modified tree would have stamped +dirty.
 > than a design intent" was already true when it was written.
 >
 > **Authored by this phase's controller**, in the branch's final commit, *after* the
-> independent audit that was dispatched to catch exactly this. The path in: `.plans/HANDOFF.md`
-> and F3's evidence both carried "the provenance guard's REFUSAL is still unexercised in the
+> independent audit that was dispatched to catch exactly this. The path in: F3's evidence and
+> the working handoff both carried "the provenance guard's REFUSAL is still unexercised in the
 > workspace", **which was itself already false** — F3 inherited it and this phase inherited
 > it from F3. Nobody read the primary source. That is the species this document names three
 > times about other people's work, committed here about its own.
@@ -1836,9 +1836,12 @@ substitute.** `uv run pytest --collect-only -q` selects **2,106 of 2,112 collect
 deselected, no collection errors** at this revision. **That is a COLLECTION and not a run.**
 The whole suite has never executed on this branch: it does not fit this Windows box in one
 command (`tests/gold` alone exceeds the 600 s local tool cap, and two local Spark suites must
-never run concurrently — `.plans/HANDOFF.md` measures why), and CI is the only place it runs
-in one process. Individual files have been run and pass; **nobody may quote that as "the
-suite passes".**
+never run concurrently — measured: `tests/bronze/test_ptax_rules.py` returned **11 failed / 31
+passed** on the one run that had a second local Spark suite executing beside it and **54 of
+54** on three runs alone, and that concurrent suite was the one that died on `Python worker
+failed to connect back`, so this box's long-standing "flake" is JVM contention rather than
+randomness), and CI is the only place it runs in one process. Individual files have been
+run and pass; **nobody may quote that as "the suite passes".**
 
 **On review.** The review of record is the **split two-reviewer whole-branch pass**, code and
 docs as disjoint packages — the shape F2 established because one reviewer does not read that

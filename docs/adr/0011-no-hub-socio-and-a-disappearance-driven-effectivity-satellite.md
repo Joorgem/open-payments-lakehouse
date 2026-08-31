@@ -76,8 +76,9 @@ not merely unrepaired.**
 
 ### The second problem: "effectivity satellite" names two incompatible things
 
-`.plans/f2-research-snapshot-dv2.md` §3 records both definitions in circulation,
-and ADR 0010 deliberately left the adjudication to this one:
+Both definitions are in circulation, and ADR 0010 deliberately left the
+adjudication to this one. The §3a/§3b labels are the phase research snapshot's
+numbering, kept here and in `src/opl/vault/effectivity.py`:
 
 - **§3a — AutomateDV.** A window over a link with a **driving key**: *"In any Link
   there are two FK columns, one will change over time and the other will remain

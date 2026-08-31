@@ -241,7 +241,9 @@ repository that is public.
 
 **Controller-verified**, warehouse `13cf10c85b0f189d`, **six statements**, all
 `from_cache: None` — so none of these is the DBSQL result cache answering an earlier
-question (`.plans/HANDOFF.md`: "check `result_from_cache` or you will measure the cache").
+question. **That inference is withdrawn**: `docs/f-db-run-evidence.md` §0.5 measured that
+the statements API carries no `result_from_cache` key at all, so `None` here is a missing
+key and not a measured `False`. It names F3's evidence among the affected.
 
 > **CORRECTION — this said "all seven statements" and published six ids. Authored by this
 > phase's controller.** The distinct ids below are `268e`, `2d8f`, `4e3b`, `55c2`, `7388`

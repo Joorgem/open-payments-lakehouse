@@ -32,8 +32,8 @@ files with nothing aged out.
 > correction to `docs/f-db-run-evidence.md` §0.1 is inline there.
 >
 > **A statement id is therefore usable provenance for work of the last day**, which is why several
-> appear in this document. `.plans/sql.sh` sets `MSYS_NO_PATHCONV=1`; a bare `databricks api get` in
-> Git Bash does not, and its failure looks exactly like expiry.
+> appear in this document. The operator wrapper this project uses sets `MSYS_NO_PATHCONV=1`; a
+> bare `databricks api get` in Git Bash does not, and its failure looks exactly like expiry.
 
 **Predictions are published BEFORE the run that tests them** (master protocol §4.5). A number first
 written down after the run that produced it is not a prediction. §2 is where they live.
@@ -308,7 +308,7 @@ the provenance lens could reach none of `/api/2.0/tag-policies`, `/api/2.1/tag-p
 > > ~~*"with `next_page_token: null`"*~~ — **there is no such key.** Controller-re-verified: the
 > > response body's top-level keys are `['tag_policies']` and nothing else. Publishing `null` for a
 > > field nobody was served is **a structural absence printed in the shape of a measurement** —
-> > verbatim the defect `.plans/sql.sh`'s own header retracts for `from_cache: None`. **The
+> > verbatim the defect `docs/f-db-run-evidence.md` §0.5 retracts for `from_cache: None`. **The
 > > completeness conclusion survives and now rests on what actually supports it: 70 policies came
 > > back in one page.**
 > >
@@ -336,7 +336,7 @@ the provenance lens could reach none of `/api/2.0/tag-policies`, `/api/2.1/tag-p
 `/api/2.0/sql/history/queries?include_metrics=true` returns `status: FINISHED` with **4** metric keys
 and `result_from_cache: null`, filling to **29** keys about 3 s later — **but a cached result is
 complete on the first read**. Only the *uncached* runs transiently read `None`, which is the
-identical shape to the structural absence `.plans/sql.sh`'s own header retracts.
+identical shape to the structural absence `docs/f-db-run-evidence.md` §0.5 retracts.
 
 **So: poll until the flag is non-null, discard a run whose flag never fills, and never read `null` as
 `False`.**
@@ -383,7 +383,7 @@ reproduce exactly; the third did not reproduce, and one number moved that was sa
 `cache_origin_statement_id` beside it, which names *which* statement's result was reused.
 `system.information_schema.columns` returns both.
 
-`.plans/sql.sh`'s header says the flag *"IS served, by
+The operator wrapper's own header says the flag *"IS served, by
 `/api/2.0/sql/history/queries?include_metrics=true`"*. That is true and it is **incomplete**: the
 flag is also plain SQL, with no REST call, no `metrics` object to materialise, and therefore none of
 the transient-`null` race §0.7 exists for.

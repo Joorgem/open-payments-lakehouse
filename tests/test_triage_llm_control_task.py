@@ -324,9 +324,9 @@ def test_the_derived_quarantine_totals_reproduce_the_split_between_the_two_absen
 def test_a_trial_is_publishable_only_when_the_cache_is_MEASURED_off(
     state, flag, publishable
 ):
-    """`None` IS NOT FALSE, and the whole point of `.plans/cache_flag.sh` exiting non-zero
-    is that the two are different worlds. A null flag means the history endpoint has not
-    materialised its metrics yet -- and it does that late for UNCACHED runs only, so a
+    """`None` IS NOT FALSE, and the whole point of the operator flag reader exiting
+    non-zero is that the two are different worlds. A null flag means the history endpoint
+    has not materialised its metrics yet -- and it does that late for UNCACHED runs only, so a
     default of False would pass exactly the trials whose reading is missing. A `True`
     flag means the string came from the cache and measures the cache, not the model."""
     trial = {"state": state, "result_from_cache": flag}

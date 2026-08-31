@@ -237,9 +237,9 @@ where the labels above come from.
 WHAT IS DELIBERATELY LEFT OUT. `system.query.history.from_result_cache` is a real column
 and it is not here: it is a property of a STATEMENT, and summing it to task-run grain
 would need a third state for the NULLs, which is the exact confusion the rest of this file
-is about. `.plans/HANDOFF.md` records that this project has already published a cache flag
-that was a structural absence printed in the shape of a measurement; a half-honest one
-here would be the second.
+is about. `docs/f-db-run-evidence.md` §0.5 records that this project has already published
+a cache flag that was a structural absence printed in the shape of a measurement; a
+half-honest one here would be the second.
 
 AND THE NARROW WRITTEN RECORD IS REFUSED. F4's plan proposed a small Delta table for three
 things the platform cannot know -- reject counts on an idempotent re-run, and the vault

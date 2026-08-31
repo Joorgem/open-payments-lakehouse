@@ -503,7 +503,7 @@ databricks api get "/api/2.1/tag-policies?page_size=200" --profile opl-free
 **`next_page_token: null` was published here and has been withdrawn**: re-measured
 2026-08-18, the response body's only top-level key is `tag_policies`, so that field
 does not exist and the `null` was a structural absence printed in the shape of a
-reading — the same defect `.plans/sql.sh`'s own header retracts for `from_cache: None`.
+reading — the same defect `docs/f-db-run-evidence.md` §0.5 retracts for `from_cache: None`.
 **The completeness conclusion survives and its evidence is the count**: 70 entries
 returned against `page_size=200`, so nothing was left on a second page. It never rested
 on a token anybody was served.

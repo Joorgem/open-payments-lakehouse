@@ -47,8 +47,8 @@ from opl.generator.profiles import POOL_SIZE, PROFILES
 _POOL = validated_pool(tuple(f"{n:08d}" for n in range(1, POOL_SIZE + 1)))
 
 # (rows, bytes, sha256) per profile, against `_POOL`. The first three byte counts are the
-# ones `.plans/HANDOFF.md` published at F3's close; `between-snapshots`' and
-# `cross-currency`' were published by F-API Task 3 in `docs/f-api-run-evidence.md` §1.
+# ones F3 published at its close; `between-snapshots`' and `cross-currency`' were
+# published by F-API Task 3 in `docs/f-api-run-evidence.md` §1.
 _BASELINE: dict[str, tuple[int, int, str]] = {
     "clean": (
         10_000, 2_925_069,

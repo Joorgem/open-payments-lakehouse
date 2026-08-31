@@ -10,9 +10,9 @@ rather than of a layer, it also owns the guard -- so this file does not re-asser
 guard's position, its parameter or its environment, and `gold_dim_company_job.yml` is in
 its `_GUARDED_JOBS` instead. `test_vault_job_wiring.py` owns the vault, where a task is
 handed TWO registry keys. This file's subject is gold, where the mistakes are different
-again and where the file it would otherwise have joined is at exactly 800 lines
-(`.plans/2026-08-10-master-route-and-autonomy-protocol.md` section 4.12: whoever touches
-it splits it first).
+again and where the file it would otherwise have joined stood at exactly 800 lines when
+this one was written -- the cap `tests/test_size_caps.py` enforces, and whoever touches
+such a file splits it first.
 
 WHAT A GOLD TASK CAN GET WRONG THAT NO OTHER LAYER CAN. A gold job is handed ONE registry
 key and resolves everything else -- the satellite it reads, that satellite's parent hub,
