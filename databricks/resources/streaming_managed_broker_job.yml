@@ -23,9 +23,17 @@
 # Serverless TRIAL: $100 of credits, 14 days, provisioned 2026-08-19. The credits expire
 # around 2026-09-03 and the cluster then stops answering. After that this job fails at the
 # metadata fetch, and that failure is a dead trial account rather than a regression in this
-# repository -- `docs/f5-run-evidence.md` carries the run ids, the row counts and the date
-# the broker went away. Nothing else in this bundle depends on the broker being alive, and
-# nothing else may be made to.
+# repository -- `docs/f5-run-evidence.md` carries the run ids and the row counts.
+#
+# IT DOES NOT YET CARRY THE DATE THE BROKER WENT AWAY, and this line used to say it did
+# (corrected 2026-08-31 by F7 T7). That date is an OBLIGATION, not a record: ADR 0019
+# Decision 6 requires it to be written from a PROBE on or after the expiry, never from the
+# calendar -- because "expired trial", "revoked ACL", "wrong username" and "no route" all
+# produce one metadata timeout, which is the whole reason the date is written down. A
+# future obligation stated in the present tense is how a promise gets read as a discharge.
+#
+# Nothing else in this bundle depends on the broker being alive, and nothing else may be
+# made to.
 #
 # ===========================================================================================
 #
