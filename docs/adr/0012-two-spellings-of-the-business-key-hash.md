@@ -183,12 +183,16 @@ direction** must therefore be a decision, so both turn the suite red.
   would collapse the two spellings back into one, which is strictly better if it
   can be paid for.
 
-**AMENDED 2026-08-31 by F7 — the feed in the second condition arrived, and the project
-took a third option neither of its branches names.** F-DB's UTF-8 Postgres merchant
-registry is that feed. The runtime was not pinned and nothing is normalised before
-hashing: a row carrying one of the forty is **rejected at the bronze gate** under
-`unhashable_case_divergence` — `opl.bronze.rule_predicates._case_divergence_check`,
-registered against the merchant contract in `src/opl/bronze/rules.py`. **The choice is
-still unforced**, because merchant's business keys are ASCII: the divergence stays latent,
-and that rule has rejected nothing outside a fixture (`docs/f-db-run-evidence.md` §3).
-`src/opl/vault/hashing_spark.py`'s module docstring carries the same correction.
+**AMENDED 2026-08-31 by F7 — a UTF-8 feed arrived, and the project took an option none of
+the conditions above names.** F-DB's Postgres merchant registry is the wave-2 feed the
+Consequences anticipate — not cp1252-bound, so it can carry the forty. The runtime was not
+pinned and nothing is normalised before hashing: a row carrying one of the forty is
+**rejected at the bronze gate** under `unhashable_case_divergence` —
+`opl.bronze.rule_predicates._case_divergence_check`, registered against the merchant
+contract in `src/opl/bronze/rules.py`. **No condition above is met by this.** The one it
+resembles asks for a feed carrying one of the forty *as part of a business key*, and
+merchant keys on a Postgres `uuid` rendered by `::text` and on a digits-only `cnpj`
+(`src/opl/vault/domains/merchant_domain.py`) — both ASCII. **The choice is still unforced**:
+the divergence stays latent, and that rule has rejected nothing outside a fixture
+(`docs/f-db-run-evidence.md` §3). `src/opl/vault/hashing_spark.py`'s module docstring
+carries the same correction.

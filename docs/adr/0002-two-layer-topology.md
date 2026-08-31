@@ -4,9 +4,10 @@
 
 > **AMENDED 2026-08-17 by F-DB. HALF OF THIS PARAGRAPH WAS MEASURED FALSE BY F-API ON
 > 2026-08-14 AND F-API DID NOT COME BACK TO SAY SO.** The amendment is **scoped to this
-> Context**. The Decision below stands unchanged, and so does everything from *"Validation
+> Context**. The Decision below stands unchanged, ~~and so does everything from *"Validation
 > notes"* onward — those are live decisions cited by `CLAUDE.md`, `README.md` and
-> `docs/f0-validation-report.md`, and none of them is retracted here.
+> `docs/f0-validation-report.md`, and none of them is retracted here.~~ **Struck 2026-08-31
+> by F7: one of them is retracted in *"Validation notes"*, for the reason given next.**
 
 > **AND THAT RING-FENCE WAS DRAWN AROUND A FALSE SENTENCE. Amended 2026-08-31 by F7.**
 > The scope above was chosen to keep a correction narrow, and it left standing, in

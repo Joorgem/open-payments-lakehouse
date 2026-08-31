@@ -2084,9 +2084,10 @@ than as refused by circumstance, which is the opposite of what the paragraph abo
 `33226013099`, **attempt 2**.
 
 **Attempt 1 failed, and it was not the code.** It died at **2:37:43** with
-`ConnectionRefusedError: [Errno 111] Connection refused` across the vault suite —
-**45 failed, 2,994 passed, 177 errors, and not one failed assertion.** That is Spark's driver
-failing to come up on the runner.
+`ConnectionRefusedError: [Errno 111] Connection refused` across ~~the vault suite~~ **two
+suites, not one — 25 failures in `tests/vault` and 20 in `tests/triage_agent` (F7,
+2026-08-31)** — **45 failed, 2,994 passed, 177 errors, and not one failed assertion.** That
+is Spark's driver failing to come up on the runner.
 
 **The discrimination was derived before it was re-run, and here it is shorter than F5's
 version of the same argument:** `ef123ac` is a merge commit whose **tree hash is identical**
@@ -2095,46 +2096,79 @@ Where T8 had to argue *"the diff contains no executable line"*, here **there is 
 all** — a tree that already passed cannot have regressed. `gh run rerun --failed` was the
 action; no code was touched.
 
-> **THIS IS THE SECOND MEASURED OCCURRENCE, AND THE ENTRY EXISTS BECAUSE THE FAILURE LOOKS
-> CATASTROPHIC AND THE WRONG REACTION IS EXPENSIVE.**
+> **~~THIS IS THE SECOND MEASURED OCCURRENCE~~ — FOUR ARE MEASURED AND TWO OF THEM ARE ON
+> `main` (swept 2026-08-31 by F7). THE ENTRY EXISTS BECAUSE THE FAILURE LOOKS CATASTROPHIC
+> AND THE WRONG REACTION IS EXPENSIVE.**
 >
-> | run | head | result | duration |
-> |---|---|---|---|
-> | `32988241383` | `32c671c` (branch) | 47 failed, 2,828 passed, 172 errors | 1:18:06 |
-> | `33226013099` attempt 1 | `ef123ac` (main) | 45 failed, 2,994 passed, 177 errors | **2:37:43** |
+> `32988241383` (`32c671c`, branch), `33213726510` (`4a70dd8`, branch), `33226013099`
+> attempt 1 (`ef123ac`, **main**) and `33415074589` attempt 1 (`d091e37`, **main**) — each
+> with **637–654 `ConnectionRefusedError`**, and each failing 25 tests in `tests/vault` and
+> 20–24 in `tests/triage_agent`.
 >
-> **~~Three~~ Two ways to tell it from a real failure:** a mass `ConnectionRefusedError` with **no
-> `assert`** in the failure lines means no test decided anything; and **compare the tree, not the
-> diff** (`git rev-parse <a>^{tree} <b>^{tree} | uniq -c`). ~~And **duration is the tell** —
-> healthy `test` on this suite is ~1 h 32 m, and F6 also saw a 2 h 55 m run that was
-> cancelled.~~
+> **~~Three~~ Two ways to tell it from a real failure:** a mass `ConnectionRefusedError`
+> ~~with **no `assert`** in the failure lines~~ — **637–654 of them, against ZERO in every
+> other failed `test` job this repository has recorded** — means no test decided anything;
+> and **compare the tree, not the diff** (`git rev-parse <a>^{tree} <b>^{tree} | uniq -c`).
+> ~~And **duration is the tell** — healthy `test` on this suite is ~1 h 32 m, and F6 also saw
+> a 2 h 55 m run that was cancelled.~~
 >
-> **FALSIFIED 2026-08-31 (F7), AND NOT MERELY WEAKENED: the two failures fall strictly INSIDE
-> the range of the successes**, so duration carries no information about health here. The
-> `test` job's *Unit tests* step, sorted:
+> **THE ABSENT `assert` WAS NEVER CHECKED AGAINST THE ALTERNATIVE, AND DOES NOT SEPARATE
+> ANYTHING (F7, 2026-08-31).** The only other `test` failures this repository has recorded
+> are `Py4JJavaError` too: executor `OutOfMemoryError` on
+> `test_loading_july_after_june_adds_only_what_july_changed` (`32186941292`, and
+> `32281092103` attempt 1), and a log4j `StackOverflowError` in `tests/triage_agent`
+> (`33216546890`). Each failed exactly one test and **none shows a failed `assert`** either.
+> **The COUNT is the discriminator; the missing `assert` describes every one of them.**
 >
-> | pytest step | run | head | conclusion |
-> |---|---|---|---|
-> | 0 h 34 m 01 s | `33221161576` | `b7ea3f0` | success |
-> | 1 h 18 m 08 s | `32988241383` | `32c671c` | **failure — this flake** |
-> | 1 h 32 m 40 s | `33415177782` | `8a91c72` | success |
-> | 1 h 34 m 38 s | `33221210084` | `038f7c7` | success |
-> | 2 h 37 m 45 s | `33226013099` attempt 1 | `ef123ac` | **failure — this flake** |
-> | 3 h 28 m 49 s | `33339004178` | `cca6e31` | success |
-> | 4 h 53 m 08 s | `33226013099` attempt 2 | `ef123ac` | success |
+> **AND THE FOURTH OCCURRENCE IS THIS PHASE'S OWN SUBJECT, ARRIVING IN ITS OWN CI LOG.**
+> `33415074589` was the merge of PR #30 to `main`, and its `test` job went red at
+> **18:51:12Z** on 2026-08-31. The merge of PR #31 had already finished **green at
+> 18:47:05Z** — four minutes earlier, on the same branch, from a commit that has `d091e37`
+> as an ancestor. So the newest run on `main` was green while the red one under it was
+> still running, and **F7's independent review is what surfaced it, hours later.**
+> A measurement that is correct and that nothing consumes is what this phase is about.
 >
-> Derive any row with
-> `gh api repos/Joorgem/open-payments-lakehouse/actions/runs/<id>/jobs --jq '.jobs[] | select(.name=="test") | .steps[] | select(.name|test("Unit tests")) | [.started_at,.completed_at] | @tsv'`,
-> and `.../runs/<id>/attempts/<n>/jobs` for a re-run attempt. **The discriminator is the
-> signature, not the clock.**
+> **FALSIFIED 2026-08-31 (F7), AND NOT MERELY WEAKENED: successful runs of the same step come
+> in both shorter and longer than all four.** The `test` job's *Unit tests* step ran
+> **31 m 23 s** on `33424009822` (`24fcefe`, main — 3,231 tests) and **4 h 53 m 08 s** on
+> `33226013099` attempt 2 (`ef123ac`, main — 3,214 tests). The four land at 1 h 18 m,
+> 2 h 14 m, 2 h 36 m and 2 h 38 m, inside that spread on both sides: nine times the wall
+> clock for ~3,200 tests either way, so the clock says nothing about health. **The 2 h 55 m
+> cancelled run in the struck sentence is real** — `33200277442` attempt 1, `18:39:32Z` to
+> `21:34:45Z`. What failed was the inference from it, not the number.
+>
+> **THE SWEEP THAT FINDS THESE DOES NOT FIND ALL FOUR, AND THAT IS A PROPERTY OF
+> RE-RUNNING.** `gh run list` reports a run's LATEST attempt, so a flake re-run to green
+> leaves the failure list altogether: `33226013099` reads *success* there, and `33415074589`
+> left it the moment its re-run started, while this paragraph was being written. Both were
+> read from attempt 1. Three more ids the list returns are `secret-scan` failures whose
+> `test` job passed (`31720457396`, `31720196253`, `31719914214`, F3). **The failure list is
+> where the sweep starts, not the population it covers.**
+>
+> ```bash
+> gh run list --limit 300 --json databaseId,conclusion --jq '.[]|select(.conclusion=="failure")|.databaseId'
+> # and the re-run attempts that list cannot show:
+> gh api --paginate 'repos/Joorgem/open-payments-lakehouse/actions/runs?per_page=100' \
+>   --jq '.workflow_runs[]|select(.run_attempt>1)|[.id,.run_attempt]|@tsv'
+> gh run view <id> [--attempt <n>] --log-failed > r.log
+> grep -c ConnectionRefusedError r.log ; grep -cE 'E +assert' r.log
+> grep -oE 'FAILED tests/[a-z_]+' r.log | sort | uniq -c
+> gh api 'repos/Joorgem/open-payments-lakehouse/actions/runs/<id>/jobs' \
+>   --jq '.jobs[]|select(.name=="test")|.steps[]|select(.name|test("Unit tests"))|[.started_at,.completed_at]|@tsv'
+> ```
+>
+> **The discriminator is the signature, not the clock.**
 >
 > **Do NOT "fix" anything on a mass `ConnectionRefusedError`.** There is nothing there to
 > fix, and a code change made under that misreading is a real defect introduced to chase a
 > phantom — which is this phase's own hunted species arriving in the CI log.
 
-*What remains unexercised: nothing measures where this flake comes from, or how often. Two
-occurrences in one week is a rate over an unknown denominator. What would exercise it: a
-run-history sweep counting `ConnectionRefusedError` failures against total `test` runs.*
+*What remains unexercised: nothing measures where this flake comes from. ~~Two occurrences in
+one week is a rate over an unknown denominator. What would exercise it: a run-history sweep
+counting `ConnectionRefusedError` failures against total `test` runs.~~ **F7 ran that sweep on
+2026-08-31: four occurrences, all between 2026-08-26 and 2026-08-31, over the 120 runs this
+repository has recorded since 2026-07-23.** It is still not a rate — `gh run list` counts RUNS
+and this flake is a property of ATTEMPTS — and the cause is still unmeasured.*
 
 ### Carried out of T8 and T8b, and every entry names what would exercise it
 

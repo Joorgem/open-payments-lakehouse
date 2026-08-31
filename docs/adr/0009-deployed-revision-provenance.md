@@ -228,10 +228,14 @@ not, and an earlier draft of this ADR said it was.
 > ```
 >
 > It names `smoke_job.yml` — the exclusion argued below — and `dataops_dashboard.yml`,
-> which declares no job at all.
-> `tests/test_job_yaml_launch_guards.py::test_every_yaml_under_resources_is_classified`
-> holds that classification total over the directory, so a job added without an answer
-> fails there rather than inheriting one.
+> which declares no job at all. **That `grep -L` proves PRESENCE and nothing about order**,
+> so it is not the evidence for *first*. Two tests in
+> `tests/test_job_yaml_launch_guards.py` carry the rest:
+> `test_every_yaml_under_resources_is_classified` holds the classification total over the
+> directory, so a job added without an answer fails there rather than inheriting one; and
+> `test_the_revision_guard_runs_first_and_everything_else_waits_for_it`, parametrised over
+> `_GUARDED_JOBS`, is what makes *first* true — the guard task must carry no `depends_on`,
+> and every other task in the job must have it among its ancestors.
 
 What had to be argued, job by job:
 
