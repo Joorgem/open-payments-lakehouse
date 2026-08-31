@@ -511,9 +511,12 @@ READINGS: tuple[Reading, ...] = (
         state=NOT_MET,
         date="2026-08-30",
         why=(
-            "still the number nobody has. `rejected_by_our_gate` is the one state of ADR "
-            "0010's five-state model that has never had a witness in any source (F7 plan "
-            "§0.4), so there is nothing to measure the open windows over"
+            "still the number nobody has, and the reason given here until F7 T4 was false. "
+            "`rejected_by_our_gate` is NOT witnessless: ADR 0010's own measured table gives "
+            "4 rows (estabelecimentos 2026-07), 1,792 and 1,781 (socios). What had never "
+            "been witnessed was the state for MERCHANT, and F7 T4 ended that too -- one "
+            "row, `bad_cnpj_shape`, run 529699767706804. The condition asks for a "
+            "measurement of how many such keys have an OPEN window, and nobody has taken it"
         ),
     ),
     Reading(
