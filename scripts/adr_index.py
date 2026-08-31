@@ -556,9 +556,13 @@ READINGS: tuple[Reading, ...] = (
         state=LOOKS_MET,
         date="2026-08-29",
         why=(
-            "lineage IS readable — `system.access.table_lineage`, **3,327 rows, 72 "
-            "distinct target tables**, 2026-07-24 to 2026-08-28, statement "
-            "`01f1a4c2-1cfb-115a-a947-5a2fbc1aec10` — and it carries the hard "
+            "lineage IS readable — `system.access.table_lineage`, **3,327 rows and 72 "
+            "distinct `target_table_full_name`** (the COLUMN matters: F7 re-measured "
+            "3,340 rows, 72 distinct `target_table_full_name` and **67** distinct "
+            "`target_table_name`, and reading those two against each other as a drop "
+            "nearly published a retention finding that was two columns), 2026-07-24 to "
+            "2026-08-28, statement `01f1a4c2-1cfb-115a-a947-5a2fbc1aec10` — and it "
+            "carries the hard "
             "`bronze_payments -> fact_payment` edge this decision said a vault-path walk "
             "would miss. It is not COMPLETE: it records EXECUTIONS (`event_time`) while "
             "the manifest states STRUCTURE, so it answers *nothing downstream* for a "
