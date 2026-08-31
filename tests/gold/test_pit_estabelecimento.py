@@ -548,7 +548,7 @@ def test_the_load_date_is_the_one_the_rest_of_the_layer_writes_under_any_session
 def test_a_satellite_carrying_a_null_applied_date_is_refused_before_anything_is_derived(
     spark, estab_bronze, vault_loaded, pit_target
 ):
-    """T-E. `docs/f-db-run-evidence.md` §0.2 records a `LEFT ANTI JOIN … USING` on a
+    """T-E. `docs/f2-wave-1-run-evidence.md` records a `LEFT ANTI JOIN … USING` on a
     nullable key inventing **8,757 phantom departures**: NULL never matches under plain
     equality. This module has exactly one join and both its keys are non-NULL -- the hash
     key because `opl.vault.hashing_spark._encoded` returns a token on its NULL branch too,

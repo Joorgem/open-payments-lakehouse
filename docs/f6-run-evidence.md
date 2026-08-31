@@ -2166,8 +2166,8 @@ action; no code was touched.
 *What remains unexercised: nothing measures where this flake comes from. ~~Two occurrences in
 one week is a rate over an unknown denominator. What would exercise it: a run-history sweep
 counting `ConnectionRefusedError` failures against total `test` runs.~~ **F7 ran that sweep on
-2026-08-31: four occurrences, all between 2026-08-26 and 2026-08-31, over the 120 runs this
-repository has recorded since 2026-07-23.** It is still not a rate — `gh run list` counts RUNS
+2026-08-31: four occurrences, all between 2026-08-26 and 2026-08-31, over this repository's whole
+run history since 2026-07-23.** It is still not a rate — `gh run list` counts RUNS
 and this flake is a property of ATTEMPTS — and the cause is still unmeasured.*
 
 ### Carried out of T8 and T8b, and every entry names what would exercise it

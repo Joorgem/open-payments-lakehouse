@@ -1836,9 +1836,11 @@ substitute.** `uv run pytest --collect-only -q` selects **2,106 of 2,112 collect
 deselected, no collection errors** at this revision. **That is a COLLECTION and not a run.**
 The whole suite has never executed on this branch: it does not fit this Windows box in one
 command (`tests/gold` alone exceeds the 600 s local tool cap, and two local Spark suites must
-never run concurrently — measured: `tests/bronze/test_ptax_rules.py` returned **11 failed / 31
-passed** on the one run that had a second local Spark suite executing beside it and **54 of
-54** on three runs alone, and that concurrent suite was the one that died on `Python worker
+never run concurrently — measured as a matched pair on ONE revision of the file:
+`tests/bronze/test_ptax_rules.py` returned **11 failed / 31 passed** on the one run that had
+a second local Spark suite executing beside it, and **42 passed on an identical rerun** with
+nothing beside it — 11 + 31 = 42, which is what makes those two arms the same file rather
+than two versions of it — and that concurrent suite was the one that died on `Python worker
 failed to connect back`, so this box's long-standing "flake" is JVM contention rather than
 randomness), and CI is the only place it runs in one process. Individual files have been
 run and pass; **nobody may quote that as "the suite passes".**

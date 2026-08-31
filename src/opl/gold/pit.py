@@ -68,7 +68,7 @@ table, not the frame, for `opl.gold.dimensions._distinct_surrogate_keys`' reason
 measuring before the write would mean deriving the whole thing a second time.
 
 EVERY JOIN AUDITED FOR NULL, BECAUSE A PIT IS AN OUTER-JOIN SHAPE BY NATURE AND THIS
-REPOSITORY HAS ALREADY PAID FOR ONE. `docs/f-db-run-evidence.md` §0.2 records a `LEFT ANTI
+REPOSITORY HAS ALREADY PAID FOR ONE. `docs/f2-wave-1-run-evidence.md` records a `LEFT ANTI
 JOIN … USING` on a nullable partner key inventing **8,757 phantom departures**, because
 NULL never matches under plain equality. There is exactly ONE join in this module -- `_new_rows`'
 anti-join on (hash key, `as_of_date`) -- and both of its keys are provably non-NULL:

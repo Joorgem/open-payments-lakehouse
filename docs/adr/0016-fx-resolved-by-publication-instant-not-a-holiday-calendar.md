@@ -272,7 +272,9 @@ zone does. Both are repaired; the repaired test is what produced the table above
 > `tests/gold/test_fact_payment.py::test_the_fact_is_unchanged_when_it_is_built_under_a_non_utc_session_zone`
 > refused it. It reads `day_of(event_time)` now, the same ten characters `event_date_key`
 > comes from. This is the third instance in this lakehouse after `company_sk`
-> (ADR 0015) and `event_date_key` (`src/opl/gold/conformed.py`).
+> (`src/opl/gold/dimensions.py` — its first spelling hashed `valid_from`, a TIMESTAMP,
+> and three session zones produced three different keys for one version) and
+> `event_date_key` (`src/opl/gold/conformed.py`).
 
 ---
 
