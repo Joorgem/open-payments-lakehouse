@@ -8,6 +8,14 @@
 > notes"* onward — those are live decisions cited by `CLAUDE.md`, `README.md` and
 > `docs/f0-validation-report.md`, and none of them is retracted here.
 
+> **AND THAT RING-FENCE WAS DRAWN AROUND A FALSE SENTENCE. Amended 2026-08-31 by F7.**
+> The scope above was chosen to keep a correction narrow, and it left standing, in
+> *"Validation notes"*, the claim *"The blocked-egress mitigation is validated"* — which
+> rests on the same F0 row this amendment's own evidence falsifies, and which
+> `docs/f0-validation-report.md` strikes. One Consequence carried two more false claims.
+> Each is struck where it stands, below. **A boundary drawn around a defect is how a
+> correction pass leaves one behind.**
+
 ~~Databricks Free Edition serverless compute blocks outbound internet to
 untrusted domains (DNS resolution fails); LinkedIn verification does not lift
 this. Therefore BCB API calls and Postgres reads cannot run as Databricks jobs.~~
@@ -48,7 +56,17 @@ canonical ingest-vs-transform separation, validated by scripts/validate_uc_volum
 
 ## Consequences
 - The "same core transforms regardless of source" story strengthens the design.
-- Auth is PAT-only on Free; bundles use serverless + %pip.
+- ~~Auth is PAT-only on Free; bundles use serverless + %pip.~~ **Serverless stands; the
+  other two claims were measured false after this was written (F7, 2026-08-31).**
+  *Auth:* **a service principal with an OAuth secret is available on Free Edition** —
+  ADR 0008's 2026-08-18 note says so, *"The lag: group membership is not a switch"* read
+  `is_member` on the `opl-free` warehouse through one, and
+  `scripts/rebuild_pii_reader_sp.py` rebuilds it. PAT is what this project uses, not what
+  Free allows. *`%pip`:* bundles install the wheel through an `environments:` block
+  instead, and no bundle job installs anything with `%pip` —
+  `grep -L 'dist/\*\.whl' databricks/resources/*.yml` names only
+  `dataops_dashboard.yml`, which declares no job, and
+  `grep -rn '%pip' databricks/` returns nothing.
 
 ## Validation notes (Task 5, harness phase)
 
@@ -62,7 +80,13 @@ canonical ingest-vs-transform separation, validated by scripts/validate_uc_volum
 - **UC Volume upload+download roundtrip: OK.** This is the go/no-go gate for
   the topology above — the control-plane PAT path can land files into a UC
   Volume from off-Databricks compute, and Databricks-side code can read them
-  back byte-identical. The blocked-egress mitigation is validated.
+  back byte-identical. ~~The blocked-egress mitigation is validated.~~ **Struck
+  2026-08-31 (F7): the roundtrip result stands, the inference does not.** The upload
+  travels the control plane and touches serverless egress not at all, so it cannot
+  validate a mitigation for blocked egress — and egress was not blocked.
+  `docs/f0-validation-report.md` strikes the row this sentence rests on, under
+  *"The first row was falsified, and the probe never tested it"*, and
+  `scripts/validate_uc_volume.py`'s docstring has said so since 2026-08-17.
 - **SDK gotcha:** `databricks-sdk==0.40.0`'s `WorkspaceClient.volumes.create`
   requires `volume_type` to be a `databricks.sdk.service.catalog.VolumeType`
   enum member, not the raw string `"MANAGED"` — passing a string raises

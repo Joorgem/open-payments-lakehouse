@@ -21,8 +21,11 @@ empirically:
 > **AMENDED 2026-08-17 by F-DB: the egress half of that alternative is ruled out, so the
 > remaining explanation is the install budget.** This line offered two causes it could not
 > separate. F-API's Task 0 separated them by measurement — a serverless task resolved a public
-> host, got HTTP 200 and pulled 192,973 bytes, and `requests` calls now run in production from
-> a job task. **Egress is not what failed the ~300 MB pyspark fetch.** The decision below is
+> host and took HTTP 200 from it for a 220-byte body, and pulled **192,973 bytes from a
+> second, unrelated host**; `requests` calls now run in production from
+> a job task. **Egress is not what failed the ~300 MB pyspark fetch.** The second host is the
+> load-bearing half: one host is consistent with a single allowlisted domain, and it is the
+> second that rules that out. The decision below is
 > unchanged; only the attributed cause narrows, and it narrows to the half that was always the
 > more likely of the two.
 

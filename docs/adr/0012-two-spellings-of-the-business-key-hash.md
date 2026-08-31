@@ -182,3 +182,13 @@ direction** must therefore be a decision, so both turn the suite red.
 - A measurement showing the UDF cost is affordable on the target cluster. That
   would collapse the two spellings back into one, which is strictly better if it
   can be paid for.
+
+**AMENDED 2026-08-31 by F7 — the feed in the second condition arrived, and the project
+took a third option neither of its branches names.** F-DB's UTF-8 Postgres merchant
+registry is that feed. The runtime was not pinned and nothing is normalised before
+hashing: a row carrying one of the forty is **rejected at the bronze gate** under
+`unhashable_case_divergence` — `opl.bronze.rule_predicates._case_divergence_check`,
+registered against the merchant contract in `src/opl/bronze/rules.py`. **The choice is
+still unforced**, because merchant's business keys are ASCII: the divergence stays latent,
+and that rule has rejected nothing outside a fixture (`docs/f-db-run-evidence.md` §3).
+`src/opl/vault/hashing_spark.py`'s module docstring carries the same correction.

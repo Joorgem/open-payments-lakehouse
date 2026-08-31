@@ -9,10 +9,11 @@ is a fact about markdown.
 WHY THIS IS A GENERATOR AND NOT A PAGE SOMEBODY TYPED. This repository's signature
 defect is a hand-maintained list that nobody updates: the route doc's status column
 was stale for five phases, the "guards found" tally is spelled five ways in five
-places and none of them moved when it grew, and ADR 0009's job list names 5 jobs of
-20. A hand-written index of twenty ADRs would be that defect, introduced by the
-phase whose subject is that defect. So the index is derived from the files, and
-`tests/test_adr_index.py` fails when the index and the ADR set disagree.
+places and none of them moved when it grew, and ADR 0009's job list named 5 jobs of
+20 until F7 Task 3 struck it. A hand-written index of twenty ADRs would be that
+defect, introduced by the phase whose subject is that defect. So the index is derived
+from the files, and `tests/test_adr_index.py` fails when the index and the ADR set
+disagree.
 
 WHERE THIS LIVES, AND WHAT WAS REJECTED. `scripts/` is this repository's home for
 tools that run on a developer's host against the repo tree

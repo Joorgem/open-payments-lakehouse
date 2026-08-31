@@ -2100,11 +2100,30 @@ action; no code was touched.
 > | `32988241383` | `32c671c` (branch) | 47 failed, 2,828 passed, 172 errors | 1:18:06 |
 > | `33226013099` attempt 1 | `ef123ac` (main) | 45 failed, 2,994 passed, 177 errors | **2:37:43** |
 >
-> **Three ways to tell it from a real failure:** a mass `ConnectionRefusedError` with **no
-> `assert`** in the failure lines means no test decided anything; **compare the tree, not the
-> diff** (`git rev-parse <a>^{tree} <b>^{tree} | uniq -c`); and **duration is the tell** —
+> **~~Three~~ Two ways to tell it from a real failure:** a mass `ConnectionRefusedError` with **no
+> `assert`** in the failure lines means no test decided anything; and **compare the tree, not the
+> diff** (`git rev-parse <a>^{tree} <b>^{tree} | uniq -c`). ~~And **duration is the tell** —
 > healthy `test` on this suite is ~1 h 32 m, and F6 also saw a 2 h 55 m run that was
-> cancelled.
+> cancelled.~~
+>
+> **FALSIFIED 2026-08-31 (F7), AND NOT MERELY WEAKENED: the two failures fall strictly INSIDE
+> the range of the successes**, so duration carries no information about health here. The
+> `test` job's *Unit tests* step, sorted:
+>
+> | pytest step | run | head | conclusion |
+> |---|---|---|---|
+> | 0 h 34 m 01 s | `33221161576` | `b7ea3f0` | success |
+> | 1 h 18 m 08 s | `32988241383` | `32c671c` | **failure — this flake** |
+> | 1 h 32 m 40 s | `33415177782` | `8a91c72` | success |
+> | 1 h 34 m 38 s | `33221210084` | `038f7c7` | success |
+> | 2 h 37 m 45 s | `33226013099` attempt 1 | `ef123ac` | **failure — this flake** |
+> | 3 h 28 m 49 s | `33339004178` | `cca6e31` | success |
+> | 4 h 53 m 08 s | `33226013099` attempt 2 | `ef123ac` | success |
+>
+> Derive any row with
+> `gh api repos/Joorgem/open-payments-lakehouse/actions/runs/<id>/jobs --jq '.jobs[] | select(.name=="test") | .steps[] | select(.name|test("Unit tests")) | [.started_at,.completed_at] | @tsv'`,
+> and `.../runs/<id>/attempts/<n>/jobs` for a re-run attempt. **The discriminator is the
+> signature, not the clock.**
 >
 > **Do NOT "fix" anything on a mass `ConnectionRefusedError`.** There is nothing there to
 > fix, and a code change made under that misreading is a real defect introduced to chase a

@@ -7,8 +7,10 @@ landing path, which is what the topology rests on and what this file has always
 verified. It says NOTHING about serverless egress -- and the sentence that used
 to close this paragraph, "even though serverless compute cannot reach the public
 internet", was measured FALSE on 2026-08-14: a serverless task resolved a public
-host, received HTTP 200 and pulled 192,973 bytes, and an API fetch has since run
-as a production job task. Corrected here in 2026-08-17's pass rather than only in
+host and received HTTP 200 from it, pulled 192,973 bytes from a SECOND, UNRELATED
+host, and an API fetch has since run as a production job task. Two hosts and not
+one: one host is consistent with a single allowlisted domain, and it is the second
+that rules that out. Corrected here in 2026-08-17's pass rather than only in
 ADR 0002, because a retraction that reaches the ADR and not the code is this
 repository's own documented failure, committed twice in F-API.
 

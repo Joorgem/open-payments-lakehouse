@@ -165,6 +165,14 @@ for it deserves to find it here rather than in an ADR about the vault:
 | `dim_customer` (SCD2) | **out of scope** | `hub_customer`, which is F2 wave 2 |
 | `dim_socio` | **forbidden** ([ADR 0011](0011-no-hub-socio-and-a-disappearance-driven-effectivity-satellite.md)) | nothing — the RFB withheld the identity |
 
+**`hub_merchant` is a different merchant, and a reader searching this repository for
+"merchant" finds both.**
+[ADR 0017](0017-a-postgres-snapshot-diff-and-the-key-that-is-not-in-the-payload.md)
+Decision 5 keys `hub_merchant` on the F-DB Postgres registry's own `merchant_id` and reaches
+the company through a link; the `dim_merchant` deferred above is the spec's
+*estabelecimento*-grained SCD2 dimension over Receita CNPJ data. Building one does not
+unblock the other — this row's condition is still the F1b re-run named beside it.
+
 ## Consequences
 
 - **The star's headline claim is narrower than §4.3's and is exactly true.** It

@@ -47,8 +47,10 @@ Three things, and the third is the one worth the phase:
 The extraction runs off Databricks, as every source in this project does. **The reason
 this project gave for that was measured false by F-API and is not the reason here.**
 ADR 0002's Context claimed Free Edition serverless blocks outbound internet; a serverless task
-has since resolved a public host, taken HTTP 200, pulled 192,973 bytes, and run an API fetch
-**in production**.
+has since resolved a public host and taken HTTP 200 from it, pulled 192,973 bytes from a
+**second, unrelated** host, and run an API fetch **in production**. Two hosts, not one:
+one host is consistent with a single allowlisted domain, and it is the second that rules
+that out.
 
 **What rules out a Databricks-side Postgres read is that the database is a container bound to
 `localhost:5433` on a machine behind a home NAT.** Egress *out of* Databricks creates no route
@@ -309,3 +311,8 @@ reconstructed at its end. It is long on purpose.
   their delete.
 - [ADR 0016](0016-fx-resolved-by-publication-instant-not-a-holiday-calendar.md) — the second of
   Pattern 1's three sources.
+- [ADR 0014](0014-dim-company-at-empresa-grain.md) — **the other merchant.** Its
+  `dim_merchant` is the spec's *estabelecimento*-grained SCD2 dimension over Receita CNPJ
+  data, deferred there; Decision 5's `hub_merchant` is the Postgres registry's own entity
+  and is not a step towards it. Linked because "merchant" otherwise has two answers in this
+  repository and nothing joining them.
