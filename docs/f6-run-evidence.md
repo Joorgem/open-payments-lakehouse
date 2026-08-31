@@ -403,8 +403,8 @@ and F5 established the same rule for the winget packages directory.
 
 ### 0.7 A DEFECT IN THE RECORD F5 CLOSED FIVE DAYS AGO
 
-`.plans/HANDOFF.md`'s **"TWO STANDING FACTS THAT MUST NOT BE LOST"** item 1, and
-`docs/f5-run-evidence.md` §3's *"Carried out of the phase as follow-ups"*, both state that
+`docs/f5-run-evidence.md` §3's *"Carried out of the phase as follow-ups"*, and the working
+handoff's standing-facts list, both state that
 `src/opl/streaming/watermarked_dedup.py` sits at **795** of the 800-line cap and
 `tests/test_streaming_watermarked_dedup.py` at **793**, and instruct whoever touches either to
 split it first.
@@ -1373,8 +1373,11 @@ shipped path: nothing under `src/opl/` imports it and it is in no bundle YAML.
 n = 5 trials of a textually identical statement is exactly the shape the DBSQL result cache
 answers. Then *"five of five agreed"* measures the cache, and **"the model is deterministic" and
 "the cache answered" produce one string** — ADR 0018's species inside the experiment built to hunt
-it. `.plans/sql.sh`'s header already records, measured, that a **comment nonce does not defeat this
-cache**, so no mechanism could be assumed.
+it. `docs/f1.4b-pr-b-run-evidence.md` §24.7 already records, measured, that a **comment nonce
+does not defeat this cache**: DBSQL strips comments before computing the key, and the key is on
+the normalised logical plan rather than the text, so `VERSION AS OF` and an output-column alias
+were cached too. **16 of 24 executions there came back cached and had to be discarded.** So no
+mechanism could be assumed here, and the positive control below is why.
 
 **Two arms, and the first is what makes the second mean anything. Reported**, from T7's implementer:
 
@@ -2081,9 +2084,10 @@ than as refused by circumstance, which is the opposite of what the paragraph abo
 `33226013099`, **attempt 2**.
 
 **Attempt 1 failed, and it was not the code.** It died at **2:37:43** with
-`ConnectionRefusedError: [Errno 111] Connection refused` across the vault suite —
-**45 failed, 2,994 passed, 177 errors, and not one failed assertion.** That is Spark's driver
-failing to come up on the runner.
+`ConnectionRefusedError: [Errno 111] Connection refused` across ~~the vault suite~~ **two
+suites, not one — 25 failures in `tests/vault` and 20 in `tests/triage_agent` (F7,
+2026-08-31)** — **45 failed, 2,994 passed, 177 errors, and not one failed assertion.** That
+is Spark's driver failing to come up on the runner.
 
 **The discrimination was derived before it was re-run, and here it is shorter than F5's
 version of the same argument:** `ef123ac` is a merge commit whose **tree hash is identical**
@@ -2092,27 +2096,79 @@ Where T8 had to argue *"the diff contains no executable line"*, here **there is 
 all** — a tree that already passed cannot have regressed. `gh run rerun --failed` was the
 action; no code was touched.
 
-> **THIS IS THE SECOND MEASURED OCCURRENCE, AND THE ENTRY EXISTS BECAUSE THE FAILURE LOOKS
-> CATASTROPHIC AND THE WRONG REACTION IS EXPENSIVE.**
+> **~~THIS IS THE SECOND MEASURED OCCURRENCE~~ — FOUR ARE MEASURED AND TWO OF THEM ARE ON
+> `main` (swept 2026-08-31 by F7). THE ENTRY EXISTS BECAUSE THE FAILURE LOOKS CATASTROPHIC
+> AND THE WRONG REACTION IS EXPENSIVE.**
 >
-> | run | head | result | duration |
-> |---|---|---|---|
-> | `32988241383` | `32c671c` (branch) | 47 failed, 2,828 passed, 172 errors | 1:18:06 |
-> | `33226013099` attempt 1 | `ef123ac` (main) | 45 failed, 2,994 passed, 177 errors | **2:37:43** |
+> `32988241383` (`32c671c`, branch), `33213726510` (`4a70dd8`, branch), `33226013099`
+> attempt 1 (`ef123ac`, **main**) and `33415074589` attempt 1 (`d091e37`, **main**) — each
+> with **637–654 `ConnectionRefusedError`**, and each failing 25 tests in `tests/vault` and
+> 20–24 in `tests/triage_agent`.
 >
-> **Three ways to tell it from a real failure:** a mass `ConnectionRefusedError` with **no
-> `assert`** in the failure lines means no test decided anything; **compare the tree, not the
-> diff** (`git rev-parse <a>^{tree} <b>^{tree} | uniq -c`); and **duration is the tell** —
-> healthy `test` on this suite is ~1 h 32 m, and F6 also saw a 2 h 55 m run that was
-> cancelled.
+> **~~Three~~ Two ways to tell it from a real failure:** a mass `ConnectionRefusedError`
+> ~~with **no `assert`** in the failure lines~~ — **637–654 of them, against ZERO in every
+> other failed `test` job this repository has recorded** — means no test decided anything;
+> and **compare the tree, not the diff** (`git rev-parse <a>^{tree} <b>^{tree} | uniq -c`).
+> ~~And **duration is the tell** — healthy `test` on this suite is ~1 h 32 m, and F6 also saw
+> a 2 h 55 m run that was cancelled.~~
+>
+> **THE ABSENT `assert` WAS NEVER CHECKED AGAINST THE ALTERNATIVE, AND DOES NOT SEPARATE
+> ANYTHING (F7, 2026-08-31).** The only other `test` failures this repository has recorded
+> are `Py4JJavaError` too: executor `OutOfMemoryError` on
+> `test_loading_july_after_june_adds_only_what_july_changed` (`32186941292`, and
+> `32281092103` attempt 1), and a log4j `StackOverflowError` in `tests/triage_agent`
+> (`33216546890`). Each failed exactly one test and **none shows a failed `assert`** either.
+> **The COUNT is the discriminator; the missing `assert` describes every one of them.**
+>
+> **AND THE FOURTH OCCURRENCE IS THIS PHASE'S OWN SUBJECT, ARRIVING IN ITS OWN CI LOG.**
+> `33415074589` was the merge of PR #30 to `main`, and its `test` job went red at
+> **18:51:12Z** on 2026-08-31. The merge of PR #31 had already finished **green at
+> 18:47:05Z** — four minutes earlier, on the same branch, from a commit that has `d091e37`
+> as an ancestor. So the newest run on `main` was green while the red one under it was
+> still running, and **F7's independent review is what surfaced it, hours later.**
+> A measurement that is correct and that nothing consumes is what this phase is about.
+>
+> **FALSIFIED 2026-08-31 (F7), AND NOT MERELY WEAKENED: successful runs of the same step come
+> in both shorter and longer than all four.** The `test` job's *Unit tests* step ran
+> **31 m 23 s** on `33424009822` (`24fcefe`, main — 3,231 tests) and **4 h 53 m 08 s** on
+> `33226013099` attempt 2 (`ef123ac`, main — 3,214 tests). The four land at 1 h 18 m,
+> 2 h 14 m, 2 h 36 m and 2 h 38 m, inside that spread on both sides: nine times the wall
+> clock for ~3,200 tests either way, so the clock says nothing about health. **The 2 h 55 m
+> cancelled run in the struck sentence is real** — `33200277442` attempt 1, `18:39:32Z` to
+> `21:34:45Z`. What failed was the inference from it, not the number.
+>
+> **THE SWEEP THAT FINDS THESE DOES NOT FIND ALL FOUR, AND THAT IS A PROPERTY OF
+> RE-RUNNING.** `gh run list` reports a run's LATEST attempt, so a flake re-run to green
+> leaves the failure list altogether: `33226013099` reads *success* there, and `33415074589`
+> left it the moment its re-run started, while this paragraph was being written. Both were
+> read from attempt 1. Three more ids the list returns are `secret-scan` failures whose
+> `test` job passed (`31720457396`, `31720196253`, `31719914214`, F3). **The failure list is
+> where the sweep starts, not the population it covers.**
+>
+> ```bash
+> gh run list --limit 300 --json databaseId,conclusion --jq '.[]|select(.conclusion=="failure")|.databaseId'
+> # and the re-run attempts that list cannot show:
+> gh api --paginate 'repos/Joorgem/open-payments-lakehouse/actions/runs?per_page=100' \
+>   --jq '.workflow_runs[]|select(.run_attempt>1)|[.id,.run_attempt]|@tsv'
+> gh run view <id> [--attempt <n>] --log-failed > r.log
+> grep -c ConnectionRefusedError r.log ; grep -cE 'E +assert' r.log
+> grep -oE 'FAILED tests/[a-z_]+' r.log | sort | uniq -c
+> gh api 'repos/Joorgem/open-payments-lakehouse/actions/runs/<id>/jobs' \
+>   --jq '.jobs[]|select(.name=="test")|.steps[]|select(.name|test("Unit tests"))|[.started_at,.completed_at]|@tsv'
+> ```
+>
+> **The discriminator is the signature, not the clock.**
 >
 > **Do NOT "fix" anything on a mass `ConnectionRefusedError`.** There is nothing there to
 > fix, and a code change made under that misreading is a real defect introduced to chase a
 > phantom — which is this phase's own hunted species arriving in the CI log.
 
-*What remains unexercised: nothing measures where this flake comes from, or how often. Two
-occurrences in one week is a rate over an unknown denominator. What would exercise it: a
-run-history sweep counting `ConnectionRefusedError` failures against total `test` runs.*
+*What remains unexercised: nothing measures where this flake comes from. ~~Two occurrences in
+one week is a rate over an unknown denominator. What would exercise it: a run-history sweep
+counting `ConnectionRefusedError` failures against total `test` runs.~~ **F7 ran that sweep on
+2026-08-31: four occurrences, all between 2026-08-26 and 2026-08-31, over this repository's whole
+run history since 2026-07-23.** It is still not a rate — `gh run list` counts RUNS
+and this flake is a property of ATTEMPTS — and the cause is still unmeasured.*
 
 ### Carried out of T8 and T8b, and every entry names what would exercise it
 
@@ -2169,7 +2225,7 @@ run-history sweep counting `ConnectionRefusedError` failures against total `test
   a statement the warehouse truncates.*
 - **The 1,000-row cache-flag window has no test** and is exercised only live (1001 returns HTTP
   400). Past 1,000 statements, *"outside the window"* and *"metrics unfilled"* both read `None`;
-  `.plans/cache_flag.sh` separates them with exit 3 and exit 2 because an operator acts differently
+  the operator tooling separates them with exit 3 and exit 2 because an operator acts differently
   on each, and the module accepts the conflation because **both discard the trial**. *What would
   exercise it: reading a flag for a statement more than 1,000 statements old.*
 - **The declared corpus is QUOTED from §0.3/§0.5/§0.10, not queried**, and its lock is a **drift**

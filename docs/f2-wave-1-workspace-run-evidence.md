@@ -521,10 +521,9 @@ phase ran a single loader, the controller reviewed the plan and struck `'00'` fr
 list of colliding codes, on the grounds that `reference.py` documented only four and `'00'`
 appeared nowhere. `'00'` collides. The plan's original author was right and the reviewer
 was wrong, because **the correction was taken from a code comment rather than from the
-data, in a phase whose entire method is to prefer the data.** `.plans/HANDOFF.md` records
-that corrections in this project overshoot — three times in F2 wave 1, once inside the very
-bullet documenting the pattern. This is the fourth, and the first written by the controller
-against its own plan.
+data, in a phase whose entire method is to prefer the data.** Corrections in this project
+overshoot — three times in F2 wave 1, once inside the very bullet documenting the pattern.
+This is the fourth, and the first written by the controller against its own plan.
 
 ### 4.3 Single-month, therefore no history — restated because it is easy to forget
 
@@ -600,7 +599,7 @@ argument for the phase.
    correction to its own plan, taken from a code comment instead of from the data.*
 
 **Two of the seven are the controller's own, and one of those is a correction that
-overshot.** That is the pattern `.plans/HANDOFF.md` names, arriving on schedule.
+overshot.** That is the corrections-overshoot pattern §4.2 names, arriving on schedule.
 
 ### 5.2 What was checked and found TRUE
 

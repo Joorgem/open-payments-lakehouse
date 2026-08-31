@@ -142,7 +142,10 @@ a local install with no stamp at all, which is exactly what we want it to have.
 
 ### Absent, empty or placeholder refuses
 
-- The four ingestion jobs and the repromote job declare
+- ~~The four ingestion jobs and the repromote job~~ **Every guarded job** (the same stale
+  enumeration struck under *"Which jobs carry the guard"* below;
+  `grep -L REQUIRED-PASS-A-REVISION databricks/resources/*.yml` returns exactly the two
+  files that sweep returns) declares
   `revision: REQUIRED-PASS-A-REVISION` as the job-parameter default —
   `opl.bronze.provenance.SENTINEL_REVISION`, following the precedent of
   `promote_batch`'s sentinel `batch_id`. A run launched without `--params
@@ -209,9 +212,32 @@ not, and an earlier draft of this ADR said it was.
 
 ### Which jobs carry the guard, and which does not
 
-Wired **first, ahead of every other task**, in the four ingestion jobs
+~~Wired **first, ahead of every other task**, in the four ingestion jobs
 (`bronze_cnpj_empresas`, `bronze_cnpj_estabelecimentos`, `bronze_cnpj_socios`,
-`bronze_cnpj_lookup`) and in `repromote_triaged_batch`:
+`bronze_cnpj_lookup`) and in `repromote_triaged_batch`:~~
+
+> **AMENDED 2026-08-31 by F7. THAT LIST WAS COMPLETE WHEN IT WAS WRITTEN AND IS NOT NOW.**
+> The bundle grew and nobody came back to this sentence: a hand-maintained list that
+> nobody updated.
+> **The guard is wired first, ahead of every other task, in every job this bundle declares
+> except `opl_smoke`.** No count is written here, because the count is what went stale.
+> Derive it:
+>
+> ```bash
+> grep -L assert_deployed_revision databricks/resources/*.yml
+> ```
+>
+> It names `smoke_job.yml` — the exclusion argued below — and `dataops_dashboard.yml`,
+> which declares no job at all. **That `grep -L` proves PRESENCE and nothing about order**,
+> so it is not the evidence for *first*. Two tests in
+> `tests/test_job_yaml_launch_guards.py` carry the rest:
+> `test_every_yaml_under_resources_is_classified` holds the classification total over the
+> directory, so a job added without an answer fails there rather than inheriting one; and
+> `test_the_revision_guard_runs_first_and_everything_else_waits_for_it`, parametrised over
+> `_GUARDED_JOBS`, is what makes *first* true — the guard task must carry no `depends_on`,
+> and every other task in the job must have it among its ancestors.
+
+What had to be argued, job by job:
 
 - ahead of `ensure_masked_table` in socios, which is the one job that already had
   a task before its `unzip`. The guard writes nothing and reads nothing, so it

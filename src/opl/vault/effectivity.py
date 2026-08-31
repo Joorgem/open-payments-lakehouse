@@ -3,7 +3,7 @@
 the window's open taken from the source and only its close inferred by us.
 
 WHICH "EFFECTIVITY SATELLITE" THIS IS, BECAUSE THE WORD NAMES TWO INCOMPATIBLE THINGS.
-The research snapshot (`.plans/f2-research-snapshot-dv2.md` §3) records both:
+The phase's research snapshot records both, and its §3 numbering is kept here:
 
   §3a AutomateDV -- a window over a link, closed by a DRIVING KEY mechanic: when a new
       driven key arrives for the same driving key, the old window is end-dated "so that

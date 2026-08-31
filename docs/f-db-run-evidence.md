@@ -87,8 +87,8 @@ workspace, four ids of three vintages, run 2026-08-15:
 > earlier claim falsifiable is what needed falsifying.
 >
 > **A statement id therefore IS usable provenance for recent work**, on the order of a day, provided
-> the path is not mangled. `.plans/sql.sh` already sets `MSYS_NO_PATHCONV=1`; a bare
-> `databricks api get` in Git Bash does not.
+> the path is not mangled. The operator wrapper this project uses already sets
+> `MSYS_NO_PATHCONV=1`; a bare `databricks api get` in Git Bash does not.
 >
 > ---
 >
@@ -163,8 +163,8 @@ and use the history endpoint when you do. §0.2 is what to do instead.
 **Controller-verified.** The plan's Task 0 says *"Do not inherit a first"* — F-API published a
 "first" that was false with the disproof eleven days old in the same folder. F-DB's headline is
 that a hard DELETE produces **the first end-dating in this lakehouse**, and it rests on
-`.plans/HANDOFF.md`'s *"zero departures — all 68,629,147 keys of 2026-06 are in 2026-07; the
-RFB retains baixadas"*, whose statement id is the first row of §0.1 and no longer resolves.
+an earlier finding — *"zero departures — all 68,629,147 keys of 2026-06 are in 2026-07; the
+RFB retains baixadas"* — whose statement id is the first row of §0.1 and no longer resolves.
 
 So it was re-measured, today, over `bronze_cnpj_empresas`. Statement
 **`01f1986b-af6c-1eb4-8585-f5edb3e11638`**, `from_cache: None`.
@@ -244,7 +244,7 @@ citation but re-derived from the table.
 
 **Method note, because it cost a statement.** The first attempt expressed the anti-join as a
 correlated `NOT EXISTS` with a null-safe `<=>`, chosen to avoid the phantom-departure defect
-`.plans/HANDOFF.md` records (*"A `LEFT ANTI JOIN … USING` on the partner key invents
+this project has already paid for once (*"A `LEFT ANTI JOIN … USING` on the partner key invents
 departures"* — 8,757 phantom rows). It **failed**: statement
 `01f1986b-9b8f-1d30-a71b-806c79d2aec8`, `[INTERNAL_ERROR] The Spark SQL phase optimization
 failed with an internal error`, SQLSTATE `XX000`. The single-pass `GROUP BY` above is both the
@@ -444,11 +444,11 @@ statement id ~~**expires**~~ **is not a durable handle** *(its expiry reading wa
 later that night; the id being unreliable is what survives)*. This is the other half, and it is
 worse: the flag published beside those ids was never read.
 
-This repository carries a standing rule, in `.plans/HANDOFF.md` and in `.plans/sql.sh`'s own
-header: *"never publish a number whose `from_cache` you did not read"* — because the DBSQL
-result cache defeats comment nonces, time travel and aliases, so a measurement that cannot say
-whether the cache answered it is not a measurement. **The rule is right. It was unsatisfiable
-through the path it documents.**
+This repository carries a standing rule, in its operator tooling and its working handoff:
+*"never publish a number whose `from_cache` you did not read"* — because the DBSQL result
+cache defeats comment nonces, time travel and aliases, as `docs/f1.4b-pr-b-run-evidence.md`
+§24.7 measured, so a measurement that cannot say whether the cache answered it is not a
+measurement. **The rule is right. It was unsatisfiable through the path it documents.**
 
 `.plans/sql.sh` reads the flag as `manifest.get("result_from_cache")` off the
 `/api/2.0/sql/statements` response. **That manifest carries only `chunks`, `format`, `schema`,

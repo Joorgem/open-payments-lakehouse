@@ -503,7 +503,7 @@ databricks api get "/api/2.1/tag-policies?page_size=200" --profile opl-free
 **`next_page_token: null` was published here and has been withdrawn**: re-measured
 2026-08-18, the response body's only top-level key is `tag_policies`, so that field
 does not exist and the `null` was a structural absence printed in the shape of a
-reading — the same defect `.plans/sql.sh`'s own header retracts for `from_cache: None`.
+reading — the same defect `docs/f-db-run-evidence.md` §0.5 retracts for `from_cache: None`.
 **The completeness conclusion survives and its evidence is the count**: 70 entries
 returned against `page_size=200`, so nothing was left on a second page. It never rested
 on a token anybody was served.
@@ -689,9 +689,12 @@ returns exactly one distinct value, `***`, at the full promoted row count. Not a
 query is not simply broken. Both name columns are masked, which is this ADR's
 deliberate widening of the spec, now applied in the live catalog.
 
-**Fail-closed, in practice.** `opl_pii_readers` does not exist in this workspace,
-and the value returned to the table owner's own query is the masked one. The
-direction argued above is the direction observed.
+**Fail-closed, in practice.** ~~`opl_pii_readers` does not exist in this workspace,~~
+**no principal is a member of `opl_pii_readers`** (the group exists — created empty by F4
+on 2026-08-18; struck here by F7 on 2026-08-31) and the value returned to the
+table owner's own query is the masked one. The
+direction argued above is the direction observed, and the conclusion does not move with the
+premise: `is_member` is false for the owner either way.
 
 **And the cost, paid without incident.** `promote_batch._assert_constraints` ran
 after the real append **without failing** — socios' two `SET NOT NULL` statements
@@ -780,7 +783,9 @@ observed directly. Staging is not a leaf table:
 - **`promote_batch` reads staging and writes what it read into bronze.**
   `opl.bronze.promote.promote_batch` builds its frame from
   `spark.read.table(staging_table)` and appends it with
-  `saveAsTable(bronze_table)`. With `opl_pii_readers` absent, a masked staging makes
+  `saveAsTable(bronze_table)`. ~~With `opl_pii_readers` absent,~~ **With the promote's
+  principal outside `opl_pii_readers`** (struck by F7, 2026-08-31: the group exists, and
+  membership rather than existence is what this argument turns on), a masked staging makes
   the next promote read `***` and append `***` — into the system of record,
   permanently, for every row. Bronze's own mask would then be hiding a value that
   is no longer there.

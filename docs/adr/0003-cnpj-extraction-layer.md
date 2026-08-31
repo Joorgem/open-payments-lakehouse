@@ -31,7 +31,7 @@ Dev uses a bounded recorte (6 lookup tables + Simples); the 10-part giants
 - The share token is a public share id (documented, `# gitleaks:allow`); a live
   integration test detects rotation (401).
 - All CNPJ keys are strings (alphanumeric CNPJ effective 2026-07-31).
-- Bronze (next plan) reads the landed files via Auto Loader.
+- ~~Bronze (next plan)~~ **Bronze** reads the landed files via Auto Loader.
 
 ## Validation notes (Task 6, harness phase)
 

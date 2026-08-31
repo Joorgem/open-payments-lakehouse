@@ -271,8 +271,10 @@ zone does. Both are repaired; the repaired test is what produced the table above
 > midnight-UTC payment dated its own identity conversion to the previous day.
 > `tests/gold/test_fact_payment.py::test_the_fact_is_unchanged_when_it_is_built_under_a_non_utc_session_zone`
 > refused it. It reads `day_of(event_time)` now, the same ten characters `event_date_key`
-> comes from. This is the third instance in this lakehouse after `company_sk` and
-> `event_date_key` (`.plans/HANDOFF.md`, F3).
+> comes from. This is the third instance in this lakehouse after `company_sk`
+> (`src/opl/gold/dimensions.py` — its first spelling hashed `valid_from`, a TIMESTAMP,
+> and three session zones produced three different keys for one version) and
+> `event_date_key` (`src/opl/gold/conformed.py`).
 
 ---
 
