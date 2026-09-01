@@ -511,9 +511,12 @@ READINGS: tuple[Reading, ...] = (
         state=NOT_MET,
         date="2026-08-30",
         why=(
-            "still the number nobody has. `rejected_by_our_gate` is the one state of ADR "
-            "0010's five-state model that has never had a witness in any source (F7 plan "
-            "§0.4), so there is nothing to measure the open windows over"
+            "still the number nobody has, and the reason given here until F7 T4 was false. "
+            "`rejected_by_our_gate` is NOT witnessless: ADR 0010's own measured table gives "
+            "4 rows (estabelecimentos 2026-07), 1,792 and 1,781 (socios). What had never "
+            "been witnessed was the state for MERCHANT, and F7 T4 ended that too -- one "
+            "row, `bad_cnpj_shape`, run 529699767706804. The condition asks for a "
+            "measurement of how many such keys have an OPEN window, and nobody has taken it"
         ),
     ),
     Reading(
@@ -553,9 +556,13 @@ READINGS: tuple[Reading, ...] = (
         state=LOOKS_MET,
         date="2026-08-29",
         why=(
-            "lineage IS readable — `system.access.table_lineage`, **3,327 rows, 72 "
-            "distinct target tables**, 2026-07-24 to 2026-08-28, statement "
-            "`01f1a4c2-1cfb-115a-a947-5a2fbc1aec10` — and it carries the hard "
+            "lineage IS readable — `system.access.table_lineage`, **3,327 rows and 72 "
+            "distinct `target_table_full_name`** (the COLUMN matters: F7 re-measured "
+            "3,340 rows, 72 distinct `target_table_full_name` and **67** distinct "
+            "`target_table_name`, and reading those two against each other as a drop "
+            "nearly published a retention finding that was two columns), 2026-07-24 to "
+            "2026-08-28, statement `01f1a4c2-1cfb-115a-a947-5a2fbc1aec10` — and it "
+            "carries the hard "
             "`bronze_payments -> fact_payment` edge this decision said a vault-path walk "
             "would miss. It is not COMPLETE: it records EXECUTIONS (`event_time`) while "
             "the manifest states STRUCTURE, so it answers *nothing downstream* for a "
