@@ -210,6 +210,19 @@ deployed to watch either happen**, because doing so is the act the decision exis
 avoid. **The decision stands on ground 1 alone**, which is sufficient: under the only
 target this repository has, the bundle half governs a schema nobody reads.
 
+> **AMENDED 2026-09-01 by F8. *"The only target"* stopped being true that day, and the
+> decision below is unchanged.** `databricks/databricks.yml` now declares a second target,
+> `prod`, `mode: production`, added because a target's `mode` is what writes
+> `schedule.pause_status` and a schedule under `mode: development` is deployed paused
+> ([ADR 0021](0021-the-deploy-binds-a-scheduled-runs-expected-revision.md)). **It is declared
+> and deliberately never deployed, and grounds 2 and 3 are the reason** — they are about a
+> production target, both are still *"assumed on strong evidence and not proved"*, and
+> ground 3's failure mode is revoking the platform's own `CREATE TABLE`. Ground 1 reads
+> exactly as written for the target that IS deployed. **What keeps grounds 2 and 3
+> hypothetical is mechanical rather than a promise: they can fire only if this bundle
+> declares a SECURABLE — `schemas`, `catalogs`, `volumes` or `external_locations` — and it
+> declares none.**
+
 `bundle deployment bind` is refused: it puts 55.8M rows of personal data inside
 `bundle destroy`'s blast radius for a cosmetic gain.
 

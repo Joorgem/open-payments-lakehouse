@@ -152,7 +152,8 @@ def test_an_incident_with_no_source_is_refused_by_the_module_that_owns_that_mess
 
 def test_a_job_name_still_wearing_the_bundle_prefix_is_refused():
     """THE ONE FIELD IN THIS RECORD THAT CAN CARRY A PERSONAL IDENTIFIER INTO A PUBLIC
-    REPOSITORY. `databricks.yml`'s only target is `mode: development`, which names every
+    REPOSITORY. The target this repository DEPLOYS is `mode: development`, which names
+    every
     deployed job `[dev <operator>] <name>` -- an operator's Windows username, which
     CLAUDE.md forbids committing and the run-evidence documents redact elsewhere.
 
@@ -284,12 +285,28 @@ def test_the_other_two_provenance_strings_are_refused_the_path_produced_by_is(pr
     ).telemetry_view == "opl.dataops.dataops_task_telemetry"
 
 
+# The two deployment modes whose job NAMING this project has characterised:
+# `development` prefixes `[dev <operator>] ` and `production` prefixes nothing at all.
+# Any other value names jobs in a way the bracket refusal in `issue.py` has never been
+# read against, so it fails below rather than being waved through as "not development,
+# therefore fine".
+_NAMING_MODES = ("development", "production")
+
+
 def test_the_bundle_declares_no_target_that_prefixes_a_job_name_without_brackets():
     """WHAT MAKES THE BRACKET CHECK TOTAL IS THIS FILE AND NOT THAT FUNCTION.
     `_assert_no_operator_identifier_reaches_the_payload` refuses a bracket, because
     `mode: development` names jobs `[dev <operator>] <name>`; a target declaring
     `presets.name_prefix: dev_<operator>_` produces `dev_jorge_opl-bronze-payments`, which
     has no bracket and passes every check in the wheel.
+
+    IT ASSERTED THE MODE, AND THE MODE IS NOT WHAT IT PROTECTS. F8 added a second
+    target, `mode: production`, and this test went red -- over a target that prefixes
+    job names with NOTHING AT ALL, which is the safest case there is and which
+    `incidents.py`'s stripping pattern already documents itself as handling. So the
+    mode is checked against the two whose naming this project has characterised, and
+    the `name_prefix` refusals -- the thing that keeps the bracket check total -- are
+    unchanged. A third mode still fails here, which is the point.
 
     So the bundle is read and required to declare no other prefixing. A target that adds one
     fails HERE, in the commit that adds it, which is the only place the answer is knowable
@@ -306,7 +323,10 @@ def test_the_bundle_declares_no_target_that_prefixes_a_job_name_without_brackets
 
     assert targets, "no targets to check, so this test asserts nothing"
     for name, target in targets.items():
-        assert target.get("mode") == "development", f"{name} is not the mode the check reads"
+        assert target.get("mode") in _NAMING_MODES, (
+            f"{name} declares mode {target.get('mode')!r}, whose job NAMING this "
+            f"project has not characterised; it has {_NAMING_MODES}"
+        )
         assert "name_prefix" not in target, f"{name} prefixes job names outside the bracket"
         assert "name_prefix" not in (target.get("presets") or {}), (
             f"{name} declares a presets.name_prefix, which is a prefix with no bracket in it"

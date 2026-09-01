@@ -203,8 +203,10 @@ from opl.dataops.telemetry import TASK_TELEMETRY_VIEW
 # and does not buy.
 DQ_GATE_TASK_KEY = "fail_on_dq"
 
-# Any LEADING BRACKETED TOKEN and the whitespace after it. `databricks.yml`'s only target
-# is `mode: development`, which names deployed jobs `[dev <operator>] <name>`.
+# Any LEADING BRACKETED TOKEN and the whitespace after it. The target this repository
+# DEPLOYS is `mode: development`, which names deployed jobs `[dev <operator>] <name>`.
+# F8 added a second target, `mode: production`, which prefixes nothing at all -- the
+# paragraph below already said that case costs this pattern nothing.
 #
 # MATCHES A SHAPE, NEVER A NAME, and that is the requirement rather than a nicety: the
 # operator's username is in that prefix and CLAUDE.md forbids committing one. It also

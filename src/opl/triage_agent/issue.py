@@ -397,8 +397,8 @@ def _assert_one_incident(rows: Mapping[str, Mapping[str, Any]]) -> None:
 def _assert_no_operator_identifier_reaches_the_payload(job_name: str | None) -> None:
     """A runtime job name still wearing its bundle prefix carries an OPERATOR'S USERNAME.
 
-    `databricks.yml`'s only target is `mode: development`, which names every deployed job
-    `[dev <operator>] <name>`, and CLAUDE.md forbids committing that string -- the
+    The target this repository DEPLOYS is `mode: development`, which names every deployed
+    job `[dev <operator>] <name>`, and CLAUDE.md forbids committing that string -- the
     run-evidence documents redact the same identifier elsewhere. `incidents.py` strips it in
     SQL, by a pattern that matches any leading bracketed token, and every payload built from
     that feed is clean before it arrives here.
@@ -418,7 +418,7 @@ def _assert_no_operator_identifier_reaches_the_payload(job_name: str | None) -> 
     `databricks.yml` and refuses a target that prefixes a job name any other way."""
     if job_name is not None and "[" in job_name:
         raise MismatchedFacts(
-            f"the job name {job_name!r} still carries a bracketed prefix. `databricks.yml` "
+            f"the job name {job_name!r} still carries a bracketed prefix. This repository "
             "deploys in development mode, which puts `[dev <operator>] ` in front of every "
             "job name, and that is an operator's username -- `incident_feed_sql` strips it "
             "and this payload was not built from that column"

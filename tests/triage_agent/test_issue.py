@@ -325,7 +325,8 @@ def test_no_issue_body_carries_a_row_value_and_the_reader_is_proven_to_work(prob
 
 
 def test_the_body_carries_no_operator_identifier_because_the_feed_strips_it(gate_probe):
-    """`databricks.yml` deploys in development mode, so every runtime job name is
+    """The target this repository DEPLOYS is `mode: development`, so every runtime job
+    name is
     `[dev <operator>] <name>` and that token is a person's username. The feed strips it in
     SQL; this file's fixture puts an invented one back so the strip can be observed at the
     END of the chain rather than at the start.
