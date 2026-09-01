@@ -471,12 +471,26 @@ footnotes.
 
 **And three of the four below had to be restated, for the reason §3.2(f) publishes as a specimen
 of this project's own species.** They were written against *the next phase*.
-`docs/f7-run-evidence.md` opens by saying **F7 is this project's last phase** — a fact this
+`docs/f7-run-evidence.md` opens by saying ~~**F7 is this project's last phase**~~ — a fact this
 document did not mention, so the two disagreed about whether another one is coming — and against
 that, *"the next phase merging past…"*, *"a phase closing without…"* and *"a hand-maintained list
-surviving a phase…"* are falsifiers that **cannot occur**. That is specimen (f) exactly, reproduced in the section
-whose whole subject is falsifiability. **There may be no next phase. There will be a next merge to
-`main`, and a next reader.** Each condition below is stated against one of those instead.
+surviving a phase…"* were ~~falsifiers that **cannot occur**~~ **taken to be falsifiers that could
+never fire**. That is specimen (f) exactly, reproduced in the section whose whole subject is
+falsifiability. **There may be no next phase. There will be a next merge to `main`, and a next
+reader.** Each condition below is stated against one of those instead.
+
+> **The struck fact went false on 2026-09-01, and not one of the conditions below moves.** The
+> owner decided, after both documents were committed, to keep expanding this repository, and PR
+> [#34](https://github.com/Joorgem/open-payments-lakehouse/pull/34) merged that day outside F7's
+> plan — [`docs/f7-run-evidence.md`](f7-run-evidence.md)'s header carries the correction and the
+> command that checks it. *"There will be a next merge to `main`, and a next reader"* was true
+> when it was written and is true now: **a falsifier that fires on the next merge fires whether or
+> not a phase is ever declared**, which is why restating them against a merge and a reader was the
+> right repair even though the reason given for it has stopped being true. **This section had no
+> example of that shape before** — not a claim going false, but a *justification* going false over
+> a conclusion that held. Same species as §1.1's count and as F7's dated line, differing only in
+> cause: neither a clock nor a merge moved under this one — **a decision was taken after it was
+> written.**
 
 1. **A locked document going false in its declared half again, with its test green.** That would
    mean the parsed/declared line is not where the defence belongs, and the readings need a

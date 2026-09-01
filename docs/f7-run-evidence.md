@@ -1,7 +1,33 @@
 # F7 — Polish: the phase whose subject is a claim that went false and nobody was obliged to notice
 
-**Written 2026-08-31, at the close of F7.** F7 is this project's **last phase**, so this is also
-its last phase record.
+**Written 2026-08-31, at the close of F7.** ~~F7 is this project's **last phase**, so this is also
+its last phase record.~~ **That was true when it was committed and false the next day** — and it
+is this document's own subject arriving in its own opening sentence. The owner decided, after this
+was written, to keep expanding the repository, and work outside F7's plan has already merged: PR
+[#34](https://github.com/Joorgem/open-payments-lakehouse/pull/34), *"ci: split the test job into
+four shards on separate runners, and lock the partition"*, merged **2026-09-01T20:23:01Z**.
+
+```bash
+gh pr view 34 --repo Joorgem/open-payments-lakehouse --json number,title,state,mergedAt
+```
+
+**Nothing beyond that is planned or named here**, and this correction claims no more than that:
+not that a next phase exists, only that F7 is not the last one.
+
+**Third instance of this phase's species, and the one with the most interesting cause.**
+[`docs/postmortem.md`](postmortem.md) §1.1's pull-request count was overtaken by a merge **49
+seconds after it was committed**; §2.4 below said *"Today is 2026-08-31"* until midnight passed
+while the phase waited on CI. **Both were measurements the world then moved under** — a merge
+landed, a clock ran. **This one was never a measurement.** It said what would happen next, and
+somebody decided otherwise after it was committed. **A claim about what comes next is not made
+safe by being true when it is written, and no test in this repository can hold one true.**
+
+**Every other sentence in this document that leaned on F7 being last is struck in place against
+this paragraph**, and the two that used it as an *argument* — §2.4's reason for not waiting on the
+broker expiry, and §3's reason for giving two of F7's own open paths ledger ids — keep their
+conclusions and lose only their reason. [`docs/postmortem.md`](postmortem.md) §6 and
+[`docs/unexercised-ledger.md`](unexercised-ledger.md) §0.5 carry the same correction, each pointing
+back here.
 
 **How to read the labels, and there are exactly two.**
 
@@ -609,7 +635,16 @@ corrected the one site that claimed the date had already been written (§1.7).
 
 **So waiting for the expiry would have bought one thing: replacing `~2026-09-03` with an exact
 date in one document.** It would not have protected a reader who is already protected, and it
-would have held the project's last phase open for a string.
+would have held ~~the project's last phase~~ **the phase** open for a string.
+
+> **The premise under that last clause is gone, and the decision it justified got better.** It was
+> written believing F7 was the last phase, which made not waiting a trade: the obligation would
+> outlive the last thing able to discharge it. **F7 is not the last phase** (see the header), so
+> the obligation is not stranded by this phase closing. It is `f5:980` in
+> [`docs/unexercised-ledger.md`](unexercised-ledger.md) §3.4, a row later work can close by
+> probing the cluster on or after the expiry and writing what came back into
+> `docs/f5-run-evidence.md` — whichever way it comes back. **What was a debt with nobody left to
+> collect it is a debt with a collector, and the row already states what would settle it.**
 
 **Writing the line now from the calendar would publish a prediction in the shape of an
 observation** — the exact failure ADR 0019 Decision 1 rejected its own first probe over, and the
@@ -669,10 +704,21 @@ already an id in that file or names why it cannot be one.
 
 > **THAT RULE WAS STATED HERE BEFORE IT WAS TRUE OF ITEMS 3 AND 5, AND THE CLOSING REVIEW CAUGHT
 > IT.** It searched the ledger for both and found neither: they existed only in this document, and
-> **F7 is the last phase, so a path recorded only in a phase document has no consumer left** —
-> which is the exact shape of the rows [`docs/unexercised-ledger.md`](unexercised-ledger.md) §4.1
-> measures. They are ids now, `repromote:21` and `vaultreg:5`, and the sentence above is left
-> standing rather than softened because the gap it did not cover is the finding.
+> ~~**F7 is the last phase, so a path recorded only in a phase document has no consumer left**~~
+> **a path recorded only in a phase document has no consumer** — which is the exact shape of the
+> rows [`docs/unexercised-ledger.md`](unexercised-ledger.md) §4.1 measures. They are ids now,
+> `repromote:21` and `vaultreg:5`, and the sentence above is left standing rather than softened
+> because the gap it did not cover is the finding.
+>
+> **The struck reason was false the day after it was written, and the two ids it argued for are
+> better placed for it, not worse.** F7 being last made those paths unreachable by anybody; with
+> the repository still being expanded (see the header) they are reachable, and a reachable path
+> buried in a phase document is precisely what §4.1's rows are. **So the rows stay.** What they
+> have in the ledger and cannot have here is a place a later reader will open:
+> [`docs/unexercised-ledger.md`](unexercised-ledger.md) §8 sets out the rule that would oblige the
+> next closing review to say which of *that file's* §3 rows it closed. **It is proposed, not part
+> of protocol §9 condition 6** — §8 says so in its own words, and §3.3(h) of
+> [`docs/postmortem.md`](postmortem.md) argues it.
 
 **1. The dated broker probe.** §2.4. Due ~2026-09-03, three days after this document. Carried as
 `f5:980`. *What would exercise it:* a metadata fetch against the cluster on or after the expiry,
@@ -706,13 +752,14 @@ features in its own words, and named this as staying unstarted (***Reported*** �
 git-ignored). Carried as `vaultreg:5`, against the sentence in `src/opl/vault/registry.py` that
 stakes DV2's extensibility claim on wave 2's three tables: the mechanism has never been exercised
 by anything but a throwaway fixture domain. *What would exercise it:* wave 2 itself. It is
-repeated here so the last phase record does not read as a claim of completeness.
+repeated here so ~~the last phase record~~ **this record** does not read as a claim of
+completeness.
 
-> **One thing this section cannot do, and it is worth stating at the end of the last phase
-> record.** Whether a ledger row is *still* true is not derivable by any test here — no test can
-> run a Databricks job. Closing a row is a human act, and the only defence F7 built against another
-> silent closure is that **closing one is now a visible edit to a single tracked file** rather than
-> a strike buried five hundred lines inside a two-thousand-line phase document.
+> **One thing this section cannot do, and it is worth stating ~~at the end of the last phase
+> record~~ plainly.** Whether a ledger row is *still* true is not derivable by any test here — no
+> test can run a Databricks job. Closing a row is a human act, and the only defence F7 built
+> against another silent closure is that **closing one is now a visible edit to a single tracked
+> file** rather than a strike buried five hundred lines inside a two-thousand-line phase document.
 > [`docs/unexercised-ledger.md`](unexercised-ledger.md) §8 proposes the process rule that would
 > make it stick, and names the half of protocol §9 condition 6 that is missing: **a phase must
 > publish what it closed of somebody else's list, not only its own.**

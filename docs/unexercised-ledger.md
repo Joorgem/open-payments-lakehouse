@@ -125,11 +125,19 @@ all**: `fdb` §3's `:1387` and `:1391` are the retirement notices for `fdb:1343`
 so they are evidence rather than debt. And some rows come from no ledger at all: §1.3's, added by
 F7 T4, plus `repromote:21` and `vaultreg:5`, added by F7's closing review because
 `docs/f7-run-evidence.md` §3 states a rule — each of F7's own open items is either an id here or
-names why it cannot be one — that those two items met neither half of. **F7 is the project's last
-phase, so a path recorded only in a phase document has no consumer left**, which is the shape of
-every row §4.1 measures.
+names why it cannot be one — that those two items met neither half of. ~~**F7 is the project's last
+phase, so a path recorded only in a phase document has no consumer left**~~ **A path recorded only
+in a phase document has no consumer**, which is the shape of every row §4.1 measures.
+
 **The site count itself is *Reported*** — counted by hand, asserted by nothing, which is why
 it is not published here as a number.
+
+**The struck half went false on 2026-09-01**, after it was committed: the repository is being
+expanded past F7 and a pull request outside F7's plan has already merged, and
+[`docs/f7-run-evidence.md`](f7-run-evidence.md)'s header carries the correction and the command
+that checks it. **The two rows are better placed for it, not worse.** A path nobody could reach
+was debt with no collector; a path in a repository still being worked on is debt with one — and
+this file, not the phase document, is where a later reader looks for it.
 
 Publish the derivation, not the number:
 
