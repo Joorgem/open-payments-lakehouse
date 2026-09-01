@@ -23,7 +23,7 @@ about**, and a postmortem that reproduced it while describing it would be worth 
 
 ## 1. The subject
 
-### 1.1 The project filed the defect against itself, and then merged past it five times
+### 1.1 The project filed the defect against itself, and then kept merging past it
 
 On **2026-08-18**, two issues were opened on this repository, by this project, about this
 project's own public documents:
@@ -35,8 +35,11 @@ project's own public documents:
   event streams as covered, but F1b is Auto Loader file ingestion — no Kafka, no watermark, no
   exactly-once proof."*
 
-Both were still open on 2026-08-31, when this was written. Between the two dates, **five pull
-requests merged into `main`**:
+Both were still open on 2026-08-31, when this was written. **The number of pull requests
+merged into `main` since the filing is published here as a command and not as an integer,
+because an integer here is false within a day — this one was.** The sentence that stood in
+this place said *five*, and was overtaken **49 seconds after it was committed** by a merge
+of this phase's own work. Re-derive it:
 
 ```bash
 gh issue list --repo Joorgem/open-payments-lakehouse --state all \
@@ -45,9 +48,15 @@ gh pr list --repo Joorgem/open-payments-lakehouse --state merged --limit 60 \
   --json number,mergedAt,title --jq '.[]|select(.mergedAt>"2026-08-18T21:45:30Z")'
 ```
 
-**#24** (F4 — DataOps), **#27** (F5 — streaming), **#28** (F6 — the triage agent), then **#30**
-and **#31**, both merged during F7 itself. Each made the README more wrong than the one before
-it, and not one of them touched it.
+At the time of writing that returned **#24** (F4 — DataOps), **#27** (F5 — streaming),
+**#28** (F6 — the triage agent), then **#30**, **#31** and **#33** — the last three merged
+**during F7 itself**, the phase whose entire subject is these two issues. Each made the README
+more wrong than the one before it, and not one of them touched it.
+
+**That the count kept moving while this paragraph was being written is not an embarrassment
+to the paragraph; it is the paragraph's subject.** A finding stays open, work keeps landing
+on top of it, and every document that states the distance in a number goes stale without
+anyone editing it. The command does not.
 
 The sentence the issue names was not a fresh mistake. It entered the file on **2026-07-23**, in
 the project's first week, and was still the published statement when this document was written:
