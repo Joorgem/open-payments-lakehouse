@@ -36,8 +36,8 @@ any project; the only defence is that a reader can re-run it.**
 | **DataOps** | derived views: reconciliation, per-file reconciliation, task telemetry, freshness | **4** |
 | **Deployment** | Databricks Asset Bundle jobs / their tasks | **21 / 99** |
 | **Decisions** | ADRs in [`docs/adr/`](docs/adr/) | **20** |
-| **Evidence** | run-evidence and validation documents in [`docs/`](docs/) | **17** |
-| **Tests** | selected by a default `uv run pytest`, of 3,300 collected (the rest need Docker) | **3,253** |
+| **Evidence** | run-evidence and validation documents in [`docs/`](docs/) | **20** |
+| **Tests** | selected by a default `uv run pytest`, of 3,330 collected (the rest need Docker) | **3,283** |
 
 The data it has actually held: **337,712,651 rows** of CNPJ bronze across `empresas`,
 `socios` and `estabelecimentos`, at **two monthly snapshots each** (2026-06 and 2026-07).
@@ -225,8 +225,8 @@ The Asset Bundle is checked with `databricks bundle validate -t free`, run from
 - **[`docs/adr/`](docs/adr/)** — one architectural decision per file, twenty of them. Where
   a decision's premise was later measured false, the correction is written into the file
   **beside** the original rather than replacing it; ADR 0002 is the clearest case.
-- **[`docs/`](docs/)** — seventeen run-evidence and validation documents, each recording
-  what a run actually printed. **Ten of them** carry the labelling convention this project
+- **[`docs/`](docs/)** — twenty run-evidence and validation documents, each recording
+  what a run actually printed. **Thirteen of them** carry the labelling convention this project
   runs on: *Controller-verified* (someone ran the command and read the output) against
   *Reported* (a task's stdout, an implementer or an agent said so). The other **seven** are
   the oldest in the directory and predate the convention.

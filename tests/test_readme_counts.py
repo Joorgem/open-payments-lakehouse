@@ -52,8 +52,8 @@ _ROW_EVIDENCE = _REPO / "docs" / "f1.4b-pr-b-run-evidence.md"
 
 # The English number words this file has to read, DECLARED. An unmapped word is a KeyError
 # naming it, which is the loud failure a silent `.get(w, 0)` would swallow.
-_WORDS = {"two": 2, "four": 4, "seven": 7, "ten": 10, "seventeen": 17,
-          "twenty": 20, "twenty-one": 21}
+_WORDS = {"two": 2, "four": 4, "seven": 7, "ten": 10, "thirteen": 13,
+          "seventeen": 17, "twenty": 20, "twenty-one": 21}
 
 # The vault's five kinds, as the README spells them against the class the registry builds.
 _VAULT_KINDS = {"hubs": "Hub", "links": "Link", "satellites": "Satellite",
