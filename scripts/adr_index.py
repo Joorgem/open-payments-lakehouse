@@ -415,6 +415,16 @@ def read_adrs() -> tuple[Adr, ...]:
 # cross-checked against git by `test_the_declared_phase_is_what_git_says` wherever the
 # clone is deep enough for git to answer. That test SKIPS on a shallow clone with the
 # reason printed; it does not pass.
+#
+# AND THE ONE CASE A DECLARED SHA CANNOT COVER. An ADR written in a phase that has not
+# merged yet has NO merge commit; every sha that could be typed for it would be
+# invented, which is worse than saying so. `UNMERGED` says so, and
+# `tests/test_adr_phase_declaration.py` checks it in both directions -- git must agree
+# there is no merge, and the moment the ADR's adding commit becomes an ancestor of
+# `origin/main` the declaration is stale and goes red. A sentinel that only meant "do
+# not look" would be the hole this table is written against.
+UNMERGED = "unmerged"
+
 PHASES: dict[str, tuple[str, str, str]] = {
     #  adr      phase          merge      branch the merge names
     "0001": ("F1.1", "707f8c2", "f1.1-cnpj-extraction"),
@@ -437,6 +447,9 @@ PHASES: dict[str, tuple[str, str, str]] = {
     "0018": ("F4", "3bd2f52", "feat/f4-dataops"),
     "0019": ("F5", "5d769a3", "feat/f5-streaming"),
     "0020": ("F6", "ef123ac", "feat/f6-rca-agent"),
+    # THE FIRST ADR WRITTEN AFTER THIS INDEX EXISTED, and therefore the first whose
+    # merge cannot be declared -- see `UNMERGED` above.
+    "0021": ("F8", UNMERGED, "f8/iac-promotion-scheduling"),
 }
 
 # THE READINGS THAT HAVE BEEN TAKEN. Everything not named here renders `NOT READ`,
@@ -567,6 +580,21 @@ READINGS: tuple[Reading, ...] = (
             "would miss. It is not COMPLETE: it records EXECUTIONS (`event_time`) while "
             "the manifest states STRUCTURE, so it answers *nothing downstream* for a "
             "table whose loader has not run inside the retention window"
+        ),
+    ),
+    Reading(
+        adr="0021",
+        anchor="a workspace that will launch a run",
+        state=NOT_MET,
+        date="2026-09-01",
+        why=(
+            "taken by F8 itself rather than carried: `POST /api/2.2/jobs/run-now` against "
+            "a guarded job answered *\"Triggering new runs for organization ... is "
+            "currently disabled temporarily\"*. Metadata reads and `databricks bundle "
+            "deploy -t free` over resources that already exist both still work, so the "
+            "refusal is about LAUNCHING and not about deploying -- and the second half of "
+            "the condition, a launch watched refusing on a revision fetched from the "
+            "remote, has therefore never been reachable"
         ),
     ),
 )
