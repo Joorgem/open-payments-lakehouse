@@ -66,8 +66,15 @@ rather than a strike buried five hundred lines into a 2,400-line phase document.
 
 Every id is `key:line`. These ten sections are the whole input. The test asserts each heading
 still appears exactly once in the file beside it, so a rename or a deletion goes red — and it
-re-derives the whole list with the sweep §8 publishes, so an eleventh ledger section appearing
-anywhere under `docs/` and not declared here goes red too.
+re-derives the whole list with the sweep §8 publishes, so an eleventh ledger section **in
+`docs/*-evidence.md`** goes red too unless it is declared here, nests inside one that is, or names
+this file in its own body — the three ways §8's comment spells out.
+
+**That glob is one level deep and matches one suffix, and saying "anywhere under `docs/`" was
+wrong.** It never reaches `docs/adr/`, and ADRs there carry ledger-shaped headings the sweep
+therefore does not see — point §8's pattern at `docs/adr/*.md` and they come back. **§7 names
+them and says why they are not consolidated here**: the exclusion is deliberate, and only the
+description of it was too wide.
 
 | key | file | ledger heading |
 |---|---|---|
@@ -86,24 +93,26 @@ anywhere under `docs/` and not declared here goes red too.
 superseded by its own §5.3 five hundred lines below — this repository's signature defect, inside
 its own ledger.
 
-Three entries added by F7 T4 are anchored in code rather than in a ledger, because that is where
-the claim is verifiable:
+Some entries added by F7 are anchored in code, a bundle YAML or a module docstring rather than in
+a ledger, because that is where the claim is verifiable:
 
 | key | file |
 |---|---|
 | `seed` | `scripts/seed_merchant_db.py` |
 | `pgsrc` | `src/opl/extraction/postgres_source.py` |
+| `repromote` | `databricks/resources/repromote_batch_job.yml` |
+| `vaultreg` | `src/opl/vault/registry.py` |
 
 ### 0.5 The totals
 
 | bucket | entries |
 |---|---|
 | STANDING LIMITS | 16 |
-| PUBLISHED CAVEATS | 10 |
-| STILL UNEXERCISED | 114 |
+| PUBLISHED CAVEATS | 9 |
+| STILL UNEXERCISED | 117 |
 | CLOSED | 34 |
 | NO LONGER MEANINGFUL | 8 |
-| **TOTAL** | **182** |
+| **TOTAL** | **184** |
 
 **Do not re-type these.** They are re-derived from the tables below by
 `tests/test_unexercised_ledger.py`, which fails naming the bucket that moved.
@@ -113,7 +122,12 @@ titled block in a ledger section is one source *site*. **Three sites carry more 
 and where those claims land in different buckets the site is split: `f4:1360`/`f4:1386`,
 `fdb:1521`/`fdb:1522`/`fdb:1523` and `fdb:1525`/`fdb:1526`. **Two bullets are not entries at
 all**: `fdb` §3's `:1387` and `:1391` are the retirement notices for `fdb:1343` and `fdb:1361`,
-so they are evidence rather than debt. And §1.3's rows are new in F7 T4 and are in no ledger.
+so they are evidence rather than debt. And some rows come from no ledger at all: §1.3's, added by
+F7 T4, plus `repromote:21` and `vaultreg:5`, added by F7's closing review because
+`docs/f7-run-evidence.md` §3 states a rule — each of F7's own open items is either an id here or
+names why it cannot be one — that those two items met neither half of. **F7 is the project's last
+phase, so a path recorded only in a phase document has no consumer left**, which is the shape of
+every row §4.1 measures.
 **The site count itself is *Reported*** — counted by hand, asserted by nothing, which is why
 it is not published here as a number.
 
@@ -166,8 +180,8 @@ of data will ever change them.**
 ### 1.3 Added by F7 T4 — three merchant rules the registry cannot produce
 
 **New, and no ledger had noticed it.** Derived from the registry DDL against the merchant rule
-set before anything was run, and recorded in `.plans/2026-08-31-f7-t4-merchant-quarantine-run.md`
-§1. `rules_for("merchant")` is `_required_rules(MERCHANT_CONTRACT)` plus **seven** named rules
+set before anything was run. `rules_for("merchant")` is `_required_rules(MERCHANT_CONTRACT)` plus
+**seven** named rules
 (`sed -n '424,438p' src/opl/bronze/rules.py`). Three of the seven cannot be reached by a row the
 Postgres registry can hold, so they defend against corruption in transit, a schema change, or a
 different source arriving on the same contract — **standing limits, not debt.**
@@ -199,7 +213,6 @@ correction refuted it with two mutations."*
 | `f2w1:1147` | no absence for the observation ledger to report | the reference loader is insert-only by design: the anti-join drops a candidate whose `codigo` is present, so no `hash_diff` comparison and no `applied_date` sequence can ever exist for these six tables |
 | `f2ws:639` | Single-month by construction. | the same argument, restated in `f2ws` (see §6) |
 | `f3ws:590` | The three conformed ghosts, all of them. | all three conformed keys are **derived** from the fact's own columns, so there is no lookup to coalesce onto a ghost |
-| `f4:1393` | Whether the platform stops maintaining a table whose PO flag reads `DISABLE`. | the flag is a request and the ops-history table is the receipt; PO's cadence is hours to days, so a session cannot settle it |
 | `f6:1948` | Four prose corrections in T1 are asserted by nothing | they are prose; the source says *"What would exercise them: nothing"* |
 | `f6:2312` | T5's own split cannot be certified as behaviour-free. | the pre-split file exists in no commit and nowhere on disk, so there is nothing to diff the moved bodies against |
 | `f6:2339` | The gate-spelling lock cannot recover history recorded under a name nobody declared. | *"nothing in the wheel"* — a person would have to widen the declaration by hand |
@@ -240,6 +253,7 @@ a legal value here: an entry whose exerciser is nothing belongs in §2, and the 
 | `fdb:1449` | THE ANSI-MODE PATH IS TESTED AND HAS NEVER RUN ON DATABRICKS. | a Databricks run of `ref_date_from_instant` after the CodeRabbit fix; the run of record predates it |
 | `fdb:1471` | `unhashable_case_divergence` HAS REJECTED NOTHING OUTSIDE A FIXTURE. | a manual `psql`, a re-seed, or a mutation script that is not this one |
 | `fdb:1523` | `_rescued_data` was never populated | a merchant row carrying an undeclared key that Auto Loader rescues; it cannot be the same row that proves a divergence, because `rescued_data_present` sits above every per-table rule |
+| `repromote:21` | AFTER a human has read the quarantine table and accepted the rejects | running `repromote_triaged_batch` for `table=merchant` against the batch F7's own run left unpromoted in `bronze_merchant_staging`, and reading staging and bronze back afterwards. **Read §3.9 before running `opl_vault_merchant` after it.** The batch sitting there is what fail-closed means and is not a defect; what is unexercised is the triage step that clears it |
 
 ### 3.2 Vault loaders
 
@@ -254,6 +268,7 @@ a legal value here: an entry whose exerciser is nothing belongs in §2, and the 
 | `fdb:1486` | THE DEFECT `ObservationGrain.key_prefixes` FIXES IS UNREACHABLE BY THIS REPOSITORY'S OWN | a mutation that changes `cnpj` while keeping its eight-character root; `mutated()` never touches `cnpj` |
 | `fdb:1504` | NO NON-EMPTY `key_prefixes` REACHES ANY GRAIN BUT ONE. | a second link with a declared derivation on an identifying end; the field's second consumer arrives with wave 2 or not at all |
 | `fdb:1526` | the other half of ADR 0010's whole subject | `opl_vault_merchant` re-run after `repromote_triaged_batch`; see §3.9's hazard before doing it |
+| `vaultreg:5` | claim on wave 2 adding `hub_account`, `hub_customer` and `link_payment` with a git | F2 wave 2 itself: those three tables added as domain modules under `opl/vault/domains/`, and the diff measured against the claim. Only a throwaway fixture domain in `tests/vault/test_registry.py` has ever exercised the mechanism, and F7 did not start wave 2 |
 
 ### 3.3 Gold
 
@@ -365,6 +380,7 @@ a legal value here: an entry whose exerciser is nothing belongs in §2, and the 
 | `f4:1350` | Three residual tautologies and one floorless sweep | adding a non-empty floor to `test_cadence.py`'s glob |
 | `f4:1360` | A CI failure during the close, and what it is honest to say about it | the experiment the entry names: the failing test in isolation against the same runner class, or the suite with F4's Spark modules deselected. F7's sweep answered a different question |
 | `f4:1390` | System-table retention's ceiling. | time; the workspace is younger than any documented horizon |
+| `f4:1393` | Whether the platform stops maintaining a table whose PO flag reads `DISABLE`. | the flag set to `DISABLE` again and the ops-history table re-read after PO's next cadence — hours to days. **Moved here from §2 by F7's closing review:** its argument was that *a session* cannot settle it, which is a statement about how long a session lasts, not about an exerciser not existing. `f4:1390`, from the same source section, is filed as debt on exactly that argument |
 | `f5:975` | How much of the trial credit is left. | an endpoint that answers; four return `NOT_FOUND` and Prometheus returns 401 |
 | `f6:1883` | "The declaration half is free of Spark" is enforced by nothing | someone adding a Spark test to any of the no-JVM files and nobody noticing. Do not re-count the files: run the measurement, a `PATH` with no `java` in it |
 | `f6:2166` | nothing measures where this flake comes from | a measurement of the cause; F7's sweep bounded it at four occurrences but `gh run list` counts RUNS and this flake is a property of ATTEMPTS |
@@ -520,13 +536,22 @@ Protocol §9 condition 6 only requires a phase to publish **its own** unexercise
 why every row of §4.1 went unstruck, because no phase was ever obliged to look at anyone else's
 list. **The condition needs a second half: publish what you closed of someone else's.**
 
-**Do not re-type a number from this file into another one.** Publish the command:
+**Do not re-type a number from this file into another one.** Publish the command — and **the sweep
+is published at two widths, because the test runs two.** Publishing only the narrow one was the
+defect: a reader ran it, got the ten declared sections back, and never saw that
+`docs/f7-run-evidence.md` §3 is ledger-shaped and missed on wording alone.
 
 ```bash
 # does every anchor still point at its claim, and do the totals still add up?
 uv run pytest tests/test_unexercised_ledger.py -q
 
-# the ten source sections, swept rather than listed. The test runs this same pattern and
-# asserts the result IS the table in 0.4, so an eleventh ledger cannot appear unnoticed.
+# THE WIDTH THE TEST ACTUALLY SWEEPS AT. Every heading this returns must be declared in §0.4,
+# nest inside one that is, or name this file in its own body -- and `docs/f7-run-evidence.md`
+# is the third case. Not "anywhere under docs/": one level deep, one suffix (see §0.4).
+grep -inE "^#+ .*(unexercis|did not exercise|didn't exercise|leaves unrun|not exercised)" docs/*-evidence.md
+
+# The narrower width, kept rather than replaced. The test asserts this one is still published
+# and that what it returns is a STRICT SUBSET of the line above, so the two cannot be quietly
+# re-unified by narrowing the sweep to match the reader's command.
 grep -inE '^#+ .*(unexercised|did not exercise)' docs/*-evidence.md
 ```

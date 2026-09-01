@@ -9,12 +9,15 @@ its last phase record.
   passes and read the output.
 - ***Reported*** — an implementer, a reviewer, or a task's stdout said it.
 
-Every claim below carries one. **This document was written by T7's implementer, so everything it
-derived while writing carries the weaker label of the two** — which is the honest reading of the
-convention `docs/f6-run-evidence.md` sets, and it is why every one of those claims is published
-with the command that re-derives it. **Prefer running the command to trusting the number.** That
-is not a flourish: §1.3 below is a number this phase published twice, corrected once, and got
-wrong both times, found by running the one-line command that settles it.
+**Not every claim below carries one, and the sentence that stood here said they all did.** §0 sets
+**Controller-verified** as its own default in the line under its heading, and says so; the rest of
+the document labels a paragraph where the label is the point and leaves the others bare. **Read a bare
+paragraph as *Reported*.** This document was written by T7's implementer, so everything it derived
+while writing carries the weaker label of the two — which is the honest reading of the convention
+`docs/f6-run-evidence.md` sets, and it is why those claims are published with the command that
+re-derives them. **Prefer running the command to trusting the number.** That is not a flourish:
+§1.3 below is a number this phase published twice, corrected once, and got wrong both times,
+found by running the one-line command that settles it.
 
 **Predictions are published BEFORE the runs that test them** (master protocol §4.5). A number
 first written down after the run that produced it is not a prediction. §2 marks all five, and the
@@ -43,8 +46,10 @@ Taken 2026-08-29/30 on `main` at `ef123ac`, before a line of the plan was writte
 2026-08-18T21:45:30Z** — *"README on main states Data Vault, Gold/Kimball and UC governance are
 'roadmap, not built' — all three are on the same branch"* — and
 **[#26](https://github.com/Joorgem/open-payments-lakehouse/issues/26)** twenty-two seconds later.
-**Both were still open when this document was written**, and five pull requests merged into `main`
-between the filing and this phase:
+**Both were still open when this document was written**, and pull requests have gone on merging
+into `main` on top of them — **including this phase's own.** How many is a fact with a short shelf
+life, so it is published as a command rather than as an integer;
+[`docs/postmortem.md`](postmortem.md) §1.1 records what happened to the integer that stood here:
 
 ```bash
 gh issue list --repo Joorgem/open-payments-lakehouse --state all --json number,state,createdAt
@@ -163,7 +168,10 @@ that would falsify it.
 
 **Controller-verified, 2026-08-31.** One quarantined `bronze_merchant` row. This is the phase's
 only workspace run, and **it was declared before the result arrived that a FAILED run is what
-success looks like here** — the job's terminal task exists to fail when the gate rejects anything.
+success looks like here** — ***Reported***, and it has to be: that declaration lives in the
+git-ignored phase plan and no reader of this repository can check it. What a reader **can** check
+is the wiring below, which routes a batch holding a rejected row to `fail_on_dq` and excludes
+`promote` — the job's terminal task exists to fail when the gate rejects anything.
 
 **Before** — statement `01f1a57a-d61a-1cf9-830a-b436c7f084df`:
 
@@ -314,10 +322,14 @@ FROM system.access.table_lineage
 > **AND THE AMBIGUOUS PHRASING HAD ALREADY BEEN PUBLISHED INTO THE GENERATED INDEX, TWO DAYS
 > EARLIER.** The reversal-condition reading for **ADR 0020 Decision 5** — dated 2026-08-29,
 > declared in `scripts/adr_index.py` and rendered into the test-locked
-> [`docs/adr/README.md`](adr/README.md) — reads *"3,327 rows, **72 distinct target tables**"*:
+> [`docs/adr/README.md`](adr/README.md) — **read** *"3,327 rows, **72 distinct target tables**"*
+> when PR #31 merged it to `main`. Past tense, and the command is pinned to that commit, because
+> **the page is generated and this branch regenerated it**: today's file no longer carries the
+> phrase.
 >
 > ```bash
-> grep -n '0020 D5' docs/adr/README.md
+> git grep -n '0020 D5' 24fcefe -- docs/adr/README.md   # the wording, where it was true
+> grep -n '0020 D5' docs/adr/README.md                  # and what stands in its place today
 > ```
 >
 > **Its verdict is right and survives this measurement.** ADR 0020 Decision 5's reversal condition
@@ -326,8 +338,10 @@ FROM system.access.table_lineage
 > in detail. **What does not survive is the phrase.** *"Distinct target tables"* names neither
 > column unambiguously, and it is the same phrase that nearly produced the false finding in the box
 > above. This is the **second** time this phase's first deliverable carried a Task 0 wording that a
-> later measurement refined — the first is in §1.2 — and it is recorded rather than quietly
-> regenerated, because the pattern is the point.
+> later measurement refined — the first is in §1.2 — and it is recorded here **and** regenerated:
+> `scripts/adr_index.py` was corrected on this branch, so the page names the column, and this box
+> is the only place the replaced wording survives. **Quietly regenerated is what it must not be**,
+> and a generated page cannot keep its own history, which is what this box is for.
 
 **The 48% NULL-target fraction is §0.4's argument in concrete form**: lineage is not a structural
 statement about the warehouse, and half its rows do not name a target at all.
@@ -412,10 +426,12 @@ grep -cE '^\| `[a-z0-9]+:[0-9]+` \|' docs/unexercised-ledger.md
 uv run pytest tests/test_unexercised_ledger.py -q
 ```
 
-**182 entries in five buckets**, and the classification is the deliverable rather than the
-concatenation: **standing limits** that no run can ever close, **published caveats** that the
-ledger's own rule ejects, the **carry-forward**, what is **closed**, and what stopped being
-meaningful. **The count of source sites is deliberately not published as a number anywhere** — it
+**Five buckets, and the classification is the deliverable** rather than the concatenation — how
+many entries each holds is what the two commands above print, and the second one fails naming the
+bucket that moved. The buckets: **standing limits** that no run can ever close, **published
+caveats** that the ledger's own rule ejects, the **carry-forward**, what is **closed**, and what
+stopped being meaningful.
+**The count of source sites is deliberately not published as a number anywhere** — it
 was counted by hand and nothing derives it, which is exactly the property that makes a number rot,
 and the ledger says so in its own §0.5.
 
@@ -482,38 +498,40 @@ are in [`docs/unexercised-ledger.md`](unexercised-ledger.md) §4.2 with run `529
 their evidence. **Controller-verified** by the run in §1.2; the ledger placement is re-derivable
 with `uv run pytest tests/test_unexercised_ledger.py -q`.
 
-**Three more are conditional, and this row does not supply what they need.**
+**The prediction named a count and never a set.** It said *"exactly six"* and stopped there, so
+there is nothing to check the two against, and **no ordinal here would be checkable either** — an
+ordinal implying a set nobody published is the same species this section is about, so the ones
+that stood here are gone rather than renumbered. What *can* be published is the set the
+consolidated ledger identifies, and what each of those would actually need:
 
-- `fdb:1471` — `unhashable_case_divergence` needs the poison to be one of the forty divergent
+- **`fdb:1471`** — `unhashable_case_divergence` needs the poison to be one of the forty divergent
   characters. **And one row can never close it together with `fdb:1523`, the `_rescued_data`
   entry:** `rescued_data_present` sits above every per-table rule under first-match-wins, so a
   schema-drifted row can never *also* be reported as a case divergence. **The two are mutually
   exclusive on a single row by construction**, which is a fact about the rule ordering that the
   prediction's arithmetic silently assumed away.
-- `fdb:1526` and ADR 0011's reversal condition need the **vault** re-run after a repromote — and
-  ADR 0011 asks for the **socios** number, so it would close in mechanism and stay open in
-  quantity. §3 records why that re-run was refused.
+- **`fdb:1526`, and ADR 0011's reversal condition with it** — both need the **vault** re-run after
+  a repromote, and ADR 0011 asks for the **socios** number, so it would close in mechanism and
+  stay open in quantity. §3 records why that re-run was refused.
+- **`fdb:1525`** — *"`closed_by` has exactly one value"* — is **closable by no row of any shape**,
+  which is the sharpest thing in this prediction. It is true **by construction**:
 
-**And one candidate is not closable by any row at all, which is the sharpest thing in this
-prediction.** `fdb:1525` — *"`closed_by` has exactly one value"* — is true **by construction**:
+  ```bash
+  grep -n CLOSING_STATE src/opl/vault/effectivity.py
+  ```
 
-```bash
-grep -n CLOSING_STATE src/opl/vault/effectivity.py
-```
+  `CLOSING_STATE` is pinned to `absent_after_observation` and nothing else, so nothing can give
+  `closed_by` a second value. **An entry whose falsifier does not exist is not debt** — and the
+  ledger now books it as a published caveat rather than as carry-forward.
+- **`fdb:1480`** — closed **before the prediction was written**, by F-DB's own 2,192-row merchant
+  run, and **never struck.** It sits in [`docs/unexercised-ledger.md`](unexercised-ledger.md)
+  §4.1, *closed and never said so*, the section that measures this phase's subject.
 
-`CLOSING_STATE` is pinned to `absent_after_observation` and nothing else, so no row of any shape
-can give `closed_by` a second value. **A prediction that counted it as closable was counting an
-entry whose falsifier does not exist** — and the ledger now books it as a published caveat rather
-than as debt.
-
-**A sixth candidate had already been closed before the prediction was written.** `fdb:1480` was
-closed by F-DB's own 2,192-row merchant run and **never struck** — it sits in
-[`docs/unexercised-ledger.md`](unexercised-ledger.md) §4.1, *closed and never said so*, the section
-that measures this phase's subject. **So the prediction's "six" contained one entry that had been
-closed for weeks, one that cannot be closed at all, and two that cannot be closed by the same row.**
-The prediction was not merely wrong about the count: **it was assembled by reading nine ledgers as
-an inventory rather than as claims**, which is precisely what the consolidated ledger exists to
-stop.
+**The falsification rests on the two that closed, and not on the list above.** The run closed two
+where the prediction said six; the list is why *six* was never reachable from the nine ledgers as
+they stood — one entry closed for weeks, one closable by nothing, and two that cannot be closed by
+the same row. **The prediction was assembled by reading nine ledgers as an inventory rather than as
+claims**, which is precisely what the consolidated ledger exists to stop.
 
 ### 2.2 — CONFIRMED IN SUBSTANCE, AND THE WORDING IS ILL-POSED, WHICH IS PUBLISHED RATHER THAN REWORDED
 
@@ -624,6 +642,13 @@ it is the only list of its kind here that is maintained rather than historical.*
 not a competitor to it: these are the five things **F7 itself** did not do, each of which is either
 already an id in that file or names why it cannot be one.
 
+> **THAT RULE WAS STATED HERE BEFORE IT WAS TRUE OF ITEMS 3 AND 5, AND THE CLOSING REVIEW CAUGHT
+> IT.** It searched the ledger for both and found neither: they existed only in this document, and
+> **F7 is the last phase, so a path recorded only in a phase document has no consumer left** —
+> which is the exact shape of the rows [`docs/unexercised-ledger.md`](unexercised-ledger.md) §4.1
+> measures. They are ids now, `repromote:21` and `vaultreg:5`, and the sentence above is left
+> standing rather than softened because the gap it did not cover is the finding.
+
 **1. The dated broker probe.** §2.4. Due ~2026-09-03, three days after this document. Carried as
 `f5:980`. *What would exercise it:* a metadata fetch against the cluster on or after the expiry,
 with the result written into `docs/f5-run-evidence.md` — whichever way it comes back.
@@ -636,8 +661,9 @@ can run a check against a settings page.
 
 **3. `repromote_triaged_batch` was not run.** The 1,089-row batch §1.2 quarantined **is still
 sitting unpromoted in staging**, which is what fail-closed means and is not a defect.
-`databricks/resources/repromote_batch_job.yml` is the path that promotes it after triage. *What
-would exercise it:* running that job against batch `529699767706804`.
+`databricks/resources/repromote_batch_job.yml` is the path that promotes it after triage. Carried
+as `repromote:21`. *What would exercise it:* running that job for `table=merchant` against the
+batch that run left in staging.
 
 **4. The vault was deliberately not re-run over that snapshot, and the reason is a hazard this
 phase priced before it bit.** The observation ledger's presence universe is bronze ∪ quarantine
@@ -651,8 +677,11 @@ out at [`docs/unexercised-ledger.md`](unexercised-ledger.md) §3.9, placed delib
 the entry a future reader would otherwise try to close first.
 
 **5. F2 wave 2 was never started, and this phase did not start it.** The phase plan refused new
-features in its own words, and named this as staying unstarted. It is repeated here so the last
-phase record does not read as a claim of completeness.
+features in its own words, and named this as staying unstarted (***Reported*** — that plan is
+git-ignored). Carried as `vaultreg:5`, against the sentence in `src/opl/vault/registry.py` that
+stakes DV2's extensibility claim on wave 2's three tables: the mechanism has never been exercised
+by anything but a throwaway fixture domain. *What would exercise it:* wave 2 itself. It is
+repeated here so the last phase record does not read as a claim of completeness.
 
 > **One thing this section cannot do, and it is worth stating at the end of the last phase
 > record.** Whether a ledger row is *still* true is not derivable by any test here — no test can

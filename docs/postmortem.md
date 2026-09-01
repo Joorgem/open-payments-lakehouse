@@ -373,7 +373,9 @@ human-scale consumer in this project failed at least once.**
   invisible red run — and the read-only analysis commissioned to hunt unconsumed findings left
   its own parenthetical unfollowed (§3.3(i)).
 - The **issue tracker**, the most visible surface any of this has, held the headline defect in the
-  open across five merges.
+  open while the work kept landing on top of it. **How many merges is the command in §1.1, not a
+  number here** — the number that stood in this sentence went false without anyone editing it,
+  which is §1.1's whole subject and was not supposed to survive into §4.
 - The **closing protocol** was satisfied nine times, correctly, while the corpus it governs
   decayed.
 
@@ -456,8 +458,9 @@ commit reaches them and no test can.
 gh repo view Joorgem/open-payments-lakehouse --json description,repositoryTopics
 ```
 
-**If they are still stale a phase from now, this document has recorded a finding that nothing
-consumed, and a reader should hold that against it.**
+**If they are still stale the next time anyone opens this repository's front page, this document
+has recorded a finding that nothing consumed, and a reader should hold that against it.** Stated
+against a reader rather than against a phase, for §6's reason.
 
 ---
 
@@ -466,20 +469,33 @@ consumed, and a reader should hold that against it.**
 Stated in this project's own idiom, because a postmortem with no falsifier is a brochure with
 footnotes.
 
+**And three of the four below had to be restated, for the reason §3.2(f) publishes as a specimen
+of this project's own species.** They were written against *the next phase*.
+`docs/f7-run-evidence.md` opens by saying **F7 is this project's last phase** — a fact this
+document did not mention, so the two disagreed about whether another one is coming — and against
+that, *"the next phase merging past…"*, *"a phase closing without…"* and *"a hand-maintained list
+surviving a phase…"* are falsifiers that **cannot occur**. That is specimen (f) exactly, reproduced in the section
+whose whole subject is falsifiability. **There may be no next phase. There will be a next merge to
+`main`, and a next reader.** Each condition below is stated against one of those instead.
+
 1. **A locked document going false in its declared half again, with its test green.** That would
    mean the parsed/declared line is not where the defence belongs, and the readings need a
    consumer of their own — most plausibly a rule that a declared reading may cite a tracked file
-   and never a plan line.
-2. **The next phase merging past an open self-filed issue, or past a red run on `main`.** The
-   mechanism in §1 would then be intact and only the instance repaired. `gh issue list --state
-   open` and the default branch's run list are the two commands that settle it.
-3. **A phase closing without answering *which of someone else's ledger rows did I close?*** §3.3(h)
-   is the argument that condition 6 is incomplete. A phase that closes cleanly without the second
-   half and is later found to have closed somebody's row silently confirms it; a phase that adopts
-   the second half and still leaves a silent closure refutes the proposed repair.
-4. **A hand-maintained list surviving a phase without going stale.** The claim underneath §4's
-   table is that a hand-maintained list in this repository rots. One that does not — measured,
-   not asserted — weakens the case for what generating them costs.
+   and never a plan line. This one needed no restating: it is about a document and a test, and
+   both outlive the phase.
+2. **The next merge to `main` landing while a self-filed issue about this repository's own public
+   record is open, or on top of a red run on `main`.** The mechanism in §1 would then be intact
+   and only the instance repaired. `gh issue list --state open` and the default branch's run list
+   are the two commands that settle it — and **#25 and #26 were both open when this was written**,
+   so this one is decided by the next merge rather than by some future phase.
+3. **Work closing on this repository — a phase, a pull request, a session — without answering
+   *which of someone else's ledger rows did I close?*** §3.3(h) is the argument that condition 6
+   is incomplete. Work that closes cleanly without the second half and is later found to have
+   closed somebody's row silently confirms it; work that adopts the second half and still leaves a
+   silent closure refutes the proposed repair.
+4. **A hand-maintained list in this repository still agreeing with the code and the runs the next
+   time anyone re-derives it.** The claim underneath §4's table is that such a list rots. One that
+   does not — measured, not asserted — weakens the case for what generating them costs.
 
 ---
 

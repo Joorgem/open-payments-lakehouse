@@ -666,10 +666,13 @@ def test_an_empty_exerciser_is_named():
 
 
 def test_a_published_total_that_drifts_from_the_rows_is_named():
-    """One digit in §0.5, against the rows the document actually carries."""
-    assert _total_disagreements(_mutated("| STILL UNEXERCISED | 114 |",
-                                         "| STILL UNEXERCISED | 113 |")) \
-        == {"STILL UNEXERCISED": (113, 114)}
+    """One digit in §0.5, against the rows the document carries. BOTH INTEGERS ARE
+    DERIVED -- typed, this arm reddened on a LEGITIMATE row move, which is a
+    hand-maintained count inside the lock, the defect the document ends."""
+    b = "STILL UNEXERCISED"
+    n = _stated_totals(_ledger())[b]
+    assert _total_disagreements(_mutated(f"| {b} | {n} |", f"| {b} | {n - 1} |")) \
+        == {b: (n - 1, n)}
 
 
 def test_a_deleted_row_moves_two_totals_and_both_are_named():
