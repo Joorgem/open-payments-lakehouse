@@ -484,7 +484,7 @@ and that failure is published rather than tidied away.**
 | 1 | ~~One quarantined `bronze_merchant` row closes **exactly six** ledger entries~~ | **FALSIFIED** — it closes **two** |
 | 2 | UC lineage does **not** cover all seven bronze tables' paths to gold | **CONFIRMED IN SUBSTANCE — AND THE WORDING IS ILL-POSED** |
 | 3 | The generated ADR index cannot parse a `## Status` block for **at least three** ADRs | **CONFIRMED** — exactly three |
-| 4 | The Redpanda broker stops answering on or after **2026-09-03** | **UNMARKED — its date has not arrived** |
+| 4 | The Redpanda broker stops answering on or after **2026-09-03** | **UNSETTLEABLE INSIDE THE PHASE, BY CONSTRUCTION** |
 | 5 | Closing the README defect leaves the GitHub repo description and topics stale | **CONFIRMED** |
 
 ### 2.1 — FALSIFIED, in the "fewer" direction, and the count is two
@@ -576,22 +576,40 @@ expected value if the generator's parser and its reporting were wrong in the sam
 are published because the pair is the point: **the cheap command and the correct one are evidence
 for different things**, and only the second can falsify the generator. They agree today.
 
-### 2.4 — UNMARKED, because its date has not arrived, and that is an honest outcome
+### 2.4 — UNSETTLEABLE INSIDE THE PHASE, BY CONSTRUCTION, AND THAT IS THE SECOND MALFORMED ONE
 
 > *"The Redpanda broker stops answering on or after 2026-09-03. **Falsified by:** it still
 > answering — in which case the sites carrying the date are corrected to what was measured, and ADR
 > 0019 Decision 6's obligation is re-dated rather than discharged."*
 
-**Written 2026-08-31, before the ~2026-09-03 expiry. No probe was made, and no probe made
-before that date could decide this.** So the prediction is marked neither confirmed nor
-falsified, and **ADR 0019 Decision 6's obligation is NOT discharged.**
+**The plan set this prediction a test date that falls AFTER the phase's own work**, and no
+probe taken before ~2026-09-03 could decide it. So it is not pending: **it could never have
+been settled here, and that was true the day it was written.**
+
+**TWO OF THE FIVE PREDICTIONS WERE MALFORMED, IN THE PHASE THAT HUNTS MALFORMED CHECKS.**
+§2.2's falsifier could not occur — three of the seven tables declare no gold path, so *"all
+seven appearing"* was unreachable. This one's falsifier was reachable but not in time. **A
+prediction whose test the phase cannot run is a check that reports the expected value for the
+whole phase**, which is ADR 0018's species arriving in the list of things this phase promised
+to measure.
 
 > **This paragraph said *"Today is 2026-08-31"* until the clock rolled past midnight while the
 > phase waited on CI, and it went false without anyone touching the file.** It is fixed here by
 > dating the sentence instead of dating the reader, which is the same repair the pull-request
 > count needed in §0.1 and §1.1 — **a word like *today* is a hand-maintained value with no
-> maintainer.** The substance never moved: the expiry is still ahead, so the mark is still none. `086f149` corrected the one site that claimed
-otherwise (§1.7).
+> maintainer.** The substance never moved.
+
+**ADR 0019 Decision 6's obligation is NOT discharged, and it is not abandoned either.** It is
+carried as `f5:980` in [`docs/unexercised-ledger.md`](unexercised-ledger.md), with what would
+exercise it written beside it and a test that fails if the row drifts from its source — which
+is the machinery §1.5 exists to provide, doing the job it was built for. The future reader is
+already protected without it: `streaming_managed_broker_job.yml`'s header says in its own words
+that this is **a recorded run, not a job a future reader can run green**, and `086f149`
+corrected the one site that claimed the date had already been written (§1.7).
+
+**So waiting for the expiry would have bought one thing: replacing `~2026-09-03` with an exact
+date in one document.** It would not have protected a reader who is already protected, and it
+would have held the project's last phase open for a string.
 
 **Writing the line now from the calendar would publish a prediction in the shape of an
 observation** — the exact failure ADR 0019 Decision 1 rejected its own first probe over, and the
