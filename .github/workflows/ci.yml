@@ -4,8 +4,52 @@ on:
   push: { branches: [main] }
   pull_request:
 jobs:
+  # THE SUITE RUNS IN FOUR SHARDS, ONE RUNNER EACH, AND THE SPLIT IS BY MEASURED TIME.
+  #
+  # WHY IT WAS SPLIT AT ALL. On 2026-09-01 this job was KILLED at GitHub's 6-hour job
+  # ceiling (run 33447642806, `cancelled` at 6h00m17s) on a tree that has passed in as
+  # little as 30 minutes. Measured over 117 successful runs the median is ~14 min and the
+  # maximum 4h53m -- a spread of more than 10x on the same code, which is runner
+  # contention rather than the suite. One shard cannot reach the ceiling.
+  #
+  # WHY NOT `pytest -n auto`, WHICH IS THE OBVIOUS ANSWER AND IS WRONG HERE. This project
+  # MEASURED that two Spark suites on one machine break each other:
+  # `tests/bronze/test_ptax_rules.py` returned 11 failed / 31 passed with a second local
+  # Spark suite beside it, and 42 passed on an identical rerun with nothing beside it.
+  # `CLAUDE.md` carries "never two local Spark suites at once" because of that pair.
+  # xdist is that condition by construction, so the shards go on SEPARATE RUNNERS and no
+  # shard is internally parallel.
+  #
+  # WHY BY TIME AND NOT BY TEST COUNT, which would have split it wrong. Attributing the
+  # green run's per-test log timestamps: `tests/triage_agent` is 271 tests and 32% of the
+  # time, `tests/bronze` is 572 tests and 6%. Count does not predict cost; a Spark session
+  # does.
+  #
+  # THE PARTITION IS EXHAUSTIVE BY CONSTRUCTION, WHICH IS THE PROPERTY THAT MATTERS. The
+  # `rest` shard is defined by IGNORING the other three rather than by listing what it
+  # runs, so a new top-level test directory joins it automatically instead of silently
+  # running nowhere. `tests/test_ci_shards.py` locks that: it reads this file and fails if
+  # the ignore list and the named shards ever disagree, and if the four shards do not
+  # collect exactly what an unsharded run collects.
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: triage
+            paths: tests/triage_agent
+          - shard: vault
+            paths: tests/vault
+          - shard: gold
+            paths: tests/gold
+          - shard: rest
+            paths: >-
+              tests
+              --ignore=tests/triage_agent
+              --ignore=tests/vault
+              --ignore=tests/gold
+    name: test (${{ matrix.shard }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -15,10 +59,13 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with: { python-version: "3.12" }
       - run: uv sync --all-groups --all-extras
+      # Lint is the whole tree and is cheap, so it runs once, on the shard that owns no
+      # directory of its own.
       - name: Lint
+        if: matrix.shard == 'rest'
         run: uv run ruff check .
       - name: Unit tests (incl. version smoke + delta roundtrip)
-        run: uv run pytest -v
+        run: uv run pytest -v ${{ matrix.paths }}
 
   # THE LIVE POSTGRES PATH, VERIFIED SOMEWHERE OTHER THAN ONE WINDOWS BOX (plan T2b).
   # ADDITIVE: the `test` job's command is untouched. `addopts` deselects both `integration`
