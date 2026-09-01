@@ -458,7 +458,8 @@ a claim, and a second copy going stale is the mechanism it is about.
 
 `databricks/resources/streaming_managed_broker_job.yml` stated that `docs/f5-run-evidence.md`
 *"carries the run ids, the row counts **and the date the broker went away**"*. **It carries the
-first two.** The third cannot exist yet: the credits expire ~2026-09-03 and today is 2026-08-31.
+first two.** The third cannot exist yet: the credits expire **~2026-09-03**, and this was
+written on **2026-08-31**.
 
 **A future obligation written in the present tense is how a promise gets read as a discharge**, and
 a reader who trusted that header would go looking for a date that is not there. `086f149` corrects
@@ -581,9 +582,15 @@ for different things**, and only the second can falsify the generator. They agre
 > answering — in which case the sites carrying the date are corrected to what was measured, and ADR
 > 0019 Decision 6's obligation is re-dated rather than discharged."*
 
-**Today is 2026-08-31. The expiry has not arrived, no probe was made, and no probe made before the
-date could decide this.** So the prediction is marked neither confirmed nor falsified, and **ADR
-0019 Decision 6's obligation is NOT discharged.** `086f149` corrected the one site that claimed
+**Written 2026-08-31, before the ~2026-09-03 expiry. No probe was made, and no probe made
+before that date could decide this.** So the prediction is marked neither confirmed nor
+falsified, and **ADR 0019 Decision 6's obligation is NOT discharged.**
+
+> **This paragraph said *"Today is 2026-08-31"* until the clock rolled past midnight while the
+> phase waited on CI, and it went false without anyone touching the file.** It is fixed here by
+> dating the sentence instead of dating the reader, which is the same repair the pull-request
+> count needed in §0.1 and §1.1 — **a word like *today* is a hand-maintained value with no
+> maintainer.** The substance never moved: the expiry is still ahead, so the mark is still none. `086f149` corrected the one site that claimed
 otherwise (§1.7).
 
 **Writing the line now from the calendar would publish a prediction in the shape of an
