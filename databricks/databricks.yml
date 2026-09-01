@@ -14,6 +14,36 @@ targets:
     mode: development
     default: true
 
+  # THE SECOND TARGET, AND IT IS DECLARED IN ORDER NEVER TO BE DEPLOYED. See ADR 0021.
+  #
+  # WHY IT HAS TO EXIST AT ALL: `mode` is what writes `schedule.pause_status`, and it
+  # writes the opposite value under each mode. Measured on an isolated scratch bundle --
+  # two targets, one job, one `schedule:` block and NO `pause_status` in the source --
+  # `databricks bundle validate -o json` renders `PAUSED` under `mode: development` and
+  # `UNPAUSED` under `mode: production`. So under `free`, the only target this repository
+  # deploys, every `schedule:` block below is deployed paused and cannot fire. A schedule
+  # is a statement of cadence here; the target that would make one fire is this one.
+  #
+  # WHY IT IS NOT DEPLOYED, and either reason alone is sufficient. ADR 0018 Decision 6
+  # rejected declarative governance on three grounds, of which the second and third are
+  # about a production target and are *"assumed on strong evidence and not proved"* -- and
+  # the third revokes the platform's own `CREATE TABLE` on the schema every pipeline writes
+  # into. That is not a thing to find out by trying it on the only workspace there is. The
+  # safety property is mechanical rather than a promise: those grounds can fire only if the
+  # bundle declares a SECURABLE (`schemas`, `catalogs`, `volumes`, `external_locations`),
+  # and it declares none.
+  #
+  # WHY `root_path` IS HERE AND WHY IT IS INTERPOLATED. `mode: production` refuses to
+  # validate without one -- *"target with 'mode: production' must set 'workspace.root_path'
+  # to make sure only one copy is deployed"* -- and the operator's identity must not be
+  # committed, so it is resolved per deploy from `${workspace.current_user.userName}`
+  # rather than typed. The same rule as the warehouse id above: the NAME lives in git and
+  # the workspace resolves it.
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+
 # NOTE for whoever next needs to run something from `scripts/` as a job task:
 # the bundle root is `databricks/`, so `scripts/` is OUTSIDE the sync root and
 # `bundle validate` refuses such a `python_file` with "is not contained in sync

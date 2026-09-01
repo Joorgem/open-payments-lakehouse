@@ -34,6 +34,21 @@ resources:
   jobs:
     opl_gold_dim_company:
       name: opl-gold-dim-company
+      # MONTHLY, IN THE 12:00 GOLD TIER, following the Empresa vault load at 09:00 that
+      # follows the monthly RFB snapshot ingested at 06:00. This dimension's grain is the
+      # empresa satellite's versions, so its cadence is that satellite's and nothing of its
+      # own.
+      #
+      # A CLOCK OFFSET IS NOT A DEPENDENCY (ADR 0021). It matters more here than upstream:
+      # this build CHECKS its declared window against the snapshots the satellite actually
+      # holds and refuses a mismatch, so a vault load that has not finished produces a
+      # refusal rather than a partial dimension -- which is the right failure, and still a
+      # failure.
+      #
+      # NO `pause_status`: the target's mode writes it, `PAUSED` under `free`.
+      schedule:
+        quartz_cron_expression: "0 0 12 15 * ?"
+        timezone_id: America/Sao_Paulo
       parameters:
         - name: months
           # A DECLARATION, NOT A FILTER, and this is the one job in the repository where

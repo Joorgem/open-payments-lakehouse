@@ -28,6 +28,12 @@ resources:
   jobs:
     opl_vault_cnpj_estabelecimento:
       name: opl-vault-cnpj-estabelecimento
+      # MONTHLY, following the bronze it reads, in the 09:00 vault tier. The Empresa vault
+      # job carries the full argument, including why a clock offset is not a dependency and
+      # why no `pause_status` is written anywhere in this bundle.
+      schedule:
+        quartz_cron_expression: "0 0 9 15 * ?"
+        timezone_id: America/Sao_Paulo
       parameters:
         - name: months
           # A LIST; see vault_empresa_job.yml, which carries the full argument for the

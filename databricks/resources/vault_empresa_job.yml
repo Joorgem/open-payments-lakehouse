@@ -25,6 +25,20 @@ resources:
   jobs:
     opl_vault_cnpj_empresa:
       name: opl-vault-cnpj-empresa
+      # MONTHLY, FOLLOWING THE BRONZE IT READS. This loader's input is a bronze table fed
+      # by the monthly RFB snapshot, so its cadence is that snapshot's and nothing of its
+      # own. 09:00 on the same day is the second of three tiers -- bronze at 06:00, the
+      # vault here, gold at 12:00.
+      #
+      # A CLOCK OFFSET IS NOT A DEPENDENCY, and three hours is a guess at a duration rather
+      # than a wait on a signal: a bronze run that failed or is still running does not stop
+      # this one from starting. Cross-job orchestration is out of this phase's scope and
+      # ADR 0021 records the gap instead of implying it is closed.
+      #
+      # NO `pause_status`: the target's mode writes it, `PAUSED` under `free`. See ADR 0021.
+      schedule:
+        quartz_cron_expression: "0 0 9 15 * ?"
+        timezone_id: America/Sao_Paulo
       parameters:
         - name: months
           # A LIST, and the plural is load-bearing rather than cosmetic. Every bronze

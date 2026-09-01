@@ -10,6 +10,28 @@ resources:
   jobs:
     bronze_cnpj_estabelecimentos:
       name: opl-bronze-cnpj-estabelecimentos
+      # MONTHLY, AND THE CADENCE IS THE SOURCE'S RATHER THAN OURS. Receita Federal
+      # publishes one CNPJ snapshot per month; `docs/f0-validation-report.md` measured the
+      # series gapless from 2023-05 onward. THE DAY IS A CHOICE AND NOT A MEASUREMENT:
+      # nothing in this repository records which day of a month a snapshot appears, so the
+      # 15th is picked to be unambiguously late rather than derived, and it is written here
+      # as a choice so nobody reads it as one.
+      #
+      # 06:00 IS THE FIRST OF THREE TIERS on that day -- bronze here, the vault loads at
+      # 09:00, the gold builds at 12:00. A CLOCK OFFSET IS NOT A DEPENDENCY: a bronze run
+      # that fails does not stop the vault job three hours later from starting. Nothing
+      # here fixes that and ADR 0021 records it rather than implying otherwise.
+      #
+      # NO `pause_status` IS WRITTEN HERE OR ANYWHERE ELSE IN THIS BUNDLE, and that is the
+      # point rather than an omission. The TARGET'S MODE writes it, and writes the opposite
+      # value under each mode -- `PAUSED` under `free` (`mode: development`), `UNPAUSED`
+      # under `prod` (`mode: production`). Under the only target this repository deploys,
+      # this schedule is deployed paused and cannot fire. See ADR 0021 for what a scheduled
+      # run would otherwise carry as its expected revision, and why the answer is not one
+      # this phase could ship.
+      schedule:
+        quartz_cron_expression: "0 0 6 15 * ?"
+        timezone_id: America/Sao_Paulo
       parameters:
         - name: month
           # THE MONTH THIS RUN INGESTS, and this default is a value the tasks refuse

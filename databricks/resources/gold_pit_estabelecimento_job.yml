@@ -107,6 +107,14 @@ resources:
   jobs:
     opl_gold_pit_estabelecimento:
       name: opl-gold-pit-estabelecimento
+      # MONTHLY, IN THE 12:00 GOLD TIER, following the Estabelecimento vault load at 09:00.
+      # The as-of set this table is built over is derived from that vault's satellites, so
+      # the cadence is theirs. A clock offset is not a dependency (ADR 0021).
+      #
+      # NO `pause_status`: the target's mode writes it, `PAUSED` under `free`.
+      schedule:
+        quartz_cron_expression: "0 0 12 15 * ?"
+        timezone_id: America/Sao_Paulo
       parameters:
         - name: revision
           # The revision this run is launched for; the default is a value the guard

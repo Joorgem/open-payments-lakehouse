@@ -73,6 +73,23 @@ resources:
   jobs:
     bronze_ptax:
       name: opl-bronze-ptax
+      # DAILY ON WEEKDAYS, AND THE CADENCE IS THE BANCO CENTRAL'S. PTAX is published once
+      # per business day, and this repository has MEASURED the publication instant rather
+      # than assuming it: every 2026 row it has read publishes in the band 13:03-13:10
+      # Brasilia time (ADR 0016 Decision 2, which is also why the timezone below is
+      # `America/Sao_Paulo` and not UTC). 14:00 is after that band with room to spare.
+      #
+      # WEEKDAYS, NOT BUSINESS DAYS, AND THE DIFFERENCE IS STATED BECAUSE IT IS REAL. A
+      # cron knows Monday from Saturday and knows nothing about Brazilian holidays, which
+      # fall on weekdays and carry no quote -- ADR 0016 records 2026-06-04 (Corpus Christi)
+      # as exactly that day, and DECLINED a holiday calendar for the FX join. Declaring one
+      # here would be the same calendar arriving by the back door, so this schedule fires on
+      # a holiday and the run finds nothing to fetch.
+      #
+      # NO `pause_status`: the target's mode writes it, `PAUSED` under `free`. See ADR 0021.
+      schedule:
+        quartz_cron_expression: "0 0 14 ? * MON-FRI"
+        timezone_id: America/Sao_Paulo
       parameters:
         - name: month
           # The month this run fetches into and ingests from; the default is a value the

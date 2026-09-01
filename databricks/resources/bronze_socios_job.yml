@@ -41,6 +41,13 @@ resources:
   jobs:
     bronze_cnpj_socios:
       name: opl-bronze-cnpj-socios
+      # MONTHLY, on the RFB snapshot cadence. Estabelecimentos' job carries the full
+      # argument -- including why the 15th is a choice rather than a measurement, why 06:00
+      # is a tier rather than a dependency, and why no `pause_status` is written anywhere in
+      # this bundle.
+      schedule:
+        quartz_cron_expression: "0 0 6 15 * ?"
+        timezone_id: America/Sao_Paulo
       parameters:
         - name: month
           # The month this run ingests; the default is a value the tasks refuse
