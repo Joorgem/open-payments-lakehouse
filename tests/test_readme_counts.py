@@ -417,9 +417,15 @@ def test_a_changed_task_count_is_named():
 
 
 def test_a_changed_test_count_is_named():
-    """The one count that needs a real collection to contradict."""
-    assert set(_disagreements(_mutated("(the rest need Docker) | **3,230** |",
-                                       "(the rest need Docker) | **3,229** |"))) \
+    """The one count that needs a real collection to contradict.
+
+    THE STATED VALUE IS READ, NEVER TYPED. Pinned to a literal, this arm went red the
+    moment the README's count legitimately moved -- `_mutated` refuses a string that is
+    no longer there -- so the arm punished the correction instead of the drift. That is
+    a hand-maintained count living inside the lock."""
+    stated = _stated(_readme())["tests_selected"]
+    row = f"(the rest need Docker) | **{stated:,}** |"
+    assert set(_disagreements(_mutated(row, row.replace(f"{stated:,}", f"{stated - 1:,}")))) \
         == {"tests_selected"}
 
 
@@ -444,7 +450,15 @@ def test_a_changed_guard_tally_is_named():
 
 
 def test_a_changed_label_tally_is_named():
-    """How many evidence documents carry Controller-verified, and how many do not."""
-    assert set(_disagreements(_mutated("**Ten of them** carry the labelling convention",
-                                       "**Seven of them** carry the labelling convention"))) \
+    """How many evidence documents carry Controller-verified, and how many do not.
+
+    THE WORD IS READ OUT OF THE README, never typed, so this arm fails on a DRIFT and
+    not on a correction. Typed, it would have gone red the moment F7's documents moved
+    the tally -- punishing the fix instead of the defect."""
+    word = re.search(r"\*\*(\w+) of them\*\* carry the labelling convention",
+                     _readme()).group(1)
+    other = next(w for w in _WORDS if w != word.lower() and _WORDS[w] != _WORDS[word.lower()])
+    assert set(_disagreements(_mutated(
+        f"**{word} of them** carry the labelling convention",
+        f"**{other.capitalize()} of them** carry the labelling convention"))) \
         == {"labelled_docs"}
