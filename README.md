@@ -118,8 +118,13 @@ Files into a bronze table is table stakes. These are not:
 
 - **CI runs on pull requests and on pushes to `main`**, not on every push. A push to a
   branch with no PR open runs nothing — see `.github/workflows/ci.yml`.
-- **Nothing is scheduled.** There is not one `schedule:` block in
-  `databricks/resources/`; every job is launched explicitly.
+- **Schedules are declared, and not one of them can fire.** Which jobs declare one:
+  `git grep -l quartz_cron_expression -- databricks/resources/`. No committed bundle file
+  writes `pause_status` — the target's `mode` writes it, and the target this repository
+  deploys is `mode: development`, under which the CLI renders `PAUSED`. So every run this
+  project has ever made was launched by hand. What a scheduled run would have to bind before
+  it could fire is
+  [ADR 0021](docs/adr/0021-the-deploy-binds-a-scheduled-runs-expected-revision.md).
 - **The payment fact does not go through the vault.** `fact_payment` loads from
   `bronze_payments` and resolves its two company roles against `dim_company`, which *is*
   built from the vault's `sat_empresa_dados`. The vault covers the CNPJ and merchant
@@ -273,7 +278,8 @@ PY
 git ls-files 'docs/adr/0*.md' | wc -l              # ADRs
 git ls-files docs | grep -c '^docs/[^/]*\.md$'     # evidence documents
 uv run pytest --collect-only -q | tail -1          # tests selected / collected
-grep -c 'schedule:' databricks/resources/*.yml     # 0 on every file
+git grep -l quartz_cron_expression -- databricks/resources/   # the jobs that declare a schedule
+git grep -n 'pause_status:' -- databricks/         # nothing: the target's mode writes it
 grep -n -A2 '^on:' .github/workflows/ci.yml        # what actually triggers CI
 
 # how many evidence documents carry the Controller-verified / Reported convention

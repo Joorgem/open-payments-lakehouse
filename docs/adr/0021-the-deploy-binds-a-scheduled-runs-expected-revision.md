@@ -250,17 +250,22 @@ So it is written down here as the reversal condition of Decision 1, and not ship
 
   **A HIT IS NOT A DEFECT, AND THE SWEEP CANNOT TELL A READER WHICH IS WHICH** — so what to
   expect in its output is written down here rather than left for the next reader to re-derive.
-  Six files today, in four kinds:
+  ~~Six files today, in four kinds:~~ **That count and its tally were wrong before the commit
+  carrying them was finished** — two further hits were added by that same commit — and they are
+  deleted rather than corrected, because the bullet directly above says a corrected number would
+  not have been the repair and then published one anyway. **No count and no file list here.**
 
-  - **two state the narrower claim that is still true** — *"the only target this repository
-    **deploys**"* (`databricks/databricks.yml`, `databricks/resources/bronze_estabelecimentos_job.yml`);
-  - **two are accepted ADRs that keep the original wide sentence exactly as written and carry a
-    dated amendment directly below it** (ADR 0008, ADR 0018). That is the house rule — amend an
-    accepted ADR, never silently rewrite it — so the phrase is *supposed* to stay findable
-    there, and the amendment beside it is what a reader is meant to arrive at;
-  - **one is this ADR**, which publishes the sweep;
-  - **one is `docs/f4-run-evidence.md`**, another phase's record of what was true when its run
-    happened, deliberately not edited.
+  **The KINDS a reader should expect**, each of which is a hit and not a defect:
+
+  - a site stating the narrower claim that is still true — *"the only target this repository
+    **deploys**"*;
+  - an accepted ADR keeping its original wide sentence exactly as written with a **dated
+    amendment directly below it**. That is the house rule — amend an accepted ADR, never
+    silently rewrite it — so the phrase is *supposed* to stay findable there, and the amendment
+    beside it is what a reader is meant to arrive at;
+  - this ADR, which publishes the sweep;
+  - another phase's run-evidence, recording what was true when its own run happened and
+    deliberately not edited.
 
   **What would be a defect is a hit asserting the wide claim in the present tense with no
   amendment beside it.** There is none today.

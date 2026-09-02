@@ -20,8 +20,11 @@ THE VERDICT IS ON SOURCE FRESHNESS ONLY, AND THAT IS A REFUSAL RATHER THAN AN OM
 Pipeline freshness has none to declare, and the reason CHANGED IN F8 WITHOUT THIS FILE
 BEING TOLD. It used to be that `databricks/resources/` contained no `schedule:`, no
 `trigger:` and no `continuous:` block at all. That stopped being true on 2026-09-01, when
-F8 declared cadences on the bronze, vault and gold jobs whose sources have a publisher
-(derive which: `git grep -l quartz_cron_expression databricks/resources/`). What is still
+F8 declared cadences on SOME bronze, vault and gold jobs and not others, each with its
+reason in its own YAML (derive which:
+`git grep -l quartz_cron_expression databricks/resources/`). It is NOT "the ones whose
+sources have a publisher": `bronze_cnpj_lookup` reads the same RFB monthly snapshot as its
+three scheduled siblings and carries no schedule. What is still
 true is narrower and is what this verdict now rests on: no committed bundle file writes
 `pause_status`, and the one target this repository deploys is `mode: development`, under
 which the CLI renders `PAUSED` -- so not one of those schedules can fire, and all 29

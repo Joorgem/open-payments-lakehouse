@@ -98,8 +98,10 @@ expected cadence therefore ships as data in the repo, beside the metric**, in fo
 `declared`, `paused`, `undeclared`, `no_source_axis`, each carrying its reason.
 
 > **AMENDED 2026-09-01 by F8. The `zero` above stopped being true that day, and the decision
-> is unchanged.** F8 declared `schedule:` blocks on the bronze, vault and gold jobs whose
-> sources have a publisher — derive which with
+> is unchanged.** F8 declared `schedule:` blocks on some of the bronze, vault and gold jobs and
+> not others, each with its reason in its own YAML — ~~the ones whose sources have a
+> publisher~~, **which was false the moment it was written**: `bronze_cnpj_lookup` reads the same
+> RFB monthly snapshot as its three scheduled siblings and carries no schedule. Derive which with
 > `git grep -l quartz_cron_expression databricks/resources/`, because this note publishes no
 > count and the first draft of the same claim elsewhere published one that was wrong within
 > the phase. **What the argument above actually needed was never the zero**: it was that no

@@ -42,11 +42,13 @@ dinamico". Static is right: runtime lineage on Free Edition is a system-table de
 with its own retention, for a question whose answer changes about once a phase. But a static
 manifest that nothing checks is a list that goes stale silently, which is the failure mode
 that makes people distrust the first decision -- so the manifest is data HERE and a test
-holds it against the bundle, exactly as `opl.dataops.cadence` ships a cadence no schedule can
-be derived from and `incidents.TABLE_OF_JOB` ships a job-to-table map the YAMLs are swept
-for. A number or a name a human typed is strictly better than the same value typed into a
-dashboard for one reason -- here it is in the diff -- and what makes it SAFE rather than
-merely honest is that it cannot go stale without a commit turning red.
+holds it against the bundle, exactly as `opl.dataops.cadence` ships a cadence no schedule that
+CAN FIRE could be derived from -- F8 declared cadences and none of them fires, because the
+target this repository deploys renders them `PAUSED` -- and `incidents.TABLE_OF_JOB` ships a
+job-to-table map the YAMLs are swept for. A number or a name a human typed is strictly
+better than the same value typed into a dashboard for one reason -- here it is in the diff
+-- and what makes it SAFE rather than merely honest is that it cannot go stale without a
+commit turning red.
 
 REJECTED, AND NEITHER IS REOPENED HERE: dynamic lineage (scope the spec refuses), and an
 unlocked static list. Also rejected, for `incidents.py`'s reason and not a new one: reading
