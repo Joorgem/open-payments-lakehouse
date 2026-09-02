@@ -6,42 +6,48 @@ satellite carrying its measures.
 
 ---
 
-## 0. READ THIS FIRST — THE PHASE DID NOT RUN IN THE WORKSPACE, AND IS NOT CLOSED
+## 0. THE RUN HAPPENED. This document reports rows.
 
-**No table described in this document was built by its own code.** Nothing in this phase
-executed in the Databricks workspace. Every measurement below was taken on **LOCAL SPARK**, on
-the developer machine, against **fixtures** — not against Receita Federal data, not against the
-synthetic payment stream at volume, and not against any Delta table in `workspace.default`.
+**Both tables were built by their own code, in the workspace, from a deployed wheel.**
 
-**Protocol §9 cannot be satisfied by this phase.** Conditions 1 and 4 require the tables to
-exist, built by their own code, with evidence from a run. Neither is met. The phase merges
-without closing, and **no controller may declare it closed.**
+```
+Run URL:  https://dbc-56b752e9-bb3f.cloud.databricks.com/jobs/1026518074461012/runs/432076088843817
+2026-09-02 18:11:49  "[dev jorge_molinadavid_jm] opl-vault-payments"  RUNNING
+2026-09-02 18:14:05  "[dev jorge_molinadavid_jm] opl-vault-payments"  TERMINATED SUCCESS
+```
 
-Standing decision 6 of the master protocol is the rule this document is written under:
-*a path that ran zero rows through it is not a path that works.* What follows reports
-unexercised things as unexercised.
-
-### The workspace refusal — MEASURED BY THE F8 SESSION, NOT BY THIS ONE
-
-| operation | state |
+| task | result |
 |---|---|
-| reads, `jobs/update`, `bundle deploy` of an **existing** resource | work |
-| `bundle deploy` creating a **NEW** job | **403 `PERMISSION_DENIED`** |
-| `jobs/run-now`, SQL warehouse start | **refused** |
+| `assert_deployed_revision` | OK — the installed wheel was built from `8ba13cc`, the revision the run was launched for, and a deploy from a modified tree would have stamped `+dirty` |
+| `link_payment` | **+40,000 rows** into `workspace.default.link_payment` from `bronze_payments` over `['2026-06','2026-08']`, joining `['hub_empresa','hub_empresa']`; target previously held 0 |
+| `sat_link_payment` | **+40,000 rows** into `workspace.default.sat_link_payment`, keyed on `link_payment`; target previously held 0 |
 
-Last run terminating `SUCCESS`: **2026-08-28T18:32:13Z**.
+### THIS DOCUMENT REPLACES ONE THAT SAID THE OPPOSITE, AND THAT IS THE FIRST THING TO KNOW
 
-**This table is carried from the F8 session's measurement and was NOT re-derived here.** This
-phase is credential-free by design: `.env` is deliberately absent from the worktree, and
-obtaining a credential is a human gate. An attempt to establish the 403 first-hand was refused
-by permission and was not worked around. **So the 403 is reported as F8's measurement, dated,
-and not as this session's.**
+An earlier version of this file, committed at `2f44796`, opened with *"the phase did not run in the
+workspace, and is not closed"* and stated that protocol §9 could not be satisfied. **That was true
+when written and is false now.** The workspace returned `403 PERMISSION_DENIED — "Organization …
+has been cancelled or is not active yet"` from `POST /api/2.2/jobs/create`, measured by the F8
+session on 2026-08-28. **On 2026-09-02 that call succeeded**, verified before anything was built:
+
+```
+databricks jobs create --json '{"name":"zz-f2w2-permission-probe", ...}'  ->  {"job_id": 326784013760523}
+databricks jobs delete 326784013760523                                    ->  exit 0
+```
+
+The probe job was deleted. **Disclosure:** the probe was written as create-then-delete in one
+command and its regex did not allow for the space in `"job_id": 326784013760523`, so the delete did
+not fire on the first pass and a stray job briefly existed in the workspace. It was deleted in the
+next command and the job count returned to 21. Nothing else was touched.
 
 ---
 
 ## 1. What is on the branch
 
 ```
+8ba13cc  feat(f2w2): the job that runs the payment vault, and a ledger row closed by its own exerciser
+5398461  docs(f2w2): a ledger row that named a dead owner and a lifted outage
+2f44796  docs(f2w2): the run evidence, which reports that nothing ran     <- superseded by this file
 18d38bd  fix(f2w2): the row that vanished, and seven counts deleted rather than corrected
 d15c245  docs(f2w2): ADR 0022, the ledger, and a prediction the tree declined to satisfy
 7b4b925  feat(f2w2): the loader routes on the parent's kind, and a lock whose green is not evidence
@@ -49,122 +55,150 @@ d15c245  docs(f2w2): ADR 0022, the ledger, and a prediction the tree declined to
 cae3eff  feat(f2w2): the payment enters the vault as a transactional link, and a guard that stopped being able to fail
 ```
 
-`git diff --shortstat origin/main..HEAD` → **51 files changed, 6878 insertions(+), 1029
-deletions(-)**.
-
-Two vault tables are registered that were not there before: **`link_payment`**, a
-self-referencing transactional link on `hub_empresa` under roles `payer`/`payee` with
-`transaction_id` as a width-less dependent-child key; and **`sat_link_payment`**, a DESCRIPTIVE
-satellite on that link carrying `amount`, `currency`, `payment_method`.
+**`link_payment`** is a self-referencing transactional link on `hub_empresa` under roles
+`payer`/`payee`, with `transaction_id` as a width-less dependent-child key. **`sat_link_payment`**
+is a DESCRIPTIVE satellite on that link carrying `amount`, `currency`, `payment_method` — the first
+such table in this vault, and the first table in this repository where a table's KIND does not
+determine its loader.
 
 **`hub_account` and `hub_customer` were NOT built, and that is a refutation rather than a cut.**
-Those columns ARE `cnpj_basico`, which `hub_empresa` already keys on, and the digest is taken
-over the padded key components without the hub's name — so a second hub on that column would
-produce a byte-identical key. ADR 0022 records the argument and supersedes the statements in
-earlier accepted documents that promised them.
+Those columns ARE `cnpj_basico`, which `hub_empresa` already keys on, and the digest is taken over
+the padded components without the hub's name — so a second hub there would produce a byte-identical
+key. ADR 0022 records the argument and supersedes the earlier accepted statements that promised
+them, without rewriting them.
 
 ---
 
-## 2. LOCAL measurements — every one of these is local Spark on fixtures
+## 2. The numbers, and the one that is not 40,150
 
-**Command and count stated together, because a count without its selection is not a
-measurement.**
+**Measured in the workspace after the run, one SQL statement:**
+
+```sql
+SELECT (SELECT COUNT(*) FROM bronze_payments)                    AS bronze_all,
+       (SELECT COUNT(DISTINCT transaction_id) FROM bronze_payments) AS distinct_txn,
+       (SELECT COUNT(*) FROM link_payment)                       AS link_rows,
+       (SELECT COUNT(*) FROM sat_link_payment)                   AS sat_rows
+```
+```
+bronze_all | distinct_txn | link_rows | sat_rows
+40150      | 40000        | 40000     | 40000
+```
+
+**Bronze holds 40,150 rows and 40,000 distinct transaction ids. The link holds 40,000, and that is
+correct rather than a loss.** `transaction_id` is IN the link's key, so 150 redelivered rows fold
+onto the ids they redeliver. Nothing was dropped: `40150 − 40000 = 150` is exactly the redelivery
+count.
+
+**The redeliveries are intra-month, not cross-month** — measured, because the two readings differ:
+
+```sql
+SELECT COUNT(*) FROM (SELECT transaction_id FROM bronze_payments
+                      GROUP BY transaction_id HAVING COUNT(DISTINCT _snapshot_month) > 1)
+-> 0
+```
+
+So no id appears in both `2026-06` and `2026-08`; the 150 duplicates are all inside `2026-06`
+(20,150 rows, 20,000 ids) and `2026-08` carries 20,000 of each.
+
+**Prerequisite, measured before the run rather than assumed:** `hub_empresa` held **69,062,849**
+rows. `refuse_unloaded_hubs` runs inside `load_link` before anything is written and refuses an
+empty hub, so this is an existence check that passed rather than referential integrity.
+
+**No satellite row carries a NULL `applied_date`:**
+
+```sql
+SELECT COUNT(*) FROM sat_link_payment WHERE applied_date IS NULL   ->   0
+```
+
+That guard was added by this phase after a closing review found that a payment whose `event_time`
+yields no day would be **silently discarded** by `changed_rows`' `left_semi` — `NULL = NULL` is not
+true. **It did not fire on this run, and that is not the same as it being unnecessary:** today's
+generator always emits a well-formed instant, so the path is unexercised, and the count above is
+what "unexercised" looks like when you measure it instead of assuming it.
+
+---
+
+## 3. What the satellite printed, and why it is worth quoting
+
+> `sat_link_payment +40000 rows … THE FOLD COUNT WAS NOT MEASURED (report_diagnostics=false, the
+> default), so this run reports none -- which is not it being zero. It is the ONLY count this flag
+> buys on a transactional satellite … NO departure count, because this satellite is TRANSACTIONAL
+> and derives no observation ledger at all -- an event does not depart, so there is no key that
+> could reach absent_after_observation and no window to close. Not a zero, and not a skipped
+> measurement either.`
+
+Both sentences are corrections this phase's reviews forced. The first arm existed and said
+*"neither diagnostic was measured … re-run to measure them"* — false here, because a departure
+count does not exist at any flag setting on a transactional satellite. The second was added because
+the run would otherwise have printed `None candidate departures, which is ZERO BY CONSTRUCTION over
+a one-month window`: a sentence about a ledger this load never built.
+
+---
+
+## 4. Test state
 
 ```
+uv run pytest tests/test_vault_job_wiring.py tests/triage_agent/test_blast_radius_lock.py \
+              tests/test_job_yaml_launch_guards.py tests/test_job_yaml_wiring.py \
+              tests/test_vault_entry_points.py tests/test_size_caps.py
+-> 270 passed, 14 skipped        [LOCAL, NO SPARK]
+
 uv run pytest tests/vault/test_payments_satellite.py tests/vault/test_payments_vault.py \
-              tests/vault/test_satellite_applied_date.py -q --no-header
-→ 47 passed in 173.60s          [LOCAL SPARK, FIXTURES]
+              tests/vault/test_satellite_applied_date.py
+-> 47 passed in 173.60s          [LOCAL SPARK, FIXTURES]
 ```
 
-```
-uv run pytest tests/test_readme_counts.py tests/triage_agent/test_blast_radius_lock.py \
-              tests/test_vault_job_wiring.py -q --no-header
-→ 15 failed, 53 passed in 13.68s     [LOCAL, NO SPARK]
-```
+**The five locks that were red because no job task existed are now GREEN**, closed by the YAML this
+document reports running. `tests/test_readme_counts.py` stays red **on purpose**: its counts must be
+re-derived on the MERGED tree and never on this branch — doing it on the branch is what made PR #32
+red twice in F7. The job added one bundle job and three bundle tasks, so those counts moved.
 
-**The full suite was NOT run on this machine and no full-suite number appears in this
-document.** It is measured at roughly seven hours here and was abandoned twice; CI is the
-authority for "the suite passes". No CI run is quoted either, because this branch has not been
-pushed.
-
-### The fifteen red tests, each attributed
-
-| count | file | why |
-|---|---|---|
-| 10 | `tests/test_readme_counts.py` | **Deliberate.** The README's counts must be re-derived on the MERGED tree and never on this branch — deriving on the branch is what made PR #32 red twice in F7. |
-| 4 | `tests/triage_agent/test_blast_radius_lock.py` | Compare the bundle against the declaration. No job task exists for the two new tables. |
-| 1 | `tests/test_vault_job_wiring.py::test_every_registered_vault_table_is_loaded_by_exactly_one_task` | The same fact, stated as totality. |
-
-**The last five are the workspace gap, visible as a test.** They are red because
-`databricks/resources/` declares no task for `link_payment` or `sat_link_payment`, and none was
-written: the workspace 403s on creating a NEW job resource, and hanging the loader off an
-EXISTING job's task list to dodge that would be a distortion outliving the outage.
+**The full suite was NOT run here** (~7 hours on this machine) and no full-suite number is claimed.
 
 ---
 
-## 3. What exists, what runs, and what has never run
+## 5. What still does not happen, and it is the honest limit
 
-| | state |
-|---|---|
-| `link_payment` / `sat_link_payment` registered in the vault registry | **yes** |
-| their loaders exercised on fixtures, local Spark | **yes** — see §2 |
-| a runnable entry point (`vault_load_satellite.py` routes on the parent's kind) | **yes**, as of `7b4b925` |
-| a bundle job task | **NO** |
-| deployed to the workspace | **NO** |
-| **built as Delta tables by their own code** | **NO** |
-| **rows loaded in the workspace** | **NONE. Zero.** |
+**`fact_payment` still reads `bronze_payments` directly.** The payment is in the vault; the FACT
+does not read it. Re-pointing it is a gold refactor with its own risk and was explicitly out of
+scope — **and it was out of scope by decision, not because of the outage**, so the 403 lifting does
+not change it. An outage lifting removes an excuse; it does not create a mandate.
 
----
+So the honest sentence is now: **the payment is in the vault, and the fact does not yet read it.**
 
-## 4. Things known and deliberately not exercised
-
-Recorded in `docs/unexercised-ledger.md` rather than asserted away. The phase opened eight rows
-of new debt and closed one. Among them:
-
-- **`fact_payment` still reads `bronze_payments` directly.** The payment is in the vault; the
-  FACT does not read it. Re-pointing it is a gold refactor with its own risk and was out of
-  scope.
-- **`fdb:1504` did NOT close, though the phase plan predicted it would.** The exerciser conflated
-  "a second link with a declared derivation on an identifying end" with "the field's second
-  consumer". `link_payment` has two derivations, but its only satellite is transactional, builds
-  no observation grain and derives no ledger — so `link_merchant_empresa` is still the only link
-  whose prefixes reach a grain. **A plan predicting a closure is not evidence of one.**
-- **The transactional satellite's delta detector is effectively inert** on today's data, and the
-  claim that this is structural was measured false: it is data-dependent.
-- **A declared residual in the entry-point lock**, plus the stale-name sweep this phase wrote,
-  whose first run was a false green.
+Other things known and not exercised are in `docs/unexercised-ledger.md` rather than asserted away.
+One row closed on this run — `vwiring` asked for a YAML task naming `sat_link_payment` and got one —
+and it is marked closed and KEPT rather than struck, because a row closed by its own stated
+exerciser is evidence the mechanism works.
 
 ---
 
-## 5. How this phase was verified, and what that verification is worth
+## 6. How this was verified, and what that verification is worth
 
-Every task ran the project's method: implementer, independent reviewer told it did not write the
-code, correction, review of the correction. Every new or changed lock was **mutation-tested** —
-broken, confirmed red, restored by file copy.
+Every task ran implementer → independent reviewer → correction → review of the correction, and every
+new or changed lock was **mutation-tested**: broken, confirmed red, restored by file copy.
 
-**The method found, in code that was green and self-verified:** a guard that had lost the ability
-to fail; a lock that killed zero tests and cancelled against its own companion edit; an
-anti-vacuity guard that could not detect vacuity; a loader accepting a pairing that loaded rows
-with no ledger and no refusal; and the defect in §4's list — a satellite row silently discarded
-because the phase moved a declaration without the DQ control it depended on.
+**The method found, in code that was green and self-verified:** a guard that had lost the ability to
+fail; a lock that killed zero tests and cancelled against its own companion edit; an anti-vacuity
+guard that could not detect vacuity; a loader accepting a pairing that loaded rows with no ledger and
+no refusal; and the NULL `applied_date` row that vanished.
 
 **A caveat on this document's own standard.** The phase ran more review rounds than the method
-prescribes — the method's four steps ARE its stopping rule, and treating every new finding as
-grounds for another round produced a loop with no exit. Severity fell monotonically: the early
-rounds found locks that could not fail, the late ones found sentences with wrong counts. The
-residual prose findings were recorded as ledger rows rather than chased, which is what the ledger
-is for.
+prescribes — the four steps ARE the stopping rule, and treating every finding as grounds for another
+round produced a loop with no exit. Severity fell monotonically: early rounds found locks that could
+not fail, late ones found sentences with wrong counts.
+
+**And the largest correction in this file is to itself.** Every artefact this phase produced stated
+the blocker in the present tense, and all of it was true when written and false a day later. The
+phase's own ADR 0022 Decision 6 names that shape; this document is its largest instance.
 
 ---
 
-## 6. What a person must do before this is worth anything
+## 7. What a person must still do
 
-1. **A workspace that will accept a new job resource.** Everything else waits on it.
-2. Then: the bundle job tasks for both tables, a deploy, and a run — after which this document is
-   superseded by one that reports rows, not fixtures.
-3. `PHASES["0022"]` in `scripts/adr_index.py` must be re-declared with the real merge sha once
-   the PR merges; it reads `unmerged` today, and the lock refuses that word the moment git says
-   the ADR reached `main`.
-
-**Until step 1 happens, the honest sentence about this phase is the one the README will carry:
-the payment is in the vault, and the fact does not yet read it.**
+1. **`PHASES["0022"]` in `scripts/adr_index.py` reads `unmerged`** and the lock refuses that word the
+   moment git says the ADR reached `main`. It must be re-declared with the real merge sha.
+2. **The README's counts** must be re-derived on the merged tree — deliberately not done here.
+3. **PR #36's title and body** still say the phase cannot satisfy §9 and must not be merged to close
+   it. **That is now false** and is corrected separately; it is recorded here because a reader may
+   reach the PR before the correction.
