@@ -59,13 +59,31 @@ cluster that must not be committed to a public repository. Every line this scrip
 through `emit`, which is the ONLY `print` in the file, and `tests/test_probe_broker.py` holds
 that by parsing this module rather than by grepping it.
 
-`Redactor` removes the two exact values AND three ADDRESS SHAPES: a dotted host name, an IPv4
-literal, and an IPv6 literal IN BRACKETS, each with an optional `:port`. It is NOT "anything
-shaped like a network address" -- measured, a bare unbracketed IPv6, a name with no dot in it,
-and a host whose last label is a single character all pass through untouched. What earns the
-rule is the foreign text this script really does print: the TOPIC NAMES in a metadata reply,
-and the `ipv4#...` literal librdkafka puts in a connect failure, neither of which an
-exact-value rule would touch. It is NOT earned by the reply's sibling brokers -- `render`
+`Redactor` removes the two exact values AND three ADDRESS SHAPES, each with an optional
+`:port`: a dotted host name whose LAST label is a letter followed by one or more letters,
+digits or hyphens; a dotted-quad IPv4 literal; and a bracketed IPv6 written in HEX DIGITS AND
+COLONS ONLY. It is NOT "anything shaped like a network address", and its misses come in TWO
+KINDS THAT ARE NOT THE SAME FAILURE. Both lists were measured against the rule on 2026-09-02:
+
+  * PASSES THROUGH UNTOUCHED -- a bare unbracketed IPv6 (`2001:db8::1`); a name with no dot
+    (`localhost`); a BRACKETED IPv6 CARRYING A ZONE INDEX (`[fe80::1%eth0]:9092`, because `%`
+    is not a hex digit, so the bracketed-IPv6 claim covers the hex-and-colon form and nothing
+    else); and an IPv4 written as a single integer (`3405803783`, `0xCB007107`).
+  * REWRITTEN ONLY IN PART, WHICH IS THE WORSE FAILURE -- the placeholder lands and A FRAGMENT
+    OF THE ADDRESS SURVIVES BESIDE IT, which is the state `foreign`'s redact-before-cap rule
+    exists to prevent. `seed.example.c:9092` becomes `<network-address-redacted>.c:9092`, and
+    so for a last label starting with a digit, a last label holding `_`, a non-ASCII last
+    label, and a trailing-dot FQDN; `::ffff:203.0.113.7` keeps its `::ffff:` prefix.
+
+An earlier version of this paragraph called the one-character last label a PASS-THROUGH and
+listed no partial rewrites at all, which lumped the two kinds together and got the worse one
+wrong. NO OPERATIONAL LEAK FOLLOWS FROM EITHER LIST: the real bootstrap is a dotted name that
+the exact-value rule and the shape rule each remove whole, and the fragments above are tails
+rather than the distinguishing first label.
+
+What earns the rule is the foreign text this script really does print: the TOPIC NAMES in a
+metadata reply, and the `ipv4#...` literal librdkafka puts in a connect failure, neither of
+which an exact-value rule would touch. It is NOT earned by the reply's sibling brokers -- `render`
 prints `len(metadata.brokers)`, a count, and no host from the reply ever reaches `Reading`.
 EVERY STRING THIS SCRIPT SENDS THROUGH `emit` therefore carries no dotted token of its own,
 because the choke point cannot tell this script's prose from the broker's text and must not
@@ -78,29 +96,49 @@ AND THE SECOND DEFENCE IS AT THE FILE DESCRIPTOR, because the first one is a key
 argument away from being deleted. MEASURED on 2026-09-02, `confluent-kafka` 2.6.1 against
 an unresolvable host: with no `logger=`, the C library writes the bootstrap host to fd 2
 ITSELF, from its own thread, three times per line (`%3|...|FAIL|... Failed to resolve
-'<host>:9092'`) -- 715 characters of it, which no Python-level redaction can see. Passing
-`logger=` reduced that to zero bytes; so did `log_level=0`; an `error_cb` alone did NOT.
+'<host>:9092'`) -- 715 characters of it in that run, which no Python-level redaction can see.
+HOW MUCH it writes, and whether it writes at all, depends on the harness -- the three
+paragraphs below are about exactly that -- and that it CAN is the whole reason fd 2 is
+redirected. Passing `logger=` reduced that to zero bytes; so did `log_level=0`; an
+`error_cb` alone did NOT.
 So the client gets a logger AND fd 2 is redirected for the client's whole lifetime.
 
 WHAT THE REDIRECT GIVES BACK IS CONTAINMENT, NOT A TRANSCRIPT -- and this docstring used to
-claim the transcript. Re-measured on 2026-09-02, same version and an unresolvable host, with
-`logger=` removed so that the C library would write: in the SHIPPED call shape the capture
-returned ZERO lines on 13 of 13 runs, at a 4-second and at the shipped 15-second timeout
-alike. Perturb the run -- a 50ms `sleep` before the client is built, nothing else changed --
-and the library's two lines do come back, 485 characters, redacted, on 4 of 4. NOTHING
-REACHED THE REAL STDERR IN ANY ARM. So whatever lands on fd 2 inside the window is redacted
-and re-emitted through the choke point, and what the C library writes may never land there.
+claim the transcript. Re-measured on 2026-09-02 over 102 fresh processes in two independent
+harnesses (`confluent-kafka` 2.6.1, an unresolvable `.invalid` host, `logger=` deleted so
+that the C library would write): in the SHIPPED call shape the capture returned ZERO lines,
+65 of 65, and NOTHING REACHED THE REAL STDERR ON ANY RUN OF EITHER HARNESS -- zero bytes,
+102 of 102. The zero held at a 4-second and at the shipped 15-second timeout alike, and at
+every `sleep` from 0 to 2000ms inserted before the client is built. Containment is what is
+claimed and what is measured. A transcript is not.
+
+NO CAUSE IS WRITTEN HERE FOR THAT ZERO, AND THE OMISSION IS DELIBERATE. Three explanations
+have been offered for it by three authors and all three failed to reproduce; the most recent
+was a 50ms `sleep` before the client is built, which this docstring asserted and which was
+then measured to return zero lines on 11 of 11. The observation has survived every attempt to
+explain it, so the observation is all that is recorded. Prefer leaving this blank to filling
+it in from a correlation.
+
+WHAT A RE-MEASUREMENT MUST REPRODUCE IS THE PRE-IMPORT, or it is not measuring this program.
+`main` calls `require_client_library()` -- which does `import confluent_kafka` -- BEFORE
+`probe`, so the extension is ALREADY LOADED when the window opens. A harness that omits that
+step gets the library's two `%3|...|FAIL|` lines back, ~515 characters, redacted, on 37 of
+37; one that includes it gets nothing, 65 of 65. Two harness shapes, two answers: that split
+is how the same fact has been overturned three times, each author crediting the difference to
+whatever else they had changed. It is recorded here as a measurement protocol and NOT as the
+mechanism, which is still unknown.
 
 `render`'s `client said |` branch is KEPT rather than deleted, because it is not dead code:
-it carried those 485 characters in the perturbed arm, and
+in the arms where the library does write, that branch carried its real `%3|...|FAIL|` text --
+the bootstrap host three times per line, redacted to the placeholder -- on all 37 of them, and
 `test_what_is_written_to_the_file_descriptor_is_captured_and_redacted` drives it on every
 run. What it is not is a promise that the client's own lines will ever appear.
 
-The logger is not a formality either, though today it is a sink: the same measurement found
-that librdkafka's log queue is never served by `list_topics`, so ZERO lines reach it. It
-carries a redacting handler and `propagate = False` regardless, because a delivered line
-that reached the root logger would go to stderr unredacted, and "zero lines" is a fact
-about a version rather than a contract.
+The logger is not a formality either, though today it is a sink: the first of those
+measurements found that librdkafka's log queue is never served by `list_topics`, so ZERO
+lines reach it. It carries a redacting handler and `propagate = False` regardless, because a
+delivered line that reached the root logger would go to stderr unredacted, and "zero lines"
+is a fact about a version rather than a contract.
 
 --- EXIT CODES, WHICH ARE THE ASYMMETRY IN THE ONE PLACE A SCRIPT CAN BE READ BY A MACHINE
 
@@ -151,12 +189,18 @@ BROKER_PLACEHOLDER = "<broker-address-redacted>"
 ADDRESS_PLACEHOLDER = "<network-address-redacted>"
 
 # THREE ADDRESS SHAPES, and deliberately not "anything shaped like an address": a dotted host
-# name, an IPv4 literal, and a BRACKETED IPv6, each with an optional port. Measured to pass
-# through UNTOUCHED: a bare unbracketed IPv6, a name with no dot, and a host whose last label
-# is a single character. What it covers is the foreign text this script prints -- the topic
-# names in a metadata reply, and the `ipv4#...` literal librdkafka puts in a connect failure.
-# Over-redaction is the safe direction, and it is paid for by keeping every string this
-# script prints free of dotted tokens.
+# name whose last label is a letter plus one or more letters/digits/hyphens, a dotted-quad
+# IPv4, and a BRACKETED IPv6 in hex digits and colons only, each with an optional port. The
+# misses are of TWO KINDS and the module docstring lists both, because they are not the same
+# failure: shapes that pass through UNTOUCHED (a bare unbracketed IPv6, a name with no dot, a
+# bracketed IPv6 carrying a `%zone`, an IPv4 written as a single integer), and shapes this
+# rewrites ONLY IN PART, leaving a fragment of the address beside the placeholder (a
+# one-character last label, one starting with a digit, one holding `_`, a non-ASCII one, a
+# trailing-dot FQDN, and the IPv4 inside an `::ffff:` mapped address).
+# What it covers is the foreign text this script prints -- the topic names in a metadata
+# reply, and the `ipv4#...` literal librdkafka puts in a connect failure. Over-redaction is
+# the safe direction, and it is paid for by keeping every string this script prints free of
+# dotted tokens.
 ADDRESS_SHAPE = re.compile(
     r"(?:[A-Za-z0-9_-]+\.)+[A-Za-z][A-Za-z0-9-]+(?::\d{1,5})?"  # a dotted host name
     r"|\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?"  # an IPv4 literal
@@ -294,8 +338,9 @@ def stderr_captured(redactor: Redactor) -> Iterator[list[str]]:
 
     AT THE FILE DESCRIPTOR, because that is the only layer the C library cannot write
     underneath. Reassigning `sys.stderr` does not move fd 2, and librdkafka writes to fd 2
-    from its own thread -- measured: 715 characters carrying the bootstrap host three times,
-    from a client built with no logger.
+    from its own thread -- measured once at 715 characters carrying the bootstrap host three
+    times per line, from a client built with no logger. How often it writes at all is a
+    separate question the module docstring records and does not answer.
 
     Decoded with `errors="replace"`: the measured line contained an OS error message in the
     machine's own code page, and a decode failure here would be a crash inside the very

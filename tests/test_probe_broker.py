@@ -194,8 +194,11 @@ def test_what_is_written_to_the_file_descriptor_is_captured_and_redacted():
     assert _leaks(joined) == []
     assert cli.BROKER_PLACEHOLDER in joined and cli.PASSWORD_PLACEHOLDER in joined
     # AND THE BRANCH THAT PRINTS THEM IS REACHABLE, which is why `render` keeps it. In the
-    # shipped call shape the client library's own lines were measured NOT to arrive here
-    # (13 of 13 runs), so without this the `client said |` arm would look like dead code.
+    # shipped call shape the client library's own lines were measured NOT to arrive here (65
+    # of 65 fresh processes), so without this the `client said |` arm would look like dead
+    # code. They DO arrive when the harness imports `confluent_kafka` INSIDE the window
+    # rather than before it, 37 of 37 -- the module docstring records that split as a
+    # measurement protocol and deliberately states no cause for it.
     rendered = "\n".join(cli.render(_did_not_answer(), captured))
     assert "client said |" in rendered
     assert _leaks(rendered) == []
@@ -265,10 +268,18 @@ def test_the_client_is_built_with_the_redacting_logger():
     claimed TWO INDEPENDENT DEFENCES: deleting `logger=` from the construction left the
     suite green, which is how a reviewer proved the hole rather than argued it.
 
-    It is not a belt beside a brace. Re-measured on 2026-09-02, `confluent-kafka` 2.6.1
-    against an unresolvable host: the fd-2 capture returned ZERO of the client library's
-    own lines on 13 of 13 runs in the SHIPPED call shape, so on this platform `logger=` is
-    the defence that actually holds and this is the only thing asserting it is there."""
+    It is not a belt beside a brace. Re-measured on 2026-09-02 over 102 fresh processes,
+    `confluent-kafka` 2.6.1 against an unresolvable `.invalid` host: the fd-2 capture
+    returned ZERO of the client library's own lines, 65 of 65, in the SHIPPED call shape --
+    the shape in which `require_client_library()` has already imported the extension before
+    the window opens. So on this platform `logger=` is the defence that actually holds, and
+    this is the only thing asserting it is there.
+
+    AND WHAT IT IS HANDED IS ASSERTED TOO, because the supplier's NAME is not the property.
+    `logger=client_logger(Redactor())` -- a redactor constructed with no credential, so it
+    registers no exact-value rule at all -- left every test in this file green, while the
+    handler the client writes to would have redacted by SHAPE ALONE and published the
+    password, which carries no dot for the shape rule to catch."""
     tree = ast.parse(_SCRIPT_PATH.read_text(encoding="utf-8"), filename=str(_SCRIPT_PATH))
     builder = next(f for f in ast.walk(tree)
                    if isinstance(f, ast.FunctionDef) and f.name == "cluster_metadata")
@@ -278,12 +289,22 @@ def test_the_client_is_built_with_the_redacting_logger():
     passed = {keyword.arg: keyword.value for keyword in built[0].keywords}
     assert "logger" in passed, (
         "the client is built with NO `logger=`, so librdkafka writes the bootstrap host to "
-        "fd 2 itself -- and the capture that would catch it returned nothing on 13 of 13 runs"
+        "fd 2 itself -- and the capture that would catch it returned nothing, 65 of 65 runs"
     )
     supplier = getattr(getattr(passed["logger"], "func", None), "id", None)
     assert supplier == "client_logger", (
         f"`logger=` is given `{supplier}`, not `client_logger(...)`, so the handler that "
         "redacts is not necessarily the one the client library writes to"
+    )
+    supplied = passed["logger"].args
+    assert len(supplied) == 1 and isinstance(supplied[0], ast.Name), (
+        "`client_logger(...)` is handed something other than a redactor already built -- a "
+        "fresh `Redactor()` registers NO exact-value rule, so the handler the client writes "
+        "to would redact by shape alone and publish the password, which carries no dot"
+    )
+    assert supplied[0].id == "redactor", (
+        f"`client_logger(...)` is handed `{supplied[0].id}`, not `redactor` -- it must be "
+        "the redactor built from the environment, the one that knows both exact values"
     )
 
 
