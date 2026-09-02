@@ -12,9 +12,11 @@
 # the CLI's own schema types the collections a bundle may declare, and identity is not
 # among them (`tests/test_bundle_resource_allowlist.py` is the lock that keeps this
 # bundle to jobs and dashboards, and its `_SWEPT_PATHS` arm derives the places from
-# `databricks bundle schema`). Terraform adds exactly two categories over the bundle,
-# identity and Unity Catalog privileges, and README.md says why the second one is
-# declined rather than merely absent.
+# `databricks bundle schema`). README.md carries the command that asks that schema for an
+# identity collection and prints the empty list it answers with. WHAT THIS DIRECTORY MAY
+# DECLARE IS NOT COUNTED HERE: `_DECLARABLE` in `tests/test_iac_terraform.py` is that list
+# and an arm there holds these files to it; README.md argues out a category this
+# repository declined -- Unity Catalog grants -- rather than leaving it merely absent.
 
 resource "databricks_group" "pii_readers" {
   display_name = var.pii_readers_group_name

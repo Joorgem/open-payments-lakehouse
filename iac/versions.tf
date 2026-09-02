@@ -4,8 +4,8 @@
 # a changelog. `terraform version` on the box that wrote this reports v1.15.8, and the
 # CI job pins the same string with `setup-terraform`, so the check's local behaviour and
 # its CI behaviour are one thing instead of two that happen to agree today. That
-# agreement is the point: the first credential check written for this directory passed
-# locally for a reason that does not exist on a runner (the provider reads
+# agreement is the point: the first credential check written for a Databricks Terraform on
+# this box passed locally for a reason that does not exist on a runner (the provider reads
 # `~/.databrickscfg` when nobody passes it credentials), and a check that is green in
 # one place and red in the other for an undeclared reason teaches the next author the
 # wrong thing.

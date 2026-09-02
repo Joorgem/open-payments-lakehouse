@@ -21,12 +21,18 @@ git ls-files iac        # the files, rather than the table below, which can go s
 Derive the resource types rather than trusting this table:
 
 ```bash
-grep -rhoE '^(resource|data) "[a-z_]+"' iac/*.tf | sort -u
+grep -rhoE '^(resource|data) "[A-Za-z0-9_]+"' iac/*.tf | sort -u
 ```
 
 `tests/test_iac_terraform.py` holds that set to an allowlist, so a third kind of object
 arriving here is a decision somebody has to type out — the same shape, and the same
 argument, as `_DECLARABLE` in `tests/test_bundle_resource_allowlist.py`.
+
+The character class is the one `_BLOCK` uses in `tests/test_iac_terraform.py`, and copying
+it is not cosmetic. The pinned provider ships identity resource types with a digit in them
+— `databricks_workspace_iam_group_v2` is one — and a class without `0-9` does not merely
+truncate such a name, it fails to match the line at all, so this command would print a
+**shorter** set than the lock enforces: a derivation weaker than the thing it explains.
 
 ## Why identity, and why only identity
 
@@ -64,8 +70,14 @@ The provider's grant resources, derived from the pinned provider binary rather t
 documentation or recollection:
 
 ```bash
-(cd iac && terraform providers schema -json > .terraform/schema.json)   # .terraform/ is git-ignored
-uv run python -c "import json; s=json.load(open('iac/.terraform/schema.json'))['provider_schemas']['registry.terraform.io/databricks/databricks']; print(sorted(r for r in s['resource_schemas'] if 'grant' in r))"
+# `init` comes first and is not optional: on a fresh clone there is no `.terraform/`, so
+# `providers schema` has no provider to describe and the pair fails before it reads
+# anything. `-backend=false` for the same reason CI's init uses it.
+(cd iac && terraform init -backend=false -input=false >/dev/null && terraform providers schema -json) |
+  uv run python -c "import json, sys
+s = json.load(sys.stdin)['provider_schemas']['registry.terraform.io/databricks/databricks']
+print(sorted(r for r in s['resource_schemas'] if 'grant' in r))"
+# ['databricks_grant', 'databricks_grants']   -- measured at the pinned 1.130.0
 ```
 
 Both are authoritative. At the pinned version's own documentation
@@ -109,18 +121,19 @@ against the second one.* At `1.130.0` it has not.
 `.github/workflows/ci.yml` runs, in the `terraform` job:
 
 ```bash
-terraform fmt -check -recursive
-terraform init -backend=false
+terraform fmt -check -recursive .   # from the repository root, not from `iac/`
+terraform init -backend=false -input=false
 terraform validate
 ```
 
-**It does not run `terraform plan`, and that is the load-bearing part.** Measured in this
-directory, with `DATABRICKS_CONFIG_FILE` pointed at a path that does not exist and
-`DATABRICKS_HOST`/`DATABRICKS_TOKEN` unset:
+**It does not run `terraform plan`, and that is the load-bearing part.** Measured with
+`DATABRICKS_CONFIG_FILE` pointed at a path that does not exist and
+`DATABRICKS_HOST`/`DATABRICKS_TOKEN` unset — the `fmt` row from the repository root, where
+CI runs it, and every other row in this directory:
 
 | command | exit | what it printed |
 |---|---|---|
-| `terraform fmt -check -recursive` | 0 | — |
+| `terraform fmt -check -recursive .` | 0 | — |
 | `terraform init` | 0 | `Installed databricks/databricks v1.130.0` |
 | `terraform validate` | 0 | `Success! The configuration is valid.` |
 | `terraform plan`, committed defaults | **0** | `Plan: 1 to add, 0 to change, 0 to destroy.` |

@@ -44,6 +44,7 @@ import yaml
 _REPO = Path(__file__).resolve().parents[1]
 _WORKFLOW = _REPO / ".github" / "workflows" / "ci.yml"
 _IAC = "iac"
+_README = _REPO / _IAC / "README.md"
 
 # THE ONLY THING `iac/` MAY DECLARE, AS (block kind, type) PAIRS. `data` is in the same
 # tuple as `resource` deliberately: a data source is not a resource and creates nothing,
@@ -62,6 +63,12 @@ _BLOCK = re.compile(r'^(resource|data)\s+"([A-Za-z0-9_]+)"\s+"[A-Za-z0-9_]+"\s*\
 
 # The identity constant on the Python side of the same name.
 _GROUP_CONSTANT = "PII_READER_GROUP"
+
+# The two ways a workflow step spells "the repository root". A SET OF SPELLINGS OF ONE
+# DIRECTORY, not a claim about a population: what the arm below needs is that the Format
+# step is not confined to `iac/`, and the root is the only directory guaranteed to be an
+# ancestor of everything `git ls-files "*.tf"` can return.
+_WORKFLOW_ROOT = (".", "${{ github.workspace }}")
 
 # Literals that must never reach a committed file in this repository, as (name, pattern).
 # NAMED SHAPES RATHER THAN NAMED VALUES: a test that grepped for this operator's user
@@ -111,8 +118,11 @@ def _declared_blocks() -> list[tuple[str, str, str]]:
     TEXTUAL, AND HERE IS WHAT THAT DOES NOT REACH: a block written in `.tf.json` (the
     JSON syntax Terraform also accepts, swept above but not parsed by this regex), one
     produced by a module this configuration called, and one indented rather than
-    starting its own line. `terraform fmt -check` runs in CI and unindents top-level
-    blocks, so the third is held closed by a different check rather than by this one."""
+    starting its own line. `terraform fmt -check` unindents top-level blocks, so the
+    third is held closed by a different check rather than by this one -- and that check
+    has to sweep as widely as this function does, or the two together read nothing at all
+    over a `.tf` outside `iac/`. That is why CI runs the Format step from the repository
+    root while the rest of its job runs in `iac/`, and why the arm below locks it there."""
     return [
         (path, kind, kind_type)
         for path in _terraform_files()
@@ -234,6 +244,46 @@ def test_no_committed_terraform_artefact_carries_a_host_token_or_user_name():
     )
 
 
+def _readme_ci_commands() -> tuple[str, ...]:
+    """The commands the README's "What CI runs" fenced block prints, one per line.
+
+    A trailing `#` comment is an annotation and is cut; no command in that block contains
+    a `#` for any other reason, and one that did would have to be matched differently."""
+    text = _README.read_text(encoding="utf-8")
+    start = text.index("## What CI runs")
+    fence = text.index("```bash", start) + len("```bash")
+    body = text[fence:text.index("```", fence)]
+    return tuple(
+        stripped
+        for line in body.strip().split("\n")
+        for stripped in [line.split("#")[0].strip()]
+        if stripped
+    )
+
+
+def test_the_readme_block_that_says_what_ci_runs_is_what_ci_runs():
+    """A README THAT PRINTS A COMMAND CI DOES NOT RUN IS READ AS THE MEASURED THING.
+
+    It printed `terraform init -backend=false` while the job ran that plus `-input=false`,
+    and the drift survived because nothing compared the two. The comparison is by whole
+    line and not by substring, deliberately: the wrong text WAS a substring of the right
+    one, so a substring check would have reported green over exactly this defect."""
+    commands = _readme_ci_commands()
+    assert commands, "`iac/README.md` prints no commands under `## What CI runs`"
+    runs = {
+        line.strip()
+        for step in _terraform_job()["steps"]
+        for line in step.get("run", "").strip().split("\n")
+        if line.strip()
+    }
+    missing = sorted(c for c in commands if c not in runs)
+    assert not missing, (
+        f"{missing} are printed in `iac/README.md` under `## What CI runs` and are run by "
+        f"no step of the `terraform` job, which runs {sorted(runs)}. Move them together: "
+        "the block is a shortcut for the workflow and is read as a measurement of it."
+    )
+
+
 def _terraform_job() -> dict:
     spec = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
     job = spec["jobs"].get("terraform")
@@ -274,3 +324,30 @@ def test_the_terraform_ci_job_validates_credential_free_and_never_plans():
         f"{reaching}: the `terraform` job names a credential. It is credential-free by "
         "design, and a gated deploy belongs in a job of its own."
     )
+
+
+def test_the_format_step_sweeps_the_whole_tree_and_not_only_the_directory_it_runs_beside():
+    """THE BACKSTOP `_declared_blocks` NAMES MUST REACH AS FAR AS `_declared_blocks` DOES.
+
+    That regex cannot read an indented `resource` block and says so; what holds the case
+    closed is `terraform fmt -check`, which unindents. But the sweep is tree-wide, so a
+    `fmt -check` confined to `iac/` leaves a `.tf` elsewhere unread by BOTH of them.
+    Measured on an indented block in a `.tf` outside `iac/`: `fmt -check -recursive` exits
+    0 run from `iac/` and 3 run from the root. The job's own default is
+    `working-directory: iac`, so the Format step carries an override that reads as
+    redundant and is not -- this arm is what makes deleting it a red build."""
+    job = _terraform_job()
+    formatting = [s for s in job["steps"] if "terraform fmt" in s.get("run", "")]
+    assert formatting, "the `terraform` job runs no `terraform fmt` step"
+    for step in formatting:
+        assert "-recursive" in step["run"], (
+            f"`{step['run']}` is not recursive, so it reads one directory. "
+            "`_declared_blocks` sweeps the tree."
+        )
+        assert step.get("working-directory") in _WORKFLOW_ROOT, (
+            f"the `terraform fmt` step runs in {step.get('working-directory')!r}. It has "
+            "to run from the repository root: `_declared_blocks` sweeps `*.tf` tree-wide "
+            "and names `fmt -check` as what holds an indented block closed, and a check "
+            f"confined to a subdirectory does not cover that sweep. {_WORKFLOW_ROOT} are "
+            "the spellings of the root this arm accepts."
+        )

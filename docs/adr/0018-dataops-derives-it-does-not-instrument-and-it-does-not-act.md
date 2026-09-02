@@ -261,7 +261,7 @@ target this repository has, the bundle half governs a schema nobody reads.
 > `databricks bundle schema`, failing if the two differ:
 > `uv run pytest tests/test_bundle_resource_allowlist.py -k swept_paths` needs the CLI and
 > therefore SKIPS wherever there is none, which is every CI run
-> (`git grep -nE '(uses|run):.*databricks' -- .github/` returns nothing).
+> (`git grep -inE '^[^#]*databricks' -- .github/` returns nothing).
 > `targets.<name>.resources` is one of
 > them, and the sweep read only the top level until F8's second correction pass while this
 > paragraph already claimed the enforcement. **What it is known not to reach**, each

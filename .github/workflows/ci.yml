@@ -249,8 +249,17 @@ jobs:
         with:
           terraform_version: "1.15.8"
           terraform_wrapper: false
-      - name: Format
-        run: terraform fmt -check -recursive
+      # THE ONE STEP IN THIS JOB THAT DOES NOT RUN IN `iac/`, and the override is
+      # load-bearing rather than untidy. `tests/test_iac_terraform.py` sweeps `*.tf`
+      # TREE-WIDE -- a `.tf` outside `iac/` would be a second Terraform nobody decided
+      # on -- and its `_declared_blocks` regex cannot read a block that is indented
+      # instead of starting its own line. `fmt -check` is the backstop that module names
+      # for that case, so it has to reach as far as the sweep does. Measured over an
+      # indented `resource` block in a `.tf` OUTSIDE `iac/`: from `iac/` this exits 0 and
+      # the block is unread by both checks; from the root it exits 3 and names the file.
+      - name: Format (the whole tree, not just `iac/`)
+        working-directory: ${{ github.workspace }}
+        run: terraform fmt -check -recursive .
       # `-backend=false`: there is no backend to configure and no state to touch, and
       # the provider is still downloaded, which is all `validate` needs. The committed
       # `.terraform.lock.hcl` carries linux_amd64 hashes for exactly this step -- a

@@ -325,9 +325,14 @@ def test_the_swept_paths_are_every_path_the_cli_schema_types_config_resources():
     """THE SET IS DERIVED FROM THE CLI, NOT COUNTED IN A DOCSTRING.
 
     NOT A CI LOCK, AND THAT IS SAID RATHER THAN GLOSSED. CI installs no Databricks CLI --
-    `git grep -nE '(uses|run):.*databricks' -- .github/` returns nothing -- so this arm
+    `git grep -inE '^[^#]*databricks' -- .github/` returns nothing -- so this arm
     SKIPS on every CI run and is a derivation that happens on a developer box. What stands
     in CI is `_SWEPT_PATHS` itself and the arms that exercise each entry of it.
+
+    THAT COMMAND READS WHOLE LINES ON PURPOSE. Matching `databricks` only against a `uses:`
+    or `run:` line cannot see an install inside a multi-line `run: |` block, which `ci.yml`
+    already contains -- measured, an install planted in one left that spelling at exit 1
+    while this one names the line. `^[^#]*` drops the comments that mention the CLI.
 
     WHAT IT DERIVES IS A TYPING, NOT A GUARANTEE ABOUT EVERY WAY A RESOURCE CAN ARRIVE. The
     schema also carries `$root.python` and `$root.experimental.python`, typed otherwise;
