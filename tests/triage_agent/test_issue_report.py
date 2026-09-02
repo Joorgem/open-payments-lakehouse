@@ -469,14 +469,21 @@ def test_the_table_that_reaches_gold_without_a_vault_table_says_so_out_loud():
     was written for: the section must not let a reader believe the fact is reached through
     the vault. It is now spelled as the direct leg being named explicitly.
 
+    THE VAULT-TABLE LINE IS ASSERTED WHOLE, AND IT IS NOT A STYLE POINT. `- vault tables:`
+    is rendered as a comma-joined list (`opl.triage_agent.report`), so `"vault tables:
+    link_payment" in body` became a PREFIX MATCH the moment `sat_link_payment` joined it:
+    it would pass over `link_payment, anything_at_all` and pass over a list that had lost
+    the satellite, which is the direction this line is here to see. Spelled whole, it says
+    what it looks like it says.
+
     The empresas arm is the control: it reaches gold only THROUGH the vault, so the bypass
     wording must not be reachable for every incident."""
     payments = _sections(render_body(issue(PAYMENTS)))["What else is downstream"]
     empresas = _sections(render_body(issue(EMPRESAS)))["What else is downstream"]
 
     assert "DIRECTLY from bronze, not through the vault" in payments
-    assert "feeds link_payment in the vault" in payments
-    assert "vault tables: link_payment" in payments
+    assert "feeds link_payment, sat_link_payment in the vault" in payments
+    assert "vault tables: link_payment, sat_link_payment\n" in payments
     assert "fact_payment" in payments
     assert "DIRECTLY from bronze" not in empresas
     assert "has NO vault loader task" not in empresas

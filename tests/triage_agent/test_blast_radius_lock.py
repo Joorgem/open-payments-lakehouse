@@ -271,14 +271,21 @@ def test_leg_threes_premise_still_holds_for_ptax_and_no_longer_holds_for_payment
     pointer to what was relied on.
 
     SO WHAT IS LEFT IS ONLY WHAT IS PERMANENT. `ptax` is the last bronze table with no
-    vault leg at all, and `payments` is the first with both legs."""
+    vault leg at all, and `payments` is the first with both legs.
+
+    THE VAULT LEG IS TWO TABLES SINCE T2 AND THE PREMISE IS UNTOUCHED. `sat_link_payment`
+    hangs off `link_payment` and reads the same bronze rows, so it lengthens the leg
+    without changing whose it is -- and it reaches no gold table either, which is why
+    `gold_direct` still carries the whole of `payments`' gold answer. The tuple is
+    asserted exactly rather than by membership for `blast_radius`' own reason: "returned
+    something" is satisfied by returning everything."""
     sourced = {source for _key, _table, source in _loader_tasks_of_bundle()}
 
     assert "ptax" not in sourced
     assert blast_radius("ptax").vault == ()
     assert blast_radius("ptax").bypasses_the_vault is True
 
-    assert blast_radius("payments").vault == ("link_payment",)
+    assert blast_radius("payments").vault == ("link_payment", "sat_link_payment")
     assert blast_radius("payments").bypasses_the_vault is True
 
 

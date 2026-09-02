@@ -69,20 +69,27 @@ said what shape they had.
     construction. They are key components stored on the link, which is the idiom the
     master spec itself chooses for `transaction_id` on `link_payment`.
   - `EffectivitySatellite`, a satellite ON a link. It is a fourth kind and not a
-    `Satellite` with a link parent, for the reason
-    `_assert_every_satellite_hangs_off_a_hub` still gives: a `Satellite` is delta-driven
-    on a `hash_diff` over a payload and `load_satellite` takes a `Hub`. This table has
-    neither. That refusal therefore stands unchanged and now names the alternative.
+    `Satellite` with a link parent, and Task 5 gave TWO reasons -- no payload and no
+    `hash_diff`, and `load_satellite` takes a `Hub`. **Only the first survives F2 wave
+    2**, which lifted the second; `opl.vault.specs.EffectivitySatellite` now carries the
+    corrected paragraph, and this bullet said "that refusal therefore stands unchanged"
+    until the wave-2 task that changed it.
 
-WHAT IS STILL DELIBERATELY NOT HERE. No DESCRIPTIVE satellite on a link, which is a
-different table from the effectivity one and would need `load_satellite` to take a link;
-socios' `qualificacao_socio` and `faixa_etaria` are its first candidates and are
-declared as unmodelled in `domains/cnpj.py` rather than left as a gap. No per-end KEY
-COLUMN MAP either: a `LinkEnd` reads its hub's business key from the columns named after
-it, and `link_company_partner`'s partner end -- whose `cnpj_basico` socios carries only
-as the first eight characters of `cpf_cnpj_socio` -- is derived by
-`opl.vault.partners`, which is the one loader in this package that is domain-specific
-and says so.
+WHAT F2 WAVE 2 ADDED, AND IT IS THE DEFERRAL THIS BLOCK USED TO RECORD. A DESCRIPTIVE
+satellite on a LINK -- `sat_link_payment`, carrying the payment's own measures. The
+refusal that stood here named its own condition ("the guard and that signature have to
+change together") and both halves moved in one task: `opl.vault.registry_satellites`
+admits a `Hub | Link` parent and `load_satellite` takes `link=`/`hubs=` beside `hub=`.
+Two pairings are still refused there, each naming what would have to change: an EVENT
+satellite on a hub, and a STATE satellite on a link -- socios' `qualificacao_socio` and
+`faixa_etaria` are the first candidates for the latter, and are still declared as
+unmodelled in `domains/cnpj.py` rather than left as a gap.
+
+WHAT IS STILL DELIBERATELY NOT HERE. No per-end KEY COLUMN MAP: a `LinkEnd` reads its
+hub's business key from the columns named after it, and `link_company_partner`'s partner
+end -- whose `cnpj_basico` socios carries only as the first eight characters of
+`cpf_cnpj_socio` -- is derived by `opl.vault.partners`, which is the one loader in this
+package that is domain-specific and says so.
 
 No table QUALIFICATION either -- a spec carries an unqualified `name`, and the loaders
 take the qualified table as an argument, so `opl.config` is consulted in the domain
@@ -110,7 +117,11 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from opl.vault.registry_satellites import (
+    assert_every_satellite_hangs_off_a_hub_or_a_link,
+)
 from opl.vault.specs import (
+    AppliedDateSource,
     BusinessKeyColumn,
     EffectivitySatellite,
     Hub,
@@ -128,6 +139,7 @@ from opl.vault.specs import (
 # this repository already imports them FROM. `ruff` would flag these as unused
 # without `__all__` naming them; the list is the re-export contract, spelled once.
 __all__ = [
+    "AppliedDateSource",
     "BusinessKeyColumn",
     "EffectivitySatellite",
     "Hub",
@@ -148,6 +160,7 @@ __all__ = [
     "linked_hubs",
     "parent_hub",
     "parent_link",
+    "parent_of",
     "table_spec",
 ]
 
@@ -230,42 +243,6 @@ def _collected_tables(domains: Sequence[VaultDomain]) -> dict[str, VaultTable]:
     return tables
 
 
-def _assert_every_satellite_hangs_off_a_hub(tables: Mapping[str, VaultTable]) -> None:
-    """Refuse a satellite whose parent is missing, or is not a hub, or whose payload
-    collides with the hub's hash key.
-
-    All three need the other tables, which is why they are here and not in
-    `Satellite.__post_init__`. The payload collision is the quiet one: the hash key
-    is written by the loader, so a payload column of the same name loses its source
-    value to the digest and keeps looking like a column."""
-    for table in tables.values():
-        if not isinstance(table, Satellite):
-            continue
-        parent = tables.get(table.parent)
-        if parent is None:
-            raise ValueError(
-                f"satellite {table.name!r} names parent {table.parent!r}, which no "
-                f"domain registers. Registered: {', '.join(sorted(tables))}"
-            )
-        if not isinstance(parent, Hub):
-            raise ValueError(
-                f"satellite {table.name!r} names parent {table.parent!r}, which is "
-                "not a hub. A satellite in THIS vault hangs off a hub: `parent_hub` "
-                "returns a Hub and `load_satellite` takes one, so a satellite "
-                "parented on another satellite would key on a column its parent does "
-                "not have, and one parented on a LINK -- which DV2 does allow -- would "
-                "be a registered table nothing in this package can write. The guard "
-                "and that signature have to change together"
-            )
-        if parent.hash_key in table.payload_columns:
-            raise ValueError(
-                f"satellite {table.name!r} names {parent.hash_key!r} as a payload "
-                f"column, and that is its parent hub {parent.name!r}'s hash key. The "
-                "loader writes the digest into that column, so the payload value "
-                "would be replaced by it without anything failing"
-            )
-
-
 def _link_hubs(tables: Mapping[str, VaultTable], link: Link) -> tuple[Hub, ...]:
     """`link`'s hubs, resolved against `tables`, or refuse naming the one that failed.
 
@@ -300,7 +277,8 @@ def _assert_every_link_joins_registered_hubs(tables: Mapping[str, VaultTable]) -
     """Refuse a link whose hubs are missing or are not hubs, or whose hash-key column
     names collide with theirs.
 
-    The sibling of `_assert_every_satellite_hangs_off_a_hub`, and here for its reason:
+    The sibling of `registry_satellites.assert_every_satellite_hangs_off_a_hub_or_a_link`,
+    and here for its reason:
     every check needs the other tables. The COLLISION half is the quiet one. The loader
     writes one column per participating hub plus the link's own digest, so two of those
     names being equal means one projection writes two values into one column -- the
@@ -515,7 +493,7 @@ def build_registry(domains: Iterable[VaultDomain]) -> Mapping[str, VaultTable]:
     collected = list(domains)
     _assert_domain_names_are_unique(collected)
     tables = _collected_tables(collected)
-    _assert_every_satellite_hangs_off_a_hub(tables)
+    assert_every_satellite_hangs_off_a_hub_or_a_link(tables)
     _assert_every_link_joins_registered_hubs(tables)
     _assert_every_declared_key_derivation_fits_its_hub(tables)
     _assert_every_effectivity_satellite_hangs_off_a_link(tables)
@@ -523,12 +501,45 @@ def build_registry(domains: Iterable[VaultDomain]) -> Mapping[str, VaultTable]:
     return MappingProxyType(tables)
 
 
+def parent_of(registry: Mapping[str, VaultTable], satellite: Satellite) -> Hub | Link:
+    """The hub OR LINK a satellite hangs off.
+
+    THE RESOLUTION `load_satellite` NEEDS SINCE F2 WAVE 2, and `parent_hub` below is now
+    the NARROWER one rather than the only one. `build_registry` has already refused every
+    way this could be wrong, so on a registry it produced the lookup cannot fail."""
+    parent = registry[satellite.parent]
+    if not isinstance(parent, Hub | Link):
+        raise ValueError(
+            f"{satellite.parent!r} is neither a hub nor a link, so satellite "
+            f"{satellite.name!r} has no hash key to key on. build_registry refuses this, "
+            "so a registry it produced cannot reach here"
+        )
+    return parent
+
+
 def parent_hub(registry: Mapping[str, VaultTable], satellite: Satellite) -> Hub:
-    """The hub a satellite hangs off. `build_registry` has already refused every way
-    this could be wrong, so the lookup here cannot fail on a registry it produced."""
+    """The HUB a satellite hangs off, refusing a satellite whose parent is a link.
+
+    THE DOCSTRING HERE SAID "`build_registry` HAS ALREADY REFUSED EVERY WAY THIS COULD BE
+    WRONG" AND F2 WAVE 2 MADE THAT FALSE. A link-parented satellite is now registrable,
+    so this refusal is REACHABLE on a perfectly valid registry -- and it is reachable from
+    outside this package: `opl.gold.registry_guards` calls it for every SCD2 dimension's
+    source satellite, and `databricks/src/vault_load_satellite.py` calls it for whatever
+    table its task names. Both would have got `'link_payment' is not a hub`, which names
+    no consequence and no alternative. The refusal is kept rather than widened, because
+    both of those callers really do need a HUB: an SCD2 dimension is a satellite's version
+    chain hung on a hub's business key, and a PIT's spine is a hub's key set.
+
+    `parent_of` is the resolution for a caller that can take either."""
     parent = registry[satellite.parent]
     if not isinstance(parent, Hub):
-        raise ValueError(f"{satellite.parent!r} is not a hub")
+        raise ValueError(
+            f"satellite {satellite.name!r} hangs off {satellite.parent!r}, which is not a "
+            "hub -- this is a satellite on a LINK, which DV2 allows and this vault now "
+            "registers. A caller that needs the hub's business key (an SCD2 dimension, a "
+            "PIT spine) has no answer here; one that only needs the parent's hash key "
+            "should resolve it with opl.vault.domains.parent_of"
+        )
     return parent
 
 

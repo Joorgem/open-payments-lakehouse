@@ -119,9 +119,15 @@ def test_the_headline_incidents_table_bypasses_the_vault_while_also_feeding_it()
     said "reaches gold with no vault table in between", which was the whole truth about
     `payments` until `link_payment` was registered and is now half of it. Both legs are
     asserted separately because the phase's declared gap lives exactly in the difference:
-    the vault holds the payment, and `fact_payment` still does not read it."""
+    the vault holds the payment, and `fact_payment` still does not read it.
+
+    THE VAULT LEG IS TWO TABLES SINCE T2 AND THE GAP IS UNCHANGED, which is the reading the
+    pair of assertions below is for. `sat_link_payment` carries the payment's measures --
+    `amount`, `currency`, `payment_method` -- so the vault now holds the payment and not
+    only the relationship; `gold` and `gold_direct` are still EQUAL, which is the exact
+    statement that no gold table reads either of them."""
     payments = blast_radius("payments")
-    assert payments.vault == ("link_payment",)
+    assert payments.vault == ("link_payment", "sat_link_payment")
     assert payments.gold == ("dim_date", "fact_payment")
     assert payments.gold_direct == ("dim_date", "fact_payment")
     assert payments.bypasses_the_vault is True
@@ -196,7 +202,9 @@ def test_each_bronze_tables_answer_is_its_own_and_not_the_whole_model():
     no vault table, and no two of the seven carry the same pair of legs.
 
     "TWO REACH NO VAULT TABLE" WAS TRUE UNTIL F2 WAVE 2 and is now one: `link_payment` gave
-    `payments` a vault leg and left `ptax` alone in that column."""
+    `payments` a vault leg and left `ptax` alone in that column. T2 added a SECOND table to
+    that leg rather than a second table with a leg, so the count is unchanged and the tuple
+    is not -- which is why this assertion is exact tuples and not a count."""
     answers = {table: blast_radius(table) for table in sorted(REGISTRY)}
     assert {table: radius.gold for table, radius in answers.items()} == {
         "empresas": ("dim_company", "dim_date", "fact_payment"),
@@ -221,7 +229,7 @@ def test_each_bronze_tables_answer_is_its_own_and_not_the_whole_model():
             "hub_merchant", "link_merchant_empresa", "sat_eff_merchant_empresa",
             "sat_merchant_dados",
         ),
-        "payments": ("link_payment",),
+        "payments": ("link_payment", "sat_link_payment"),
         "ptax": (),
         "socios": ("link_company_partner", "sat_eff_company_partner"),
     }
@@ -570,7 +578,7 @@ def test_the_note_has_four_arms_and_a_real_table_reaches_each():
     "NO vault loader task" wording had to move rather than be reused: it is false of
     `payments` now -- there IS a vault loader task declared for it."""
     payments = blast_radius_note("payments")
-    assert "feeds link_payment in the vault" in payments
+    assert "feeds link_payment, sat_link_payment in the vault" in payments
     assert "DIRECTLY from bronze, not through the vault" in payments
     assert "NO vault loader task" not in payments
 

@@ -48,6 +48,7 @@ from opl.gold.spec_fields import (
     READS_MEMBER,
 )
 from opl.vault import domains
+from opl.vault.registry import Satellite as VaultSatellite
 
 from .spec_probes import (
     KINDS,
@@ -738,3 +739,42 @@ def test_the_gold_registry_is_built_at_the_import_of_the_module_that_declares_it
         "opl/gold/registry.py does not call build_registry at import, so a malformed "
         "registry would be discovered by whichever job touched the table first"
     )
+
+
+def test_gold_still_refuses_a_link_parented_satellite_now_that_the_vault_registers_one():
+    """THE HALF OF F2 WAVE 2 THAT LANDS IN THIS LAYER, and it lands as a question rather
+    than as a change: the vault now registers `sat_link_payment`, a `Satellite` whose
+    parent is a `Link`, and every guard in `opl.gold.registry_guards` that resolves a
+    satellite does so with `isinstance(source, Satellite)` -- which that table SATISFIES.
+
+    NEITHER GUARD IS TOTAL OVER THE VAULT REGISTRY, which is why nothing here went red on
+    the day it was registered: both iterate GOLD tables and reach a vault table only
+    through one that names it, and no gold table names this one. The first assertion pins
+    that, so the two below are known to be about a declaration nobody has made rather than
+    about the state of the registry.
+
+    BOTH REFUSALS SURVIVE, AND FOR TWO DIFFERENT REASONS WORTH KEEPING APART. A PIT is
+    refused by PARENTAGE -- its spine is a hub's key set and the pointers are UNIONED on
+    the hash key, so a satellite of anything else collapses two key spaces. An SCD2
+    dimension is refused by RESOLUTION: it reads its parent hub's business key into the
+    dimension, and `opl.vault.domains.parent_hub` has no hub to give. That second message
+    was `'link_payment' is not a hub` until this task -- naming neither the consequence
+    nor the alternative -- and it is asserted here because this is the layer that meets
+    it."""
+    named: set[str] = set()
+    for table in REGISTRY.values():
+        for attribute in ("source_satellite", "satellites", "applied_date_source"):
+            value = getattr(table, attribute, None)
+            if isinstance(value, str):
+                named.add(value)
+            elif isinstance(value, tuple):
+                named.update(value)
+    assert "sat_link_payment" not in named
+    assert isinstance(domains.table_spec("sat_link_payment"), VaultSatellite)
+
+    with pytest.raises(ValueError, match="hangs off 'link_payment'"):
+        build_registry(
+            (_pit(satellites=("sat_estabelecimento_dados", "sat_link_payment")),)
+        )
+    with pytest.raises(ValueError, match="satellite on a LINK"):
+        build_registry((_dimension(source_satellite="sat_link_payment"),))

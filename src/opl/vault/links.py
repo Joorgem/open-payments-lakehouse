@@ -9,15 +9,18 @@ WE first saw the relationship and where it came from. (This module wrote no
 dependent-child key and refused every link declaring one until F2 wave 2, which is a
 deferral ADR 0011 recorded by name and `_refuse_a_link_this_loader_cannot_write` still
 carries the argument for; `link_payment` is the table that consumed it.)
-Descriptive facts and effectivity windows belong to a satellite on the link --
-and since Task 5 the vault has one of those two: `sat_eff_company_partner`, an
-`EffectivitySatellite` loaded by `opl.vault.effectivity` and admitted by
-`registry._assert_every_effectivity_satellite_hangs_off_a_link`. A DESCRIPTIVE
-satellite on a link still does not exist and is still refused
-(`registry._assert_every_satellite_hangs_off_a_hub`); `registry.py`'s "WHAT IS STILL
-DELIBERATELY NOT HERE" says why. (This paragraph read "which this vault does not have
-yet" until Task 7's correction pass -- true at Task 4, falsified by Task 5 one commit
-range later, in the module the reader meets first.)
+Descriptive facts and effectivity windows belong to a satellite on the link -- and
+since F2 wave 2 the vault has BOTH: `sat_eff_company_partner`, an `EffectivitySatellite`
+loaded by `opl.vault.effectivity` and admitted by
+`registry._assert_every_effectivity_satellite_hangs_off_a_link` (Task 5); and
+`sat_link_payment`, an ordinary `Satellite` whose parent is `link_payment`, loaded by
+`opl.vault.satellites` and admitted by
+`registry_satellites.assert_every_satellite_hangs_off_a_hub_or_a_link`. (This paragraph
+read "which this vault does not have yet" until Task 7's correction pass -- true at Task
+4, falsified by Task 5 one commit range later -- and then said the descriptive one "still
+does not exist and is still refused", which F2 wave 2 falsified in turn. Twice now, in
+the module the reader meets first, a sentence about what does not exist has outlived the
+thing not existing.)
 
 SO THIS IS `load_hub` AT LINK GRAIN, AND IT IS DELIBERATELY THE SAME SHAPE. The
 anti-join-then-append, the earliest-`record_source` aggregate, the injected
@@ -105,7 +108,7 @@ def refuse_mismatched_hubs(link: Link, hubs: Sequence[Hub]) -> None:
     """The link and its hubs arrive as two arguments, so something has to check they
     belong together -- AND THAT THEY ARRIVED IN THE RIGHT ORDER.
 
-    They are separate arguments for `_refuse_a_mismatched_hub`'s reason: a loader that
+    They are separate arguments for `satellites._resolved_parent`'s reason: a loader that
     resolved the hubs through the module-level registry could not be tested against a
     throwaway spec, and the registry is the thing wave 2 must extend without this file
     changing. The cost is this check, and here it is strictly larger than the

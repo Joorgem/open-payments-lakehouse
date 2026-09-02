@@ -617,7 +617,7 @@ def test_a_window_that_is_not_the_snapshots_the_source_holds_is_refused(spark, d
 
 def test_a_satellite_that_is_not_the_dimensions_declared_source_is_refused(spark, dim_loaded):
     """The loader takes the dimension AND its satellite as two arguments -- so it can be
-    driven with a throwaway spec, which is `opl.vault.satellites._refuse_a_mismatched_hub`'s
+    driven with a throwaway spec, which is `opl.vault.satellites._resolved_parent`'s
     reason -- and something therefore has to check they belong together. Handed another
     satellite it would build a plausible dimension about a different table."""
     with pytest.raises(ValueError, match="declares source"):

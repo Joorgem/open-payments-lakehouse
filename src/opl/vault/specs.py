@@ -161,23 +161,179 @@ class Hub:
         return tuple(key.name for key in self.business_keys)
 
 
+# HOW A SATELLITE'S `applied_date` IS READ OUT OF THE COLUMN IT COMES FROM. Two readings,
+# a closed set, and the vocabulary is `opl.gold.spec_fields.ROLE_READERS`' -- which asks
+# the identical question one layer up ("is this column a DATE this pipeline derived, or
+# ISO text the source delivered?") and answers it with `READS_DATE` / `READS_ISO_TEXT`.
+#
+# MIRRORED AND NOT IMPORTED, WHICH IS A LAYER DECISION RATHER THAN A DUPLICATE OVERLOOKED.
+# The vault must not import gold: `opl.gold.registry_guards` imports `opl.vault.domains`,
+# so the edge already runs the other way and importing back would be a cycle. What keeps
+# the two honest is not a shared string but a shared ANSWER --
+# `tests/vault/test_payments_satellite.py` asserts that this module's ISO reading and
+# `opl.gold.conformed.day_of` return the same day for the same value, which is the
+# property that actually matters and which a shared constant would not have given.
+READS_DATE = "date"
+READS_ISO_TEXT = "iso-instant-text"
+APPLIED_DATE_READERS = (READS_DATE, READS_ISO_TEXT)
+
+
+@dataclass(frozen=True, kw_only=True)
+class AppliedDateSource:
+    """WHERE A SATELLITE'S `applied_date` COMES FROM: a source column, plus the rule for
+    reading a calendar day out of it.
+
+    WHY THIS IS A DECLARATION AND NOT THE CONSTANT IT WAS. `satellite_candidates` built
+    `applied_date` from `opl.bronze.snapshot.SNAPSHOT_REF_DATE_COLUMN` unconditionally,
+    and that column IS NOT ON EVERY BRONZE TABLE. `add_common_audit_columns` omits it for
+    a GENERATED or API-FED source, deliberately and with the reason written in four
+    places (`opl.bronze.autoloader`, `opl.bronze.snapshot`'s third-derivation block,
+    `opl.bronze.rules`' payments set, `opl.dataops.cadence`): the ref date is "the date
+    the source declares in its own filename", a generated stream declares none, and
+    stamping an all-NULL column would have forced the payments rule set to drop
+    `unprovable_snapshot_ref_date` -- a control omitted so the value it refuses can be
+    written. So a satellite over `bronze_payments` cannot get its `applied_date` the way
+    every satellite before it did, and the repair is a declaration rather than a second
+    loader or a bronze column nothing can prove.
+
+    A COLUMN PLUS A RULE, WHICH IS `opl.bronze.snapshot_axis.SnapshotAxis`'S SHAPE AND
+    DELIBERATELY NOT `SnapshotAxis` ITSELF. That type is one source's answer to "when did
+    we OBSERVE this row" -- it names `_snapshot_month`, its `accepts` predicate validates
+    a WINDOW value before Spark starts, and `ObservationGrain` and `read_snapshot_window`
+    both key off it. This names something else about the same row: when the FACT was
+    true. The two are different columns on the same table for payments (`_snapshot_month`
+    and `event_time`) and for the RFB (`_snapshot_month` and `_snapshot_ref_date`), and
+    `opl.bronze.snapshot`'s own docstring is about keeping exactly that pair apart.
+    Reusing the type would let a caller pass an axis where a fact date belongs, and the
+    two would agree on every source that has only one of them.
+
+    `reads` AND NOT A CALLABLE, for `KeyPrefix`'s reason restated: this module imports no
+    pyspark and must not start, so the value has to be something the registry can REASON
+    about rather than a Column-building lambda. `opl.vault.loading.applied_date_expression`
+    is the one place it becomes an expression, and it refuses a reader it has no branch
+    for rather than falling through to a default.
+
+    THE METADATA COLLISION IS REFUSED HERE, at construction, before any registry exists:
+    the loader writes `applied_date` itself, so a source column of that name would be read
+    and then overwritten by the value read from it -- which happens to be harmless and
+    reads as a declaration that took effect. The other three are refused for
+    `_validated_columns`' reason: the metadata value wins on the write."""
+
+    column: str
+    reads: str = READS_DATE
+
+    def __post_init__(self) -> None:
+        if not self.column or not self.column.strip():
+            raise ValueError("an applied-date source needs a column name")
+        if self.reads not in APPLIED_DATE_READERS:
+            raise ValueError(
+                f"applied-date source on column {self.column!r} declares reads="
+                f"{self.reads!r}, which is not one of {APPLIED_DATE_READERS}. A reader "
+                "outside the closed set has no expression behind it, so the column would "
+                "be read by whatever branch happened to be last"
+            )
+        if self.column in METADATA_COLUMNS:
+            raise ValueError(
+                f"applied-date source names {self.column!r}, and the loaders write that "
+                f"themselves ({', '.join(sorted(METADATA_COLUMNS))}). The source's own "
+                "value would be replaced by the metadata on the write, leaving a column "
+                "full of plausible dates that came from us rather than from the source"
+            )
+
+
+# THE DEFAULT, AND WHY EVERY SATELLITE WRITTEN BEFORE F2 WAVE 2 IS BYTE-UNCHANGED BY THE
+# FIELD BELOW EXISTING. The four shipped satellites read `_snapshot_ref_date`, which is
+# already a `date`, so `READS_DATE` returns `F.col(...)` -- exactly the expression
+# `satellite_candidates` composed as a literal before the declaration existed.
+#
+# THE COLUMN NAME IS A SECOND SPELLING OF `opl.bronze.snapshot.SNAPSHOT_REF_DATE_COLUMN`,
+# AND IT IS CROSS-CHECKED RATHER THAN TRUSTED -- `opl.vault.loading.BRONZE_RECORD_SOURCE`'s
+# idiom, taken for that constant's reason and for one more. This module must import where
+# pyspark is not installed (`opl.vault.columns` states the property and `KeyPrefix` states
+# the rule), and `opl.bronze.snapshot` is Spark `Column` expressions and nothing else, so
+# there is no importable constant here. `tests/vault/test_payments_satellite.py` asserts the
+# two strings are equal, which turns the duplicate into a cross-check.
+SNAPSHOT_REF_DATE = AppliedDateSource(column="_snapshot_ref_date", reads=READS_DATE)
+
+
 @dataclass(frozen=True, kw_only=True)
 class Satellite:
-    """A DV2 satellite: a parent hub, and the payload whose change it records.
+    """A DV2 satellite: a parent hub OR LINK, the payload whose change it records, where
+    its `applied_date` is read from, and whether an observation ledger gates it.
 
     NO HASH-KEY FIELD, DELIBERATELY. A satellite's hash key IS its parent's, and a
     satellite free to spell it independently is a satellite a typo can point at
-    nothing -- silently, as an empty join rather than an error. `parent_hub` resolves
-    it, and `build_registry` refuses a parent that is not a registered hub, so the two
-    cannot disagree."""
+    nothing -- silently, as an empty join rather than an error. `parent_of` resolves
+    it, and `build_registry` refuses a parent that is not a registered hub or link, so
+    the two cannot disagree.
+
+    THE PARENT MAY BE A LINK SINCE F2 WAVE 2, WHICH IS THE SAME KIND AND NOT A FIFTH ONE.
+    `registry.py`'s stated criterion for `EffectivitySatellite` being a fourth kind is
+    that "a `Satellite` is delta-driven on a `hash_diff` over a payload and
+    `load_satellite` takes a `Hub`. This table has neither." A DESCRIPTIVE satellite on a
+    link has BOTH -- `sat_link_payment` carries `amount`, `currency`, `payment_method` and
+    a `hash_diff` over them, and goes through the SAME `changed_rows` `sat_empresa_dados`
+    does -- so the only half that was ever true of it was the signature, which is the half
+    the refusal itself named as the thing to change. A fifth kind would have been this
+    dataclass with one annotation altered, and `opl.vault.specs`' rule for a genuinely new
+    kind (its own `__post_init__` here, its word in the `VaultTable` union there) does not
+    describe that.
+
+    THE CHANGE DETECTOR IS THE SAME CODE AND IS INERT ON THIS TABLE, WHICH IS SAID HERE SO
+    THE SENTENCE ABOVE IS NOT READ AS MORE THAN IT CLAIMS. `changed_rows` compares each
+    row's `hash_diff` against `lag(hash_diff)` partitioned by the PARENT's hash key and
+    ordered by `applied_date`. A link hash key that carries a dependent-child key is
+    unique per event: `link_payment` hashes `transaction_id` into its digest, so every
+    payment is its own partition with exactly one `applied_date`, `lag` is always NULL,
+    and no candidate has ever been dropped as unchanged. What makes a re-load append
+    nothing is `opl.vault.loading._without_persisted`'s (key, `applied_date`) anti-join
+    ALONE. So the delta is true in form and unexercised in substance, and it stays in the
+    shared path rather than being switched off: the first STATE satellite on a link --
+    socios' `qualificacao_socio`, named below -- would exercise it on the day it lands,
+    and a table-kind branch around it would be the thing that then had to be undone.
+
+    `transactional` IS THE DECLARATION THAT THERE IS NO WINDOW TO CLOSE, and it decides
+    one thing: whether `load_satellite` requires an `ObservationGrain`. It is DECLARED
+    rather than inferred from the parent's kind, because both combinations are real DV2 --
+    an EVENT satellite on a link (this one) and a STATE satellite on a link (socios'
+    `qualificacao_socio`, which `registry.py` names as the first candidate) -- and a rule
+    reading "a satellite on a link needs no ledger" would silently strip the ledger from
+    the second the day it lands.
+
+    IT IS NOT A PROXY AND IT IS NOT A SWITCH FOR TURNING A LEDGER OFF. The ledger's five
+    states are derived over a key universe CROSSED WITH the months of the window, and
+    `absent_after_observation` means "we saw this key earlier and did not see it here". At
+    an EVENT grain that is the definition of every event in every later month: a payment
+    made in June is absent from July because it happened once, not because anything
+    departed. So a ledger here would report a candidate delete per payment of every
+    earlier month -- measured on this task's own fixture at 2 of 4 keys for a stream in
+    which nothing departed -- and print it into a task log as "candidate departures". A
+    diagnostic whose only possible reading is false is the dual of the guard that cannot
+    fire, and `opl.vault.observation`'s own rule is that the wrong thing must require
+    typing. `build_registry` refuses the two pairings that would make this a switch: a
+    transactional satellite on a HUB, and a non-transactional one on a LINK -- AND SO DOES
+    `opl.vault.satellite_grain.snapshot_axis_for`, which is not a restatement. The registry
+    guard covers every REGISTERED spec; the loader takes its parent as a free argument so
+    that a throwaway one can reach it, and for a while it refused only one of the two
+    there. A registry-only refusal is a refusal of the declarations, not of the loads."""
 
     name: str
     parent: str
     payload_columns: Sequence[str]
+    applied_date_from: AppliedDateSource = SNAPSHOT_REF_DATE
+    transactional: bool = False
 
     def __post_init__(self) -> None:
         if not self.name or not self.parent:
             raise ValueError(f"a satellite needs a name and a parent ({self.name!r})")
+        if not isinstance(self.applied_date_from, AppliedDateSource):
+            raise TypeError(
+                f"satellite {self.name!r} declares applied_date_from="
+                f"{self.applied_date_from!r}, which is not an AppliedDateSource -- a bare "
+                "column name cannot carry the rule for reading a DAY out of it, and the "
+                "two shapes this vault has (a `date` column and a 24-character ISO "
+                "instant string) need different expressions"
+            )
         object.__setattr__(
             self,
             "payload_columns",
@@ -476,12 +632,19 @@ class EffectivitySatellite:
     """A satellite on a LINK, recording when the relationship it hangs off was
     effective: one row per link hash key per change of `is_active`.
 
-    A FOURTH TABLE KIND RATHER THAN A `Satellite` WITH A LINK PARENT, and the two
-    reasons are the same ones `_assert_every_satellite_hangs_off_a_hub` gives for
-    refusing that shape. A `Satellite` is delta-driven on a `hash_diff` over a payload
-    and `load_satellite` takes a `Hub`; this table has no payload, no `hash_diff`, and
-    is driven by the observation ledger instead. Registering it as a `Satellite` would
-    make it a table `load_satellite` would key on a column its parent does not have.
+    A FOURTH TABLE KIND RATHER THAN A `Satellite` WITH A LINK PARENT, AND ONLY ONE OF THE
+    TWO ORIGINAL REASONS SURVIVES F2 WAVE 2 -- which is why this paragraph is written out
+    rather than pointing at a guard. It read "the same reasons
+    `_assert_every_satellite_hangs_off_a_hub` gives", and that guard now ADMITS a link
+    parent: `load_satellite` takes one, and `sat_link_payment` is a `Satellite` on
+    `link_payment`. So "the signature takes a `Hub`" is gone.
+
+    WHAT IS UNCHANGED IS THE REASON THAT WAS ALWAYS THE REAL ONE: this table has NO
+    PAYLOAD and NO `hash_diff`. A `Satellite` is delta-driven on the hash of its payload
+    columns and `Satellite.__post_init__` refuses an empty payload outright; this table
+    watches `is_active`, which nothing delivers and this vault derives from the
+    observation ledger. Registering it as a `Satellite` would mean declaring a payload it
+    does not have so that a change detector could be taken over it.
 
     `entry_column` IS THE WINDOW'S OPEN AND IT KEEPS THE SOURCE'S OWN NAME, which is
     the one piece of epistemics this spec carries. The open is DELIVERED --

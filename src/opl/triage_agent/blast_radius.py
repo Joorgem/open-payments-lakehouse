@@ -253,6 +253,36 @@ VAULT_LOADS_FROM: dict[str, tuple[str, ...]] = {
     # with it. A declared edge the bundle has not caught up with is the loud failure; an
     # undeclared vault table is the silent one this guard exists for.
     "link_payment": ("payments",),
+    # THE SECOND EDGE WITH NO LOADER TASK BEHIND IT, AND ITS GAP IS WIDER THAN THE LINK'S.
+    # `sat_link_payment` hangs off `link_payment` and reads the SAME bronze table -- the
+    # satellite's payload is the payment's own measures, which live on the payment row and
+    # nowhere else -- so its source is `payments` for the reason the link's is and not by
+    # copying the line above.
+    #
+    # IT HAS NO RUNNABLE ENTRY POINT AT ALL TODAY, WHICH IS MORE THAN A MISSING YAML TASK
+    # AND IS STATED SO T3 CANNOT READ IT AS LESS. `databricks/src/vault_load_satellite.py`
+    # resolves its parent with `domains.parent_hub(spec)` and hands the result to
+    # `grain_for(hub, source)`; `parent_hub` REFUSES a link-parented satellite by design,
+    # measured:
+    #
+    #     >>> domains.parent_hub(domains.table_spec("sat_link_payment"))
+    #     ValueError: satellite 'sat_link_payment' hangs off 'link_payment', which is not
+    #     a hub -- ... one that only needs the parent's hash key should resolve it with
+    #     opl.vault.domains.parent_of
+    #
+    # So the script would refuse this table before Spark started, and the red
+    # `test_every_registered_vault_table_is_loaded_by_exactly_one_task` records only the
+    # missing TASK. T3 has to give that script a `parent_of` path and an `axis=` argument
+    # (a transactional satellite takes no grain) as well as the YAML, or the task it adds
+    # will be a task that cannot run. `databricks/` is F8's area this phase, which is why
+    # this comment names the gap instead of closing it.
+    #
+    # THE FIVE RED TESTS ARE STILL FIVE, WHICH IS WORTH SAYING BECAUSE IT LOOKS LIKE IT
+    # SHOULD BE TEN. The reds are per-TEST comparisons of the whole bundle against this
+    # whole declaration, not per-table, so a second undeclared-in-YAML table makes the
+    # same five assertions fail with a longer diff rather than making ten fail. Counted
+    # rather than assumed.
+    "sat_link_payment": ("payments",),
     "ref_cnae": ("lookup",),
     "ref_motivo": ("lookup",),
     "ref_municipio": ("lookup",),

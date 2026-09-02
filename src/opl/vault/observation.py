@@ -136,7 +136,7 @@ from pyspark.sql import functions as F
 
 from opl.bronze.snapshot_axis import MONTHLY_SNAPSHOT, SnapshotAxis
 from opl.config import DEFAULT
-from opl.vault.months import validated_months
+from opl.vault.months import refuse_unloaded_months, validated_months
 from opl.vault.specs import KeyPrefix
 
 # THE DEFAULT AXIS'S COLUMN, DERIVED AND NOT RESTATED, kept as a name because TESTS read
@@ -464,21 +464,29 @@ def _window(
 
     THE COST IS PAID ONLY BY A CALLER WHO NAMES MONTHS. With `months=None` the window
     IS the distinct months of the data, so it cannot contain one the data has not
-    seen, and this returns that frame lazily without collecting anything."""
+    seen, and this returns that frame lazily without collecting anything.
+
+    THE REFUSAL ITSELF MOVED TO `opl.vault.months.refuse_unloaded_months` IN F2 WAVE 2,
+    and the MESSAGE is unchanged to the byte -- what moved is only where the rule is
+    spelled. A TRANSACTIONAL satellite has no observation grain and therefore never
+    reaches this function, so without the move the guard would have had a second copy in
+    `opl.vault.satellites` for the one-table case: the same defect `opl.vault.months`'
+    own docstring exists to record, one function later."""
     axis = grain.snapshot_column
     loaded = presence.select(axis).distinct()
     if months is None:
         return loaded
-    unloaded = sorted(set(months) - {row[axis] for row in loaded.collect()})
-    if unloaded:
-        raise ValueError(
-            f"months names {unloaded}, which no row of {grain.bronze_table!r} or "
-            f"{grain.quarantine_table!r} carries. Refusing rather than answering: "
+    refuse_unloaded_months(
+        months,
+        loaded={row[axis] for row in loaded.collect()},
+        tables=(grain.bronze_table, grain.quarantine_table),
+        consequence=(
             "every key in the window would get a row for that month with nothing on "
             "either side -- absent_after_observation, a candidate delete for the "
             "whole table, conjured out of a typo or an ingest that did not run. A "
             "month present on only ONE side is not this and is accepted"
-        )
+        ),
+    )
     return spark.createDataFrame([(month,) for month in months], f"{axis} string")
 
 

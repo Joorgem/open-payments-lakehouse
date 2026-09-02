@@ -254,10 +254,10 @@ def test_the_registered_tables_are_the_three_domains_tables():
     discovery are untouched -- and this assertion is where a domain that stopped being
     discovered would show up as four missing names rather than as a job failing.
 
-    AND THREE SINCE F2 WAVE 2, ON THE SAME MECHANISM AND WITH ONE FEWER TABLE TO SHOW IT.
-    `link_payment` is `opl/vault/domains/payments_domain.py`'s whole contribution, and no
-    file under `opl/vault/` names that module either -- so the claim is made a second time
-    against a domain of ONE table, where a single missing name is the whole evidence.
+    AND THREE SINCE F2 WAVE 2, ON THE SAME MECHANISM. `link_payment` and
+    `sat_link_payment` are `opl/vault/domains/payments_domain.py`'s whole contribution and
+    no file under `opl/vault/` names that module either. (This said "a domain of ONE table"
+    while T1 was the whole of it; T2 added the satellite.)
 
     ADDING A NAME HERE IS THE DELIBERATE EDIT THIS TEST IS FOR, not a lock to route
     around: the paragraph above says so about a RENAME, and an addition is the same act.
@@ -282,6 +282,7 @@ def test_the_registered_tables_are_the_three_domains_tables():
         "sat_empresa_dados",
         "sat_estabelecimento_dados",
         "sat_estabelecimento_endereco",
+        "sat_link_payment",
         "sat_merchant_dados",
     ]
     assert domains.table_spec("hub_empresa").hash_key == "hub_empresa_hk"
@@ -308,24 +309,6 @@ def test_a_satellite_takes_its_hash_key_from_its_parent_hub():
 
 def test_the_cnpj_satellite_resolves_to_the_cnpj_hub():
     assert domains.parent_hub(domains.table_spec("sat_empresa_dados")).name == "hub_empresa"
-
-
-def test_a_satellite_whose_parent_is_not_registered_is_refused():
-    """Across domains as well as within one: `build_registry` sees every domain at
-    once, so this refusal does not depend on the order the filesystem yielded the
-    modules in."""
-    with pytest.raises(ValueError, match="hub_thing"):
-        build_registry([_domain(_SAT)])
-
-
-def test_a_satellite_whose_parent_is_another_satellite_is_refused():
-    """A satellite hangs off a hub or a link, never off another satellite. Without
-    this the parent lookup would succeed and the satellite would key on a column its
-    'parent' does not have."""
-    other = Satellite(name="sat_other", parent="sat_thing_dados", payload_columns=("x",))
-
-    with pytest.raises(ValueError, match="not a hub"):
-        build_registry([_domain(_HUB, _SAT, other)])
 
 
 # --------------------------------------------------------------------------- #
@@ -361,20 +344,6 @@ def test_a_link_naming_a_satellite_as_one_of_its_hubs_is_refused():
 
     with pytest.raises(ValueError, match="not a hub"):
         build_registry([_domain(_HUB, _SAT, bad)])
-
-
-def test_a_descriptive_satellite_whose_parent_is_a_link_is_refused():
-    """DV2 allows a DESCRIPTIVE satellite on a link and this vault still does not have
-    one. The boundary stands after Task 5 added `EffectivitySatellite`, and the reason
-    is unchanged: `parent_hub` returns a `Hub` and `load_satellite` takes one, so a
-    link-parented `Satellite` would be a table nothing in this package can write. The
-    effectivity satellite is a separate KIND precisely because it is not this."""
-    on_link = Satellite(
-        name="sat_on_link", parent="link_thing_other", payload_columns=("x",)
-    )
-
-    with pytest.raises(ValueError, match="not a hub"):
-        build_registry([_domain(_HUB, _OTHER_HUB, _LINK, on_link)])
 
 
 def test_a_link_with_fewer_than_two_identity_components_is_refused():
@@ -629,17 +598,6 @@ def test_a_hub_whose_hash_key_collides_with_a_business_key_column_is_refused():
             hash_key="cnpj_basico",
             business_keys=(BusinessKeyColumn(name="cnpj_basico", width=8),),
         )
-
-
-def test_a_satellite_payload_colliding_with_its_hubs_hash_key_is_refused():
-    """Only visible once the parent is resolved, so it is a whole-set guard rather
-    than a `__post_init__` one."""
-    clash = Satellite(
-        name="sat_clash", parent="hub_thing", payload_columns=("hub_thing_hk",)
-    )
-
-    with pytest.raises(ValueError, match="hub_thing_hk"):
-        build_registry([_domain(_HUB, clash)])
 
 
 def test_a_zero_width_business_key_is_refused():

@@ -47,14 +47,11 @@ hub is missing or empty."""
 from __future__ import annotations
 
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 from pyspark.sql import functions as F
 
-from opl.bronze.registry import table_spec as bronze_table_spec
 from opl.contracts import payments as payments_contract
-from opl.contracts.catalogue import columns_for
 from opl.vault import domains
 from opl.vault.columns import LOAD_DATE, RECORD_SOURCE
 from opl.vault.domains.cnpj import CNPJ_BASICO_WIDTH, HUB_EMPRESA
@@ -69,131 +66,17 @@ from opl.vault.links import (
 from opl.vault.specs import BusinessKeyColumn, KeyPrefix, Link, LinkEnd
 
 from .conftest import (
-    AUDIT_DDL,
-    INGESTED_AT,
+    EMPRESA_ROOTS,
     JUL,
     JUN,
     LOADED_AT,
-    REF_DATES,
+    PAYMENTS_SPEC,
     derived_table,
-    write_delta,
 )
 
 LINK = domains.table_spec("link_payment")
 LINK_HUBS = domains.linked_hubs(LINK)
 PARTNER_LINK = domains.table_spec("link_company_partner")
-
-PAYMENTS_CONTRACT = tuple(columns_for(payments_contract.CONTRACT))
-_PAYMENTS_SPEC = bronze_table_spec("payments")
-
-# The three companies the fixture trades between, as eight-character roots -- the key
-# space `hub_empresa` really holds, which is what makes a resolution rate of 100% a
-# construction rather than a hope (`opl.contracts.payments`, "BOTH COUNTERPARTIES ARE
-# LEGAL ENTITIES").
-A, B, C = "10000001", "20000002", "30000003"
-EMPRESA_ROOTS = (A, B, C)
-
-# (transaction_id, payer, payee). The ids are opaque and carry no time, per the
-# contract: "It is not ordered and carries no time."
-P_ONE = ("t-0001", A, B)
-P_TWO = ("t-0002", A, B)  # THE SAME PAIR. Only the transaction id differs.
-P_REVERSED = ("t-0003", B, A)
-P_JULY = ("t-0004", A, C)
-
-RECORD_SOURCE_VALUE = "opl_generator_payments"
-
-_PAYMENT_DEFAULTS = {
-    "event_time": "2026-06-01T12:00:00.000000Z",
-    "emitted_at": "2026-06-01T12:00:00.000000Z",
-    "amount": "1234.56",
-    "currency": payments_contract.REPORTING_CURRENCY,
-    "payment_method": payments_contract.PAYMENT_METHODS[0],
-}
-
-_PAYMENTS_SCHEMA = (
-    ", ".join(f"{column} string" for column in PAYMENTS_CONTRACT) + ", " + AUDIT_DDL
-)
-
-# `hub_empresa`'s own feed, one column wide. The Receita's file feed loads it in
-# production (`vault_empresa_job`); here it exists so the link has hub rows to point at.
-_EMPRESA_SCHEMA = "cnpj_basico string, " + AUDIT_DDL
-
-
-def payment_row(payment: tuple[str, str, str], month: str, **overrides) -> tuple:
-    """One bronze payments row: the whole contract plus every audit column the ingest
-    stamps.
-
-    THE CONTRACT'S OWN COLUMN NAMES, READ OFF THE CONTRACT, never retyped -- the three
-    the link reads are `IDENTITY_COLUMN` and the two `COUNTERPARTY_COLUMNS`, and a
-    fixture that spelled them itself would keep passing after a rename that broke the
-    spec."""
-    values = dict(_PAYMENT_DEFAULTS)
-    values.update(
-        zip(
-            (payments_contract.IDENTITY_COLUMN, *payments_contract.COUNTERPARTY_COLUMNS),
-            payment,
-            strict=True,
-        )
-    )
-    values.update(overrides)
-    return tuple(values[column] for column in PAYMENTS_CONTRACT) + (
-        None,
-        f"/Volumes/x/payments/{month}/payments.jsonl",
-        INGESTED_AT,
-        RECORD_SOURCE_VALUE,
-        "batch-1",
-        month,
-        REF_DATES[month],
-    )
-
-
-def _payment_rows() -> list[tuple]:
-    """The fixture's bronze rows, meant to be read top to bottom -- the shape IS the
-    argument."""
-    return [
-        payment_row(P_ONE, JUN),
-        # THE SAME PAIR, A SECOND PAYMENT. Both hub references are identical to P_ONE's,
-        # so `transaction_id` is the only thing that can separate the two link rows.
-        payment_row(P_TWO, JUN),
-        # THE PAIR THE OTHER WAY ROUND. A different relationship, and the one that shows
-        # the two roled reference columns really carry two different companies.
-        payment_row(P_REVERSED, JUN),
-        # A BYTE-IDENTICAL REDELIVERY of P_ONE in the next month. The contract calls this
-        # "the SAME payment seen twice"; the link's anti-join must add nothing for it.
-        payment_row(P_ONE, JUL),
-        payment_row(P_JULY, JUL, event_time="2026-07-02T09:00:00.000000Z",
-                    emitted_at="2026-07-02T09:00:00.000000Z"),
-    ]
-
-
-def _empresa_rows() -> list[tuple]:
-    """A minimal empresas bronze feed, so `hub_empresa` EXISTS and is populated before
-    the link is written."""
-    return [
-        (root, None,
-         "/Volumes/x/cnpj/2026-06/empresas/K3241.K03200Y0.D60613.EMPRECSV",
-         INGESTED_AT, "rfb_cnpj_webdav", "batch-0", JUN, REF_DATES[JUN])
-        for root in EMPRESA_ROOTS
-    ]
-
-
-@pytest.fixture(scope="module")
-def payments_source(spark, vault_database):
-    """A throwaway Delta database holding one bronze payments table and the empresas
-    feed `hub_empresa` is loaded from."""
-    db = vault_database("payments_vault")
-    bronze, empresas = f"{db}.payments", f"{db}.empresas"
-    write_delta(spark, bronze, _PAYMENTS_SCHEMA, _payment_rows())
-    write_delta(spark, empresas, _EMPRESA_SCHEMA, _empresa_rows())
-    return SimpleNamespace(db=db, bronze=bronze, empresas=empresas)
-
-
-@pytest.fixture
-def payments_target(payments_source):
-    """Fresh table names per test, for the tests that WRITE -- sharing one would make
-    idempotence pass for the wrong reason."""
-    db, suffix = payments_source.db, uuid4().hex[:8]
-    return SimpleNamespace(hub=f"{db}.emp_{suffix}", link=f"{db}.link_{suffix}")
 
 
 def hub_tables(names) -> dict[str, str]:
@@ -547,21 +430,28 @@ def test_the_link_is_refused_where_hub_empresa_has_not_been_loaded(
     assert not spark.catalog.tableExists(payments_target.link)
 
 
-def test_the_domain_declares_one_table_and_reads_its_source_off_the_bronze_registry():
-    """The domain module is DATA, and this is the whole of what it registers today.
+def test_the_domain_declares_the_link_and_its_satellite_and_reads_one_bronze_source():
+    """The domain module is DATA, and this is the whole of what it registers.
 
-    ONE TABLE, because `sat_link_payment` needs `load_satellite` to take a link and
-    `registry._assert_every_satellite_hangs_off_a_hub` to change with it -- one decision,
-    made by the task that owns both halves, rather than half-made here.
+    TWO TABLES SINCE T2, AND THIS TEST SAID ONE. The satellite was deferred with its own
+    condition written out -- "`sat_link_payment` needs `load_satellite` to take a link and
+    `registry._assert_every_satellite_hangs_off_a_hub` to change with it, one decision made
+    by the task that owns both halves" -- and that task changed both. The ORDER is asserted
+    because it is the order `discover_domains` yields and the order a reader meets: the
+    relationship first, then what it carried.
+
+    ONE SOURCE FOR BOTH, which is not a detail: the link and its satellite read the same
+    bronze rows, which is what makes the satellite's hash key the link's own digest by
+    construction rather than by a join.
 
     THE SOURCE IS THE BRONZE REGISTRY'S, not a literal: `opl.contracts.payments` pins the
     staging/bronze/quarantine triple and `opl.bronze.registry` lifts it, so a domain that
     respelled the Delta name would be a fifth place that string lives."""
     from opl.vault.domains import payments_domain
 
-    assert payments_domain.DOMAIN.tables == (LINK,)
-    assert payments_domain.PAYMENTS_SOURCE.endswith(_PAYMENTS_SPEC.bronze)
-    assert _PAYMENTS_SPEC.bronze == payments_contract.BRONZE_TABLE
+    assert payments_domain.DOMAIN.tables == (LINK, domains.table_spec("sat_link_payment"))
+    assert payments_domain.PAYMENTS_SOURCE.endswith(PAYMENTS_SPEC.bronze)
+    assert PAYMENTS_SPEC.bronze == payments_contract.BRONZE_TABLE
 
 
 def test_a_non_identifying_end_stays_unwritable_here_even_with_a_declared_derivation():

@@ -34,6 +34,7 @@ from opl.vault.registry import link_identity_columns as _link_identity_columns
 from opl.vault.registry import linked_hubs as _linked_hubs
 from opl.vault.registry import parent_hub as _parent_hub
 from opl.vault.registry import parent_link as _parent_link
+from opl.vault.registry import parent_of as _parent_of
 from opl.vault.registry import table_spec as _table_spec
 
 DOMAINS = discover_domains(__path__, __name__)
@@ -45,8 +46,23 @@ def table_spec(name: str) -> VaultTable:
     return _table_spec(REGISTRY, name)
 
 
+def parent_of(satellite: Satellite) -> Hub | Link:
+    """The hub OR LINK a registered satellite hangs off -- the resolution
+    `load_satellite` needs, since a satellite's parent may be either since F2 wave 2.
+
+    A SECOND RESOLVER BESIDE `parent_hub` AND NOT A WIDENING OF IT. The two answer
+    different questions and both have callers: this one answers "what is this satellite
+    keyed on", which is all a satellite loader needs; `parent_hub` answers "which hub's
+    business key does this satellite's history hang on", which is what an SCD2 dimension
+    and a PIT spine need and which a link parent has no answer to. Widening the one name
+    would have handed `opl.gold.registry_guards` a `Link` where it reads
+    `business_key_columns`, i.e. an `AttributeError` several frames from the declaration
+    that caused it."""
+    return _parent_of(REGISTRY, satellite)
+
+
 def parent_hub(satellite: Satellite) -> Hub:
-    """The hub a registered satellite hangs off."""
+    """The HUB a registered satellite hangs off, refusing one parented on a link."""
     return _parent_hub(REGISTRY, satellite)
 
 

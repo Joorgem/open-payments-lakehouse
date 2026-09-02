@@ -684,7 +684,7 @@ def test_a_grain_declaring_the_key_columns_in_another_order_is_refused(
     spark, estab_source, estab_target
 ):
     """THE FIRST MULTI-COLUMN KEY MAKES THIS REACHABLE, and the decision it forced is
-    argued in `opl.vault.satellites._grain_key_mismatch`: the permuted grain would
+    argued in `opl.vault.satellite_grain._grain_key_mismatch`: the permuted grain would
     ANSWER identically, and is refused so the grain's column list and the hub's stay one
     list rather than two sets. It has its OWN message, because telling someone whose
     columns are right that their grain is "coarser or finer" sends them after a bug

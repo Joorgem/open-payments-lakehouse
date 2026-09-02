@@ -43,7 +43,7 @@ caller in the tree still passes months; it is the TYPE of the window that has be
 generalised, not the vocabulary of the jobs that pass one."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 from opl.bronze.snapshot_axis import SnapshotAxis
 
@@ -59,9 +59,9 @@ def validated_months(
     to a different question.
 
     WHAT THIS CANNOT CHECK, stated so no caller reads more into it: whether a
-    well-formed month was ever LOADED. That needs the data, and
-    `opl.vault.observation._window` is where it is asked -- see that function for why
-    the answer is worth an eager Spark job."""
+    well-formed month was ever LOADED. That needs the data, so it is a second function --
+    `refuse_unloaded_months` below -- which the callers reach once they have the months
+    the data actually holds. See it for why the answer is worth an eager Spark job."""
     if months is None:
         return None
     if isinstance(months, str):
@@ -84,3 +84,41 @@ def validated_months(
             f"{consequence}"
         )
     return window
+
+
+def refuse_unloaded_months(
+    months: Sequence[str],
+    *,
+    loaded: Iterable[str],
+    tables: Sequence[str],
+    consequence: str,
+) -> None:
+    """Refuse a named month that no row of `tables` carries.
+
+    THE SECOND HALF OF THE MONTH RULE, AND THE HALF `validated_months` STRUCTURALLY
+    CANNOT DO. That one checks the SHAPE of a value before Spark exists; this one checks
+    the value against the data, so it can only run once somebody has collected the
+    months the tables hold. `2026-09` is well-formed and may name a typo, or a month
+    whose ingest failed.
+
+    ONE SPELLING, TWO CALLERS, WHICH IS WHY IT IS HERE AND NOT INLINE IN EITHER OF THEM.
+    `opl.vault.observation._window` asks it over bronze UNION quarantine, because an
+    unloaded month there manufactures a candidate delete for the whole key space; and
+    `opl.vault.satellites` asks it over the ONE source a satellite with no observation
+    grain reads, because there an unloaded month selects no rows and the load reports
+    success having written nothing. Same rule, two consequences, and `consequence` is a
+    parameter for `validated_months`' reason: those are different wrong answers and an
+    operator reading one of them needs to be told which.
+
+    `tables` IS A SEQUENCE AND IS NAMED IN THE MESSAGE, because the refusal is only
+    actionable if the reader knows what was consulted. Two tables read "no row of 'a' or
+    'b' carries", which is what `_window`'s own message said before this function
+    existed and what the ledger's tests match on."""
+    unloaded = sorted(set(months) - set(loaded))
+    if not unloaded:
+        return
+    consulted = " or ".join(repr(table) for table in tables)
+    raise ValueError(
+        f"months names {unloaded}, which no row of {consulted} carries. Refusing rather "
+        f"than answering: {consequence}"
+    )
