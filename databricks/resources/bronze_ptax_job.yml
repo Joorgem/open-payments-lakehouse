@@ -91,7 +91,17 @@ resources:
       #
       # (The interval is deliberately named once in this block and not restated in the
       # paragraph above: two statements of it here are two things that can disagree, and
-      # the lock below refuses a comment that states two different ones.)
+      # the lock below refuses a comment that states two different ones.
+      #
+      # SO IF THE BAND IS EVER SUPERSEDED, THIS BLOCK IS THE ONE PLACE IN THIS REPOSITORY
+      # WHERE THE HOUSE PRACTICE OF RECORDING THE OLD VALUE IN PLACE, STRUCK, CANNOT BE
+      # FOLLOWED. The lock reads `band HH:MM-HH:MM` out of these comment lines and compares
+      # values; it cannot see a strike, a "was", or a quotation, so a superseded interval
+      # left here reads as a second interval and turns the file red. Replace the interval in
+      # this block, and record the old one -- with its date and what moved it -- in the
+      # header above `resources:`, which is outside the run of lines this lock reads, or in
+      # the commit body. That is the cost of anchoring the comparison to the comment
+      # attached to `schedule:`, and it is paid here rather than argued in the test.)
       #
       # 14:00 is after the late end of the measured band with room to spare, and
       # tests/test_bundle_targets_and_schedules.py derives that comparison from the band

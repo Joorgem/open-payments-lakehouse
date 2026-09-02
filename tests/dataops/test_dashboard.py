@@ -32,6 +32,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from job_yaml import resource_files
 
 from opl.config import DEFAULT
 from opl.dataops.views import DATAOPS_VIEWS
@@ -55,7 +56,12 @@ _WORKSPACE_SCOPED_WAREHOUSE_ID = "13cf10c85b0f189d"
 # Every committed bundle file that could carry a resource value. `.databricks/` is the
 # CLI's build output and is deliberately not swept -- it is generated, git-ignored, and
 # holds the resolved id by design.
-_BUNDLE_FILES = (_BUNDLE / "databricks.yml", *sorted((_BUNDLE / "resources").glob("*.yml")))
+#
+# `resource_files` RATHER THAN A GLOB OF THIS FILE'S OWN, and this was the third spelling of
+# the suffix set in this repository. The other two drifted -- one learned `.yaml` and the
+# other did not, and a resource file the bundle deploys walked through the gap. The set now
+# lives once, in `tests/job_yaml.py`, with the CLI's own refusal quoted beside it.
+_BUNDLE_FILES = (_BUNDLE / "databricks.yml", *resource_files())
 
 # Everything that turns a NULL into a NUMBER, not just the one spelling the first version
 # of this file banned. `sql_telemetry` and a NULL metric are the same statement said twice;

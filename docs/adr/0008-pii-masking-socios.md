@@ -368,24 +368,28 @@ personal data inside `bundle destroy`'s blast radius. **Rejected**; revisit only
 > `schedule.pause_status` and a schedule under `mode: development` deploys paused
 > ([ADR 0021](0021-the-deploy-binds-a-scheduled-runs-expected-revision.md)). **It is
 > declared and deliberately never deployed**, and the second and third failure modes
-> above are part of why. **The second is about a production target. The third is not** —
-> an authoritative `grants` block revokes what it does not list under **any** target
-> declaring the securable, and this note said "both are about a production target" until
-> F8's second correction pass. The first reads exactly as written for the target that IS
-> deployed.
+> above are part of why. The first reads exactly as written for the target that IS
+> deployed. **Which target each of the other two is about is no longer argued here**, and
+> the deletion is the correction: this note said "both are about a production target",
+> replaced that with the third firing under **any** target declaring the securable, and
+> that is over-strong as well — dev mode's renaming is per resource kind
+> (measured 2026-09-02: `mode: development` renamed a declared `schemas` and left a
+> declared `volumes` alone). None of it has to be got right, because the enforcement below
+> refuses every non-job, non-dashboard collection wherever it is declared.
 >
 > **What keeps the other two hypothetical is no longer a promise, and its edges are stated
 > rather than left to the reader.** `tests/test_bundle_resource_allowlist.py` permits
 > `jobs` and `dashboards` and refuses every other resource collection in that bundle —
 > an ALLOWLIST, not a securable refusal, so it also refuses `secret_scopes` and
 > `sql_warehouses`, which carry no `grants` and exist as real state in this workspace. It
-> sweeps every `*.yml`/`*.yaml` under `databricks/` at the top level **and under each
-> target**, the second because `targets.<name>.resources` is accepted by the CLI (measured:
-> a scratch bundle declaring one validates `exit=0` and renders `['jobs', 'schemas']`) and
-> because it is where a securable would land under the production target. It read only the
-> top level until F8's second correction pass, while this note already claimed the
-> enforcement. **It does not reach** a resource declared in a file `include`d from outside
-> `databricks/`, nor any grant issued outside the bundle — which is what
+> sweeps every bundle document under `databricks/`, at every path the CLI's own schema
+> types `config.Resources` — **which this note no longer counts**, because the count it
+> published was short: that module carries the paths as code and derives the set from
+> `databricks bundle schema` in an arm of its own. `targets.<name>.resources` is one of
+> them, is where a securable would land under the production target, and was unswept until
+> F8's second correction pass while this note already claimed the enforcement. **It does
+> not reach** a resource declared in a file `include`d from outside `databricks/`, nor any
+> grant issued outside the bundle — which is what
 > `apply_pii_governance` does, imperatively, by
 > [ADR 0018](0018-dataops-derives-it-does-not-instrument-and-it-does-not-act.md)
 > Decision 6's own ruling.

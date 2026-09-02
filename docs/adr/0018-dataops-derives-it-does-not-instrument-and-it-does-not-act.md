@@ -235,9 +235,13 @@ target this repository has, the bundle half governs a schema nobody reads.
 > and deliberately never deployed, and grounds 2 and 3 are the reason** — both still
 > *"assumed on strong evidence and not proved"*, and ground 3's failure mode is revoking the
 > platform's own `CREATE TABLE`. Ground 1 reads exactly as written for the target that IS
-> deployed. **Ground 2 is about a production target; ground 3 is NOT** — an authoritative
-> `grants` block revokes what it does not list under **any** target that declares the
-> securable, and the first draft of this amendment said both were about production.
+> deployed. **Which target grounds 2 and 3 are about is no longer argued here, and the
+> deletion is the correction.** The first draft said both were about production; the second
+> said ground 3 fires under **any** target declaring the securable; and the second is
+> over-strong too, because dev mode's renaming is per resource kind — measured 2026-09-02,
+> `mode: development` renamed a declared `schemas` and left a declared `volumes` alone. The
+> per-kind argument does not have to be got right: the enforcement below refuses every
+> non-job, non-dashboard collection wherever it is declared.
 >
 > **What keeps grounds 2 and 3 hypothetical is mechanical and is now enforced rather than
 > promised, and what that enforcement does NOT cover is written here rather than left to be
@@ -249,14 +253,18 @@ target this repository has, the bundle half governs a schema nobody reads.
 > makes it an allowlist rather than a securable refusal: it also refuses `secret_scopes` and
 > `sql_warehouses`, neither of which carries `grants`, both of which exist as real state in
 > this workspace, and declaring either would be a legitimate act it makes somebody argue for.
-> It sweeps every `*.yml`/`*.yaml` under `databricks/`, at the top level **and under each
-> target** — `targets.<name>.resources` is accepted by the CLI, measured on a scratch bundle
-> that validates `exit=0` and renders `['jobs', 'schemas']`, and the sweep read only the top
-> level until F8's second correction pass, while this paragraph already claimed the
-> enforcement. **Two things it does not reach**, both measured the same way: a resource
-> declared in a file `include`d from outside `databricks/`, and any grant issued outside the
-> bundle at all — which is what `apply_pii_governance` does, and what this decision decided
-> it should go on doing.
+> It sweeps every bundle document under `databricks/`, at every path the CLI's own schema
+> types `config.Resources`. **That set is not counted here**, and the reason is the failure
+> the paragraph above already names in another form: the count this paragraph published was
+> short of what the CLI accepts, exactly as its restated enumeration of securables was short
+> of its source. The module carries the paths as code and derives the set from
+> `databricks bundle schema` in an arm of its own. `targets.<name>.resources` is one of
+> them, and the sweep read only the top level until F8's second correction pass while this
+> paragraph already claimed the enforcement. **What it is known not to reach**, each
+> measured rather than assumed, and not offered as a complete list of what nobody has
+> thought of: a resource declared in a file `include`d from outside `databricks/`, and any
+> grant issued outside the bundle at all — which is what `apply_pii_governance` does, and
+> what this decision decided it should go on doing.
 
 `bundle deployment bind` is refused: it puts 55.8M rows of personal data inside
 `bundle destroy`'s blast radius for a cosmetic gain.

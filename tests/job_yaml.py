@@ -38,6 +38,27 @@ BUNDLE = REPO / "databricks" / "databricks.yml"
 
 PYTHON_FILE_PREFIX = "../src/"
 
+# THE SUFFIXES A BUNDLE DOCUMENT MAY CARRY, IN ONE PLACE BECAUSE THE SWEEPS DRIFTED APART
+# ONCE ALREADY: `bundle_docs` learned `*.yaml` and the two sweeps in
+# `tests/test_bundle_targets_and_schedules.py` did not, so a scheduled, unclassified
+# `zz_probe_job.yaml` under `databricks/resources/` left both modules green. The set is the
+# CLI's own, named in its own refusal of anything else -- *"must be YAML or JSON files."* --
+# and JSON is not theoretical: on a scratch bundle `include: resources/*.json` validates
+# `exit=0` and renders the job declared in it. This repository writes `.yml` and has no
+# `.yaml` or `.json` resource today, which is exactly why a sweep could stop reading one
+# without anything going red.
+BUNDLE_DOC_SUFFIXES = (".yml", ".yaml", ".json")
+
+# THE CLI'S OWN OUTPUT DIRECTORY, EXCLUDED FROM THE BUNDLE-WIDE SWEEP BY DIRECTORY NAME.
+# `databricks bundle deploy` writes `.databricks/bundle/<target>/resources.json` -- its
+# record of what it deployed, and measured on this box that record CARRIES `pause_status`,
+# because rendering it is the CLI's job and that is where its value lives. Reading it would
+# make the "no committed bundle file declares `pause_status`" sweep RED on any box that has
+# deployed and GREEN in CI, which has no `.databricks/` at all: a local/CI divergence
+# pointing the wrong way. Excluded by NAME rather than by consulting git, which keeps
+# `bundle_docs`'s deliberate filesystem-not-`git ls-files` property below.
+CLI_OUTPUT_DIR = ".databricks"
+
 # The task key of the deployed-revision guard (ADR 0009). Shared because both halves
 # read it: the launch-guard half asserts it runs first everywhere, and the table half
 # has to know which task is allowed to precede the masks.
@@ -86,9 +107,40 @@ JOB_OF = {
 }
 
 
+def bundle_files(root: Path) -> list[Path]:
+    """Every bundle document at any depth under `root`, sorted, CLI output excluded.
+
+    WHICH SUFFIXES IS NOT THIS FUNCTION'S DECISION and neither is the exclusion:
+    `BUNDLE_DOC_SUFFIXES` and `CLI_OUTPUT_DIR` above carry both, with their reasons, and
+    `resource_files` below reads the same tuple. That is the whole point of them being
+    module constants: sweeps that spell the set separately are sweeps that drift, and the
+    drift is what this function was extracted to end."""
+    return sorted(
+        path
+        for path in root.rglob("*")
+        if path.suffix in BUNDLE_DOC_SUFFIXES
+        and path.is_file()
+        and CLI_OUTPUT_DIR not in path.parts
+    )
+
+
+def resource_files(root: Path = RESOURCES) -> list[Path]:
+    """The files the bundle's own `include: resources/*` reaches: one directory, no descent.
+
+    NOT `bundle_files`, and the difference is the `include:` glob's: `resources/*.yml`
+    matches nothing in a subdirectory, so a sweep that recursed here would demand a
+    classification for files the bundle never picks up. The SUFFIXES are shared, because
+    that is the half that drifted."""
+    return sorted(
+        path
+        for path in root.iterdir()
+        if path.suffix in BUNDLE_DOC_SUFFIXES and path.is_file()
+    )
+
+
 def bundle_docs() -> dict[str, object]:
-    """Every `*.yml` and `*.yaml` FILE ON DISK under the bundle root, parsed, keyed by its
-    path relative to that root.
+    """Every bundle document ON DISK under the bundle root, parsed, keyed by its path
+    relative to that root.
 
     THE FILESYSTEM AND NOT `git ls-files`, DELIBERATELY, and the docstring used to say
     "every committed bundle file" while doing this -- a description of a narrower sweep
@@ -105,14 +157,14 @@ def bundle_docs() -> dict[str, object]:
     mention it. What holds the line there is that adding such an entry means editing
     `databricks.yml`, which is one of the documents these sweeps read.
 
-    BOTH EXTENSIONS, because `include: resources/*.yaml` validates too (same scratch
-    bundle, `exit=0`), and a glob that knew only one spelling would leave the other as a
-    way in. This repository writes `.yml` and has no `.yaml` file today."""
+    WHICH SUFFIXES IT READS AND WHAT IT SKIPS ARE `bundle_files`', not this function's, and
+    the reasons are stated where the two constants are declared. `yaml.safe_load` parses the
+    JSON ones as well -- measured on every such file under `databricks/` on this box -- so
+    one reader covers the set."""
     root = BUNDLE.parent
     return {
         str(path.relative_to(root)): yaml.safe_load(path.read_text(encoding="utf-8"))
-        for pattern in ("*.yml", "*.yaml")
-        for path in sorted(root.rglob(pattern))
+        for path in bundle_files(root)
     }
 
 

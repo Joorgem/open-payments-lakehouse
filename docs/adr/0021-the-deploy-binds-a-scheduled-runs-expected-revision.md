@@ -120,16 +120,19 @@ other resource collection:
   `sql_warehouses` — neither carries `grants`, both are real state in this workspace (one
   scope; the warehouse `databricks.yml` resolves by name), and declaring either would be a
   legitimate act this lock makes somebody argue for rather than a hazard it exists to stop.
-- **It sweeps two places, not one.** Every `*.yml`/`*.yaml` under `databricks/`, at the top
-  level and under **each target**. The second is where a securable would land under the
-  production target — the target grounds 2 and 3 are about — and `targets.<name>.resources` is
-  accepted by the CLI: measured on a scratch bundle that validates `exit=0` and renders
-  resource kinds `['jobs', 'schemas']`. **This ADR asserted the enforcement while the sweep
-  read only the top level**, which is the defect its own correction pass found.
-- **What it does not reach**, both measured on the same scratch bundle: a resource declared in
-  a file the bundle `include`s from **outside** `databricks/` (`include: ../outside/*.yml`
-  validates `exit=0` and renders the resource), and any grant issued outside the bundle at
-  all — `apply_pii_governance` issues them imperatively, which is Decision 6's own ruling.
+- **It sweeps every place the CLI's own schema types `config.Resources`, and this ADR does
+  not say how many that is.** The count it did publish was short of what the CLI accepts,
+  while reading as thoroughness; so the paths live as code in that module and an arm of its
+  own derives the set from `databricks bundle schema`. `targets.<name>.resources` is one of
+  them and is where a securable would land under the production target — the target grounds
+  2 and 3 are about. **This ADR asserted the enforcement while the sweep read only the top
+  level**, which is the defect its own correction pass found; the count came in with that
+  correction and is the defect the pass after it found.
+- **What it is known not to reach**, each measured on the same scratch bundle and not offered
+  as a complete list of what nobody has thought of: a resource declared in a file the bundle
+  `include`s from **outside** `databricks/` (`include: ../outside/*.yml` validates `exit=0`
+  and renders the resource), and any grant issued outside the bundle at all —
+  `apply_pii_governance` issues them imperatively, which is Decision 6's own ruling.
 
 The bundle declares no securable, and this phase adds none.
 

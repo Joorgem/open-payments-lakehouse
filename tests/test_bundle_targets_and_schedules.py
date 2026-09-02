@@ -3,36 +3,30 @@
 
 WHICH HALF IS ASSERTED HERE AND WHICH IS NOT -- read this before trusting the green.
 
-  * ASSERTED, CREDENTIAL-FREE, IN CI: everything about the COMMITTED SOURCE. Every YAML
-    under `databricks/resources/` is classified scheduled or not, with a reason; a
+  * ASSERTED, CREDENTIAL-FREE, IN CI: everything about the COMMITTED SOURCE. Every bundle
+    document under `databricks/resources/` is classified scheduled or not, with a reason; a
     scheduled job declares a cron and a timezone and nothing else that fires it; an
     unscheduled one declares no `schedule`, `trigger` or `continuous`; and **no committed
     bundle file DECLARES `pause_status` at any depth** (the values, not the text -- the
-    schedule comments explain the key, and the explanation is not the defect). Both
-    targets are read out of
-    `databricks/databricks.yml`, and `prod`'s root path must be interpolated rather than
-    carry an operator's identity.
+    schedule comments explain the key, and the explanation is not the defect). Both targets
+    are read out of `databricks/databricks.yml`, and `prod`'s root path must be interpolated
+    rather than carry an operator's identity.
 
   * NOT ASSERTED IN CI: the RENDERING. `pause_status` is written by the CLI from the
     target's `mode`, and asking what it wrote means running `databricks bundle validate`,
-    which needs credentials -- measured, not assumed: with the config file pointed
-    elsewhere and `DATABRICKS_HOST`/`DATABRICKS_TOKEN` unset, `bundle validate -t free`
-    exits 1 with *"default auth: cannot configure default credentials"*, because this
-    bundle's dev-mode name prefix resolves the current user and its dashboard resource
-    resolves a warehouse by `lookup:`. So the rendering arm below SKIPS when the CLI or
-    the credentials are absent, and says so. It is not decoration: it is the only place
-    the `PAUSED`/`UNPAUSED` split is observed rather than described, and it was run by
-    hand on the tree that shipped it.
+    which needs credentials for this bundle -- it resolves the current user for the dev-mode
+    prefix and a warehouse by `lookup:`. So the rendering arm skips on the CLI being absent
+    and on the credential failure's own signature, and goes RED on anything else; `_rendered`
+    carries that distinction and what it costs. It is not decoration: it is the only place
+    the `PAUSED`/`UNPAUSED` split is observed rather than described, and it was run by hand
+    on the tree that shipped it.
 
-AND WHAT THE JUSTIFICATIONS THEMSELVES CLAIM, WHICH IS THE HALF THAT WAS MISSING.
-Until F8's correction pass this module asserted only that a cron and a timezone
-EXIST. F8's independent reviewer REPORTED moving PTAX from a weekday afternoon to a
-Sunday small hour and rewriting every zone to UTC with the suite still green. What is
-checkable here rather than reported is why that is unsurprising: neither mutation
-touches anything the old assertions read, and each falsifies the paragraph written
-directly above the block it changes. So the properties those paragraphs claim are
-asserted here, and every expected value is DERIVED from a file rather than typed
-beside the assertion:
+AND WHAT THE JUSTIFICATIONS THEMSELVES CLAIM, WHICH IS THE HALF THAT WAS MISSING. Until
+F8's correction pass this module asserted only that a cron and a timezone EXIST, and F8's
+reviewer reported moving PTAX to a Sunday small hour and rewriting every zone to UTC with
+the suite still green -- neither mutation touches anything those assertions read, and each
+falsifies the paragraph directly above the block it changes. So the properties those
+paragraphs claim are asserted here, every expected value DERIVED from a file:
 
   * the three monthly tiers run in the order the comments give them -- bronze strictly
     before vault, vault strictly before gold -- on one shared day of the month;
@@ -43,27 +37,21 @@ beside the assertion:
     and the reason these crons are not in UTC.
 
 THE BAND IS PARSED OUT OF THE COMMENT ATTACHED TO THE JOB'S OWN `schedule:` KEY
-(`band HH:MM-HH:MM`), which is deliberate twice over. The number the cron has to beat
-then cannot drift away from the sentence that justifies it; and it cannot be satisfied
-by a sentence somewhere else in the file. The search ran over the WHOLE FILE until F8's
-second correction pass, above a 73-line header in the one file it reads, so any `band`
-written anywhere in that header would have done. A comment rewrapped so `band` and the
-times fall on different lines fails LOUDLY here rather than leaving the hour resting on
-nothing -- the failure this phase already paid for once, with a line-based `grep` that
-could not see a claim wrapped across two lines. And a block stating TWO DIFFERENT bands
-is a fault rather than a first-match, because that block is now small enough that
-restating the interval in it is easy -- this file's own correction did exactly that
-within one commit.
+(`band HH:MM-HH:MM`), so the number the cron has to beat cannot drift from the sentence
+justifying it and cannot be satisfied by a sentence elsewhere in the file -- the search ran
+over the WHOLE FILE, above a long header, until F8's second correction pass. A comment
+rewrapped so `band` and the times fall on different lines fails LOUDLY rather than leaving
+the hour resting on nothing, and a block stating TWO DIFFERENT bands is a fault rather than
+a first-match. What that costs the author of a SUPERSEDED band is stated in the block it
+costs it in, not here.
 
 `zoneinfo` NEEDS A TZ DATABASE -- the system one on Linux, the `tzdata` package on
 Windows. Where it is absent this file goes RED rather than skipping, because a zone
 check that cannot resolve a zone has checked nothing.
 
-WHAT LEFT THIS FILE. The resource allowlist -- which collections this bundle may declare
-anywhere -- moved to `tests/test_bundle_resource_allowlist.py`, whole, with its arms. It
-answers neither of this module's two questions and would read the same if nothing here had
-a schedule; it arrived here only because the phase that wrote it was a scheduling phase.
-Its own docstring carries what it covers and, more usefully, what it does not.
+WHAT LEFT THIS FILE. The resource allowlist moved to
+`tests/test_bundle_resource_allowlist.py`, whole, with its arms: it answers neither of this
+module's questions, and its own docstring carries what it covers and what it does not.
 
 WHY THE SPLIT MATTERS AT ALL. `mode: development` renders `pause_status: PAUSED` and
 `mode: production` renders `UNPAUSED`, from source that says neither. Write `pause_status`
@@ -85,11 +73,13 @@ import pytest
 import yaml
 from job_yaml import (
     BUNDLE,
+    BUNDLE_DOC_SUFFIXES,
     FIRING_KEYS,
     RESOURCES,
     bundle_docs,
     job_of,
     keys_anywhere,
+    resource_files,
 )
 
 from opl.extraction.ptax_source import BRASILIA
@@ -185,9 +175,13 @@ _NON_JOB = {"dataops_dashboard.yml"}
 
 
 def _classification_faults(root=RESOURCES) -> list[str]:
-    """Whether the three lists above are TOTAL over the YAMLs actually present."""
+    """Whether the three lists above are TOTAL over the bundle documents actually present.
+
+    `resource_files` and not a glob of this module's own: the suffixes are `job_yaml`'s one
+    tuple, because this sweep and `bundle_docs()` spelled them apart and a `.yaml` job walked
+    in through the gap."""
     declared = set(_SCHEDULED) | set(_UNSCHEDULED) | _NON_JOB
-    present = {path.name for path in root.glob("*.yml")}
+    present = {path.name for path in resource_files(root)}
     if declared == present:
         return []
     return [
@@ -205,9 +199,9 @@ def _firing_keys(job: dict) -> list[str]:
 
 
 def _schedule_faults(root=RESOURCES) -> list[str]:
-    """Every YAML present under `root`, against what its classification promises."""
+    """Every bundle document present under `root`, against what its classification promises."""
     faults = []
-    for path in sorted(root.glob("*.yml")):
+    for path in resource_files(root):
         name = path.name
         if name in _NON_JOB:
             continue
@@ -309,8 +303,20 @@ def test_the_bundle_declares_the_two_targets_this_split_needs():
 # --------------------------------------------------------------------------------
 
 
+# The measured signature of the ONE failure this module skips on, quoted from the CLI: with
+# the config file pointed elsewhere and `DATABRICKS_HOST`/`DATABRICKS_TOKEN` unset,
+# `bundle validate` exits 1 with *"default auth: cannot configure default credentials"*.
+_NO_CREDENTIALS = "cannot configure default credentials"
+
+
 def _rendered(target: str) -> dict:
-    """`databricks bundle validate -t <target> -o json`, or skip with the reason."""
+    """`databricks bundle validate -t <target> -o json`, or skip with the reason.
+
+    A SKIP IS FOR THE CREDENTIALS AND FOR NOTHING ELSE, and this used to turn EVERY non-zero
+    exit into one -- which swallowed a probe: a bundle that had stopped validating read here
+    exactly like a box with no token. THE COST is that `bundle validate` reaches the
+    workspace, so an outage on a box that HAS credentials now fails rather than skips: the
+    direction to be wrong in, since a red says look and the skip it replaces said nothing."""
     cli = shutil.which("databricks")
     if cli is None:
         pytest.skip("no `databricks` CLI on PATH; the rendering half cannot run here")
@@ -319,8 +325,12 @@ def _rendered(target: str) -> dict:
         cwd=RESOURCES.parent, capture_output=True, text=True,
         env={**os.environ, "MSYS_NO_PATHCONV": "1"},
     )
-    if done.returncode:
-        pytest.skip(f"`bundle validate -t {target}` failed: {done.stderr.strip()[:200]}")
+    if done.returncode and _NO_CREDENTIALS in done.stderr:
+        pytest.skip(f"`bundle validate -t {target}` has no credentials here")
+    assert not done.returncode, (
+        f"`bundle validate -t {target}` exited {done.returncode} for a reason that is not "
+        f"absent credentials, so the bundle itself is in doubt: {done.stderr.strip()[:300]}"
+    )
     return json.loads(done.stdout)["resources"]["jobs"]
 
 
@@ -401,6 +411,22 @@ def test_the_sweep_goes_red_when_a_pause_status_is_written_into_the_source(tmp_p
     assert any(_PAUSE in fault for fault in _schedule_faults(root))
 
 
+def test_the_classification_sweep_reads_every_suffix_a_resource_file_may_carry(tmp_path):
+    """THE REVIEWER'S PROBE, MADE PERMANENT AND WALKED OVER THE WHOLE SUFFIX SET. A
+    scheduled, unclassified, unguarded `zz_probe_job.yaml` under `databricks/resources/` left
+    this module green, because these sweeps globbed `*.yml` while `bundle_docs()` had learned
+    more. Both read `job_yaml`'s one tuple now, and this arm walks it."""
+    root = _copied_tree(tmp_path)
+    assert not _classification_faults(root)
+    _, text = _a_scheduled_job()
+    for suffix in BUNDLE_DOC_SUFFIXES:
+        probe = f"zz_probe_job{suffix}"
+        (root / probe).write_text(text, encoding="utf-8")
+        faults = _classification_faults(root)
+        (root / probe).unlink()
+        assert any(probe in fault for fault in faults), (probe, faults)
+
+
 def test_the_target_lock_goes_red_when_prod_commits_an_identity():
     """Swap the interpolation for a literal -- a FABRICATED one, never this box's."""
     text = BUNDLE.read_text(encoding="utf-8")
@@ -412,9 +438,8 @@ def test_the_target_lock_goes_red_when_prod_commits_an_identity():
 
 
 # --------------------------------------------------------------------------------
-# WHAT THE JUSTIFICATIONS CLAIM. A cron and a zone EXISTING is not what any comment
-# beside a schedule block promises -- see this module's docstring for the two mutations
-# that proved it.
+# WHAT THE JUSTIFICATIONS CLAIM. A cron and a zone EXISTING is not what any comment beside
+# a schedule block promises -- see this module's docstring for the mutations that proved it.
 # --------------------------------------------------------------------------------
 
 # Quartz's six fields, in order. A seventh (year) is optional and this bundle writes none.
@@ -436,6 +461,7 @@ _BAND = re.compile(r"band (\d{2}):(\d{2})-(\d{2}):(\d{2})")
 _SCHEDULE_KEY = re.compile(r"^ +schedule:$", re.M)
 
 _CRON_VALUE = re.compile(r'(quartz_cron_expression: )"[^"]+"')
+
 
 def _cron_of(name: str, root=RESOURCES) -> dict[str, str]:
     """One scheduled job's quartz expression, by field name."""
@@ -550,11 +576,10 @@ def _zone_faults(root=RESOURCES) -> list[str]:
 def _justification_of(text: str) -> str:
     """The unbroken run of comment lines directly ABOVE this file's `schedule:` key.
 
-    `_BAND` was searched over the WHOLE FILE, first match wins, above a 73-line header in
-    the one file it reads -- so a `band HH:MM-HH:MM` written anywhere in that header, about
-    anything, would have satisfied the hour. What justifies a cron is the comment attached
-    to it. A file with no `schedule:` key yields the empty string, and `_daily_faults`
-    reports the missing band rather than reading somewhere else for one."""
+    `_BAND` was searched over the WHOLE FILE, first match wins, above a long header -- so a
+    `band HH:MM-HH:MM` written anywhere in it, about anything, satisfied the hour. What
+    justifies a cron is the comment attached to it. A file with no `schedule:` key yields
+    the empty string, and `_daily_faults` reports a missing band rather than reading on."""
     found = _SCHEDULE_KEY.search(text)
     if found is None:
         return ""
@@ -573,11 +598,11 @@ def _daily_faults(root=RESOURCES) -> list[str]:
     and the times land on different lines fails here rather than silently unhooking the
     check, and a band stated elsewhere in the file no longer satisfies one stated here.
 
-    AND A COMMENT STATING TWO DIFFERENT BANDS IS A FAULT, not a first-match. That block is
-    now small enough that restating the interval in it is easy -- this very check went green
-    on a rewritten PTAX comment carrying the same band twice, one of them inside a quoted
-    historical error -- and `search` would silently take whichever came first. Two intervals
-    that disagree give the hour two things to sit after; the file says which it means."""
+    AND A COMMENT STATING TWO DIFFERENT BANDS IS A FAULT, not a first-match: `search` would
+    take whichever came first, and two intervals that disagree give the hour two things to
+    sit after. Restating the interval in that block is easy enough that this check once went
+    green over a rewritten PTAX comment carrying it twice. WHAT THAT COSTS THE AUTHOR OF A
+    SUPERSEDED BAND is stated in the PTAX block, where it is paid."""
     faults = []
     for name in sorted(_SCHEDULED):
         cron = _cron_of(name, root)
@@ -727,17 +752,25 @@ def test_the_tier_lock_goes_red_when_a_scheduled_monthly_job_carries_no_tier(
 
 def test_the_band_lock_goes_red_when_the_band_moves_out_of_the_schedules_own_comment(tmp_path):
     """The band is MOVED, not deleted -- to the top of the same file, where the old
-    whole-file search would have found it and called the hour justified.
+    whole-file search would have found it and called the hour justified. That is the defect
+    this anchoring exists for: a long header sits above the block, and any
+    `band HH:MM-HH:MM` in it, about anything at all, satisfied the comparison.
 
-    That is the defect this anchoring exists for: 73 lines of header sit above the block,
-    and any `band HH:MM-HH:MM` in them, about anything at all, satisfied the comparison."""
+    EVERY LINE STATING THE BAND MOVES, WHICH IS THE ARM AGREEING WITH THE LOCK IT DEFENDS.
+    `_daily_faults` compares a SET of bands, so two IDENTICAL mentions are permitted -- and
+    against a file in that permitted state an arm moving only the first left one behind and
+    failed with a bare `AssertionError: []`, broken by a state its own lock allows."""
     root = _copied_tree(tmp_path)
     assert not _daily_faults(root)
     path = root / _the_daily_job(root)
     text = path.read_text(encoding="utf-8")
-    stated = next(line for line in _justification_of(text).splitlines() if _BAND.search(line))
-    moved = stated + "\n" + text.replace(stated + "\n", "", 1)
+    justification = _justification_of(text)
+    stated = [line for line in justification.splitlines() if _BAND.search(line)]
+    assert stated, f"{path.name} states no band in its schedule comment for this arm to move"
+    kept = "\n".join(line for line in justification.splitlines() if line not in stated)
+    moved = "\n".join(stated) + "\n" + text.replace(justification, kept, 1)
     assert _BAND.search(moved), "this arm dropped the band instead of moving it"
+    assert not _BAND.search(_justification_of(moved)), "the band is still in the block"
     path.write_text(moved, encoding="utf-8")
     faults = _daily_faults(root)
     assert any("states no `band" in fault for fault in faults), faults
