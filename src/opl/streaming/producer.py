@@ -43,22 +43,29 @@ transport free to add its own would make that count a measurement of librdkafka'
 behaviour on the day the test ran. The dedup story stays a statement about DATA only while
 the transport cannot contribute to it.
 
---- CREDENTIALS COME FROM THE ENVIRONMENT, AND ONLY THE PASSWORD IS A SECRET --------------
+--- CREDENTIALS COME FROM THE ENVIRONMENT, AND ONLY THE USERNAME TRAVELS IN CLEAR ---------
 
 `KAFKA_BOOTSTRAP`, `KAFKA_USER`, `KAFKA_PASSWORD`, read out of a `Mapping` the CALLER
 passes -- this module never touches `os.environ` itself, so a test states the environment
 it means instead of patching a global. The local Redpanda container needs none of them and
 speaks PLAINTEXT; the managed broker needs all three and speaks SASL_SSL / SCRAM-SHA-256.
 
-ONLY THE PASSWORD IS A SECRET, and F5 measured what happens when that line is drawn wrongly
+THE USERNAME IS A COORDINATE, and F5 measured what happens when that line is drawn wrongly
 (plan section 4.2, controller-verified with a negative control). The Kafka username was put
 in a Databricks secret scope alongside the password, and because the platform replaces every
 occurrence of a secret's VALUE in task output, the username `opl` -- the prefix of this
 repository's catalog, topic, job names and package -- turned every one of those into
-`[REDACTED]` in the run log. A reader cannot tell a redaction from a value. So a bootstrap
-address and a username are COORDINATES and travel in clear; the password is a secret, is
-never defaulted in code, and carries `repr=False` so that a `BrokerConfig` reaching a
-traceback or a log line does not print it.
+`[REDACTED]` in the run log. A reader cannot tell a redaction from a value. So the USERNAME
+travels in clear; the password is a secret, is never defaulted in code, and carries
+`repr=False` so that a `BrokerConfig` reaching a traceback or a log line does not print it.
+
+THE BOOTSTRAP DOES NOT TRAVEL IN CLEAR, and this paragraph used to say it did -- it called
+the address a coordinate alongside the username, which contradicted the rest of the
+repository and is the likeliest reason a caller here would think the address needs no
+handling. It stays in the Databricks secret scope and out of committed text because it names
+the managed cluster: ADR 0019 Decision 7's own "what reverses it" clause, and
+`docs/f5-run-evidence.md`'s "the BOOTSTRAP still is a secret, deliberately".
+`scripts/probe_broker.py` redacts it on every path it prints.
 
 --- THE CLIENT IS INJECTABLE, AND THAT IS WHAT MAKES THE DIGEST TEST A UNIT TEST ----------
 

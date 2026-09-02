@@ -50,18 +50,29 @@ prevent one layer up.
 
 --- TWO SECRETS, ONE CHOKE POINT, AND TWO INDEPENDENT DEFENCES ----------------------------
 
-The PASSWORD is a secret and so is the BOOTSTRAP HOST -- that is this repository's own
-line, drawn in `databricks/src/stream_managed_broker.py`: the host names a cluster that
-must not be committed to a public repository. Every line this script prints goes through
-`emit`, which is the ONLY `print` in the file, and `tests/test_probe_broker.py` holds that
-by parsing this module rather than by grepping it.
+The PASSWORD is a secret and the BOOTSTRAP HOST is treated as one here. ADR 0019 Decision 7
+draws the general line -- a host and a username are COORDINATES, not credentials -- and then
+reverses it for this deployment in its own "what reverses it" clause; `docs/f5-run-evidence.md`
+restates that as "the BOOTSTRAP still is a secret, deliberately", and
+`databricks/src/stream_managed_broker.py` keeps it in the secret scope because it names a
+cluster that must not be committed to a public repository. Every line this script prints goes
+through `emit`, which is the ONLY `print` in the file, and `tests/test_probe_broker.py` holds
+that by parsing this module rather than by grepping it.
 
-`Redactor` removes the exact values AND anything shaped like a network address. The shape
-rule is not decoration: the metadata reply carries the cluster's OTHER broker hosts, which
-are not the bootstrap string and would survive an exact-value rule; so would the `ipv4#...`
-literal in a connect failure. This file therefore keeps NO DOTTED TOKEN IN ITS OWN
-VOCABULARY, because the choke point cannot tell this script's prose from the broker's text
-and must not have to.
+`Redactor` removes the two exact values AND three ADDRESS SHAPES: a dotted host name, an IPv4
+literal, and an IPv6 literal IN BRACKETS, each with an optional `:port`. It is NOT "anything
+shaped like a network address" -- measured, a bare unbracketed IPv6, a name with no dot in it,
+and a host whose last label is a single character all pass through untouched. What earns the
+rule is the foreign text this script really does print: the TOPIC NAMES in a metadata reply,
+and the `ipv4#...` literal librdkafka puts in a connect failure, neither of which an
+exact-value rule would touch. It is NOT earned by the reply's sibling brokers -- `render`
+prints `len(metadata.brokers)`, a count, and no host from the reply ever reaches `Reading`.
+EVERY STRING THIS SCRIPT SENDS THROUGH `emit` therefore carries no dotted token of its own,
+because the choke point cannot tell this script's prose from the broker's text and must not
+have to. `test_this_script_own_prose_survives_its_own_redaction_unchanged` holds that over
+the three verdicts, both rendered readings, the "no reading" lines and both refusal messages
+-- the refusals included because they name variables, flags and files, and are therefore the
+likeliest strings here to grow a dotted token in a later edit.
 
 AND THE SECOND DEFENCE IS AT THE FILE DESCRIPTOR, because the first one is a keyword
 argument away from being deleted. MEASURED on 2026-09-02, `confluent-kafka` 2.6.1 against
@@ -69,8 +80,21 @@ an unresolvable host: with no `logger=`, the C library writes the bootstrap host
 ITSELF, from its own thread, three times per line (`%3|...|FAIL|... Failed to resolve
 '<host>:9092'`) -- 715 characters of it, which no Python-level redaction can see. Passing
 `logger=` reduced that to zero bytes; so did `log_level=0`; an `error_cb` alone did NOT.
-So the client gets a logger AND fd 2 is redirected for the client's whole lifetime, with
-whatever lands there re-emitted through the choke point.
+So the client gets a logger AND fd 2 is redirected for the client's whole lifetime.
+
+WHAT THE REDIRECT GIVES BACK IS CONTAINMENT, NOT A TRANSCRIPT -- and this docstring used to
+claim the transcript. Re-measured on 2026-09-02, same version and an unresolvable host, with
+`logger=` removed so that the C library would write: in the SHIPPED call shape the capture
+returned ZERO lines on 13 of 13 runs, at a 4-second and at the shipped 15-second timeout
+alike. Perturb the run -- a 50ms `sleep` before the client is built, nothing else changed --
+and the library's two lines do come back, 485 characters, redacted, on 4 of 4. NOTHING
+REACHED THE REAL STDERR IN ANY ARM. So whatever lands on fd 2 inside the window is redacted
+and re-emitted through the choke point, and what the C library writes may never land there.
+
+`render`'s `client said |` branch is KEPT rather than deleted, because it is not dead code:
+it carried those 485 characters in the perturbed arm, and
+`test_what_is_written_to_the_file_descriptor_is_captured_and_redacted` drives it on every
+run. What it is not is a promise that the client's own lines will ever appear.
 
 The logger is not a formality either, though today it is a sink: the same measurement found
 that librdkafka's log queue is never served by `list_topics`, so ZERO lines reach it. It
@@ -126,10 +150,13 @@ PASSWORD_PLACEHOLDER = "<SASL-password-redacted>"
 BROKER_PLACEHOLDER = "<broker-address-redacted>"
 ADDRESS_PLACEHOLDER = "<network-address-redacted>"
 
-# Anything SHAPED like a network address, whatever its value. This is what covers the hosts
-# this script has never seen: the sibling brokers a metadata reply names, and the `ipv4#...`
-# literal librdkafka puts in a connect failure. Over-redaction is the safe direction, and
-# it is paid for by keeping this file's own vocabulary free of dotted tokens.
+# THREE ADDRESS SHAPES, and deliberately not "anything shaped like an address": a dotted host
+# name, an IPv4 literal, and a BRACKETED IPv6, each with an optional port. Measured to pass
+# through UNTOUCHED: a bare unbracketed IPv6, a name with no dot, and a host whose last label
+# is a single character. What it covers is the foreign text this script prints -- the topic
+# names in a metadata reply, and the `ipv4#...` literal librdkafka puts in a connect failure.
+# Over-redaction is the safe direction, and it is paid for by keeping every string this
+# script prints free of dotted tokens.
 ADDRESS_SHAPE = re.compile(
     r"(?:[A-Za-z0-9_-]+\.)+[A-Za-z][A-Za-z0-9-]+(?::\d{1,5})?"  # a dotted host name
     r"|\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?"  # an IPv4 literal
@@ -163,7 +190,7 @@ NO_READING_MEANS = (
 
 @dataclass(frozen=True)
 class Redactor:
-    """Removes the two secrets by value, and any network address by shape.
+    """Removes the two secrets by value, and three address shapes by pattern.
 
     NOT KEYED TO ONE OF THEM, and that is the defect `probe_postgres_session.redacted_dsn`
     found in itself: a redaction written against the value the author happened to have
@@ -336,12 +363,18 @@ def cluster_metadata(broker: BrokerConfig, redactor: Redactor, *, timeout: float
 
 
 def probe(broker: BrokerConfig, redactor: Redactor, *, timeout: float) -> tuple[Reading, list[str]]:
-    """Ask once, time it, and let NO exception out of this function unredacted.
+    """Ask once, time it, and turn any `Exception` into an ALREADY-REDACTED reading.
 
     THE `except` IS BROAD ON PURPOSE and it changes no outcome: every failure here is
     already "the cluster did not answer", and what the breadth buys is that the text
     reaching the output went through `foreign` rather than through the interpreter's
-    traceback printer. Assume the exception text contains the host -- it does."""
+    traceback printer. Assume the exception text contains the host -- it does.
+
+    IT IS `Exception`, NOT `BaseException`, so this is not the "let NO exception out
+    unredacted" the line used to claim: a `KeyboardInterrupt` or a `SystemExit` raised
+    inside the request still leaves here untouched. No reachable one was found to carry
+    broker text, so what is corrected is the SENTENCE and not the handler -- widening the
+    catch would swallow the interrupt that stops a 15-second hang, which is worse."""
     taken_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     started = time.monotonic()
     with stderr_captured(redactor) as captured:

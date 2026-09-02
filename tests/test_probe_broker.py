@@ -29,6 +29,7 @@ import importlib.util
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -131,9 +132,12 @@ def test_both_secrets_are_removed_from_a_line_that_carries_both():
 
 
 def test_a_broker_the_redactor_was_never_told_about_is_removed_by_shape():
-    """The reply names the cluster's OTHER brokers, and a connect failure names an address.
+    """A connect failure names an address, and a metadata reply names topics.
 
-    Neither is the bootstrap string, so an exact-value rule alone would publish both."""
+    NOT the reply's sibling brokers, which is what this docstring used to say: `render`
+    prints `len(metadata.brokers)`, a count, and no host from the reply ever reaches
+    `Reading`. The rule is still earned -- neither of the addresses below is the bootstrap
+    string, so an exact-value rule alone would publish both."""
     cleaned = _REDACTOR(f"Connect to ipv4#10.11.12.13:9092 at {_SIBLING} failed")
     assert _leaks(cleaned) == []
     assert "10.11.12.13" not in cleaned
@@ -146,6 +150,18 @@ def test_a_blank_credential_registers_no_rule_at_all():
     empty = cli.Redactor.of(bootstrap="", password="")
     assert empty.pairs == ()
     assert empty("nothing here is a secret") == "nothing here is a secret"
+
+
+def test_the_longest_value_is_replaced_first_so_the_port_cannot_survive_the_host():
+    """`Redactor.of` sorts LONGEST VALUE FIRST and nothing held that: reversing the sort
+    left the whole suite green. The consequence is only cosmetic, which is why it is
+    asserted cheaply rather than argued -- replace the bare host before the full bootstrap
+    and the output becomes `<broker-address-redacted>:9092`, publishing the port and
+    reading like a redaction that half-failed."""
+    assert [len(value) for value, _mask in _REDACTOR.pairs] == sorted(
+        (len(value) for value, _mask in _REDACTOR.pairs), reverse=True)
+    assert _REDACTOR(_BOOTSTRAP) == cli.BROKER_PLACEHOLDER
+    assert "9092" not in _REDACTOR(_BOOTSTRAP)
 
 
 def test_the_error_path_cannot_leak(monkeypatch):
@@ -177,6 +193,12 @@ def test_what_is_written_to_the_file_descriptor_is_captured_and_redacted():
     joined = "\n".join(captured)
     assert _leaks(joined) == []
     assert cli.BROKER_PLACEHOLDER in joined and cli.PASSWORD_PLACEHOLDER in joined
+    # AND THE BRANCH THAT PRINTS THEM IS REACHABLE, which is why `render` keeps it. In the
+    # shipped call shape the client library's own lines were measured NOT to arrive here
+    # (13 of 13 runs), so without this the `client said |` arm would look like dead code.
+    rendered = "\n".join(cli.render(_did_not_answer(), captured))
+    assert "client said |" in rendered
+    assert _leaks(rendered) == []
 
 
 def test_foreign_text_is_redacted_before_it_is_capped_never_after():
@@ -238,6 +260,33 @@ def test_the_client_call_stays_inside_the_descriptor_capture():
     assert calls, "the metadata request must happen INSIDE the capture"
 
 
+def test_the_client_is_built_with_the_redacting_logger():
+    """THE SYMMETRIC LOCK TO THE ONE ABOVE, and it was missing while the module docstring
+    claimed TWO INDEPENDENT DEFENCES: deleting `logger=` from the construction left the
+    suite green, which is how a reviewer proved the hole rather than argued it.
+
+    It is not a belt beside a brace. Re-measured on 2026-09-02, `confluent-kafka` 2.6.1
+    against an unresolvable host: the fd-2 capture returned ZERO of the client library's
+    own lines on 13 of 13 runs in the SHIPPED call shape, so on this platform `logger=` is
+    the defence that actually holds and this is the only thing asserting it is there."""
+    tree = ast.parse(_SCRIPT_PATH.read_text(encoding="utf-8"), filename=str(_SCRIPT_PATH))
+    builder = next(f for f in ast.walk(tree)
+                   if isinstance(f, ast.FunctionDef) and f.name == "cluster_metadata")
+    built = [node for node in ast.walk(builder)
+             if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "AdminClient"]
+    assert len(built) == 1, f"`cluster_metadata` builds {len(built)} clients; exactly one"
+    passed = {keyword.arg: keyword.value for keyword in built[0].keywords}
+    assert "logger" in passed, (
+        "the client is built with NO `logger=`, so librdkafka writes the bootstrap host to "
+        "fd 2 itself -- and the capture that would catch it returned nothing on 13 of 13 runs"
+    )
+    supplier = getattr(getattr(passed["logger"], "func", None), "id", None)
+    assert supplier == "client_logger", (
+        f"`logger=` is given `{supplier}`, not `client_logger(...)`, so the handler that "
+        "redacts is not necessarily the one the client library writes to"
+    )
+
+
 def test_the_client_logger_cannot_reach_a_handler_that_writes_to_stderr():
     """`propagate` is the load-bearing line: the root logger's last-resort handler writes
     to stderr, which is the one path this script cannot redact. Handlers are replaced
@@ -283,14 +332,33 @@ def test_the_two_verdicts_are_different_sentences():
     assert cli.NO_READING_MEANS not in (cli.ANSWERED_MEANS, cli.NO_ANSWER_MEANS)
 
 
-def test_this_script_own_prose_survives_its_own_redaction_unchanged():
-    """THE INVARIANT THAT MAKES ONE CHOKE POINT SAFE. The redactor removes anything shaped
-    like a network address and cannot tell this script's prose from the broker's text, so
-    the script keeps no dotted token in its own vocabulary. A verdict reworded to contain
-    one would be published with a hole in it, and nothing else would notice."""
+def test_this_script_own_prose_survives_its_own_redaction_unchanged(monkeypatch):
+    """THE INVARIANT THAT MAKES ONE CHOKE POINT SAFE. The redactor removes text shaped like
+    a network address and cannot tell this script's prose from the broker's text, so every
+    string this script prints keeps no dotted token of its own. A verdict reworded to
+    contain one would be published with a hole in it, and nothing else would notice.
+
+    WIDENED FROM FIVE STRINGS TO EVERY PRINTED ONE. The narrow version covered the three
+    verdicts and the two rendered readings and stopped there, which left out the "no
+    reading" lines and BOTH REFUSAL MESSAGES -- the strings that name environment
+    variables, flags and files, and so are the likeliest in the module to gain a dotted
+    token in a later edit. The lines are read BEFORE `emit` redacts them, because a check
+    on the printed text would see the placeholder and pass."""
     empty = cli.Redactor.of(bootstrap="", password="")
+
+    monkeypatch.setitem(sys.modules, "confluent_kafka", None)
+    with pytest.raises(ImportError) as absent:
+        cli.require_client_library()
+    with pytest.raises(ValueError) as no_password:
+        cli.require_a_sasl_credential(SimpleNamespace(password=None))
+
+    handed: list[str] = []
+    monkeypatch.setattr(cli, "emit", lambda _redactor, line: handed.append(line))
+    cli.no_reading(empty, ValueError("a cause carrying no address at all"))
+
     lines = [cli.ANSWERED_MEANS, cli.NO_ANSWER_MEANS, cli.NO_READING_MEANS,
-             *cli.render(_answered()), *cli.render(_did_not_answer())]
+             *cli.render(_answered()), *cli.render(_did_not_answer()),
+             *handed, str(absent.value), str(no_password.value)]
     mangled = [line for line in lines if empty(line) != line]
     assert mangled == [], f"the redactor rewrites this script's own prose: {mangled}"
 
