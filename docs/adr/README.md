@@ -53,7 +53,7 @@ underneath it.
 | [0018](0018-dataops-derives-it-does-not-instrument-and-it-does-not-act.md) | DataOps derives; it does not instrument, and it does not act | F4 (`3bd2f52`) | Accepted, qualified | 7 | 1 |
 | [0019](0019-the-proof-runs-where-a-process-can-be-killed.md) | The exactly-once proof runs where a process can be killed; the broker is a recorded run | F5 (`5d769a3`) | Accepted, qualified | 8 | 8 |
 | [0020](0020-the-triage-accelerator-is-deterministic-and-the-model-runs-as-the-control.md) | The triage accelerator is deterministic, and the model runs as the control | F6 (`ef123ac`) | Accepted, qualified | 6 | 6 |
-| [0022](0022-payment-as-a-transactional-link-and-two-refuted-hubs.md) | The payment is a transactional link between two companies, and its two promised hubs are refuted | F2w2 (`unmerged`) | Accepted, qualified | 7 | 7 |
+| [0022](0022-payment-as-a-transactional-link-and-two-refuted-hubs.md) | The payment is a transactional link between two companies, and its two promised hubs are refuted | F2w2 (`9dcb0cf`) | Accepted, qualified | 7 | 7 |
 
 ## The numbered decisions
 
