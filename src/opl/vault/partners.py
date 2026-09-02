@@ -63,7 +63,7 @@ from pyspark.sql import functions as F
 
 from opl.vault.columns import LOAD_DATE, RECORD_SOURCE
 from opl.vault.hashing_spark import refuse_non_string_columns
-from opl.vault.links import refuse_mismatched_hubs, refuse_unloaded_hubs
+from opl.vault.links import link_columns, refuse_mismatched_hubs, refuse_unloaded_hubs
 from opl.vault.loading import (
     BRONZE_RECORD_SOURCE,
     SNAPSHOT_MONTH_COLUMN,
@@ -236,16 +236,7 @@ def partner_link_candidates(
         F.col(SNAPSHOT_MONTH_COLUMN),
         F.col(BRONZE_RECORD_SOURCE),
     )
-    return earliest_record_source(keyed, _link_columns(link, hubs))
-
-
-def _link_columns(link: Link, hubs: Sequence[Hub]) -> list[str]:
-    """Every column the link carries that is not DV2 metadata, in write order."""
-    return [
-        link.hash_key,
-        *(end.reference_column(hub) for end, hub in zip(link.ends, hubs, strict=True)),
-        *link.dependent_child_key_columns,
-    ]
+    return earliest_record_source(keyed, link_columns(link, hubs))
 
 
 def _collapsed_duplicates(
@@ -304,7 +295,7 @@ def load_partner_link(
         )
     (
         candidates.select(
-            *_link_columns(link, hubs),
+            *link_columns(link, hubs),
             F.lit(load_date).alias(LOAD_DATE),
             F.col(RECORD_SOURCE),
         )

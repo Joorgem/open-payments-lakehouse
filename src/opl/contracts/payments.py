@@ -25,8 +25,15 @@ was a candidate and each is wrong:
     `COUNT(DISTINCT a,b,c)` that silently dropped 8,761 NULL-bearing rows -- so the
     failure mode is not hypothetical here.
   - It is not an account, a customer, or a counterparty. Those are
-    `payer_cnpj_basico` / `payee_cnpj_basico`, and F2 wave 2's `hub_account` /
-    `hub_customer` are where they become keys.
+    `payer_cnpj_basico` / `payee_cnpj_basico`, and F2 wave 2 made them keys as two
+    ROLES on ONE hub -- `payer_hub_empresa_hk` and `payee_hub_empresa_hk`, both
+    references to `hub_empresa` on `link_payment`. THIS BULLET USED TO NAME
+    `hub_account` / `hub_customer` AS WHERE THEY BECOME KEYS AND THAT IS REFUTED, not
+    merely unbuilt: either hub would hash the same 8-character root `hub_empresa`
+    already holds, and `loading.hash_key_expression` puts no table name in the digest,
+    so the two tables would carry byte-identical keys and nothing would refuse it
+    (ADR 0022 Decision 2). A role is not an entity; it is what one company IS in one
+    relationship, which is the link's subject rather than a hub's.
   - It is not a settlement or a batch. A settlement groups many payments; nothing in
     this contract expresses that grouping, deliberately, because the vault does not
     model it yet and a column nothing reads is a column that rots.

@@ -560,9 +560,9 @@ def test_the_generic_link_loader_refuses_the_link_it_cannot_write(
     partner the COMPANY's digest, so every relationship would appear to be a company
     partnered with itself.
 
-    THE REFUSAL IS UNCHANGED AND ITS WORDING IS NOT (F-DB Task 5): `not end.identifying`
-    was a proxy: see `links.undeclared_derived_ends` for the reason it now refuses on."""
-    with pytest.raises(ValueError, match="nor a declared derivation"):
+    THE REFUSAL IS UNCHANGED AND SO IS `not end.identifying` -- F-DB Task 5 moved off it,
+    F2 wave 2's T1 review moved back; `links.non_identifying_ends` says why."""
+    with pytest.raises(ValueError, match="NON-IDENTIFYING end"):
         load_link(
             spark, LINK, hubs=LINK_HUBS, hub_tables=socios_hub_tables(socios_target),
             source_table=socios_source.bronze,

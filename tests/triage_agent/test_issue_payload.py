@@ -24,13 +24,14 @@ provenance block, and what a reader has is the run it names.
 from __future__ import annotations
 
 import json
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
 import yaml
 
 from opl.bronze.registry import UnknownTable
-from opl.triage_agent.blast_radius import blast_radius
+from opl.triage_agent.blast_radius import BlastRadius, blast_radius
 from opl.triage_agent.issue import (
     CENSUS_FACTS,
     FACTS,
@@ -525,13 +526,48 @@ def test_a_payload_whose_blast_radius_this_wheel_no_longer_derives_is_refused():
     IT IS NOT A VERSION CHECK AND DOES NOT PRETEND TO BE ONE -- two wheels with identical
     manifests and different everything else compare equal here. The control is the first
     line: the unmodified payload must read back, or the raise below is about the round trip
-    rather than about the radius."""
+    rather than about the radius.
+
+    THE MUTATION MOVED FROM `gold` TO `vault` IN F2 WAVE 2, AND THE REASON IS THE SECOND
+    ASSERTION RATHER THAN CONVENIENCE. `BlastRadius` now carries `gold_direct` and refuses,
+    AT CONSTRUCTION, a direct leg the union does not contain -- so shrinking `gold` alone no
+    longer reaches this comparison at all: it is refused one step earlier, by a guard whose
+    message is strictly better ("the two were computed from different declarations"). Both
+    arms are driven below, because a test that only saw the earlier refusal would leave
+    `MismatchedFacts` with no producer and would read as covering it."""
     carried = as_mapping(issue(PAYMENTS))
     assert from_mapping(carried).radius == blast_radius("payments")
 
-    carried["radius"] = {**carried["radius"], "gold": ["dim_date"]}
+    # THE VAULT LEG, which `__post_init__` does not constrain, so the file-versus-wheel
+    # comparison is what fires.
+    stale = {**carried, "radius": {**carried["radius"], "vault": ["link_payment"]}}
     with pytest.raises(MismatchedFacts, match="downstream manifest changed"):
-        from_mapping(carried)
+        from_mapping(stale)
+
+    # THE GOLD LEG, which it does: a payload whose union no longer contains its own direct
+    # leg is refused before the comparison, and that is the sharper answer.
+    inconsistent = {**carried, "radius": {**carried["radius"], "gold": ["dim_date"]}}
+    with pytest.raises(ValueError, match="different declarations"):
+        from_mapping(inconsistent)
+
+
+def test_the_written_radius_carries_every_field_the_reader_requires():
+    """THE ROUND TRIP'S FIELD LIST, DRIVEN RATHER THAN TRUSTED -- and it is a lock added
+    because the thing it locks was BROKEN, not because it might be.
+
+    F2 wave 2's T1 added `gold_direct` to `BlastRadius` and to `issue._radius_of`'s read,
+    and did not add it to `as_mapping`, which spelled three field names as literals. Every
+    payload written since carried three keys where the reader required four, so
+    `payloads_from_json` raised `KeyError: 'gold_direct'` for every incident -- the whole
+    of the publisher's input path -- `scripts/open_triage_issue.py`, which calls
+    `payloads_from_json` on the file this writes -- dead, with nineteen tests red on it and
+    none of them naming the cause. A fourth literal would have left the same hole open for the fifth
+    field, so `as_mapping` iterates `fields(...)` and this asserts the two ends agree
+    against the dataclass rather than against a list either side could restate."""
+    carried = as_mapping(issue(PAYMENTS))["radius"]
+
+    assert set(carried) == {field.name for field in fields(BlastRadius)}
+    assert from_mapping(as_mapping(issue(PAYMENTS))).radius == blast_radius("payments")
 
 
 def test_assembling_and_rendering_are_deterministic():

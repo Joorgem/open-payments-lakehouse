@@ -3,12 +3,22 @@
 adds a domain without editing it.
 
 THAT LAST SENTENCE IS THE WHOLE REASON THIS FILE IS THREE STATEMENTS LONG. The plan's
-scope boundary stakes DV2's extensibility claim on wave 2 adding `hub_account`,
+scope boundary staked DV2's extensibility claim on wave 2 adding `hub_account`,
 `hub_customer` and `link_payment` with a diff of "+N files, 0 modified" -- a claim the
 git history either shows or does not, and which cannot be made retroactively. A list
 of module names here would be the file that breaks it, so there is no list: `__path__`
-is the package's own directory and `discover_domains` imports whatever is in it. Drop
-`payments.py` beside `cnpj.py` and it is registered.
+is the package's own directory and `discover_domains` imports whatever is in it.
+
+AND WAVE 2 DID IT, WITH A SHORTER LIST THAN THE ONE ABOVE. `payments_domain.py` was
+dropped beside `cnpj.py` and registered `link_payment` and `sat_link_payment` with this
+file untouched. It carries **no** `hub_account` and **no** `hub_customer`: both are
+REFUTED rather than deferred, because either would produce `hub_empresa`'s own digest
+under a second table name (ADR 0022 Decision 2). And the module is
+`payments_domain.py`, not the `payments.py` this paragraph used to name -- two repo-wide
+sweeps parametrise `src/opl/**` by `p.name`, and `opl/contracts/payments.py` already
+holds that basename, so the two would collide into `payments.py0` / `payments.py1`.
+`discover_domains` reads the DIRECTORY and the module binds `DOMAIN` at module level,
+so the file's own name carries no meaning to the registry and the suffix costs nothing.
 
 THE GUARDS RUN AT IMPORT, over every domain at once, which is why `build_registry` is
 called here rather than lazily on first lookup. A registry with two domains claiming
@@ -34,6 +44,7 @@ from opl.vault.registry import link_identity_columns as _link_identity_columns
 from opl.vault.registry import linked_hubs as _linked_hubs
 from opl.vault.registry import parent_hub as _parent_hub
 from opl.vault.registry import parent_link as _parent_link
+from opl.vault.registry import parent_of as _parent_of
 from opl.vault.registry import table_spec as _table_spec
 
 DOMAINS = discover_domains(__path__, __name__)
@@ -45,8 +56,23 @@ def table_spec(name: str) -> VaultTable:
     return _table_spec(REGISTRY, name)
 
 
+def parent_of(satellite: Satellite) -> Hub | Link:
+    """The hub OR LINK a registered satellite hangs off -- the resolution
+    `load_satellite` needs, since a satellite's parent may be either since F2 wave 2.
+
+    A SECOND RESOLVER BESIDE `parent_hub` AND NOT A WIDENING OF IT. The two answer
+    different questions and both have callers: this one answers "what is this satellite
+    keyed on", which is all a satellite loader needs; `parent_hub` answers "which hub's
+    business key does this satellite's history hang on", which is what an SCD2 dimension
+    and a PIT spine need and which a link parent has no answer to. Widening the one name
+    would have handed `opl.gold.registry_guards` a `Link` where it reads
+    `business_key_columns`, i.e. an `AttributeError` several frames from the declaration
+    that caused it."""
+    return _parent_of(REGISTRY, satellite)
+
+
 def parent_hub(satellite: Satellite) -> Hub:
-    """The hub a registered satellite hangs off."""
+    """The HUB a registered satellite hangs off, refusing one parented on a link."""
     return _parent_hub(REGISTRY, satellite)
 
 

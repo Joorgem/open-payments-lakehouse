@@ -52,9 +52,17 @@ LOAD_DATE = "load_date"
 # rather than re-derived, so there is one spelling of it in the lakehouse.
 RECORD_SOURCE = "record_source"
 
-# The satellite's business timeline: when the fact was true AT THE SOURCE, taken from
-# `_snapshot_ref_date`. Hubs do not carry it -- a hub row asserts that a key exists,
-# which is not a statement about a point in time.
+# The satellite's business timeline: when the fact was true AT THE SOURCE. Hubs do not
+# carry it -- a hub row asserts that a key exists, which is not a statement about a point
+# in time.
+#
+# WHERE IT COMES FROM IS THE SATELLITE'S OWN DECLARATION SINCE F2 WAVE 2, and this comment
+# said "taken from `_snapshot_ref_date`" while that was true of all four satellites and
+# false of the fifth. `bronze_payments` has no such column -- a generated stream declares
+# no snapshot reference date, `opl.bronze.autoloader.add_common_audit_columns` omits it on
+# purpose -- so `sat_link_payment` reads the payment's own `event_time`.
+# `opl.vault.specs.AppliedDateSource` is the declaration and `_snapshot_ref_date` is still
+# its default, so every satellite written before that is byte-unchanged.
 APPLIED_DATE = "applied_date"
 
 # The satellite's change detector: the business-key hash standard applied to the

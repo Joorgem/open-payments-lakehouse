@@ -200,7 +200,9 @@ underneath it.
 > CI's `test` job checks out at `actions/checkout@v4`'s default `fetch-depth: 1`, so
 > that history is not there when the lock runs. A column that degrades quietly under a
 > shallow clone is worse than one that is declared and cross-checked where git can
-> answer.
+> answer. An ADR written in a phase that has not merged yet has no such sha to declare,
+> so it reads `unmerged` — and the lock refuses that word the moment git says the ADR
+> reached `main`.
 """.split("\n")
 
 

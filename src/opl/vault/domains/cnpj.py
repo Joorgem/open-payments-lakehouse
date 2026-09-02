@@ -253,8 +253,8 @@ ESTABELECIMENTOS_SOURCE = DEFAULT.table(_ESTABELECIMENTOS.bronze)
 # Hub grain over estabelecimentos, shared by both satellites -- they record change at
 # the same grain and differ only in payload. Keyed on the RAW columns for
 # `EMPRESA_GRAIN`'s reason, and in the HUB'S ORDER because
-# `opl.vault.satellites._grain_key_mismatch` requires the two declarations to be the
-# same list rather than merely the same set; see that function for the argument.
+# `opl.vault.satellite_grain._grain_key_mismatch` requires the two declarations to be
+# the same list rather than merely the same set; see that function for the argument.
 ESTABELECIMENTO_GRAIN = ObservationGrain.in_default_schema(
     name=HUB_ESTABELECIMENTO.name,
     bronze=_ESTABELECIMENTOS.bronze,
@@ -335,8 +335,15 @@ UNMODELLED_SOCIOS_COLUMNS = (
     "nome_socio_razao_social",
     "nome_do_representante",
     # Descriptive facts about the RELATIONSHIP, which belong to a descriptive satellite
-    # on the link -- a table this vault has no loader for yet (`opl.vault.satellites`
-    # takes a Hub). Adding one touches nothing that exists.
+    # on the link. THAT TABLE NOW EXISTS AND THIS COMMENT USED TO SAY IT DID NOT: F2
+    # wave 2 built `sat_link_payment` and `load_satellite` takes `link=`/`hubs=`, so the
+    # sentence "a table this vault has no loader for yet... adding one touches nothing
+    # that exists" was falsified by the same change that made it worth re-reading.
+    # What still blocks THESE two is narrower and is not the loader's signature: a
+    # satellite on `link_company_partner` is a STATE satellite on a link, which
+    # `registry_satellites._refuse_a_transactionality_the_parent_does_not_support`
+    # refuses at import until `effectivity._refuse_a_mismatched_link_grain` is routed
+    # into `load_satellite`. So adding one touches the loader after all.
     "qualificacao_socio",
     "faixa_etaria",
     "pais",

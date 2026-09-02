@@ -22,10 +22,11 @@ called that.
 WHAT IS SHARED AND WHAT IS NOT. Everything above the estabelecimentos section is
 generic: the months, the two dates the RFB itself stamps, the audit columns bronze adds
 to every contract, and the two helpers that write and derive Delta tables. Below it are
-the two table fixtures, each kept whole rather than parameterised, because their rows
-ARE their argument -- each module's docstring reads them against the measurement they
-mirror. Both moved here for the same reason: their modules hit the 800-line cap and
-their materialisations cost seconds that a second file must not pay twice."""
+the table fixtures, each kept whole rather than parameterised, because their rows ARE
+their argument -- each module's docstring reads them against the measurement they mirror.
+The two CNPJ ones moved here because their modules hit the 800-line cap and their
+materialisations cost seconds a second file must not pay twice; the payments one moved
+for a different reason, argued in the comment block that opens its own section below."""
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -34,7 +35,11 @@ from uuid import uuid4
 
 import pytest
 
+from opl.bronze.registry import table_spec as bronze_table_spec
+from opl.contracts import payments as payments_contract
+from opl.contracts.catalogue import columns_for as contract_columns_for
 from opl.contracts.cnpj_schemas import columns_for
+from opl.generator.instants import to_text
 from opl.vault import domains
 from opl.vault.hubs import load_hub
 from opl.vault.links import load_link
@@ -500,3 +505,181 @@ def socios_target(socios_source):
         link=f"{db}.link_{suffix}",
         eff=f"{db}.eff_{suffix}",
     )
+
+
+# --------------------------------------------------------------------------- #
+# THE PAYMENTS FIXTURE, MOVED HERE IN F2 WAVE 2's T2 FOR THIS FILE'S ORIGINAL REASON.
+# `sat_link_payment` needs a second module against the SAME bronze rows -- the link and
+# its satellite read one source, which is what makes the satellite's hash key the link's
+# own digest by construction.
+#
+# THE REASON IS DRIFT AND IT IS NOT COST, WHICH THIS COMMENT GOT WRONG IN BOTH HALVES AND
+# IS WORTH CORRECTING RATHER THAN DELETING. It said `test_payments_vault.py` "reached 664
+# lines": `git show cae3eff:tests/vault/test_payments_vault.py | wc -l` is **634**. And it
+# said a second copy "would have cost a second `CREATE DATABASE`, a second pair of Delta
+# writes" -- it would not have SAVED them. `payments_source` below is
+# `@pytest.fixture(scope="module")` and `vault_database` is a session-scoped FACTORY that
+# creates a fresh database per call, so pytest builds this fixture once per REQUESTING
+# MODULE: two modules pay two `CREATE DATABASE`s and two pairs of writes whether the code
+# is shared or copied. What sharing actually buys is the thing a copy cannot: ONE list of
+# rows. A second copy could drift from the one the link is asserted against, and both
+# files would stay green while the satellite was measured over rows the link never saw.
+#
+# THE ROWS ARE THE ARGUMENT AND ARE KEPT WHOLE, exactly as the estabelecimentos and
+# socios fixtures above are: `test_payments_vault.py`'s docstring reads P_ONE .. P_JULY
+# top to bottom as the case for the link, and `test_payments_satellite.py` reads the same
+# five rows as the case for the satellite. One list, two arguments.
+# --------------------------------------------------------------------------- #
+
+# Every column bronze payments carries from the contract, and the registry entry the
+# Delta names are lifted from -- read off both rather than retyped, which is the
+# property `opl.contracts.payments` pins its staging/bronze/quarantine triple for.
+PAYMENTS_CONTRACT = tuple(contract_columns_for(payments_contract.CONTRACT))
+PAYMENTS_SPEC = bronze_table_spec("payments")
+
+# The three companies the fixture trades between, as eight-character roots -- the key
+# space `hub_empresa` really holds, which is what makes a resolution rate of 100% a
+# construction rather than a hope (`opl.contracts.payments`, "BOTH COUNTERPARTIES ARE
+# LEGAL ENTITIES").
+A, B, C = "10000001", "20000002", "30000003"
+EMPRESA_ROOTS = (A, B, C)
+
+# (transaction_id, payer, payee). The ids are opaque and carry no time, per the
+# contract: "It is not ordered and carries no time."
+P_ONE = ("t-0001", A, B)
+P_TWO = ("t-0002", A, B)  # THE SAME PAIR. Only the transaction id differs.
+P_REVERSED = ("t-0003", B, A)
+P_JULY = ("t-0004", A, C)
+
+# `bronze_payments`' OWN `_record_source`, AND IT IS NOT `RECORD_SOURCE_VALUE`. That
+# name is taken, sixty lines above, by the RFB WebDAV share -- and a second binding of
+# it here SHADOWED the first, which is not a style point: `tests/vault/test_cnpj_vault
+# .py` imports `RECORD_SOURCE_VALUE` from this module and asserts the real
+# `add_audit_columns` stamps it, so the shadow made that cross-check compare the RFB's
+# stamp against the payment generator's string and go red. Measured, not reasoned
+# about. This module's own docstring already says fixture names must carry their
+# table; the payments block arrived from a module where it had the namespace to
+# itself.
+PAYMENTS_RECORD_SOURCE = "opl_generator_payments"
+
+# THE GENERATOR'S OWN RENDERING, NOT A HAND-TYPED ONE, AND THE DIFFERENCE IS THIS TASK'S
+# CENTRAL MEASUREMENT. `opl.generator.instants.to_text` emits
+# `YYYY-MM-DDTHH:MM:SS.mmmZ` -- TWENTY-FOUR characters, three fractional digits -- and
+# this fixture wrote `...000000Z`, twenty-seven, which is
+# `opl.bronze.snapshot_axis.INSTANT_PATTERN`'s microsecond rendering and belongs to a
+# different column on a different table. A satellite reading `event_time` through
+# `ref_date_from_instant` would have passed against the 27-character fixture and returned
+# NULL for every real payment row. Derived through `to_text` so the fixture cannot drift
+# from the producer again.
+JUN_EVENT = to_text(1780315200000)   # 2026-06-01T12:00:00.000Z
+JUL_EVENT = to_text(1782982800000)   # 2026-07-02T09:00:00.000Z
+
+_PAYMENT_DEFAULTS = {
+    "event_time": JUN_EVENT,
+    "emitted_at": JUN_EVENT,
+    "amount": "1234.56",
+    "currency": payments_contract.REPORTING_CURRENCY,
+    "payment_method": payments_contract.PAYMENT_METHODS[0],
+}
+
+# `bronze_payments`' OWN AUDIT COLUMNS, AND `conftest.AUDIT_DDL` IS THE WRONG LIST FOR IT.
+# That constant ends in `_snapshot_ref_date date`, which every RFB table carries and which
+# **`bronze_payments` does not have at all**: `add_common_audit_columns` omits it for a
+# GENERATED source, deliberately, because a stream this lakehouse produces declares no
+# reference date in a filename and stamping an all-NULL column would have forced the
+# payments DQ set to drop `unprovable_snapshot_ref_date`
+# (`opl.bronze.autoloader`, `opl.bronze.snapshot`, `opl.bronze.rules`, `opl.dataops.cadence`
+# all say so). T1's fixture used the wider list, which was harmless while nothing read the
+# column and would have made every assertion about `sat_link_payment`'s `applied_date`
+# VACUOUS -- the old unconditional `_snapshot_ref_date` projection would have found a
+# column here that production does not have.
+PAYMENTS_AUDIT_DDL = (
+    "_rescued_data string, _source_file string, _ingested_at timestamp, "
+    "_record_source string, _batch_id string, _snapshot_month string"
+)
+
+_PAYMENTS_SCHEMA = (
+    ", ".join(f"{column} string" for column in PAYMENTS_CONTRACT)
+    + ", "
+    + PAYMENTS_AUDIT_DDL
+)
+
+# `hub_empresa`'s own feed, one column wide. The Receita's file feed loads it in
+# production (`vault_empresa_job`); here it exists so the link has hub rows to point at.
+_EMPRESA_SCHEMA = "cnpj_basico string, " + AUDIT_DDL
+
+
+def payment_row(payment: tuple[str, str, str], month: str, **overrides) -> tuple:
+    """One bronze payments row: the whole contract plus every audit column the ingest
+    stamps.
+
+    THE CONTRACT'S OWN COLUMN NAMES, READ OFF THE CONTRACT, never retyped -- the three
+    the link reads are `IDENTITY_COLUMN` and the two `COUNTERPARTY_COLUMNS`, and a
+    fixture that spelled them itself would keep passing after a rename that broke the
+    spec."""
+    values = dict(_PAYMENT_DEFAULTS)
+    values.update(
+        zip(
+            (payments_contract.IDENTITY_COLUMN, *payments_contract.COUNTERPARTY_COLUMNS),
+            payment,
+            strict=True,
+        )
+    )
+    values.update(overrides)
+    # No `_snapshot_ref_date`: see `PAYMENTS_AUDIT_DDL`. The tuple ends at the month.
+    return tuple(values[column] for column in PAYMENTS_CONTRACT) + (
+        None,
+        f"/Volumes/x/payments/{month}/payments.jsonl",
+        INGESTED_AT,
+        PAYMENTS_RECORD_SOURCE,
+        "batch-1",
+        month,
+    )
+
+
+def _payment_rows() -> list[tuple]:
+    """The fixture's bronze rows, meant to be read top to bottom -- the shape IS the
+    argument."""
+    return [
+        payment_row(P_ONE, JUN),
+        # THE SAME PAIR, A SECOND PAYMENT. Both hub references are identical to P_ONE's,
+        # so `transaction_id` is the only thing that can separate the two link rows.
+        payment_row(P_TWO, JUN),
+        # THE PAIR THE OTHER WAY ROUND. A different relationship, and the one that shows
+        # the two roled reference columns really carry two different companies.
+        payment_row(P_REVERSED, JUN),
+        # A BYTE-IDENTICAL REDELIVERY of P_ONE in the next month. The contract calls this
+        # "the SAME payment seen twice"; the link's anti-join must add nothing for it.
+        payment_row(P_ONE, JUL),
+        payment_row(P_JULY, JUL, event_time=JUL_EVENT, emitted_at=JUL_EVENT),
+    ]
+
+
+def _empresa_rows() -> list[tuple]:
+    """A minimal empresas bronze feed, so `hub_empresa` EXISTS and is populated before
+    the link is written."""
+    return [
+        (root, None,
+         "/Volumes/x/cnpj/2026-06/empresas/K3241.K03200Y0.D60613.EMPRECSV",
+         INGESTED_AT, "rfb_cnpj_webdav", "batch-0", JUN, REF_DATES[JUN])
+        for root in EMPRESA_ROOTS
+    ]
+
+
+@pytest.fixture(scope="module")
+def payments_source(spark, vault_database):
+    """A throwaway Delta database holding one bronze payments table and the empresas
+    feed `hub_empresa` is loaded from."""
+    db = vault_database("payments_vault")
+    bronze, empresas = f"{db}.payments", f"{db}.empresas"
+    write_delta(spark, bronze, _PAYMENTS_SCHEMA, _payment_rows())
+    write_delta(spark, empresas, _EMPRESA_SCHEMA, _empresa_rows())
+    return SimpleNamespace(db=db, bronze=bronze, empresas=empresas)
+
+
+@pytest.fixture
+def payments_target(payments_source):
+    """Fresh table names per test, for the tests that WRITE -- sharing one would make
+    idempotence pass for the wrong reason."""
+    db, suffix = payments_source.db, uuid4().hex[:8]
+    return SimpleNamespace(hub=f"{db}.emp_{suffix}", link=f"{db}.link_{suffix}")

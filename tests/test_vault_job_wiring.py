@@ -43,9 +43,9 @@ real Spark in `tests/vault/test_effectivity_window.py`.
 
 AND THIS FILE IS NOW A PAIR, SPLIT BY F-DB TASK 1 AT EXACTLY 800 LINES. F-DB's
 `vault_merchant_job.yml` HAS SINCE BEEN ADDED to `_VAULT_JOBS`, which is what that split
-made room for -- and the totality lock now covers eighteen registered tables across TWO
-domains rather than fourteen across one. The seam is the one this repository has drawn
-twice already and named both times:
+made room for -- and the totality lock covers every table `opl.vault.domains` registers,
+so it widened again when F2 wave 2 added a domain. The seam is the one this repository
+has drawn twice already and named both times:
 `test_task_wiring.py` reads the SCRIPTS and `test_job_yaml_wiring.py` reads the JOB that
 hands them arguments; `test_gold_entry_points.py` and `test_gold_job_wiring.py` are that
 pair one layer along. The vault had both halves in one file. What went to
@@ -58,6 +58,16 @@ other half moved out rather than this one. That prediction held: Task 5 added
 `vault_merchant_job.yml` and `tests/test_vault_entry_points.py` needed no edit, because
 all four loaders its tasks run already existed.
 
+AND IT IS A TRIO SINCE F2 WAVE 2's CORRECTION ROUND, WHICH IS A DIFFERENT SEAM AGAIN. The
+file reached 799 lines against a strictly-under-800 cap -- measured on the uncommitted
+tree this split was made from, which is why `git show cae3eff:` returns 754 and not that
+number -- and a blocking review finding
+required one more mutation probe, so `tests/vault_job_demands.py` took what a vault table
+DEMANDS of a source and what a bronze source CARRIES -- both answered out of the two
+registries, neither reading a line of YAML. It is a plain module and not a test one, on
+`tests/job_yaml.py`'s pattern and for its stated reason. Everything left here reads a
+YAML, which is the property that decides where a future helper goes.
+
 Nothing here starts Spark: every assertion is about wiring. The two locks below that
 consult a script load it by path with the importlib pattern the other task tests use --
 `databricks/src` scripts are job entry points, not part of the opl wheel."""
@@ -69,28 +79,26 @@ from pathlib import Path
 
 import pytest
 import yaml
-
-from opl.bronze.registry import table_spec as bronze_table_spec
-from opl.config import SENTINEL_MONTH, is_month
-from opl.contracts.catalogue import columns_for
-from opl.vault import domains
-from opl.vault.job_params import optional_flag
-from opl.vault.links import undeclared_derived_ends
-from opl.vault.observation import ObservationGrain
-from opl.vault.registry import (
-    EffectivitySatellite,
-    Hub,
-    Link,
-    ReferenceTable,
-    Satellite,
-    VaultTable,
+from vault_job_demands import (
+    columns_the_source_carries,
+    entry_point_for,
+    parents_in,
+    required_source_columns,
 )
 
-# `columns_for` COMES FROM `opl.contracts.catalogue` AND NOT FROM `cnpj_schemas`, SINCE
-# F-DB. The pairing lock below reads the contract of whatever bronze table a task names,
-# and three of those contracts are not the Receita's file layouts at all --
-# `cnpj_schemas.columns_for` raises KeyError for `merchant`. The catalogue is the join
-# over every source, which is the question this lock is actually asking.
+from opl.bronze.registry import table_spec as bronze_table_spec
+from opl.bronze.snapshot import SNAPSHOT_REF_DATE_COLUMN
+from opl.config import SENTINEL_MONTH, is_month
+from opl.vault import domains
+from opl.vault.job_params import optional_flag
+from opl.vault.observation import ObservationGrain
+from opl.vault.registry import EffectivitySatellite, Satellite
+
+# WHAT A TABLE DEMANDS AND WHAT A SOURCE CARRIES LIVE IN `tests/vault_job_demands.py`,
+# which is a plain module and not a test one -- `tests/job_yaml.py`'s shape, taken in F2
+# wave 2's correction round when this file was at 799 lines against a strictly-under-800
+# cap and one mutation probe still had to fit. The seam is that everything there is
+# answered out of the two REGISTRIES and reads no YAML, and everything here reads a YAML.
 
 _REPO = Path(__file__).resolve().parents[1]
 _SRC = _REPO / "databricks" / "src"
@@ -110,6 +118,12 @@ _VAULT_JOBS = (
     # feed. Every lock below is total over it unchanged; what it needs from this list is
     # the same thing the other four do.
     "vault_merchant_job.yml",
+    # F2 wave 2, and the first vault job whose SATELLITE hangs off a link rather
+    # than a hub. Every lock below is total over it unchanged; what it needs from
+    # this list is what the other five needed. This list is a hand-kept population
+    # and it did its job on this file: it went RED on a YAML nobody had listed,
+    # rather than sweeping a job whose tasks nothing checked.
+    "vault_payments_job.yml",
 )
 
 # THE JOBS WHOSE `report_diagnostics` DEFAULT IS ON, WITH THE REASON -- a declared
@@ -137,15 +151,6 @@ _LOAD_DATE_REFERENCE = "{{job.start_time.iso_datetime}}"
 # `tests/test_vault_entry_points.py` too, which asks a different thing of it: the
 # parameter NAME the loader declares, rather than the arity of the task handed to it.
 _DIAGNOSTICS_SCRIPT = "vault_load_satellite"
-
-# The one loader per kind, EXCEPT for links -- see `_entry_point_for`, where the split
-# between the two link loaders is derived rather than listed.
-_ENTRY_POINT_OF_KIND: dict[type, str] = {
-    Hub: "vault_load_hub",
-    Satellite: "vault_load_satellite",
-    EffectivitySatellite: "vault_load_effectivity",
-    ReferenceTable: "vault_load_reference",
-}
 
 
 # --- reading the YAMLs ---------------------------------------------------------------
@@ -219,88 +224,6 @@ def _ancestors(tasks: dict[str, dict], key: str) -> set[str]:
     return seen
 
 
-# --- what each vault table needs -----------------------------------------------------
-
-
-def _is_a_derived_link(link: Link) -> bool:
-    """Does this link have an end `load_link` cannot compute?
-
-    THE SAME CONDITION `opl.vault.links._refuse_a_link_this_loader_cannot_write` TESTS,
-    and since F-DB it is the same FUNCTION rather than a restatement of it:
-    `undeclared_derived_ends` is exported from that module for exactly this caller. That
-    refusal is the reason there are two link loaders at all -- `load_link` computes every
-    end's reference from the columns that hub is NAMED after, so an undeclared derived
-    end would hash both ends of `link_company_partner` from `cnpj_basico` and every
-    relationship would read as a company partnered with itself, with the right row count
-    and working joins.
-
-    THE CONDITION MOVED AND THE ROUTING DID NOT, WHICH IS WHAT THIS RE-DERIVATION IS FOR.
-    It read `any(not end.identifying ...)`, and that flag was a PROXY for "derived".
-    `link_merchant_empresa`'s empresa end is derived AND identifying, so under the old
-    spelling this lock would have routed it to `vault_load_partner_link.py` -- a loader
-    that would refuse it -- while under the flag's stated MEANING it belongs on
-    `vault_load_link.py`, which can now write it. Asking the loader's own function means
-    the two cannot disagree about which entry point a link needs."""
-    return bool(link.dependent_child_keys) or bool(undeclared_derived_ends(link))
-
-
-def _entry_point_for(spec: VaultTable) -> str:
-    """The one `databricks/src` script that can load `spec`."""
-    if isinstance(spec, Link):
-        return "vault_load_partner_link" if _is_a_derived_link(spec) else "vault_load_link"
-    entry_point = _ENTRY_POINT_OF_KIND.get(type(spec))
-    assert entry_point is not None, (
-        f"vault table {spec.name!r} is a {type(spec).__name__}, a kind no entry point "
-        "under databricks/src loads. A new table kind needs one, or it is a registered "
-        "table no job can write"
-    )
-    return entry_point
-
-
-def _required_source_columns(spec: VaultTable) -> tuple[str, ...]:
-    """The source columns the loader for `spec` will demand by name.
-
-    MIRRORS EACH LOADER'S OWN `refuse_non_string_columns` CALL, which is the list that
-    decides whether a (vault table, bronze source) pairing can work at all. Asserting it
-    here is what turns "that pairing fails in Spark, eventually, if we are lucky" into
-    "that pairing is refused before the bundle is deployed"."""
-    if isinstance(spec, Hub):
-        return spec.business_key_columns
-    if isinstance(spec, Satellite):
-        return (*domains.parent_hub(spec).business_key_columns, *spec.payload_columns)
-    if isinstance(spec, Link):
-        hubs = domains.linked_hubs(spec)
-        if _is_a_derived_link(spec):
-            # `partner_link_candidates` refuses the COMPANY end's key and the two
-            # dependent-child keys; the partner end is derived from one of the latter.
-            return (*hubs[0].business_key_columns, *spec.dependent_child_key_columns)
-        # `link_candidates` asks the END where its hub's key lives -- the hub's own
-        # column names, or the columns a `LinkEnd.key_from` declares. Restated as
-        # `hub.business_key_columns` this lock would demand `cnpj_basico` from
-        # `bronze_merchant`, which has no such column, and refuse a pairing that works.
-        return tuple(
-            name
-            for end, hub in zip(spec.ends, hubs, strict=True)
-            for name in end.source_columns(hub)
-        )
-    if isinstance(spec, EffectivitySatellite):
-        link = domains.parent_link(spec)
-        return (*domains.link_identity_columns(link), spec.entry_column)
-    assert isinstance(spec, ReferenceTable), f"no column list is known for {spec.name!r}"
-    return (spec.natural_key, spec.payload)
-
-
-def _parents_in(spec: VaultTable) -> tuple[str, ...]:
-    """The vault tables `spec`'s rows reference, which must be loaded before it."""
-    if isinstance(spec, Satellite):
-        return (domains.parent_hub(spec).name,)
-    if isinstance(spec, Link):
-        return tuple(dict.fromkeys(spec.hub_names))
-    if isinstance(spec, EffectivitySatellite):
-        return (spec.parent,)
-    return ()
-
-
 # --- the locks -----------------------------------------------------------------------
 
 
@@ -347,7 +270,7 @@ def _assert_every_task_runs_the_entry_point_its_kind_needs(
     job_yml: str, root: Path = _RESOURCES
 ) -> None:
     for key, (script, table, _source) in _load_tasks(job_yml, root).items():
-        expected = _entry_point_for(domains.table_spec(table))
+        expected = entry_point_for(domains.table_spec(table))
         assert script == expected, (
             f"{job_yml}:{key} runs {script}.py for vault table {table!r}, which needs "
             f"{expected}.py. Each loader in opl.vault takes one kind of spec; the wrong "
@@ -366,11 +289,11 @@ def _assert_every_source_carries_what_its_loader_demands(
 ) -> None:
     for key, (_script, table, source) in _load_tasks(job_yml, root).items():
         spec = domains.table_spec(table)
-        contract = set(columns_for(bronze_table_spec(source).contract))
-        needed = _required_source_columns(spec)
-        missing = [column for column in needed if column not in contract]
+        carried = columns_the_source_carries(source)
+        needed = required_source_columns(spec)
+        missing = [column for column in needed if column not in carried]
         assert not missing, (
-            f"{job_yml}:{key} loads {table!r} from bronze {source!r}, whose contract has "
+            f"{job_yml}:{key} loads {table!r} from bronze {source!r}, which carries "
             f"no {missing}. The loader refuses those columns by name, so this pairing "
             "cannot work -- and it is exactly what a copied task leaves behind, because "
             "both names are tables that exist"
@@ -402,7 +325,7 @@ def test_a_table_is_loaded_after_every_table_it_references_that_the_same_job_loa
     loads = _load_tasks(job_yml)
     task_of_table = {table: key for key, (_, table, _source) in loads.items()}
     for key, (_script, table, _source) in loads.items():
-        for parent in _parents_in(domains.table_spec(table)):
+        for parent in parents_in(domains.table_spec(table)):
             if parent not in task_of_table or task_of_table[parent] == key:
                 continue
             assert task_of_table[parent] in _ancestors(tasks, key), (
@@ -610,6 +533,20 @@ def _grains_the_jobs_build() -> list[tuple[str, str, str, ObservationGrain]]:
     for job_yml in _VAULT_JOBS:
         for key, (script, table, source) in _load_tasks(job_yml).items():
             spec = domains.table_spec(table)
+            # A TRANSACTIONAL satellite takes no grain -- `load_satellite` refuses one --
+            # so there is nothing for this sweep to compare, and `grain_for` would be
+            # handed a parent it cannot key a ledger on.
+            #
+            # THIS BRANCH IS NOW EXERCISED, AND THIS COMMENT USED TO SAY THE OPPOSITE.
+            # It read: no YAML declares a task for `sat_link_payment`, so
+            # `spec.transactional` is False for every spec this loop ever sees and
+            # deleting the two lines kills no test. `vault_payments_job.yml` declares
+            # that task, so the loop now sees a transactional spec and the branch is
+            # reached. The ledger row that named this YAML as its exerciser is closed
+            # by the thing it asked for, which is the outcome a row is supposed to
+            # have rather than a surprise.
+            if isinstance(spec, Satellite) and spec.transactional:
+                continue
             if isinstance(spec, Satellite):
                 grain = satellite_task.grain_for(
                     domains.parent_hub(spec), bronze_table_spec(source)
@@ -628,25 +565,19 @@ def test_the_grain_this_task_builds_is_the_grain_the_domain_declares():
     """THE ONE PLACE THE JOB LAYER RE-DERIVES SOMETHING THE DOMAIN ALREADY DECLARED, and
     the reason it is asserted rather than argued.
 
-    `opl/vault/domains/cnpj.py` declares `EMPRESA_GRAIN`, `ESTABELECIMENTO_GRAIN` and
-    `COMPANY_PARTNER_GRAIN`, and `merchant_domain.py` declares two more -- an observation
-    grain is not a registered table, so there is no way for a job to reach one by name
-    without a mapping that would itself be the second spelling. So the two satellite entry
+    `opl/vault/domains/cnpj.py` declares three grains and `merchant_domain.py` two more --
+    an observation grain is not a registered table, so a job cannot reach one by name
+    without a mapping that would itself be the second spelling. The two satellite entry
     points call the SAME constructor over the SAME two registry entries, and this compares
-    the result against what the domain declares, per (satellite task, bronze source)
-    pairing the YAMLs actually carry.
+    the result against what the domain declares, per (task, source) pairing the YAMLs carry.
 
     IT SWEEPS THE DOMAINS PACKAGE RATHER THAN ONE MODULE, SINCE F-DB. It read
     `vars(cnpj_domain)` while there was one domain, which would have reported the merchant
-    grains as "declared by no constant" -- a lock that goes red for the right reason and
-    names the wrong cause. The sweep is `discover_domains`' own mechanism, so a wave-2
-    domain is covered on the day its file lands rather than on the day somebody adds an
-    import here.
-
-    The grain is the argument whose mistakes are invisible in the output: it decides the
-    reported departure count for a descriptive satellite and WHICH WINDOWS CLOSE for the
-    effectivity one. The loaders' own `_refuse_a_mismatched_grain` covers the runtime
-    half; this covers the half that would otherwise be a paragraph of prose."""
+    grains as "declared by no constant" -- red for the right reason, naming the wrong
+    cause. The sweep is `discover_domains`' own mechanism, so a wave-2 domain is covered
+    on the day its file lands. The grain is the argument whose mistakes are invisible in
+    the output: it decides the reported departure count for a descriptive satellite and
+    WHICH WINDOWS CLOSE for the effectivity one."""
     declared = _grains_the_domains_declare()
     built = _grains_the_jobs_build()
     for job_yml, key, script, grain in built:
@@ -664,8 +595,13 @@ def test_the_grain_this_task_builds_is_the_grain_the_domain_declares():
     # totality lock above -- each registered table loaded by exactly one task -- these
     # are the same number, so a wave-2 satellite is covered here on the day it is
     # registered rather than on the day somebody remembers to raise a constant.
+    # A TRANSACTIONAL SATELLITE IS NOT ONE OF THEM SINCE F2 WAVE 2, AND EXCLUDING IT IS A
+    # RESTATEMENT RATHER THAN AN EXEMPTION: `Satellite | EffectivitySatellite` WAS "every
+    # table whose loader takes a grain", and `load_satellite` now REFUSES to be handed one
+    # for `sat_link_payment`. The predicate below is that refusal's own condition.
     expected = sum(
-        isinstance(spec, Satellite | EffectivitySatellite)
+        isinstance(spec, EffectivitySatellite)
+        or (isinstance(spec, Satellite) and not spec.transactional)
         for spec in domains.REGISTRY.values()
     )
     assert len(built) == expected, (
@@ -721,7 +657,47 @@ def test_the_source_lock_catches_a_satellite_left_reading_the_table_it_was_copie
         '              - "sat_empresa_dados"\n              - "empresas"',
         '              - "sat_empresa_dados"\n              - "estabelecimentos"',
     )
-    with pytest.raises(AssertionError, match="whose contract has no"):
+    with pytest.raises(AssertionError, match="which carries no") as refused:
+        _assert_every_source_carries_what_its_loader_demands(
+            "vault_empresa_job.yml", root=root
+        )
+
+    # THE CONTROL FOR THE PROBE BELOW, AND THE REASON THIS LINE IS AN `not in`.
+    # `estabelecimentos` IS an RFB file feed, so it carries `_snapshot_ref_date` and this
+    # pairing is refused on the payload alone. The next test repoints the same satellite
+    # at a source that carries no such column, and the ONLY thing separating the two
+    # messages is the applied-date demand.
+    assert SNAPSHOT_REF_DATE_COLUMN not in str(refused.value)
+
+
+def test_the_source_lock_catches_a_default_applied_date_on_a_source_that_stamps_none(
+    tmp_path,
+):
+    """`sat_empresa_dados` from `payments`: the pairing the applied-date half of this lock
+    exists for, and the one no YAML carries.
+
+    THIS PROBE IS F2 WAVE 2's CORRECTION ROUND AND ITS ABSENCE WAS A BLOCKING FINDING.
+    `required_source_columns` demands `spec.applied_date_from.column` and
+    `columns_the_source_carries` adds `_snapshot_ref_date` to what an RFB source is deemed
+    to hold; measured, the two CANCELLED on every (task, source) pairing the YAMLs carry,
+    so removing the demand killed zero tests and removing both returned the file to its
+    behaviour before either. A lock nothing can make fail is a lock, in this repository's
+    phrase, that has lost its ability to fail.
+
+    `payments` IS THE SOURCE THAT MAKES THEM DISAGREE. It is GENERATED, so
+    `add_common_audit_columns` stamps no `_snapshot_ref_date` and `declares_source_date`
+    is False for it -- while `sat_empresa_dados` takes the DEFAULT applied-date source,
+    which is that column. So `_snapshot_ref_date` appears in `missing` if and only if the
+    demand is there, and `match=` is on that name and not on the assertion's wording. The
+    payload columns are missing too and would fail this pairing anyway, which is exactly
+    why the match had to be narrowed to the one name the demand contributes."""
+    root = _mutated(
+        "vault_empresa_job.yml",
+        tmp_path,
+        '              - "sat_empresa_dados"\n              - "empresas"',
+        '              - "sat_empresa_dados"\n              - "payments"',
+    )
+    with pytest.raises(AssertionError, match=SNAPSHOT_REF_DATE_COLUMN):
         _assert_every_source_carries_what_its_loader_demands(
             "vault_empresa_job.yml", root=root
         )

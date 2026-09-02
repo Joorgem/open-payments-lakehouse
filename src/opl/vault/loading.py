@@ -53,6 +53,7 @@ from opl.vault.columns import APPLIED_DATE, HASH_DIFF, RECORD_SOURCE
 from opl.vault.hashing_spark import hash_key_column, zero_padded_column
 from opl.vault.months import validated_months
 from opl.vault.registry import BusinessKeyColumn, Hub, Link, LinkEnd
+from opl.vault.specs import READS_DATE, READS_ISO_TEXT, AppliedDateSource
 
 # Bronze's own RSRC column, carried into the vault verbatim rather than re-derived.
 #
@@ -74,6 +75,7 @@ __all__ = [
     "SNAPSHOT_MONTH_COLUMN",
     "SNAPSHOT_REF_DATE_COLUMN",
     "SnapshotAxis",
+    "applied_date_expression",
     "changed_rows",
     "earliest_record_source",
     "end_components",
@@ -111,6 +113,51 @@ def rows_in(spark: SparkSession, table: str) -> int:
     if not spark.catalog.tableExists(table):
         return 0
     return spark.read.table(table).count()
+
+
+# THE CALENDAR DAY OF AN ISO-8601 INSTANT IS ITS FIRST TEN CHARACTERS, AND NEVER A CAST.
+# `opl.gold.conformed.day_of` argues this at length and its argument is this one: a
+# `CAST(... AS TIMESTAMP)` resolves the instant in the SESSION timezone, so under
+# America/Sao_Paulo -- which local Spark inherits from the operating system unless
+# `opl.config.SESSION_TIMEZONE` is pinned -- a midnight-UTC payment lands on the previous
+# day. For a satellite that is worse than for a fact: `applied_date` is the ORDERING AXIS
+# of the version chain (`opl.vault.satellites`' own second paragraph), so a cluster
+# setting would decide which of two payloads a satellite calls the later one.
+#
+# TEN, AND NOT `opl.bronze.snapshot._INSTANT_DATE_WIDTH`, WHICH IS THE SAME NUMBER ABOUT A
+# DIFFERENT STRING. That constant belongs to `ref_date_from_instant`, whose input is the
+# 27-character microsecond rendering `opl.bronze.snapshot_axis.INSTANT_PATTERN` pins; the
+# payment stream's `event_time` is 24 characters with THREE fractional digits
+# (`opl.generator.instants.to_text`), so that function refuses it -- measured, it returns
+# NULL for every payment row, on both the width check and the pattern. Reusing it would
+# have produced an all-NULL `applied_date`, which `changed_rows` orders on. Ten characters
+# is a property of ISO-8601 itself and is true of both renderings, which is why the
+# derivation gold already uses is the one taken here.
+_ISO_DAY_WIDTH = 10
+
+
+def applied_date_expression(source: AppliedDateSource) -> Column:
+    """A satellite's `applied_date`, as a Column over the source column it declares.
+
+    THE ONE PLACE A DECLARATION BECOMES AN EXPRESSION, which is the seam
+    `opl.vault.specs` names when it says the reader is data rather than a callable: that
+    module imports no pyspark, so the branch has to be here, and being here it is one
+    branch rather than one per loader.
+
+    TOTAL OVER `APPLIED_DATE_READERS` BY REFUSAL AND NOT BY A FALLBACK. A reader with no
+    branch raises naming itself; an `else` returning `F.col(...)` would read a
+    27-character string as a date column and hand `changed_rows` a NULL ordering key for
+    every row, which orders the whole version chain arbitrarily without failing."""
+    if source.reads == READS_DATE:
+        return F.col(source.column)
+    if source.reads == READS_ISO_TEXT:
+        return F.to_date(F.substring(F.col(source.column), 1, _ISO_DAY_WIDTH))
+    raise ValueError(
+        f"applied-date source on {source.column!r} declares reads={source.reads!r}, and "
+        "this module has no expression for it. `AppliedDateSource` refuses a reader "
+        "outside its closed set at construction, so reaching here means a reader was "
+        "added to that set and not to this branch -- the pair has to move together"
+    )
 
 
 def _padded(keys: Sequence[BusinessKeyColumn], sources: Sequence[Column]) -> list[Column]:

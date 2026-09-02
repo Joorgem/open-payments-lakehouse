@@ -1,6 +1,15 @@
 # src/opl/vault/satellites.py
 """Load a DV2 descriptive satellite: one row per hash key per `applied_date`, written
-only when the payload CHANGED.
+only when the payload CHANGED. On a HUB or -- since F2 wave 2 -- on a LINK.
+
+THE PARENT MAY BE EITHER, AND THAT IS ONE SIGNATURE CHANGE RATHER THAN A NEW KIND. This
+loader took `hub: Hub` and `opl.vault.registry` refused a link-parented satellite in
+those exact terms: "one parented on a LINK -- which DV2 does allow -- would be a
+registered table nothing in this package can write. The guard and that signature have to
+change together." Both moved in F2 wave 2 and `sat_link_payment` is the table that
+consumed it. Nothing else about this loader differs between the two: the delta on
+`hash_diff`, the dedup tie-break, the anti-join and the column order are the same code,
+and the only branch is which expression keys the row (`_parent_key_expression`).
 
 THE MECHANIC, AND THE PHASE'S PREMISE. `hash_diff` is the business-key hash standard
 applied to the payload instead of to a business key. A candidate row is kept when its
@@ -32,6 +41,11 @@ WHAT THIS SATELLITE DOES NOT DO, and both are refusals rather than omissions:
     in `SatelliteLoadResult`, where an operator sees it and no code branches on it. A
     caller who wants a departure signal maps that state onto one in their own code,
     where the choice is visible in review.
+  - **It does not write a row it has no day for, and it does not drop one quietly
+    either.** `_refuse_a_candidate_with_no_applied_date` refuses the whole load. The
+    drop was already happening -- an equi-join on a NULL matches nothing -- so what the
+    refusal adds is the noise, which is what `opl.gold.pit` already makes about the same
+    value one layer along.
 
 WHY CONSULTING THE LEDGER IS LOAD-BEARING HERE AND NOT DECORATIVE, stated precisely
 because the tempting version of this wiring is not. Filtering candidates against the
@@ -43,6 +57,17 @@ believes the hole is closed. What the ledger actually provides is two things tha
 real: the departure count above, and `_window`'s refusal of a month with no row on
 either side -- `months=['2026-09']` would otherwise select no bronze row, write
 nothing, and report success.
+
+AND SINCE F2 WAVE 2 THERE IS A SATELLITE WITH NO LEDGER AT ALL, WHICH IS THE DUAL OF THAT
+PARAGRAPH RATHER THAN AN EXCEPTION TO IT. `sat_link_payment` hangs off a TRANSACTIONAL
+link and declares `Satellite.transactional`; a payment is an event, so every key of every
+earlier month is `absent_after_observation` in this one BY CONSTRUCTION and the departure
+count would be a candidate delete per payment. A diagnostic whose only possible reading is
+false is the same defect as a guard that cannot fire, seen from the other side --
+`opl.vault.specs.Satellite` carries the measurement and the alternative that was rejected.
+What that satellite does NOT lose is the second of the two real things: the window guard
+is `satellite_grain.refuse_a_window_the_source_never_loaded`, the same rule over one table
+instead of two, spelled once in `opl.vault.months`.
 
 THE DEDUPLICATION RULE IS STATED, AND ON EMPRESAS IT NEVER FIRES. The source does not
 guarantee one row per key per month -- at link grain on socios, 27,990,592 rows cover
@@ -82,10 +107,14 @@ unexercised by real data. A flag that turned a real 0 into a silent 0 would make
 evidence unfalsifiable, because nothing in the result or the log would separate a
 measurement from a skip -- so the fields are `int | None`, `SatelliteLoadResult` refuses
 a half-measured pair, and `databricks/src/vault_load_satellite.py` prints two different
-sentences. WHAT IS **NOT** OPTIONAL is deriving the ledger: that is what routes `months`
-through `observation._window` and its refusal of a month with no row on either side,
-which is the second of the two things this module says consulting the ledger really
-buys. The derivation runs on every load; only the `count()` over it is skipped.
+sentences. WHAT IS **NOT** OPTIONAL, ON A LOAD THAT HAS A GRAIN AT ALL, is deriving the
+ledger: that is what routes `months` through `observation._window` and its refusal of a
+month with no row on either side, which is the second of the two things this module says
+consulting the ledger really buys. The derivation runs on every such load; only the
+`count()` over it is skipped. (That sentence had no qualifier until F2 wave 2, when a
+TRANSACTIONAL satellite gained no ledger to derive -- and reaches the same refusal by
+another route rather than losing it. `SatelliteLoadResult.ledger_derived` is what keeps
+"nobody looked" apart from "there was nothing to look at".)
 
 WHAT THE RULE COSTS WHERE IT DOES FIRE, since "deterministic" is not "correct". Bronze
 is append-only and a corrected batch can be promoted for the same month, so two rows
@@ -104,17 +133,20 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from opl.vault.columns import APPLIED_DATE, HASH_DIFF, LOAD_DATE, RECORD_SOURCE
 from opl.vault.hashing_spark import hash_key_column, refuse_non_string_columns
+from opl.vault.links import refuse_mismatched_hubs
+from opl.vault.links import source_columns as link_source_columns
 from opl.vault.loading import (
     BRONZE_RECORD_SOURCE,
-    SNAPSHOT_REF_DATE_COLUMN,
     SnapshotAxis,
+    applied_date_expression,
     changed_rows,
     hash_key_expression,
+    link_hash_key_expression,
     read_snapshot_window,
     rows_in,
 )
@@ -124,7 +156,12 @@ from opl.vault.observation import (
     ObservationState,
     observation_ledger,
 )
-from opl.vault.registry import Hub, Satellite
+from opl.vault.registry import Hub, Link, Satellite, identifying_hubs
+from opl.vault.satellite_grain import (
+    refuse_a_window_the_source_never_loaded,
+    snapshot_axis_for,
+)
+from opl.vault.specs import READS_DATE, READS_ISO_TEXT, AppliedDateSource
 
 # Internal to `satellite_candidates`' tie-break, and named because it is selected
 # through by field: a bare string at both ends is one typo from a column of NULLs.
@@ -160,13 +197,44 @@ class SatelliteLoadResult:
     # an entity that returns next month. Reported so an operator can see it; acted on
     # nowhere in this module. `None` under the same rule as above.
     candidate_departures: int | None
+    # Whether this load derived an observation ledger at all. FALSE ONLY FOR A
+    # TRANSACTIONAL SATELLITE, which declares that there is no window to close and is
+    # therefore loaded with no `ObservationGrain` (`opl.vault.specs.Satellite` argues
+    # why). It is a FIELD and not an inference from `candidate_departures is None`,
+    # because that is precisely the confusion the pair rule below exists to prevent:
+    # "nobody looked" and "there was nothing to look at" are two states, and reading one
+    # off the other would make the second unfalsifiable.
+    #
+    # DEFAULTED TRUE, so every load written before F2 wave 2 constructs this object
+    # exactly as it did and gets exactly the refusal it did.
+    ledger_derived: bool = True
 
     def __post_init__(self) -> None:
         """ONE FLAG GOVERNS BOTH, so a half-measured pair is a state no load can produce
         and no reader can interpret -- `collapsed_duplicates=0` beside
         `candidate_departures=None` claims the load both did and did not do the extra
         work. Refused in the type rather than trusted to its one caller, because the
-        whole value of `None` here is that it means exactly one thing."""
+        whole value of `None` here is that it means exactly one thing.
+
+        THE PAIR RULE IS RESTATED RATHER THAN RELAXED BY F2 WAVE 2, and the difference
+        matters. `ledger_derived=False` is a load with NO ledger, so a departure count was
+        never available at any flag setting -- but `collapsed_duplicates` still was, and it
+        is the number that matters most for a transactional satellite: a payment
+        redelivered in a later month carries the SAME (link hash key, event day) as its
+        first delivery, so the fold is live there where on empresas it is measured at
+        zero. Reporting the fold and no departure is therefore a real state, and the arm
+        below refuses the two that are NOT: a ledgerless load claiming a departure count,
+        and -- on the ledger path, unchanged to the byte -- a half-measured pair."""
+        if not self.ledger_derived:
+            if self.candidate_departures is not None:
+                raise ValueError(
+                    f"a satellite load reported ledger_derived=False beside "
+                    f"candidate_departures={self.candidate_departures!r}. A departure is "
+                    "a state of the OBSERVATION LEDGER, and this load derived none -- so "
+                    "the number cannot have been measured and naming one would put an "
+                    "unsourced count in an operator's log"
+                )
+            return
         if (self.collapsed_duplicates is None) != (self.candidate_departures is None):
             raise ValueError(
                 f"a satellite load reported collapsed_duplicates="
@@ -178,143 +246,230 @@ class SatelliteLoadResult:
             )
 
 
-def _refuse_a_mismatched_hub(satellite: Satellite, hub: Hub) -> None:
-    """The satellite and the hub arrive as two arguments, so something has to check
-    they belong together.
+# --- THE PARENT ARRIVES AS `hub=` OR AS `link=` PLUS `hubs=`, AND WHY IT IS TWO NAMES ---
+#
+# Module level for this file's standing reason (see the block above `load_satellite`):
+# this is the reasoning, and inside a docstring it puts the function past the 50-line cap.
+#
+# THE OBVIOUS SHAPE IS ONE `parent: Hub | Link` ARGUMENT AND IT IS NOT TAKEN, because a
+# link parent is not one value: `link_hash_key_expression` needs the link's HUBS to know
+# each identifying end's widths and business-key order, so a `Link` alone cannot be keyed
+# on. A single `parent` plus an optional `hubs` makes "a link with no hubs" expressible
+# and then refused at run time, which is the same class of mistake one argument further
+# away. As two names the pairing is structural: `link=` and `hubs=` travel together --
+# exactly as they do on `load_effectivity_satellite`, which is the other loader over a
+# link and reached this shape first -- and `hub=` alone is the whole of the hub case.
+#
+# AND `hub=` KEEPS ITS NAME, WHICH IS THE SECOND REASON AND THE SMALLER ONE. It is spelled
+# by `databricks/src/vault_load_satellite.py`'s `parent_arguments` and by every
+# `load_satellite` call in the suite that keys on a hub;
+# renaming it to `parent=` would have been a rename inside another agent's area this
+# phase. Recorded rather than dressed up as design: if the two ever want to become one
+# argument, `_resolved_parent` is the only thing that changes.
 
-    They are two arguments on purpose: a loader that resolved the parent through the
-    module-level registry could not be tested against a throwaway spec, and the
-    registry is exactly the thing wave 2 must be able to extend without this file
-    changing. The cost of that is this check, and it is worth stating what it prevents
-    -- a satellite keyed on another hub's digest joins to nothing, silently, and
+
+def _resolved_parent(
+    satellite: Satellite, hub: Hub | None, link: Link | None, hubs: Sequence[Hub]
+) -> Hub | Link:
+    """The one table this satellite keys on, or refuse -- the four ways the pair is wrong.
+
+    The parent arrives as free arguments for the reason this whole layer does: a loader
+    that resolved it through the module-level registry could not be tested against a
+    throwaway spec, and the registry is exactly the thing a new domain must be able to
+    extend without this file changing. The cost is this check, and what it prevents is a
+    satellite keyed on another table's digest -- which joins to nothing, silently, and
     reports success doing it."""
-    if hub.name != satellite.parent:
+    if (hub is None) == (link is None):
+        raise ValueError(
+            f"satellite {satellite.name!r} was handed hub={hub!r} and link={link!r}. "
+            "Exactly one is the parent: a satellite keys on ONE table's hash key, and "
+            "neither passing both nor passing neither says which. Resolve it with "
+            "opl.vault.domains.parent_of"
+        )
+    if hub is not None and hubs:
+        raise ValueError(
+            f"satellite {satellite.name!r} hangs off hub {hub.name!r} and was handed "
+            f"hubs={[other.name for other in hubs]}. `hubs` is a LINK's ends' hubs and a "
+            "hub has no ends, so this pair means the caller resolved a link somewhere and "
+            "passed the wrong half of it"
+        )
+    parent = hub if hub is not None else link
+    assert parent is not None  # noqa: S101 - narrowed by the two branches above
+    if parent.name != satellite.parent:
         raise ValueError(
             f"satellite {satellite.name!r} declares parent {satellite.parent!r} and was "
-            f"handed hub {hub.name!r}. Its hash key would be the wrong hub's digest, so "
+            f"handed {parent.name!r}. Its hash key would be the wrong table's digest, so "
             "the satellite would join to nothing without failing -- resolve the parent "
-            "with opl.vault.domains.parent_hub rather than passing a hub by hand"
+            "with opl.vault.domains.parent_of rather than passing one by hand"
         )
+    if isinstance(parent, Link):
+        refuse_mismatched_hubs(parent, hubs)
+    return parent
 
 
-def _grain_key_mismatch(hub: Hub, grain: ObservationGrain) -> str | None:
-    """Why `grain`'s key columns are not `hub`'s, or None if they are.
+def _parent_key_expression(parent: Hub | Link, hubs: Sequence[Hub]) -> Column:
+    """The digest this satellite's rows are keyed on, built from the parent's own spec.
 
-    TWO DIFFERENT MISTAKES, TWO MESSAGES, which is the point of this function: one
-    comparison told the reordered case that its ledger was "coarser or finer", which is
-    FALSE and sends someone looking for a bug in their column list.
-
-    ORDER IS PART OF THE MATCH, AND THAT IS A DECISION TAKEN HERE. `hub_estabelecimento`
-    is the vault's first multi-column key, so "is (`cnpj_dv`, `cnpj_ordem`,
-    `cnpj_basico`) the same grain as (`cnpj_basico`, `cnpj_ordem`, `cnpj_dv`)?" stops
-    being theoretical. FOR THE LEDGER, YES -- and the argument has to concede that
-    first, because the tempting justification for refusing is wrong: `groupBy` is
-    order-insensitive, so a permuted grain returns the same states for the same keys and
-    miscounts nothing. This branch refuses something that would have answered correctly.
-
-    WHAT IT BUYS IS THAT THE TWO DECLARATIONS ARE ONE LIST, not merely one set. The
-    hub's order IS load-bearing (`hash_key_expression` concatenates in it, so a permuted
-    hub is a re-keyed hub), and a domain writes `key_columns=<hub>.business_key_columns`
-    so that there is one order in the file rather than two. This check keeps that the
-    only spelling that passes. Accept a permutation and anything that later pairs the
-    two POSITIONALLY -- a join built by zipping them, a message printing one against the
-    other -- pairs `cnpj_basico` with `cnpj_dv` with nothing failing. Set equality is
-    the weaker claim and buys only the right to write the columns in an order no domain
-    should want. The cost is a refusal of a correct configuration, so the message names
-    the one-line fix."""
-    declared, expected = tuple(grain.key_columns), hub.business_key_columns
-    if set(declared) != set(expected):
-        return (
-            f"the observation grain is keyed on {declared} and hub {hub.name!r} on "
-            f"{expected}. The ledger would count departures at a different grain than "
-            "the satellite records change at -- coarser and it misses departures, "
-            "finer and it invents them"
-        )
-    if declared != expected:
-        return (
-            f"the observation grain is keyed on {declared} and hub {hub.name!r} on "
-            f"{expected} -- the same columns in a different order. The LEDGER would "
-            "answer the same, because groupBy does not care; this is refused so that "
-            "the two declarations stay one list rather than two sets. The hub's order "
-            "IS load-bearing (the hash concatenates in it), and anything that later "
-            "pairs the grain's columns with the hub's positionally would pair the "
-            "wrong two. Build the grain with key_columns=<the hub spec>."
-            "business_key_columns rather than restating the columns"
-        )
-    return None
+    ONE SPELLING EACH, BORROWED AND NOT RE-DERIVED, which is `opl.vault.loading`'s whole
+    subject: the hub branch is the expression `load_hub` wrote its keys with and the link
+    branch is the one `load_link` wrote its hash key with, so a satellite joins to its
+    parent by construction rather than by two derivations happening to agree. A second
+    spelling here would not fail -- it would produce a satellite whose every join to its
+    parent returns nothing, which is the quietest wrong answer in this layer."""
+    if isinstance(parent, Hub):
+        return hash_key_expression(parent)
+    return link_hash_key_expression(parent, identifying_hubs(parent, hubs))
 
 
-def _refuse_a_mismatched_grain(
-    hub: Hub, grain: ObservationGrain, source_table: str
-) -> None:
-    """The grain arrives as a third free argument and must describe the SAME rows the
-    satellite is loading.
+def _parent_source_columns(parent: Hub | Link, hubs: Sequence[Hub]) -> tuple[str, ...]:
+    """The SOURCE columns the parent's key expression reads, for the string refusal.
 
-    `_refuse_a_mismatched_hub` exists because two independently-passed arguments can
-    disagree; the grain has that hazard twice over, and worse, because it is the one
-    argument whose mistakes are invisible in the output. It drives two things: the
-    departure count, and `_window`'s refusal of a month with no row on either side --
-    and `_window` reads `grain.bronze_table`, NOT `source_table`. A grain pointing at
-    estabelecimentos would let `months=['2026-09']` pass or fail against the wrong
-    table, and would report a departure count for a different key space, with the
-    satellite's own rows perfectly correct beside it.
+    THE LINK BRANCH IS `links.source_columns` AND NOT THE HUBS' BUSINESS KEYS, which is
+    the distinction that function exists to hold: an end may declare a `key_from`, so the
+    columns read are the END's answer and not the hub's names, and the link's
+    DEPENDENT-CHILD KEYS are read too because `link_hash_key_expression` hashes them. Left
+    out, a `transaction_id` arriving as a bigint would be cast silently and hashed as the
+    cast, giving a satellite keyed on digests no re-load over a string column could
+    reproduce."""
+    if isinstance(parent, Hub):
+        return parent.business_key_columns
+    return tuple(link_source_columns(parent, hubs))
 
-    TWO CHECKS, AND THE NAME IS DELIBERATELY NOT ONE OF THEM. The review suggested
-    `grain.name == hub.name`, which `domains/cnpj.py` does satisfy. It is the weaker
-    claim: a name is a label, so two grains can share one while reading different
-    tables, and it is precisely the table and the key space that the two failures above
-    are about. Checking what the ledger actually READS covers both, and covers them
-    whether or not a future domain follows the naming convention.
 
-    The key-space half is `_grain_key_mismatch`, which is where the order decision the
-    first multi-column key forced is argued, and the third check is
-    `_refuse_a_prefixed_hub_grain`."""
-    if grain.bronze_table != source_table:
+# THE TWO REPRESENTATIONS OF A DAY THIS LOADER ACCEPTS, and which Spark type each one is.
+# `READS_DATE` names a column that already IS a `date` -- `_snapshot_ref_date`, derived in
+# bronze by `opl.bronze.snapshot.ref_date_column` -- and `READS_ISO_TEXT` names ISO-8601
+# text, which bronze holds as a string because bronze is all-string for a contract column.
+_APPLIED_DATE_TYPES = {READS_DATE: "date", READS_ISO_TEXT: "string"}
+
+
+def _expected_source_type(declared: AppliedDateSource) -> str:
+    """The Spark type `declared.reads` needs the source column to have, or refuse.
+
+    TOTAL BY A NAMED REFUSAL AND NOT BY `KeyError`, which is the rule its neighbour
+    already states and this dict did not follow. `opl.vault.loading.applied_date_
+    expression` says of itself: "TOTAL OVER `APPLIED_DATE_READERS` BY REFUSAL AND NOT BY A
+    FALLBACK. A reader with no branch raises naming itself." The mapping above answers the
+    same question about the same closed set, and a third reader added to
+    `APPLIED_DATE_READERS` and not to it raised a bare `KeyError` on a string a traceback
+    would show as a dict subscript -- with nothing naming the set, the satellite, or the
+    edit that has to accompany the other.
+
+    AND IT IS THE ONE THAT ACTUALLY FIRES, WHICH IS WHY THE PROSE CANNOT BE LEFT TO THE
+    NEIGHBOUR. `satellite_candidates` calls `_refuse_an_applied_date_the_source_cannot_
+    provide` BEFORE it builds any expression, so through the loader this refusal is
+    reached first and `applied_date_expression`'s own is unreachable -- that one is
+    driven only by a test calling the builder directly. Leaving the `KeyError` here would
+    have meant the pair's stated rule held only on the path nothing takes."""
+    expected = _APPLIED_DATE_TYPES.get(declared.reads)
+    if expected is None:
         raise ValueError(
-            f"the observation grain reads {grain.bronze_table!r} and the satellite is "
-            f"being loaded from {source_table!r}. The ledger would describe a "
-            "different table than the one written: its departure count would be about "
-            "another key space, and its refusal of an unloaded month would be checked "
-            "against another table's months. Pass the grain built for this source"
+            f"applied-date source on {declared.column!r} declares "
+            f"reads={declared.reads!r}, and this loader knows no Spark type for it -- it "
+            f"types {sorted(_APPLIED_DATE_TYPES)}. `AppliedDateSource` refuses a reader "
+            "outside APPLIED_DATE_READERS at construction, so reaching here means a "
+            "reader was added to that set and to loading.applied_date_expression and not "
+            "to _APPLIED_DATE_TYPES -- the three have to move together"
         )
-    _refuse_a_prefixed_hub_grain(hub, grain)
-    mismatch = _grain_key_mismatch(hub, grain)
-    if mismatch is not None:
-        raise ValueError(mismatch)
+    return expected
 
 
-def _refuse_a_prefixed_hub_grain(hub: Hub, grain: ObservationGrain) -> None:
-    """A hub grain may not be read through a `KeyPrefix`.
+def _refuse_an_applied_date_the_source_cannot_provide(
+    source: DataFrame, satellite: Satellite, source_table: str
+) -> None:
+    """The declared applied-date column must be ON the source and be the TYPE its reader
+    expects.
 
-    A FLAT REFUSAL RATHER THAN A COMPARISON, WHICH IS WHY IT IS NOT PART OF
-    `_grain_key_mismatch`. F-DB Task 5's correction pass gave `ObservationGrain` a
-    derivation -- the thing that makes `link_merchant_empresa`'s ledger key on the eight
-    characters its digest is over rather than on the fourteen bronze holds. A HUB has no
-    such thing: its business key is read from the columns it is NAMED after
-    (`loading._padded_components` is the whole of it), so there is no declaration to
-    compare a prefix against.
+    THE FIRST HALF IS `observation._side`'S SHAPE, and for its reason: the declaration
+    names a column by string, so a source that does not carry it is a `AnalysisException`
+    several operators into a plan rather than prose naming the column and the table. It is
+    not covered by `refuse_non_string_columns` above, because `_snapshot_ref_date` is a
+    `date` and being refused as a non-string is exactly wrong for it.
 
-    AND THE MISTAKE POINTS THE OPPOSITE WAY FROM THE LINK'S. A missing prefix made that
-    ledger FINER than the link; a prefix here makes this one COARSER than the hub -- one
-    ledger key spanning several hub keys -- so a departure is reported only when the last
-    of them leaves, and the count is small, plausible and about a key space this
-    satellite wrote no row for."""
-    if not grain.key_prefixes:
+    THE SECOND HALF IS THE ONE THAT FAILS SILENTLY, and it is `opl.gold.spec_fields`'
+    `_assert_the_reader_matches_the_representation` asked one layer down. Neither
+    mismatch raises in Spark: `substring` over a `date` casts it to text first and
+    `F.col` over a string simply passes the string through. What the second produces is a
+    satellite whose `applied_date` is a STRING while every other satellite's is a `date` --
+    and `applied_date` is this loader's ORDERING AXIS, so the version chain would be
+    ordered lexicographically over a rendering, and the written column would not match the
+    one an existing table already holds. `mode("append")` matches by POSITION, so on a
+    re-shaped table that lands as a type error or, worse, as a coerced column."""
+    declared = satellite.applied_date_from
+    if declared.column not in source.columns:
+        raise ValueError(
+            f"satellite {satellite.name!r} reads its applied_date from "
+            f"{declared.column!r}, which {source_table!r} does not carry -- it has "
+            f"{sorted(source.columns)}. A GENERATED or API-FED source has no "
+            "`_snapshot_ref_date` at all (opl.bronze.autoloader.add_common_audit_columns "
+            "omits it deliberately), which is why the column is declared per satellite"
+        )
+    expected = _expected_source_type(declared)
+    actual = dict(source.dtypes)[declared.column]
+    if actual == expected:
         return
     raise ValueError(
-        f"the observation grain declares key prefixes {tuple(grain.key_prefixes)} and "
-        f"hub {hub.name!r} reads its business key from the columns it is named after. A "
-        "prefix would key the ledger on a truncation of a hub key -- COARSER than the "
-        "hub, so several hub keys share one ledger key and a departure is reported only "
-        "when the last of them leaves. Prefixes belong to a LINK end that declares one; "
-        "pass the grain built for this hub"
+        f"satellite {satellite.name!r} reads {declared.column!r} as {declared.reads!r}, "
+        f"which needs a {expected!r} column, and {source_table!r} types it {actual!r}. "
+        "Neither direction raises in Spark: a substring over a date casts it to text "
+        "first, and reading a string as a date leaves applied_date a STRING -- which is "
+        "this loader's ordering axis and the column an existing satellite already holds "
+        "as a date"
+    )
+
+
+def _refuse_a_candidate_with_no_applied_date(
+    candidates: DataFrame, satellite: Satellite, source_table: str
+) -> None:
+    """Refuse a candidate row whose `applied_date` came out NULL, before anything is
+    written.
+
+    IT WOULD BE DROPPED SILENTLY AND NOTHING WOULD SAY SO, which is why this is a refusal
+    and not a report. `changed_rows` closes with `candidates.join(changed, on=[key,
+    APPLIED_DATE], how="left_semi")`, and an equi-join never matches a NULL -- so the row
+    is discarded whether or not the target already holds rows, the load reports success,
+    and a re-run appends 0 because the row was never a candidate for anything. Measured
+    on the five-row payments fixture with one unparseable `event_time`: 4 link rows, 3
+    satellite rows, re-run +0.
+
+    THE LAYER BELOW ALREADY REFUSES THIS VALUE LOUDLY -- `opl.gold.pit`'s
+    `_refuse_an_unusable_as_of_set`, "the 8,757-phantom-departure family" -- so this is
+    the vault agreeing with gold rather than a new rule. What made the old unconditional
+    `_snapshot_ref_date` projection safe was a control one layer up:
+    `opl.bronze.rules._unprovable_ref_date` rejects the rows `snapshot.ref_date_column`
+    leaves NULL. That control does not travel with a DECLARATION -- `AppliedDateSource`
+    lets a satellite name any column, and the payments rule set has no shape rule on
+    `event_time` -- so the guarantee had to be restated where the column is built.
+
+    AND NOT AS A `bad_event_time_shape` GATE RULE, WHICH IS THE OBVIOUS OTHER PLACE AND IS
+    DECLINED IN `rules.py`'S OWN WORDS. That gate is all-or-nothing and shipped, and a new
+    way for a live table to go red "belongs in a change that says so, not as a rider on
+    this one". It would also QUARANTINE the row -- losing the payment from `fact_payment`,
+    which reads bronze directly -- to protect a satellite. This refusal costs the vault
+    load alone and makes the narrower claim: this LOADER cannot order a row it has no day
+    for.
+
+    ONE EAGER PROBE AND NOT A COUNT: `limit(1)` lets Spark stop at the first offending
+    group, and the aggregate `candidates` already needs is the only work either way."""
+    if candidates.filter(F.col(APPLIED_DATE).isNull()).limit(1).count() == 0:
+        return
+    declared = satellite.applied_date_from
+    raise ValueError(
+        f"satellite {satellite.name!r} has at least one candidate row whose "
+        f"{APPLIED_DATE} is NULL, read from {declared.column!r} on {source_table!r} as "
+        f"{declared.reads!r}. Nothing downstream can hold it: changed_rows' closing "
+        "left_semi joins on (hash key, applied_date) and NULL matches nothing, so the "
+        "row would be dropped with the load reporting success and a re-run appending 0, "
+        "and opl.gold.pit refuses a NULL applied_date outright. The bronze DQ gate does "
+        "not check this column's shape, so fix the source value or narrow the window"
     )
 
 
 def satellite_candidates(
     spark: SparkSession,
     satellite: Satellite,
-    hub: Hub,
+    parent: Hub | Link,
+    hubs: Sequence[Hub] = (),
     *,
     source_table: str,
     months: Sequence[str] | None,
@@ -323,32 +478,45 @@ def satellite_candidates(
     """One row per (hash key, applied_date) in the window, carrying the payload, its
     `hash_diff` and the source row's `record_source`.
 
-    `applied_date` COMES FROM `_snapshot_ref_date` AND NOT FROM `_snapshot_month`. The
-    two are separate bronze columns on purpose (`opl.bronze.snapshot`): the month is the
-    operational identity of the run, the ref date is the date the RFB itself declares
-    in its filename, and it is not month-end -- 2026-06 carries the 13th and 2026-07
-    the 11th. Deriving a date from the month would invent a day."""
+    `applied_date` COMES FROM THE SATELLITE'S OWN DECLARATION, AND FOR EVERY SATELLITE
+    WRITTEN BEFORE F2 WAVE 2 THAT DECLARATION IS `_snapshot_ref_date` AND NOT
+    `_snapshot_month`. The two are separate bronze columns on purpose
+    (`opl.bronze.snapshot`): the month is the operational identity of the run, the ref
+    date is the date the RFB itself declares in its filename, and it is not month-end --
+    2026-06 carries the 13th and 2026-07 the 11th. Deriving a date from the month would
+    invent a day.
+
+    IT IS A DECLARATION AND NO LONGER A CONSTANT BECAUSE THE CONSTANT WAS NOT UNIVERSAL.
+    `bronze_payments` carries no `_snapshot_ref_date`: `add_common_audit_columns` omits it
+    for a generated source, and stamping an all-NULL one would have forced the payments DQ
+    set to drop `unprovable_snapshot_ref_date`. `opl.vault.specs.AppliedDateSource` is
+    where that is argued and `opl.vault.loading.applied_date_expression` is where it
+    becomes an expression."""
     source = read_snapshot_window(spark, source_table, months, axis=axis)
     payload = tuple(satellite.payload_columns)
-    refuse_non_string_columns(source, (*hub.business_key_columns, *payload))
+    refuse_non_string_columns(
+        source, (*_parent_source_columns(parent, hubs), *payload)
+    )
+    _refuse_an_applied_date_the_source_cannot_provide(source, satellite, source_table)
     keyed = source.select(
-        hash_key_expression(hub).alias(hub.hash_key),
-        F.col(SNAPSHOT_REF_DATE_COLUMN).alias(APPLIED_DATE),
+        _parent_key_expression(parent, hubs).alias(parent.hash_key),
+        applied_date_expression(satellite.applied_date_from).alias(APPLIED_DATE),
         hash_key_column([F.col(column) for column in payload]).alias(HASH_DIFF),
         *(F.col(column) for column in payload),
         F.col(BRONZE_RECORD_SOURCE).alias(RECORD_SOURCE),
     )
     return (
-        keyed.groupBy(hub.hash_key, APPLIED_DATE)
+        keyed.groupBy(parent.hash_key, APPLIED_DATE)
         .agg(F.min(F.struct(HASH_DIFF, *payload, RECORD_SOURCE)).alias(_CHOSEN))
-        .select(hub.hash_key, APPLIED_DATE, f"{_CHOSEN}.*")
+        .select(parent.hash_key, APPLIED_DATE, f"{_CHOSEN}.*")
     )
 
 
 def _collapsed_duplicates(
     spark: SparkSession,
     satellite: Satellite,
-    hub: Hub,
+    parent: Hub | Link,
+    hubs: Sequence[Hub],
     source_table: str,
     months: Sequence[str] | None,
     axis: SnapshotAxis,
@@ -371,11 +539,18 @@ def _collapsed_duplicates(
     `zero_padded_column` maps `'1'` and `'01'` onto one padded key, so distinct raw
     values can share a hash key. Counting the raw columns would report fewer duplicates
     than the fold actually performs, which is the wrong direction for a number whose
-    whole job is to make the fold visible."""
+    whole job is to make the fold visible.
+
+    THE FOLD IS LIVE ON A TRANSACTIONAL SATELLITE WHERE IT IS MEASURED AT ZERO ON
+    EMPRESAS, which is why this count survives the ledger being optional. A payment
+    redelivered in a later month is "the SAME payment seen twice"
+    (`opl.contracts.payments`), and it carries the same `transaction_id` and the same
+    `event_time` -- so its (link hash key, applied_date) is identical to the first
+    delivery's and the two ARE folded here."""
     source = read_snapshot_window(spark, source_table, months, axis=axis)
     keyed = source.select(
-        hash_key_expression(hub).alias(hub.hash_key),
-        F.col(SNAPSHOT_REF_DATE_COLUMN).alias(APPLIED_DATE),
+        _parent_key_expression(parent, hubs).alias(parent.hash_key),
+        applied_date_expression(satellite.applied_date_from).alias(APPLIED_DATE),
     )
     return keyed.count() - keyed.distinct().count()
 
@@ -408,10 +583,11 @@ def _candidate_departures(ledger: DataFrame) -> int:
 def _diagnostics(
     spark: SparkSession,
     satellite: Satellite,
-    hub: Hub,
+    parent: Hub | Link,
+    hubs: Sequence[Hub],
     source_table: str,
     months: Sequence[str] | None,
-    ledger: DataFrame,
+    ledger: DataFrame | None,
     axis: SnapshotAxis,
     *,
     report: bool,
@@ -423,17 +599,24 @@ def _diagnostics(
     duplicates and 0 candidate departures, and both zeros are PUBLISHED as evidence that
     two paths are unexercised by real data; a skip that reported 0 would make that
     evidence unfalsifiable, because no reader could separate a measurement from an
-    omission. See the module docstring for what the skip is worth in seconds."""
+    omission. See the module docstring for what the skip is worth in seconds.
+
+    A `None` LEDGER IS A TRANSACTIONAL LOAD AND ITS DEPARTURE COUNT STAYS `None` EVEN WHEN
+    THE FLAG IS ON -- there is no ledger to count over, and `SatelliteLoadResult` carries
+    `ledger_derived=False` so the two `None`s cannot be read as one another. The FOLD is
+    still measured, and on that satellite it is the number that matters."""
     if not report:
         return None, None
-    return (
-        _collapsed_duplicates(spark, satellite, hub, source_table, months, axis),
-        _candidate_departures(ledger),
+    collapsed = _collapsed_duplicates(
+        spark, satellite, parent, hubs, source_table, months, axis
     )
+    if ledger is None:
+        return collapsed, None
+    return collapsed, _candidate_departures(ledger)
 
 
 def _in_column_order(
-    rows: DataFrame, satellite: Satellite, hub: Hub, load_date: datetime
+    rows: DataFrame, satellite: Satellite, parent: Hub | Link, load_date: datetime
 ) -> DataFrame:
     """The rows about to be written, in the satellite's declared column order.
 
@@ -442,9 +625,15 @@ def _in_column_order(
     `mode("append")` is positional unless `mergeSchema` says otherwise, so two loads
     building the same columns in two orders would write the payload into each other's
     columns without failing. Metadata first, then payload, and
-    `test_the_satellite_has_no_end_date_column_at_all` pins the whole list."""
+    `test_the_satellite_has_no_end_date_column_at_all` pins the whole list.
+
+    SIX KINDS OF COLUMN AND NOT ONE MORE, WHICH IS WHAT MAKES THE REGISTRY'S COLLISION
+    GUARD AS NARROW AS IT IS. A satellite on a LINK writes the link's hash key here and
+    NONE of the link's other columns -- not its roled reference columns, not its
+    dependent-child keys -- so those names cannot be taken from a payload column by this
+    write. `opl.vault.registry_satellites` argues that from the other side."""
     return rows.select(
-        hub.hash_key,
+        parent.hash_key,
         F.lit(load_date).alias(LOAD_DATE),
         F.col(APPLIED_DATE),
         F.col(RECORD_SOURCE),
@@ -457,7 +646,7 @@ def _append_changed(
     spark: SparkSession,
     candidates: DataFrame,
     satellite: Satellite,
-    hub: Hub,
+    parent: Hub | Link,
     target_table: str,
     load_date: datetime,
     before: int,
@@ -471,13 +660,15 @@ def _append_changed(
     result object's `appended` is an after-minus-before over one measurement point."""
     existing = None
     if before:
-        existing = spark.read.table(target_table).select(hub.hash_key, APPLIED_DATE, HASH_DIFF)
+        existing = spark.read.table(target_table).select(
+            parent.hash_key, APPLIED_DATE, HASH_DIFF
+        )
     # The anti-join that used to sit here is inside `changed_rows` now -- it was the one
     # step of that function's contract each caller had to remember, and it was the step
     # the docstring called load-bearing. See `loading._without_persisted`.
-    changed = changed_rows(candidates, existing, hub.hash_key)
+    changed = changed_rows(candidates, existing, parent.hash_key)
     (
-        _in_column_order(changed, satellite, hub, load_date)
+        _in_column_order(changed, satellite, parent, load_date)
         .write.format("delta").mode("append").saveAsTable(target_table)
     )
 
@@ -485,7 +676,8 @@ def _append_changed(
 # WHY `load_satellite`'S ARGUMENT PROSE IS HERE. F-DB Task 2 added the axis paragraph and
 # pushed this function to 56 lines against the `< 50 INCLUDING comments` cap (master
 # protocol §4.9). No test enforces that cap, which is how it was reported compliant on a
-# docstring-excluded measure; `opl.bronze.rules:413` moved prose to module level for the
+# docstring-excluded measure; `opl.bronze.rules` moved prose to module level, above
+# `rules_for`, for the
 # same reason. Nothing here is dropped.
 #
 # `load_date` HAS NO DEFAULT, for `load_hub`'s reason: a loader that stamps its own clock
@@ -498,11 +690,19 @@ def _append_changed(
 # measured" is a thing no reader can confuse with "measured, found none". The first real
 # run spent most of 5,635 s on the two and both answered 0; see `_diagnostics`.
 #
-# THE AXIS COMES OFF THE GRAIN AND IS NOT A SECOND PARAMETER. The grain was already
-# required, `_refuse_a_mismatched_grain` has already pinned it to this source table, and
-# its axis is the source's own declaration -- so an `axis=` argument here would be a second
+# THE AXIS COMES OFF THE GRAIN WHERE THERE IS ONE, AND IS A PARAMETER WHERE THERE IS NOT.
+# For a satellite gated on an observation ledger the grain is required,
+# `_refuse_a_mismatched_grain` has already pinned it to this source table, and its axis is
+# the source's own declaration -- so an `axis=` argument beside it would be a second
 # spelling of one decision, whose disagreement would land as a window that silently
-# selected nothing.
+# selected nothing, and it is refused. A TRANSACTIONAL satellite has no grain, so nothing
+# else spells the axis and the parameter is the only spelling rather than a second one.
+# `snapshot_axis_for` refuses every other combination of the three, and the parent's kind
+# beside them: `opl.vault.satellite_grain` carries that argument at module level.
+#
+# THE PARENT IS `hub=` OR `link=` PLUS `hubs=`, argued in the comment block above
+# `_resolved_parent`. Both are defaulted `None` so that exactly one may be given; neither
+# is optional in the sense of omissible.
 #
 # IDEMPOTENT: a re-run finds every (key, applied_date) it would write already persisted,
 # drops them before the window, and appends nothing. The write is a single Delta append, so
@@ -511,38 +711,48 @@ def load_satellite(
     spark: SparkSession,
     satellite: Satellite,
     *,
-    hub: Hub,
+    hub: Hub | None = None,
+    link: Link | None = None,
+    hubs: Sequence[Hub] = (),
     source_table: str,
     target_table: str,
     load_date: datetime,
-    grain: ObservationGrain,
+    grain: ObservationGrain | None = None,
+    axis: SnapshotAxis | None = None,
     months: Sequence[str] | None = None,
     report_diagnostics: bool = False,
 ) -> SatelliteLoadResult:
     """Append a row for every (hash key, `applied_date`) whose payload changed.
 
-    Idempotent, and its three arguments-without-defaults are argued in the comment block
+    Idempotent, and its arguments-without-defaults are argued in the comment block
     above this function."""
-    _refuse_a_mismatched_hub(satellite, hub)
-    _refuse_a_mismatched_grain(hub, grain, source_table)
-    axis = grain.snapshot_axis
+    parent = _resolved_parent(satellite, hub, link, hubs)
+    window_axis = snapshot_axis_for(satellite, parent, grain, axis, source_table)
     candidates = satellite_candidates(
-        spark, satellite, hub, source_table=source_table, months=months, axis=axis
+        spark, satellite, parent, hubs,
+        source_table=source_table, months=months, axis=window_axis,
     )
-    # DERIVED ON EVERY LOAD, INCLUDING ONE THAT REPORTS NOTHING FROM IT: this is the only
-    # route by which `months` reaches `observation._window`'s refusal of a month with no
-    # row on either side. Lazy past that refusal -- see `_candidate_departures`.
-    ledger = observation_ledger(spark, grain, months=months)
+    # DERIVED ON EVERY LOAD THAT HAS A GRAIN, INCLUDING ONE THAT REPORTS NOTHING FROM IT:
+    # it is the only route by which `months` reaches `observation._window`'s refusal of a
+    # month with no row on either side, and it is lazy past that refusal. A transactional
+    # load has no ledger and reaches the same refusal over ONE table instead of two.
+    ledger = None
+    if grain is not None:
+        ledger = observation_ledger(spark, grain, months=months)
+    else:
+        refuse_a_window_the_source_never_loaded(spark, source_table, months, window_axis)
+    _refuse_a_candidate_with_no_applied_date(candidates, satellite, source_table)
     collapsed, departures = _diagnostics(
-        spark, satellite, hub, source_table, months, ledger, axis,
+        spark, satellite, parent, hubs, source_table, months, ledger, window_axis,
         report=report_diagnostics,
     )
     before = rows_in(spark, target_table)
-    _append_changed(spark, candidates, satellite, hub, target_table, load_date, before)
+    _append_changed(spark, candidates, satellite, parent, target_table, load_date, before)
     return SatelliteLoadResult(
         table=target_table,
         appended=rows_in(spark, target_table) - before,
         already_present=before,
         collapsed_duplicates=collapsed,
         candidate_departures=departures,
+        ledger_derived=ledger is not None,
     )

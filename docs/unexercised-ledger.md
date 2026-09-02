@@ -102,25 +102,36 @@ a ledger, because that is where the claim is verifiable:
 | `pgsrc` | `src/opl/extraction/postgres_source.py` |
 | `repromote` | `databricks/resources/repromote_batch_job.yml` |
 | `vaultreg` | `src/opl/vault/registry.py` |
+| `paydom` | `src/opl/vault/domains/payments_domain.py` |
+| `vspecs` | `src/opl/vault/specs.py` |
+| `golddim` | `databricks/src/gold_load_dimension.py` |
+| `jobdem` | `tests/vault_job_demands.py` |
+| `vwiring` | `tests/test_vault_job_wiring.py` |
+| `ventry` | `tests/test_vault_entry_points.py` |
+
+**The last three point at a TEST module, and that is where those claims are verifiable rather than a filing convenience.** Each is a branch written in the commit that registers the table it will serve, over a population no YAML declares yet; the branch is the claim, and the module holding it is the only place the claim can be read against code. Both source docstrings said a row here was owed and named F2 wave 2's T4 as its owner, and both now point back at the row by id instead — this is that row, and the docstring is the claim rather than the record. **`ventry` is the third and came the same way**: T3 measured an uncovered residual while closing its own review findings, declared it in the file that found it, and did not repair it there — the durable repair is a refusal in `src/opl/vault/`, so the comment is the claim and this is the debt.
 
 ### 0.5 The totals
 
 | bucket | entries |
 |---|---|
-| STANDING LIMITS | 16 |
+| STANDING LIMITS | 18 |
 | PUBLISHED CAVEATS | 9 |
-| STILL UNEXERCISED | 117 |
-| CLOSED | 34 |
-| NO LONGER MEANINGFUL | 8 |
-| **TOTAL** | **184** |
+| STILL UNEXERCISED | 122 |
+| CLOSED | 35 |
+| NO LONGER MEANINGFUL | 9 |
+| **TOTAL** | **193** |
 
 **Do not re-type these.** They are re-derived from the tables below by
 `tests/test_unexercised_ledger.py`, which fails naming the bucket that moved.
 
 **Why this is more ids than there are bullets in the nine ledgers.** One bullet, table row or
-titled block in a ledger section is one source *site*. **Three sites carry more than one claim**,
+titled block in a ledger section is one source *site*. **Four sites carry more than one claim**,
 and where those claims land in different buckets the site is split: `f4:1360`/`f4:1386`,
-`fdb:1521`/`fdb:1522`/`fdb:1523` and `fdb:1525`/`fdb:1526`. **Two bullets are not entries at
+`fdb:1521`/`fdb:1522`/`fdb:1523`, `fdb:1525`/`fdb:1526` and `vaultreg:5`/`vaultreg:16`.
+**The fourth was split by F2 wave 2 and is the first whose halves both left §3**: its registry half is
+CLOSED and its two-hub half is NO LONGER MEANINGFUL, which is what a claim looks like when
+one part of it was exercised and the other was refuted. **Two bullets are not entries at
 all**: `fdb` §3's `:1387` and `:1391` are the retirement notices for `fdb:1343` and `fdb:1361`,
 so they are evidence rather than debt. And some rows come from no ledger at all: §1.3's, added by
 F7 T4, plus `repromote:21` and `vaultreg:5`, added by F7's closing review because
@@ -172,6 +183,7 @@ otherwise take as owed work collapse into one paragraph and three tables.
 | `fdb:1497` | `_grain_derivation_mismatch` AND `_refuse_a_prefixed_hub_grain` HAVE REFUSED NOTHING BUT A | fires when someone declares a third grain; the two that exist both derive both halves from the link spec |
 | `f6:2352` | A top-level `UNION` in either F4 view. | the exerciser is a SQL rewrite of a view |
 | `f6:2356` | A trailing line comment ending in ` AS source` before a comma. | the exerciser is a hand-written comment inside a generated projection |
+| `vaultreg:527` | so a registry it produced cannot reach here | `parent_of`'s *neither a hub nor a link* refusal is unreachable through `build_registry`, which has already refused every such parent at import; only a hand-built mapping passed straight to it arrives there. `domains.parent_hub`'s equivalent IS reachable and IS driven, so the pair differ — added by F2 wave 2 |
 
 ### 1.2 Blind spots — nothing refuses the edit; the edit goes unseen
 
@@ -184,6 +196,7 @@ of data will ever change them.**
 | `f6:2290` | A script that reads a bronze table while the bundle hands its task no gold table name is | the exerciser is a new gold job task |
 | `f6:2297` | The `ast` reader recognises exactly one spelling and anything else contributes nothing. | the exerciser is new source text in another spelling |
 | `f6:2305` | `tests/test_vault_job_wiring.py`'s totality lock cannot see a loader task added to an existing, | the exerciser is a YAML edit; kept because T5's own sweep is strictly stronger |
+| `ventry:486` | `_transactional_axis` returns the axis it is handed without checking | **the two gates that comment names do not refuse a substituted axis**: `_resolved_parent` never reads it and `_transactional_axis` never compares it against `source_table`, so an in-place update of the seam's argument dict between `parent_arguments` and the loader leaves `tests/test_vault_entry_points.py` byte-identical to its honest headline. **NARROWED BY F2 WAVE 2'S CLOSING ROUND, WHICH MEASURED THE OTHER HALF FALSE.** The comment also called the substitution SILENT, and the production path is LOUD: `main` always names months and `read_snapshot_window` validates them against the axis it is handed, so a merchant axis on the payments source raises `ValueError: months contains ['2026-06'] -- every value must be YYYY-MM-DDTHH:MM:SS.uuuuuuZ` before a row is read. And `INSTANT_SNAPSHOT` is the only non-monthly axis the bronze registry declares, so every other substitution swaps `MONTHLY_SNAPSHOT` for itself and changes nothing. What is uncovered is the EDIT, not a wrong answer. **No volume of data closes it** — the exerciser is a source edit, and the repair is a lock over the seam's ARGUMENTS rather than a refusal, since the loader already raises. Measured and declared by F2 wave 2's T3 in `7b4b925`, in the file that found it and not repaired there on purpose |
 
 ### 1.3 Added by F7 T4 — three merchant rules the registry cannot produce
 
@@ -274,9 +287,12 @@ a legal value here: an entry whose exerciser is nothing belongs in §2, and the 
 | `f3ws:610` | The PIT's out-of-order-backfill refusal. | a snapshot loaded between two the table already holds |
 | `fdb:1369` | `effectivity._statements`' carry-forward window still orders by `APPLIED_DATE`, which is a | two observations on one calendar day, which T8's scheduling decision currently prevents |
 | `fdb:1486` | THE DEFECT `ObservationGrain.key_prefixes` FIXES IS UNREACHABLE BY THIS REPOSITORY'S OWN | a mutation that changes `cnpj` while keeping its eight-character root; `mutated()` never touches `cnpj` |
-| `fdb:1504` | NO NON-EMPTY `key_prefixes` REACHES ANY GRAIN BUT ONE. | a second link with a declared derivation on an identifying end; the field's second consumer arrives with wave 2 or not at all |
+| `fdb:1504` | NO NON-EMPTY `key_prefixes` REACHES ANY GRAIN BUT ONE. | a satellite whose parent link carries a declared derivation on an identifying end **and** that takes an observation grain. **F2 wave 2 supplied the first half and not the second, so this did NOT close, and the entry's own exerciser is what was wrong:** it asked for *"a second link with a declared derivation on an identifying end"* and treated that as the same fact as a second CONSUMER of the field. Measured on the registry — `identity_derivations_of(link_payment)` returns TWO `KeyPrefix`es, and its only satellite is `sat_link_payment`, which is transactional, takes `axis=` instead of a grain and derives no ledger at all. `link_merchant_empresa` is still the only link whose non-empty prefixes reach one |
 | `fdb:1526` | the other half of ADR 0010's whole subject | `opl_vault_merchant` re-run after `repromote_triaged_batch`; see §3.9's hazard before doing it |
-| `vaultreg:5` | claim on wave 2 adding `hub_account`, `hub_customer` and `link_payment` with a git | F2 wave 2 itself: those three tables added as domain modules under `opl/vault/domains/`, and the diff measured against the claim. Only a throwaway fixture domain in `tests/vault/test_registry.py` has ever exercised the mechanism, and F7 did not start wave 2 |
+| `jobdem:186` | THE LINK BRANCH IS UNEXERCISED TODAY AND THIS DOCSTRING USED TO CLAIM OTHERWISE. | a job YAML task naming `sat_link_payment`, which is **F2 wave 2's to write** and which nobody has written. **THIS ROW USED TO NAME T3 AS ITS OWNER AND THE WORKSPACE 403 AS ITS BLOCKER, AND BOTH WERE WRONG.** F8's plan mentions `sat_link_payment` zero times (`grep -c` on it), so a reader would have resolved the owner to a phase that never promised the task and is closing -- a row with a dead owner. And job creation was measured WORKING on 2026-09-02 (`databricks jobs create` returned a job id; the probe job was deleted), so the 403 measured 2026-08-28 no longer holds. Caught by the F8 session, which had declined to author the task on protocol section 9 grounds and read the row this phase then wrote about it. Measured by F2 wave 2's T2 review: reverting `_satellite_key_columns` to `parent_hub` leaves the file green apart from the pre-existing red, so the branch kills zero tests today |
+| `jobdem:204` | THE SATELLITE ARM READS `spec.parent` AND NOT `parent_hub(spec).name` SINCE F2 WAVE 2, | the same YAML task. The two spellings agree on every satellite a job loads today — a hub parent's name IS `spec.parent` — so nothing distinguishes them until a link-parented satellite gets one |
+| `vwiring:540` | THIS BRANCH IS NOW EXERCISED, AND THIS COMMENT USED TO SAY THE OPPOSITE. | **CLOSED 2026-09-02 BY THE EXERCISER IT NAMED.** The row asked for a YAML task naming `sat_link_payment`; `databricks/resources/vault_payments_job.yml` declares one, so the grain sweep's loop now sees a transactional spec and the branch is reached. Kept in this section rather than struck because a row closed by its own stated exerciser is the outcome the ledger is FOR, and striking it would delete the evidence that the mechanism worked. The anchor moved 534 -> 540 when the job was added to `_VAULT_JOBS` whose remedy is an edit to the sweep as well as to the YAML |
+| `vspecs:290` | So the delta is true in form and unexercised in substance | a redelivery carrying a CORRECTED `event_time`, or the first STATE satellite on a link. `link_payment` hashes `transaction_id` into its digest, so the partition is one TRANSACTION and not one `applied_date`: F2 wave 2's closing round put two rows with one transaction id and two event days in one partition on local Spark and the delta DID fire, dropping the second as unchanged. No such row exists in the generated stream, whose redelivery is byte-identical, so `lag` is NULL on every row this repository has loaded — what makes a re-load append nothing is `loading._without_persisted`'s (key, `applied_date`) anti-join ALONE |
 
 ### 3.3 Gold
 
@@ -297,6 +313,7 @@ a legal value here: an entry whose exerciser is nothing belongs in §2, and the 
 | `fapi:1648` | The empty-series refusal and the below-the-series refusal | the same two populations, after the runs (see §6) |
 | `fapi:1651` | The holiday crossing, on fact rows | a fact row nearer than the 15 days that separate 2026-06-04 from 2026-06-19 |
 | `fapi:1656` | THE TWO-RATE PROPERTY RESTS ON ONE STREAM AND ONE DAY. | a second stream or a second converting day; 4,905 of 40,000 fact rows convert and all fall on 2026-06-22 |
+| `paydom:159` | AND THE README'S LIMIT NARROWS RATHER THAN CLOSING. `fact_payment` still reads | re-pointing `fact_payment` at `link_payment` and `sat_link_payment`. **F2 wave 2's own declared gap, and explicitly OUT of its scope** (ADR 0022 Decision 7): it is a gold refactor with its own risk and its own decision. Until it happens the payment is in the vault and the FACT does not read it, so the README's *Honest limits* narrows rather than closing |
 
 ### 3.4 Streaming
 
@@ -395,6 +412,7 @@ a legal value here: an entry whose exerciser is nothing belongs in §2, and the 
 | `f6:2195` | `assert_deployed_revision` does not re-read the SYNCED ENTRY POINT | deploying a wheel while the sync of `databricks/src` fails or is skipped |
 | `f6:2367` | Whether a job-level `permissions: issues: write` elevates above a repository default of | the first workflow run that tries |
 | `fapi:1498` | The provenance guard's `+dirty` REFUSAL, in the workspace | a deploy built from a dirty tree, which means publishing an artefact known to be built from uncommitted work. **This is the only correct statement of this in the corpus** (see §6) |
+| `golddim:11` | which is the fix `opl.vault.satellites._refuse_a_mismatched_hub`'s own message names. | striking the surviving mentions of a private F2 wave 2 deleted: this line, `databricks/resources/gold_dim_company_job.yml:93` and `databricks/resources/vault_empresa_job.yml:119`. **THREE, not the five an earlier hand-assembled list reported** — the two in `databricks/src/vault_load_satellite.py` have since been repaired, and this count was re-derived by grep rather than copied, which is the rule ADR 0022 Decision 6 states. `databricks/` is another session's area this phase, so they are recorded rather than edited |
 
 ### 3.9 One hazard to read before closing `fdb:1526`
 
@@ -449,7 +467,7 @@ nothing more.
 | `fdb:1455` | `ref_date_from_instant` HAS RUN ON LOCAL SPARK ONLY | the run of record: 2 distinct `_snapshot_ref_date`, derived by that function over 2,192 real rows on serverless | anchor:docs/f-db-run-evidence.md:1224 |
 | `fdb:1464` | THE THREE LIVE POSTGRES TESTS RUN ON ONE WINDOWS BOX AND NOWHERE ELSE. | the `postgres` CI job, which runs `uv run pytest -m postgres` on `ubuntu-latest` and which `fdb:1535` records as green **later in the same section**. Found by F7 T4; the source analysis flagged it as a check and left it open | anchor:docs/f-db-run-evidence.md:1541 anchor:.github/workflows/ci.yml:38 |
 | `fdb:1480` | `src/opl/unicode_case.py` AND `src/opl/bronze/rule_predicates.py` HAVE RUN ZERO ROWS ON | 2,192 merchant rows through `rules_for("merchant")`, every rule of which is built in `rule_predicates.py`, which imports `DIVERGENT_CHARACTER_CLASS` from `opl.unicode_case` | anchor:src/opl/bronze/rule_predicates.py:37 anchor:docs/f-db-run-evidence.md:1222 |
-| `fdb:1494` | `ObservationGrain.key_prefixes` AND `key_expression` HAVE RUN ZERO ROWS ON DATABRICKS | the run of record loaded `link_merchant_empresa`, the only link with a declared derivation on an identifying end | anchor:docs/f-db-run-evidence.md:1225 |
+| `fdb:1494` | `ObservationGrain.key_prefixes` AND `key_expression` HAVE RUN ZERO ROWS ON DATABRICKS | the run of record loaded `link_merchant_empresa`, whose non-empty `key_prefixes` are what those two functions read. **RESTATED BY F2 WAVE 2, NOT WEAKENED:** this cell used to read *"the only link with a declared derivation on an identifying end"*, which `link_payment` falsified by declaring TWO. What made this link the one that closed the row is not that it was the only link to declare a derivation, but that its prefixes REACH A GRAIN — `sat_link_payment` is transactional, takes `axis=` and reaches none — so the same run still closes it | anchor:docs/f-db-run-evidence.md:1225 |
 | `fdb:1521` | `fail_on_dq` AND THE `check_bad_rows` FALSE BRANCH NEVER RAN. | **F7 T4's run, 2026-08-31.** One bad row in 1,089 took the condition's false arm; `promote` was excluded and `fail_on_dq` failed, which is the success condition | run:529699767706804 |
 | `fdb:1522` | `bronze_merchant_quarantine` has | **F7 T4's run, 2026-08-31.** Quarantine went 0 to 1; the row carries `_dq_reject_reason` `bad_cnpj_shape` and nothing else, and bronze did not move | run:529699767706804 stmt:01f1a57b-e745-14e0-9d1d-dfef2158916e |
 
@@ -467,6 +485,7 @@ nothing more.
 | `fdb:1343` | `INSTANT_SNAPSHOT` has no production reference at all. | F-DB Task 4, retired in the ledger's own voice because *"a ledger that only grows stops being read"* | anchor:docs/f-db-run-evidence.md:1387 |
 | `fdb:1361` | `effectivity`'s axis-aware path cannot run on a non-monthly source today, for a reason | F-DB Task 4: the third audit path exists, so unreachable became merely unexercised | anchor:docs/f-db-run-evidence.md:1391 |
 | `fdb:1535` | THE NEW CI JOB HAS NOT RUN ON GITHUB, and this is the honest version of a claim that would | the push that opened PR #21, the same night: the `postgres` job ran on GitHub and passed | anchor:docs/f-db-run-evidence.md:1541 |
+| `vaultreg:5` | claim on wave 2 adding `hub_account`, `hub_customer` and `link_payment` with a git | **the MECHANISM half, by F2 wave 2 itself.** `domains/payments_domain.py` is one new file and registered `link_payment` and `sat_link_payment` through the directory scan with `domains/__init__.py` and `registry.py`'s discovery untouched — the first time a REAL domain has exercised it rather than a throwaway fixture. It is here and not in §4.1 because `registry.py`'s own docstring was updated in place to say so. The *0 modified* half is narrower than it reads and that file now says which: the LINK cleared it, the SATELLITE did not | anchor:src/opl/vault/registry.py:12 anchor:src/opl/vault/domains/payments_domain.py:20 |
 
 Two more were updated in place without a strike and are **not** counted here, because a live
 unexercised claim survives in each and keeps them in §3: `f4:1298` (`spark.sql(..., args={...})`
@@ -489,6 +508,7 @@ The thing described was removed, superseded, or was never an unexercised path.
 | `fapi:1594` | The high-end coverage report is not a refusal and must not be read as one. | a reading instruction, not a path |
 | `fapi:1661` | The `assert_deployed_revision` guard cost 21.5% of this phase's task time | a cost measurement carrying its own retraction. Not a path |
 | `fdb:1529` | THE HUB-GRAIN VERSUS LINK-GRAIN DIVERGENCE IS NOT REACHABLE BY THIS DATA. | reachability here is a property of the seed script, which this project authors. A statement about a fixture, not about a shipped path |
+| `vaultreg:16` | TWO THIRDS OF THE TABLE LIST IS REFUTED RATHER THAN DEFERRED | `vaultreg:5`'s other half, split off because the two land in different buckets. `hub_account` and `hub_customer` are not unexercised and not deferred: neither will be built, because either would hash the same 8-character root `hub_empresa` already holds, and `loading.hash_key_expression` puts no table name in the digest — so the two tables would carry byte-identical keys and nothing anywhere refuses it. ADR 0022 Decision 2. The question stopped applying |
 
 ---
 

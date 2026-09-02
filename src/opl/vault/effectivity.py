@@ -148,7 +148,7 @@ def _grain_key_mismatch(
     """Why `grain`'s key columns are not `link`'s identity, or None if they are.
 
     TWO DIFFERENT MISTAKES, TWO MESSAGES, and the sibling of
-    `opl.vault.satellites._grain_key_mismatch` -- which exists for exactly this reason
+    `opl.vault.satellite_grain._grain_key_mismatch` -- which exists for that reason
     and whose fix never propagated here. One `!=` told the REORDERED case that its
     ledger was "coarser or finer", which is false: a permuted key set is neither, the
     `groupBy` behind the ledger is order-insensitive, and the reader is sent looking for

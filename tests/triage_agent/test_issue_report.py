@@ -177,7 +177,12 @@ def test_the_two_headline_incidents_disagree_in_every_column_a_triager_acts_on()
         (payments.severity, empresas.severity),
         (payments.recommended_action, empresas.recommended_action),
         (payments.history, empresas.history),
-        ("has NO vault loader task", "hub_empresa"),
+        # WAS `"has NO vault loader task"` UNTIL F2 WAVE 2, which gave `payments` a vault
+        # loader and made that string unreachable for it. What still separates the two
+        # incidents is the DIRECT leg: `payments` drives a gold table straight from bronze
+        # and `empresas` reaches gold only through the vault. The pair must stay a genuine
+        # difference in both directions, which the loop below asserts.
+        ("DIRECTLY from bronze", "hub_empresa"),
     )
     for mine, theirs in differences:
         assert mine != theirs
@@ -451,19 +456,36 @@ def test_the_downstream_section_names_tables_and_holds_no_magnitude_at_all():
 
 
 def test_the_table_that_reaches_gold_without_a_vault_table_says_so_out_loud():
-    """`payments` is `592660596679630`'s table and has no vault loader task in the bundle,
-    so a manifest walked bronze -> vault -> gold answers "nothing downstream" for the
-    workspace's largest incident. An empty vault leg rendered as an empty answer would be
-    that defect one layer up.
+    """`payments` is `592660596679630`'s table, and since F2 wave 2 it does BOTH things:
+    it feeds `link_payment` in the vault AND drives `fact_payment` straight from bronze.
+    The body must say the bypass out loud anyway -- that is the whole point of the section
+    -- because a manifest walked bronze -> vault -> gold now answers `link_payment` for the
+    workspace's largest incident, and `link_payment` reaches no gold table at all. An
+    answer that is wrong is worse here than an answer that is empty.
 
-    The empresas arm is the control: it has a vault leg, so the bypass sentence must NOT be
-    reachable for every incident."""
+    THIS TEST ASSERTED "has NO vault loader task in the bundle" AND "vault tables: none"
+    UNTIL F2 WAVE 2 FALSIFIED BOTH. There is a vault loader task declared for `payments`
+    now, and its vault leg is not none. What survives unchanged is the property the test
+    was written for: the section must not let a reader believe the fact is reached through
+    the vault. It is now spelled as the direct leg being named explicitly.
+
+    THE VAULT-TABLE LINE IS ASSERTED WHOLE, AND IT IS NOT A STYLE POINT. `- vault tables:`
+    is rendered as a comma-joined list (`opl.triage_agent.report`), so `"vault tables:
+    link_payment" in body` became a PREFIX MATCH the moment `sat_link_payment` joined it:
+    it would pass over `link_payment, anything_at_all` and pass over a list that had lost
+    the satellite, which is the direction this line is here to see. Spelled whole, it says
+    what it looks like it says.
+
+    The empresas arm is the control: it reaches gold only THROUGH the vault, so the bypass
+    wording must not be reachable for every incident."""
     payments = _sections(render_body(issue(PAYMENTS)))["What else is downstream"]
     empresas = _sections(render_body(issue(EMPRESAS)))["What else is downstream"]
 
-    assert "has NO vault loader task in the bundle and still reaches gold" in payments
-    assert "vault tables: none" in payments
+    assert "DIRECTLY from bronze, not through the vault" in payments
+    assert "feeds link_payment, sat_link_payment in the vault" in payments
+    assert "vault tables: link_payment, sat_link_payment\n" in payments
     assert "fact_payment" in payments
+    assert "DIRECTLY from bronze" not in empresas
     assert "has NO vault loader task" not in empresas
 
 

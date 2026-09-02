@@ -38,18 +38,40 @@ WHAT IS NOT LOCKED HERE, named rather than left to be discovered:
 AND THE COMPARISON IS PROVED CAPABLE OF FAILING, on every run: the arms at the bottom mutate
 the document IN MEMORY -- one fact at a time -- and assert the failure names that fact and no
 other. A lock nobody has watched go red is not a lock.
+
+WHAT LEFT, AND THE SEAM IT LEFT ALONG. This file reached **799 lines** against a
+strictly-under-800 cap with F2 wave 2's rows still owed, so the half that reads THE
+REPOSITORY -- the source lines the anchors name, the `docs/*-evidence.md` corpus the sweep
+walks, and the git object store the CLOSED evidence cites -- is now `tests/ledger_sources.py`,
+which carries the argument for the seam. What stayed is the other subject: what the DOCUMENT
+says, the comparisons between the two, and the arms. `_unconsolidated_sections` stayed even
+though it sat inside the block that left, because it is a COMPARISON and reaches back across
+the seam through `_headings`; it is the reason the departed block's banner claim -- *"nothing
+below opens the ledger document"* -- was true only in the narrow sense that it never called
+`_ledger()` itself.
 """
 from __future__ import annotations
 
 import re
-import subprocess
 from collections import Counter
-from functools import lru_cache
-from pathlib import Path
 
 import pytest
 
-_REPO = Path(__file__).resolve().parents[1]
+# ALIASED TO THE NAMES THIS FILE ALREADY USED, so the split moved definitions and
+# touched no call site. `tests/ledger_sources.py` carries the seam, and why
+# `_unconsolidated_sections` did not go with the block it used to sit in.
+from ledger_sources import DEFERRAL as _DEFERRAL
+from ledger_sources import PUBLISHED_PATTERN as _PUBLISHED_PATTERN
+from ledger_sources import REPO as _REPO
+from ledger_sources import commit_resolves as _commit_resolves
+from ledger_sources import corpus_files as _corpus
+from ledger_sources import history_is_deep as _history_is_deep
+from ledger_sources import norm as _norm
+from ledger_sources import source_lines as _source_lines
+from ledger_sources import swept_headings as _swept_headings
+from ledger_sources import swept_sections as _swept_sections
+from ledger_sources import window as _window
+
 _LEDGER = _REPO / "docs" / "unexercised-ledger.md"
 
 # Section heading -> bucket. EVERY table of entries must be named here, and NOTHING USED TO
@@ -77,24 +99,12 @@ _SECTIONS = {
 _KEYS_TABLE = "### 0.4 The sources, keyed"
 _TOTALS_TABLE = "### 0.5 The totals"
 _ID = re.compile(r"^`([a-z0-9]+):(\d+)`$")
-_ANCHOR_WINDOW = 3
 
 # The row grep §0.5 publishes as the document's own entry count, held HERE as the single
 # authority and asserted present THERE. Counting it rather than reading it makes it a lock.
 _ROW_GREP = r"^\| `[a-z0-9]+:[0-9]+` \|"
 _ROW_ID = re.compile(r"^\| `([a-z0-9]+:[0-9]+)` \|")
 
-# THE SWEEP, AT TWO WIDTHS, deliberate rather than drift. `_PUBLISHED_PATTERN` is what §8
-# prints for a reader; it misses `## 3. What F7 leaves unrun, and where the rest of it lives`
-# in `docs/f7-run-evidence.md` -- ledger-shaped, in a file the glob matches, missed on WORDING
-# ALONE, and the precedent an F8 author would copy. The sweep test asserts CONTAINMENT.
-_PUBLISHED_PATTERN = r"^#+ .*(unexercised|did not exercise)"
-_SECTION_PATTERN = (r"^#+ .*(unexercis|did not exercise|didn't exercise|leaves unrun"
-                    r"|not exercised)")
-
-# How a swept section §0.4 does not declare can still be accounted for: by saying in its own
-# body that its debt lives in the consolidated file, which `docs/f7-run-evidence.md` §3 does.
-_DEFERRAL = "unexercised-ledger.md"
 
 # *what would exercise it*, answered with nothing but not spelled `nothing`. THE BARE DASHES
 # ARE THE DAMAGING ONES: an em dash is markdown's empty cell, so a row could say "no answer"
@@ -114,11 +124,6 @@ _NO_EVIDENCE = "cites no commit:, anchor:, run: or stmt: evidence"
 # --------------------------------------------------------------------------------
 # READING MARKDOWN. Shapes only: a heading, and the tables under it.
 # --------------------------------------------------------------------------------
-
-
-def _norm(text: str) -> str:
-    """Whitespace collapsed, so a wrapped source line and a table cell compare equal."""
-    return " ".join(text.split())
 
 
 def _tables(text: str, heading: str) -> list[list[list[str]]]:
@@ -219,81 +224,8 @@ def _derived_totals(text: str) -> dict[str, int]:
 
 
 # --------------------------------------------------------------------------------
-# WHAT THE REPOSITORY SAYS. Nothing below opens the ledger document.
+# THE COMPARISONS, each returning what it found rather than asserting.
 # --------------------------------------------------------------------------------
-
-
-@lru_cache(maxsize=64)
-def _source_lines(path: str) -> tuple[str, ...]:
-    resolved = _REPO / path
-    assert resolved.is_file(), f"{path} is not a file in this repository"
-    return tuple(resolved.read_text(encoding="utf-8").splitlines())
-
-
-def _window(path: str, line: int) -> str:
-    """The anchored line plus the two after it, whitespace collapsed.
-
-    THREE LINES AND NOT ONE. A claim in these documents is a bullet that wraps, so a quote a
-    reader would call "the line" often spans two; a window of one would redden on a re-wrap
-    that changed nothing.
-
-    AND HERE IS WHAT THAT TOLERATES, MEASURED -- the earlier wording, *"three is still tight
-    enough that a claim which MOVES goes red"*, was false for the size of move that happens. 179
-    of the 182 claims match on the anchor line ALONE, and over `docs/f5-run-evidence.md`'s 22
-    anchors: inserting ONE or TWO lines above them reddens NOTHING, THREE reddens all 22, DELETING
-    one reddens all 22 at once. THE TOLERANCE IS ASYMMETRIC, the window running forward only --
-    concrete and pending, since writing the broker-probe result into that file is an insertion.
-    `_ANCHOR_WINDOW` stays at three: one buys precision at a red on every re-wrap."""
-    lines = _source_lines(path)
-    assert 1 <= line <= len(lines), f"{path}:{line} is past the end of the file"
-    return _norm(" ".join(lines[line - 1:line - 1 + _ANCHOR_WINDOW]))
-
-
-def _corpus() -> dict[str, str]:
-    """The phase records the sweep reads: `docs/*-evidence.md`, and ONLY that.
-
-    NOT "anywhere under `docs/`", WHICH IS WHAT THIS FILE CLAIMED IN TWO PLACES. The glob is one
-    level deep and matches one suffix: `docs/adr/0016-*.md` and `0017-*.md` both carry a `### What
-    ships UNEXERCISED` it does not see, and `0008` an *"unexercised here by choice"*. THAT
-    EXCLUSION IS DEFENSIBLE AND §7 MAKES IT; claiming to sweep all of `docs/` while globbing one
-    suffix was not. A dict, so the arms can add a document without writing one into the tree."""
-    return {path.relative_to(_REPO).as_posix(): path.read_text(encoding="utf-8")
-            for path in sorted((_REPO / "docs").glob("*-evidence.md"))}
-
-
-def _swept_sections(pattern: str = _SECTION_PATTERN,
-                    corpus: dict[str, str] | None = None,
-                    ) -> list[tuple[str, str, list[str], str]]:
-    """(file, heading, the headings it nests under, its body) for every ledger-shaped section.
-
-    THIS IS THE HALF A DECLARED LIST CANNOT SUPPLY. `_heading_misses` proves the ten declared
-    sections still exist; only a sweep proves there is no ELEVENTH one that nobody added.
-    Ancestors and body come with it, because "undeclared" is not on its own the question --
-    `_unconsolidated_sections` says what is."""
-    found: list[tuple[str, str, list[str], str]] = []
-    for name, text in (_corpus() if corpus is None else corpus).items():
-        lines = text.splitlines()
-        above: list[tuple[int, str]] = []
-        for number, line in enumerate(lines):
-            hashes = re.match(r"^(#+) ", line)
-            if not hashes:
-                continue
-            level = len(hashes.group(1))
-            while above and above[-1][0] >= level:
-                above.pop()
-            if re.match(pattern, line, re.IGNORECASE):
-                end = next((i for i in range(number + 1, len(lines))
-                            if re.match(rf"^#{{1,{level}}} ", lines[i])), len(lines))
-                found.append((name, line.strip(), [head for _, head in above],
-                              "\n".join(lines[number:end])))
-            above.append((level, line.strip()))
-    return found
-
-
-def _swept_headings(pattern: str = _SECTION_PATTERN,
-                    corpus: dict[str, str] | None = None) -> set[tuple[str, str]]:
-    """Just the (file, heading) pairs of the sweep, which is the shape §0.4 declares."""
-    return {(name, heading) for name, heading, _, _ in _swept_sections(pattern, corpus)}
 
 
 def _unconsolidated_sections(text: str,
@@ -323,33 +255,6 @@ def _unconsolidated_sections(text: str,
             f"a ledger section §0.4 does not declare and whose body never names {_DEFERRAL}: "
             "consolidate it or defer to the ledger in as many words")
     return misses
-
-
-def _commit_resolves(sha: str) -> bool:
-    return subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=_REPO,
-                          capture_output=True).returncode == 0
-
-
-@lru_cache(maxsize=1)
-def _history_is_deep() -> bool:
-    """Whether a `commit:` token can be resolved in this clone at all.
-
-    CI COULD NOT ANSWER IT AND THIS FILE FAILED THERE RATHER THAN SAY SO. `ci.yml`'s `test` job
-    uses `actions/checkout@v4` and sets no `fetch-depth` -- only `secret-scan` asks for `0` -- so
-    it runs at the action's default of `1`, and §4.2's `commit:2d077a8`, an F5-era commit, is not
-    in the object store. Reproduced with `git clone --depth 1`: two tests here turned red for a
-    reason with nothing to do with the ledger. A CHECK THAT CANNOT LOOK MUST SAY SO, NOT REPORT
-    THE VALUE IT EXPECTED -- `commit:0000000` and a real commit are INDISTINGUISHABLE here, so
-    "does not resolve" read as "fine" is the green-that-reads-like-verification this document
-    is about. `tests/test_adr_index.py` set the rule for this checkout; this is its second user."""
-    probe = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=_REPO,
-                           capture_output=True, text=True)
-    return probe.returncode == 0 and probe.stdout.strip() == "false"
-
-
-# --------------------------------------------------------------------------------
-# THE COMPARISONS, each returning what it found rather than asserting.
-# --------------------------------------------------------------------------------
 
 
 def _anchor_misses(text: str) -> dict[str, str]:
@@ -724,17 +629,37 @@ def test_a_headline_count_that_drifts_from_section_4_1_is_named():
         "**23 entries had been closed")) == {"never_struck": (23, 24)}
 
 
+# THE ONE §4.1 ROW THIS ARM MOVES, HELD ONCE RATHER THAN TWICE. F2 wave 2 RESTATED this
+# row's *what closed it* cell: `link_payment` declared a second derivation on an identifying
+# end, so "the only link with a declared derivation on an identifying end" stopped being true
+# of `link_merchant_empresa`, and the cell now says what actually closed the row. The row had
+# been spelled out TWICE below -- once as the search string and once as the replacement --
+# so the restatement had to be retyped in both, a correction cost that bought nothing: THE
+# MUTATION THIS ARM MAKES IS THE ANCHOR AND NOTHING ELSE. The replacement is derived from the
+# row instead. Coupling to the document is unchanged -- reword the cell and `_mutated`'s
+# count-of-one assertion fails on the search string, loudly, which is how this was found.
+_FDB_1494 = (
+    "| `fdb:1494` | `ObservationGrain.key_prefixes` AND `key_expression` HAVE "
+    "RUN ZERO ROWS ON DATABRICKS | the run of record loaded "
+    "`link_merchant_empresa`, whose non-empty `key_prefixes` are what those "
+    "two functions read. **RESTATED BY F2 WAVE 2, NOT WEAKENED:** this cell "
+    "used to read *\"the only link with a declared derivation on an "
+    "identifying end\"*, which `link_payment` falsified by declaring TWO. What "
+    "made this link the one that closed the row is not that it was the only "
+    "link to declare a derivation, but that its prefixes REACH A GRAIN — "
+    "`sat_link_payment` is transactional, takes `axis=` and reaches none — so "
+    "the same run still closes it | anchor:docs/f-db-run-evidence.md:1225 |")
+
+
 def test_a_row_moved_out_of_section_4_1_is_named_by_both_counts_it_moves():
-    """Retyping one CLOSED row's evidence to another document moves the second count."""
-    assert _prose_disagreements(_mutated(
-        "| `fdb:1494` | `ObservationGrain.key_prefixes` AND `key_expression` HAVE RUN ZERO "
-        "ROWS ON DATABRICKS | the run of record loaded `link_merchant_empresa`, the only link "
-        "with a declared derivation on an identifying end | anchor:docs/f-db-run-evidence.md:"
-        "1225 |",
-        "| `fdb:1494` | `ObservationGrain.key_prefixes` AND `key_expression` HAVE RUN ZERO "
-        "ROWS ON DATABRICKS | the run of record loaded `link_merchant_empresa`, the only link "
-        "with a declared derivation on an identifying end | anchor:docs/f4-run-evidence.md:"
-        "542 |")) == {"same_document": (10, 9)}
+    """Retyping one CLOSED row's evidence to another document moves the second count.
+
+    AND THE MUTATION IS ASSERTED TO MUTATE before it is trusted, which is this phase's own
+    lesson twice over: a replacement that happens to equal its search string applies
+    cleanly, reports green and has changed nothing."""
+    moved = _FDB_1494.replace("docs/f-db-run-evidence.md:1225", "docs/f4-run-evidence.md:542")
+    assert moved != _FDB_1494, "the anchor swap did not change the row"
+    assert _prose_disagreements(_mutated(_FDB_1494, moved)) == {"same_document": (10, 9)}
 
 
 def test_a_source_section_dropped_from_the_declaration_is_named_by_the_sweep():

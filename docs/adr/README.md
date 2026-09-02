@@ -25,9 +25,11 @@ underneath it.
 > CI's `test` job checks out at `actions/checkout@v4`'s default `fetch-depth: 1`, so
 > that history is not there when the lock runs. A column that degrades quietly under a
 > shallow clone is worse than one that is declared and cross-checked where git can
-> answer.
+> answer. An ADR written in a phase that has not merged yet has no such sha to declare,
+> so it reads `unmerged` — and the lock refuses that word the moment git says the ADR
+> reached `main`.
 
-## All 20 ADRs
+## All 21 ADRs
 
 | # | decision | phase | status | `## Decision` sections | reversal conditions |
 |---|---|---|---|---|---|
@@ -51,10 +53,11 @@ underneath it.
 | [0018](0018-dataops-derives-it-does-not-instrument-and-it-does-not-act.md) | DataOps derives; it does not instrument, and it does not act | F4 (`3bd2f52`) | Accepted, qualified | 7 | 1 |
 | [0019](0019-the-proof-runs-where-a-process-can-be-killed.md) | The exactly-once proof runs where a process can be killed; the broker is a recorded run | F5 (`5d769a3`) | Accepted, qualified | 8 | 8 |
 | [0020](0020-the-triage-accelerator-is-deterministic-and-the-model-runs-as-the-control.md) | The triage accelerator is deterministic, and the model runs as the control | F6 (`ef123ac`) | Accepted, qualified | 6 | 6 |
+| [0022](0022-payment-as-a-transactional-link-and-two-refuted-hubs.md) | The payment is a transactional link between two companies, and its two promised hubs are refuted | F2w2 (`unmerged`) | Accepted, qualified | 7 | 7 |
 
 ## The numbered decisions
 
-The **6** ADRs whose decisions are numbered, from their own headings. The reversal table below cites them by number.
+The **7** ADRs whose decisions are numbered, from their own headings. The reversal table below cites them by number.
 
 **[0006](0006-bronze-dq-gate-policy.md) — bronze DQ gate: keep fail-closed on any reject, add a triage path, and — measured — keep it**
 
@@ -108,9 +111,19 @@ The **6** ADRs whose decisions are numbered, from their own headings. The revers
 - Decision 5 — blast radius is a DECLARED manifest, locked against the registries
 - Decision 6 — the comparison horizon is bounded, and the agent says when N was not available
 
+**[0022](0022-payment-as-a-transactional-link-and-two-refuted-hubs.md) — The payment is a transactional link between two companies, and its two promised hubs are refuted**
+
+- Decision 1 — `link_payment` is a TRANSACTIONAL link, self-referencing on `hub_empresa` under `payer` and `payee`
+- Decision 2 — `hub_account` and `hub_customer` are REFUTED, not deferred
+- Decision 3 — the measures ride a satellite on the LINK, and that WIDENED a kind rather than adding one
+- Decision 4 — `applied_date` becomes a DECLARED source, because `bronze_payments` deliberately carries no `_snapshot_ref_date`
+- Decision 5 — `BlastRadius` carries a THIRD shape, and the two-shape model was emitting a false sentence
+- Decision 6 — a rename carries its own prose sweep, IN the rename commit, re-derived AFTER the edit
+- Decision 7 — the phase ships UNCLOSED, and the README's limit narrows rather than closing
+
 ## Reversal conditions
 
-**41 conditions, stated by 10 of the 20 ADRs. 10 have been read** (3 LOOKS MET, IS NOT, 2 MET, 4 NOT MET, 1 UNCLOSABLE); the remaining 31 are marked `NOT READ`, which is not `NOT MET`. **10 ADRs state no reversal condition at all** — 0001, 0002, 0003, 0004, 0005, 0007, 0008, 0009, 0016, 0017 — and that is a finding rather than an omission of this page's.
+**48 conditions, stated by 11 of the 21 ADRs. 11 have been read** (3 LOOKS MET, IS NOT, 2 MET, 5 NOT MET, 1 UNCLOSABLE); the remaining 37 are marked `NOT READ`, which is not `NOT MET`. **10 ADRs state no reversal condition at all** — 0001, 0002, 0003, 0004, 0005, 0007, 0008, 0009, 0016, 0017 — and that is a finding rather than an omission of this page's.
 
 `MET` and `NOT MET` are measurements. **`LOOKS MET, IS NOT` is the state this table exists for**: something arrived that resembles the condition and does not satisfy it, which collapsed into a boolean reads as `MET` — and that is how a decision gets reversed by a resemblance. `UNCLOSABLE` means no change to this repository can ever close it. `NOT READ` means nobody has looked.
 
@@ -157,6 +170,13 @@ The **6** ADRs whose decisions are numbered, from their own headings. The revers
 | [0020 D4](0020-the-triage-accelerator-is-deterministic-and-the-model-runs-as-the-control.md) | a run that settles prediction 3, plus a reason to want the issue opened by something other than a person. | **NOT READ** | — | *nobody has taken this reading* |
 | [0020 D5](0020-the-triage-accelerator-is-deterministic-and-the-model-runs-as-the-control.md) | Unity Catalog lineage becoming readable and complete on this edition, at which point the declaration becomes the *lock* on a derived answer rather than the answer. | **LOOKS MET, IS NOT** | 2026-08-29 | lineage IS readable — `system.access.table_lineage`, **3,327 rows and 72 distinct `target_table_full_name`** (the COLUMN matters: F7 re-measured 3,340 rows, 72 distinct `target_table_full_name` and **67** distinct `target_table_name`, and reading those two against each other as a drop nearly published a retention finding that was two columns), 2026-07-24 to 2026-08-28, statement `01f1a4c2-1cfb-115a-a947-5a2fbc1aec10` — and it carries the hard `bronze_payments -> fact_payment` edge this decision said a vault-path walk would miss. It is not COMPLETE: it records EXECUTIONS (`event_time`) while the manifest states STRUCTURE, so it answers *nothing downstream* for a table whose loader has not run inside the retention window |
 | [0020 D6](0020-the-triage-accelerator-is-deterministic-and-the-model-runs-as-the-control.md) | the telemetry marking a retired task key as superseded, which would make the stable-key argument unnecessary rather than wrong. | **NOT READ** | — | *nobody has taken this reading* |
+| [0022 D1](0022-payment-as-a-transactional-link-and-two-refuted-hubs.md) | an identifier arriving in the stream that is not a company and not the event — a settlement id, an account, a batch — at which point the pair-plus-event key stops being the whole grain and the link gains an end or the domain gains a table. That is a `SCHEMA_VERSION` change and therefore a scope decision, not a modelling one. | **NOT READ** | — | *nobody has taken this reading* |
+| [0022 D2](0022-payment-as-a-transactional-link-and-two-refuted-hubs.md) | the payment stream carrying an identifier for a party that is not its CNPJ root — a customer number, an account number, a wallet — which would be a real entity with a key space of its own and a hub with something to hold. Nothing about the vault reverses this; the stream does. | **NOT READ** | — | *nobody has taken this reading* |
+| [0022 D3](0022-payment-as-a-transactional-link-and-two-refuted-hubs.md) | a second link-parented satellite whose behaviour a hub-parented one cannot have — a different delta rule, a different grain contract, a closing path. Two tables sharing a kind and disagreeing about what the kind does is the moment the kind splits, and `Link` itself entered this package that way. | **NOT READ** | — | *nobody has taken this reading* |
+| [0022 D4](0022-payment-as-a-transactional-link-and-two-refuted-hubs.md) | `bronze_payments` gaining a `_snapshot_ref_date` it can prove — which means the generated stream declaring a date in its own filename, the thing three bronze modules say a generated stream does not have. The declaration would then be redundant for this table and would still be the mechanism, because the satellites that read `_snapshot_ref_date` today (the RFB ones, and `sat_merchant_dados`, whose source is Postgres and whose axis is an instant) and the payments one would no longer be readable from one constant by luck. | **NOT READ** | — | *nobody has taken this reading* |
+| [0022 D5](0022-payment-as-a-transactional-link-and-two-refuted-hubs.md) | `fact_payment` re-pointed at `link_payment`, which empties `payments`' direct leg and leaves `ptax` as the field's only witness — at which point the third shape is carried by one table and the question of whether a declaration deserves a field it exercises once becomes live again. | **NOT READ** | — | *nobody has taken this reading* |
+| [0022 D6](0022-payment-as-a-transactional-link-and-two-refuted-hubs.md) | nothing reverses running a sweep after an edit. What would make it unnecessary is a check that derives its own population from the tree at the moment it runs, for the specific class of name being renamed — narrower than the rejected general one, and worth building the next time a rename touches more than a handful of files. | **NOT READ** | — | *nobody has taken this reading* |
+| [0022 D7](0022-payment-as-a-transactional-link-and-two-refuted-hubs.md) | a workspace that will launch a run — at which point `docs/f2-wave-2-run-evidence.md` can be produced from a run instead of from a local Spark session, and protocol §9's conditions 1 and 4 become answerable for the first time in this phase. | **NOT MET** | 2026-09-02 | taken by the F8 session and RE-STATED here rather than inherited silently, because it is the condition that decides whether F2 wave 2 can ever close: `bundle deploy` creating a NEW job answers **403 `PERMISSION_DENIED`** and `jobs/run-now` is refused, while reads, `jobs/update` and a deploy over resources that ALREADY EXIST all still work — so the refusal is about LAUNCHING and not about deploying. Last run terminating `SUCCESS` in this workspace: **2026-08-28T18:32:13Z**. That is exactly the half protocol §9's conditions 1 and 4 need, so the phase ships unclosed and says so |
 
 ## What this page cannot see
 
@@ -165,7 +185,7 @@ use each is read out of the files, not typed here:
 
 - a `### What would reverse this decision` section — 0006
 - a `### What would change this decision` section — 0010, 0011, 0012, 0013, 0014, 0015
-- an inline `**What reverses it:**` paragraph under a numbered decision — 0018, 0019, 0020
+- an inline `**What reverses it:**` paragraph under a numbered decision — 0018, 0019, 0020, 0022
 
 **And the grammar underneath them, which is the floor a condition has to clear to be
 counted at all.** Code fences and the HTML that renders as nothing — comments, and

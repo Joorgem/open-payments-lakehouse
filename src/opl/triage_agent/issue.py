@@ -593,13 +593,32 @@ def as_mapping(issue: TriageIssue) -> dict[str, Any]:
 
     THE RADIUS IS WRITTEN OUT AND IS NOT WHAT IS READ BACK -- `from_mapping` derives it
     again and refuses a disagreement. It is here so that a person reading the file sees the
-    same answer the body will carry, without importing this package."""
+    same answer the body will carry, without importing this package.
+
+    THE RADIUS' FIELDS ARE ITERATED AND NOT LISTED, WHICH IS A REPAIR OF A REAL BREAK. This
+    block spelled `source`, `vault` and `gold` as three literals; F2 wave 2's T1 added
+    `gold_direct` to `BlastRadius` and to `_radius_of`'s read, and did not add it here -- so
+    every payload this function wrote was missing a key its own reader requires by name, and
+    `payloads_from_json(json.dumps(as_mapping(...)))` raised `KeyError: 'gold_direct'` for
+    every incident. That is the WHOLE publish path: `scripts/open_triage_issue.py` reads
+    its facts from a file this function wrote, through `payloads_from_json`. Nothing
+    called triage_publish has ever existed in this tree, and this sentence named it
+    until the corpus was swept. Nineteen tests across `test_issue_payload.py` and
+    `test_issue_publisher.py` were red on it, and no test asserted the round trip's field
+    list, so a fourth literal added here would have been the same defect again on the fifth
+    field. `fields(BlastRadius)` is the list now, and
+    `test_the_written_radius_carries_every_field_the_reader_requires` drives it."""
     out: dict[str, Any] = {}
     for spec in fields(issue):
         value = getattr(issue, spec.name)
         if spec.name == "radius":
             out[spec.name] = {
-                "source": value.source, "vault": list(value.vault), "gold": list(value.gold),
+                field.name: (
+                    list(getattr(value, field.name))
+                    if isinstance(getattr(value, field.name), tuple)
+                    else getattr(value, field.name)
+                )
+                for field in fields(value)
             }
         elif spec.name == "provenance":
             out[spec.name] = {
@@ -617,8 +636,16 @@ def as_mapping(issue: TriageIssue) -> dict[str, Any]:
 def _radius_of(carried: Mapping[str, Any], source: str) -> BlastRadius:
     """The radius this wheel derives, checked against the one the file carries."""
     derived = blast_radius(source)
+    # `gold_direct` IS READ BY NAME LIKE THE OTHERS, and a payload written before F2 wave 2
+    # added the field therefore fails here with a `KeyError` rather than comparing equal on
+    # three fields out of four. That is the behaviour this function exists for: the guard
+    # below reports a wheel whose manifest has moved since the facts were produced, and a
+    # payload from before the field existed IS that case.
     written = BlastRadius(
-        source=carried["source"], vault=tuple(carried["vault"]), gold=tuple(carried["gold"]),
+        source=carried["source"],
+        vault=tuple(carried["vault"]),
+        gold=tuple(carried["gold"]),
+        gold_direct=tuple(carried["gold_direct"]),
     )
     if derived != written:
         raise MismatchedFacts(

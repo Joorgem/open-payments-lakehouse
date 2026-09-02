@@ -106,17 +106,30 @@ def test_losing_the_second_parent_of_the_shared_hub_is_two_missing_gold_tables()
 # ----------------------------------------------------------------------------------
 
 
-def test_the_headline_incidents_table_reaches_gold_with_no_vault_table_in_between():
+def test_the_headline_incidents_table_bypasses_the_vault_while_also_feeding_it():
     """`592660596679630` is a `payments` incident, the largest in this workspace, and the one
     whose recorded recommendation is DO NOT PROMOTE (`docs/f6-run-evidence.md` 0.3, 1.3).
 
-    A manifest built by walking bronze -> vault -> gold answers "nothing downstream" for it.
-    That answer raises nothing, is a perfectly ordinary shape for a bronze table here, and is
-    the most reassuring thing this module could print. The exact tuples are asserted, not
-    just non-emptiness, because "returned something" is satisfied by returning everything."""
+    A manifest built by walking bronze -> vault -> gold answers WORSE THAN NOTHING for it
+    since F2 wave 2: it answers `link_payment`, a vault table no gold table reads. The exact
+    tuples are asserted, not just non-emptiness, because "returned something" is satisfied
+    by returning everything.
+
+    THIS TEST USED TO ASSERT `payments.vault == ()` AND F2 WAVE 2 FALSIFIED THAT. The name
+    said "reaches gold with no vault table in between", which was the whole truth about
+    `payments` until `link_payment` was registered and is now half of it. Both legs are
+    asserted separately because the phase's declared gap lives exactly in the difference:
+    the vault holds the payment, and `fact_payment` still does not read it.
+
+    THE VAULT LEG IS TWO TABLES SINCE T2 AND THE GAP IS UNCHANGED, which is the reading the
+    pair of assertions below is for. `sat_link_payment` carries the payment's measures --
+    `amount`, `currency`, `payment_method` -- so the vault now holds the payment and not
+    only the relationship; `gold` and `gold_direct` are still EQUAL, which is the exact
+    statement that no gold table reads either of them."""
     payments = blast_radius("payments")
-    assert payments.vault == ()
+    assert payments.vault == ("link_payment", "sat_link_payment")
     assert payments.gold == ("dim_date", "fact_payment")
+    assert payments.gold_direct == ("dim_date", "fact_payment")
     assert payments.bypasses_the_vault is True
 
     ptax = blast_radius("ptax")
@@ -129,17 +142,33 @@ def test_the_guard_refuses_a_declaration_that_drops_the_direct_to_gold_leg():
     """THE RED ARM. The defence is an import-time refusal, so this drives it on a
     declaration missing the entry rather than observing that the entry is there.
 
-    Removing `payments` from `DIRECT_TO_GOLD` leaves it with no vault loader and no gold
-    target -- an empty blast radius on the workspace's biggest incident -- and that has to
-    be a raise. The control arm is first: the live declaration must pass, or the raise below
-    could be about the injection rather than about the missing leg."""
+    Removing `ptax` from `DIRECT_TO_GOLD` leaves it with no vault loader and no gold target
+    -- an empty blast radius -- and that has to be a raise. The control arm is first: the
+    live declaration must pass, or the raise below could be about the injection rather than
+    about the missing leg.
+
+    THIS TEST DROVE THE GUARD WITH `payments` UNTIL F2 WAVE 2, AND THE PHASE TOOK THE
+    DEMONSTRATION AWAY RATHER THAN THE GUARD. `payments` only ever demonstrated this
+    refusal because it had no vault leg; with `link_payment` registered, dropping its
+    `DIRECT_TO_GOLD` entry leaves a non-empty radius and this guard is silent about it.
+    `ptax` is now the only bronze table with no vault leg, so it is the only one that can
+    drive this arm -- which is worth noticing rather than papering over: **the guard is one
+    table away from having no demonstration at all**, and the day `ptax` gains a vault
+    loader it becomes a refusal nobody can watch fail.
+
+    WHAT STILL COVERS THE `payments` CASE, because the coverage did not move with the
+    demonstration: `test_blast_radius_lock.py` holds `DIRECT_TO_GOLD`'s KEY SET equal to the
+    bronze tables the gold entry points actually read (`set().union(*per_file.values()) ==
+    set(DIRECT_TO_GOLD)`), so a dropped `payments` entry still fails there -- on a stronger
+    check than this one, since it compares the declaration against the source it describes
+    rather than against emptiness."""
     _assert_no_bronze_table_reaches_nothing(direct=DIRECT_TO_GOLD)
 
-    with pytest.raises(ValueError, match="nothing downstream: \\['payments'\\]"):
+    with pytest.raises(ValueError, match=r"nothing downstream: \['ptax'\]"):
         _assert_no_bronze_table_reaches_nothing(
-            direct={key: value for key, value in DIRECT_TO_GOLD.items() if key != "payments"}
+            direct={key: value for key, value in DIRECT_TO_GOLD.items() if key != "ptax"}
         )
-    with pytest.raises(ValueError, match=r"nothing downstream: \['payments', 'ptax'\]"):
+    with pytest.raises(ValueError, match=r"nothing downstream: \['ptax'\]"):
         _assert_no_bronze_table_reaches_nothing(direct={})
 
 
@@ -167,10 +196,15 @@ def test_the_guard_also_refuses_a_bronze_table_dropped_from_the_vault_declaratio
 def test_each_bronze_tables_answer_is_its_own_and_not_the_whole_model():
     """THE ASSERTION THE WHOLE FILE EXISTS FOR: exact tuples, table by table.
 
-    A blast radius returning all six gold tables and all eighteen vault tables for every
-    bronze table would satisfy every non-emptiness check in this file. These are the numbers
-    that cannot be produced that way -- THREE of the seven reach no gold table, TWO reach no
-    vault table, and no two of the seven carry the same pair of legs."""
+    A blast radius returning EVERY gold table and EVERY vault table for every bronze table
+    would satisfy every non-emptiness check in this file. These are the answers that cannot
+    be produced that way -- THREE of the seven bronze tables reach no gold table, ONE
+    reaches no vault table, and no two of the seven carry the same pair of legs.
+
+    "TWO REACH NO VAULT TABLE" WAS TRUE UNTIL F2 WAVE 2 and is now one: `link_payment` gave
+    `payments` a vault leg and left `ptax` alone in that column. T2 added a SECOND table to
+    that leg rather than a second table with a leg, so the count is unchanged and the tuple
+    is not -- which is why this assertion is exact tuples and not a count."""
     answers = {table: blast_radius(table) for table in sorted(REGISTRY)}
     assert {table: radius.gold for table, radius in answers.items()} == {
         "empresas": ("dim_company", "dim_date", "fact_payment"),
@@ -195,7 +229,7 @@ def test_each_bronze_tables_answer_is_its_own_and_not_the_whole_model():
             "hub_merchant", "link_merchant_empresa", "sat_eff_merchant_empresa",
             "sat_merchant_dados",
         ),
-        "payments": (),
+        "payments": ("link_payment", "sat_link_payment"),
         "ptax": (),
         "socios": ("link_company_partner", "sat_eff_company_partner"),
     }
@@ -475,31 +509,80 @@ def test_the_record_carries_no_count_no_proportion_and_no_score():
     55,830,826 rows of the live STAGING table, with no test able to tell the two apart.
     `severity.py` refused the same ratio for the same measurement; the record
     holds names and nothing that could be summed, ranked or rendered as a percentage, and
-    the field list is asserted EXACTLY: an added `affected_rows` fails here."""
-    assert [item.name for item in fields(BlastRadius)] == ["source", "vault", "gold"]
+    the field list is asserted EXACTLY: an added `affected_rows` fails here.
+
+    `gold_direct` JOINED THE LIST IN F2 WAVE 2 AND THIS TEST IS WHY THAT WAS A DECISION.
+    It is a fourth field and it is still NAMES ONLY, which is the rule -- the equality
+    caught the addition and made someone say so here rather than letting the record grow a
+    field nobody weighed. A count would have failed the same way, which is the point."""
+    assert [item.name for item in fields(BlastRadius)] == [
+        "source", "vault", "gold", "gold_direct",
+    ]
     for table in REGISTRY:
         radius = blast_radius(table)
         assert isinstance(radius.source, str)
-        assert all(isinstance(name, str) for name in (*radius.vault, *radius.gold))
+        assert all(
+            isinstance(name, str)
+            for name in (*radius.vault, *radius.gold, *radius.gold_direct)
+        )
 
 
-def test_the_vault_bypass_needs_both_halves_and_not_just_an_empty_vault_leg():
-    """`bypasses_the_vault` on a record that reaches nothing at all must be False.
+def test_the_vault_bypass_is_read_off_the_direct_leg_and_not_off_an_empty_vault_leg():
+    """`bypasses_the_vault` must answer for the DIRECT leg alone.
 
-    That record cannot come out of `blast_radius` -- the import guard refuses it -- so it is
-    built here directly, which is the only way to fire the second half of the expression.
-    Written as `not self.vault` alone the property would be True for it, and "reaches gold
-    without the vault" would be the word printed for a table that reaches nothing."""
-    assert BlastRadius(source="x", vault=(), gold=()).bypasses_the_vault is False
-    assert BlastRadius(source="x", vault=(), gold=("g",)).bypasses_the_vault is True
-    assert BlastRadius(source="x", vault=("v",), gold=("g",)).bypasses_the_vault is False
+    These records cannot come out of `blast_radius` -- the import guard refuses a radius
+    that reaches nothing -- so they are built here directly, which is the only way to reach
+    every combination of the two legs.
+
+    THE THIRD CASE IS THE ONE F2 WAVE 2 INVERTED, AND IT WAS A LIVE DEFECT, NOT A
+    HYPOTHETICAL. It used to assert False for "has a vault leg AND reaches gold": the
+    property was spelled `not self.vault and bool(self.gold)`, so a table with a vault
+    loader could never report a bypass. `link_payment` made `payments` exactly that table
+    while `fact_payment` still loads from `bronze_payments` -- so the one incident this
+    module was built for (`592660596679630`) reported that it does NOT bypass the vault
+    while its fact was being written straight out of bronze. The bypass is a fact about the
+    direct leg; the vault leg is a different question and must not veto it."""
+    nothing = BlastRadius(source="x", vault=(), gold=(), gold_direct=())
+    direct_only = BlastRadius(source="x", vault=(), gold=("g",), gold_direct=("g",))
+    both_legs = BlastRadius(source="x", vault=("v",), gold=("g",), gold_direct=("g",))
+    via_vault_only = BlastRadius(source="x", vault=("v",), gold=("g",), gold_direct=())
+
+    assert nothing.bypasses_the_vault is False
+    assert direct_only.bypasses_the_vault is True
+    assert both_legs.bypasses_the_vault is True
+    assert via_vault_only.bypasses_the_vault is False
 
 
-def test_the_note_has_three_arms_and_a_real_table_reaches_each():
+def test_a_direct_leg_the_whole_gold_set_does_not_contain_is_refused():
+    """`gold` is the union of the two legs, so a direct-leg table missing from it means the
+    two were derived from different declarations -- the drift the stored union invites.
+
+    Refused in `__post_init__` rather than left to be read: the symptom otherwise is a
+    sentence in an issue body naming a gold table the record's own `gold` tuple denies."""
+    with pytest.raises(ValueError, match="different declarations"):
+        BlastRadius(source="x", vault=(), gold=("a",), gold_direct=("a", "b"))
+
+
+def test_the_note_has_four_arms_and_a_real_table_reaches_each():
     """An arm no input can reach is this repository's most-hunted species, so each is named
-    with the table that takes it. The first arm is the one that matters: it says the bypass
-    OUT LOUD rather than leaving an empty vault list to be read as an empty answer."""
-    assert "NO vault loader task" in blast_radius_note("payments")
+    with the table that takes it.
+
+    THE FOURTH ARM IS FIRST IN THE FUNCTION AND FIRST HERE, because it is the only one
+    whose absence produced a FALSE sentence rather than a missing one. `payments` feeds
+    `link_payment` and drives `fact_payment` straight from bronze; with three arms it fell
+    through to the "and through them" wording and attributed both gold tables to a vault
+    table that reaches neither. The assertion below is on BOTH halves of the new sentence,
+    because "feeds ... in the vault" alone was already true of the arm that lied.
+
+    `payments` USED TO TAKE THE BYPASS ARM AND `ptax` STILL DOES, which is why the
+    "NO vault loader task" wording had to move rather than be reused: it is false of
+    `payments` now -- there IS a vault loader task declared for it."""
+    payments = blast_radius_note("payments")
+    assert "feeds link_payment, sat_link_payment in the vault" in payments
+    assert "DIRECTLY from bronze, not through the vault" in payments
+    assert "NO vault loader task" not in payments
+
+    assert "NO vault loader task" in blast_radius_note("ptax")
     assert "fact_payment" in blast_radius_note("ptax")
     assert "and through them" in blast_radius_note("empresas")
     assert "NO gold table" in blast_radius_note("merchant")

@@ -183,7 +183,7 @@ def _refuse_a_mismatched_source(
     """The dimension, its satellite and that satellite's hub arrive as three arguments,
     so something has to check they belong together.
 
-    They are three arguments for `opl.vault.satellites._refuse_a_mismatched_hub`'s
+    They are three arguments for `opl.vault.satellites._resolved_parent`'s
     reason: a loader that resolved its source through the module-level registry could
     not be driven with a throwaway spec, and the registry is exactly the thing a later
     task must be able to extend without this file changing. The cost is this check, and
