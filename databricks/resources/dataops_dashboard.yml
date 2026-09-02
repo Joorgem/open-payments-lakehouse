@@ -32,7 +32,11 @@
 # `display_name` IS PREFIXED BY DEV MODE. `targets.free` is `mode: development`, so the
 # deployed name is `[dev <user>] opl-dataops`, exactly as every job in this bundle is.
 # Not fought: the prefix is what keeps a development deploy from colliding with a
-# production one, and the alternative is a second target this project does not have.
+# production one. The project HAS a second target now -- `targets.prod`, added by F8
+# and declared a few lines below `free` in `databricks.yml` -- and it changes nothing
+# here: it is `mode: production`, so it would carry the unprefixed name, and ADR 0021
+# declares it in order never to deploy it. The prefixed name is the only one this
+# dashboard has ever had.
 #
 # THE `.lvdash.json` IS AUTHORED, NEVER ROUND-TRIPPED. `bundle generate dashboard --force`
 # rewrites the file -- sorts keys, pretty-prints, injects `pageType` -- so a UI edit

@@ -74,17 +74,31 @@ resources:
     bronze_ptax:
       name: opl-bronze-ptax
       # DAILY ON WEEKDAYS, AND THE CADENCE IS THE BANCO CENTRAL'S. PTAX is published once
-      # per business day, and this repository has MEASURED the publication instant rather
-      # than assuming it: every 2026 row it has read publishes in the band 13:03-13:10
-      # Brasilia time (ADR 0016 Decision 2, which is also why the timezone below is
-      # `America/Sao_Paulo` and not UTC). 14:00 is after that band with room to spare.
+      # per business day. WHAT THIS REPOSITORY HAS MEASURED IS FOUR PUBLICATION INSTANTS,
+      # NOT A POPULATION, and the difference is the whole reason this paragraph was
+      # rewritten: ADR 0016 Decision 1 clause 1 prints those four, puts all of them inside
+      # the band 13:03-13:10 Brasilia time, and warns in the same sentence that any wider
+      # claim `would be quantifying over rows nobody printed`. This comment made exactly
+      # that wider claim -- `every 2026 row it has read` -- and cited the wrong decision
+      # for it. 14:00 is after the late end of that band with room to spare, and
+      # tests/test_bundle_targets_and_schedules.py derives that comparison from the band
+      # named in THIS comment rather than from an hour typed beside the cron.
+      #
+      # ADR 0016 DECISION 2 IS THE SEPARATE RULING, and it is why the zone below is not
+      # UTC: `dataHoraCotacao` carries no zone designator and is read as Brasilia time.
       #
       # WEEKDAYS, NOT BUSINESS DAYS, AND THE DIFFERENCE IS STATED BECAUSE IT IS REAL. A
       # cron knows Monday from Saturday and knows nothing about Brazilian holidays, which
-      # fall on weekdays and carry no quote -- ADR 0016 records 2026-06-04 (Corpus Christi)
-      # as exactly that day, and DECLINED a holiday calendar for the FX join. Declaring one
-      # here would be the same calendar arriving by the back door, so this schedule fires on
-      # a holiday and the run finds nothing to fetch.
+      # fall on weekdays and can carry no quote. THE WITNESS FOR THAT IS THIS FILE'S OWN
+      # HEADER, not ADR 0016: F-API Task 0's window is 43 weekdays against 42 quotes, the
+      # missing day being 2026-06-04, Corpus Christi. ADR 0016 mentions that date only to
+      # say no holiday falls inside the payment range, and its one MEASURED holiday witness
+      # runs the other way -- 2023-11-20, which a 2026-vintage list calls a holiday and
+      # which DOES carry a quote. What ADR 0016 does supply here is the ruling: it DECLINED
+      # a holiday calendar, on the ground that a calendar is a second spelling of `is there
+      # a quote` that can disagree with the series silently in both directions. Declaring
+      # one here would be that refused calendar arriving by the back door, so this schedule
+      # fires on a holiday and the run finds nothing to fetch.
       #
       # NO `pause_status`: the target's mode writes it, `PAUSED` under `free`. See ADR 0021.
       schedule:

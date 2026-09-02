@@ -362,6 +362,20 @@ here writes into. `bundle deployment bind` would adopt the schema and put 55.8M 
 personal data inside `bundle destroy`'s blast radius. **Rejected**; revisit only with
 `lifecycle: {prevent_destroy: true}` as a precondition.
 
+> **AMENDED 2026-09-01 by F8. *"This repo's only target"* stopped being true that day,
+> and the decision above is unchanged.** `databricks/databricks.yml` now declares a
+> second target, `prod`, `mode: production`, because a target's `mode` is what writes
+> `schedule.pause_status` and a schedule under `mode: development` deploys paused
+> ([ADR 0021](0021-the-deploy-binds-a-scheduled-runs-expected-revision.md)). **It is
+> declared and deliberately never deployed**, and the second and third failure modes
+> above are part of why: both are about a production target, and the third revokes the
+> platform's own `CREATE TABLE` on the schema every pipeline here writes into. The
+> first reads exactly as written for the target that IS deployed. What keeps the other
+> two hypothetical is no longer a promise: `tests/test_bundle_targets_and_schedules.py`
+> refuses any resource collection in that bundle other than `jobs` and `dashboards`, so
+> a securable — the only kind of object `grants` rides on — cannot enter it without a
+> test going red.
+
 ## The lag: group membership is not a switch
 
 **This ADR must not claim the control closes when membership is removed, because it

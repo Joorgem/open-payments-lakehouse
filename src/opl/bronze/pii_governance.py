@@ -10,10 +10,11 @@ test on a machine with no Databricks.
 WHY THIS IS NOT IN THE BUNDLE, WHICH IS WHERE A REVIEWER WILL LOOK FIRST. A
 Databricks Asset Bundle has no `tables` resource, and `grants` is a field on Catalog,
 Schema, Volume, RegisteredModel, ExternalLocation and VectorSearchIndex -- never on a
-table. Declaring the schema instead fails three separate ways here: this repo's only
-target is `mode: development`, which rewrites `name: default` to `dev_<prefix>_default`
-and would deploy green while governing a NEW, EMPTY schema; a production target keeps
-the name and then collides with the existing `default`, owned by
+table. Declaring the schema instead fails three separate ways here: the target this
+repo DEPLOYS is `mode: development`, which rewrites `name: default` to
+`dev_<prefix>_default` and would deploy green while governing a NEW, EMPTY schema; a
+production target keeps the name and then collides with the existing `default`,
+owned by
 `_workspace_admins_workspace_<id>`; and `resources.<securable>.grants` is
 AUTHORITATIVE, so declaring it would revoke `_workspace_users_workspace_<id>`'s
 `USE SCHEMA / CREATE TABLE / CREATE FUNCTION / CREATE VOLUME / CREATE MODEL /

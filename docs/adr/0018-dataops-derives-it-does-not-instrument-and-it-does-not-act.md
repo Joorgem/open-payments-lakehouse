@@ -211,7 +211,7 @@ avoid. **The decision stands on ground 1 alone**, which is sufficient: under the
 target this repository has, the bundle half governs a schema nobody reads.
 
 > **AMENDED 2026-09-01 by F8. *"The only target"* stopped being true that day, and the
-> decision below is unchanged.** `databricks/databricks.yml` now declares a second target,
+> decision above is unchanged.** `databricks/databricks.yml` now declares a second target,
 > `prod`, `mode: production`, added because a target's `mode` is what writes
 > `schedule.pause_status` and a schedule under `mode: development` is deployed paused
 > ([ADR 0021](0021-the-deploy-binds-a-scheduled-runs-expected-revision.md)). **It is declared
@@ -219,9 +219,13 @@ target this repository has, the bundle half governs a schema nobody reads.
 > production target, both are still *"assumed on strong evidence and not proved"*, and
 > ground 3's failure mode is revoking the platform's own `CREATE TABLE`. Ground 1 reads
 > exactly as written for the target that IS deployed. **What keeps grounds 2 and 3
-> hypothetical is mechanical rather than a promise: they can fire only if this bundle
-> declares a SECURABLE — `schemas`, `catalogs`, `volumes` or `external_locations` — and it
-> declares none.**
+> hypothetical is mechanical, and it is now enforced rather than promised: they can fire
+> only if this bundle declares a SECURABLE — one of the object types this decision
+> enumerates above as carrying `grants` — and `tests/test_bundle_targets_and_schedules.py`
+> refuses any resource collection in the bundle other than `jobs` and `dashboards`.** The
+> enumeration is not repeated here on purpose: this amendment first carried a four-item
+> list against the six-item one three paragraphs up, which is how a restated enumeration
+> fails.
 
 `bundle deployment bind` is refused: it puts 55.8M rows of personal data inside
 `bundle destroy`'s blast radius for a cosmetic gain.

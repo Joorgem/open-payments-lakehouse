@@ -4,13 +4,23 @@
 WHY THIS FILE EXISTS AT ALL, AND IT IS THE WHOLE ARGUMENT. `freshness` can measure how
 long ago each bronze table was last written and how old the snapshot in it is. Neither
 number is a metric until something says what it should be. Nothing in this repository
-did: `databricks/resources/` contains **zero** `schedule:`, `trigger:` and `continuous:`
-blocks -- every one of the 29 `ingest` task runs in this workspace was launched by hand
--- so a threshold invented inside a dashboard would be measuring when an operator last
+does: every one of the 29 `ingest` task runs in this workspace was launched by hand --
+so a threshold invented inside a dashboard would be measuring when an operator last
 typed a command and calling it data freshness. That is the standard this phase applied
 to a documented retention figure and to a billing claim, and it applies to the phase's
-own metric. `tests/dataops/test_cadence.py` asserts the zero, so if a schedule is ever
-added, the premise of this file changes loudly rather than silently.
+own metric.
+
+THE GROUND UNDER THAT SENTENCE MOVED IN F8, WHICH IS WHY IT NO LONGER READS `ZERO
+SCHEDULE BLOCKS`. It used to: `databricks/resources/` carried no `schedule:`, `trigger:`
+or `continuous:` block at all, and `tests/dataops/test_cadence.py` asserted the zero.
+F8 declared a cadence on twelve jobs and that test went red when they landed, which is
+exactly what it was written for -- and it then stayed red, unread, until that phase's
+correction pass. What still holds is narrower, and it is what this file now rests on:
+no committed bundle file writes `pause_status`, and the one target this repository
+deploys is `mode: development`, under which the CLI renders `PAUSED` -- so no scheduled
+run has ever fired and every ingest is still launched by hand (ADR 0021). The day one
+CAN fire, that test goes red again and the numbers below are re-decided against what
+the schedule does, rather than adjusted to restore a green.
 
 IT IS A DECLARATION AND IT SAYS SO. `every_days` is a number a human typed and can be
 argued with, and `why` is where the argument is. That is strictly better than the same
@@ -76,11 +86,11 @@ KINDS = (DECLARED, PAUSED, UNDECLARED, NO_SOURCE_AXIS)
 
 # ONE publication period plus a fortnight, and both halves are written down because the
 # number is the only invented thing in this file. 31 days is the RFB's own rhythm -- one
-# CNPJ snapshot per month. The 14 is an allowance for the fact that nothing schedules the
-# ingest, so somebody has to notice the drop and launch the job; it is the part of this
-# constant that is a judgement rather than an observation, and it is the part to argue
-# with. Spelled once and shared by the three tables it governs, so there is no drift
-# between them and no invitation to tune one.
+# CNPJ snapshot per month. The 14 is an allowance for the fact that no schedule in this
+# bundle can fire, so somebody still has to notice the drop and launch the job; it is the
+# part of this constant that is a judgement rather than an observation, and it is the part
+# to argue with. Spelled once and shared by the three tables it governs, so there is no
+# drift between them and no invitation to tune one.
 _RFB_MONTHLY_DAYS = 45
 
 
@@ -119,17 +129,26 @@ CADENCE: dict[str, Cadence] = {
     "empresas": Cadence(
         kind=DECLARED,
         every_days=_RFB_MONTHLY_DAYS,
-        why="RFB publishes one CNPJ snapshot per month; nothing here schedules the ingest",
+        why=(
+            "RFB publishes one CNPJ snapshot per month; the declared schedule deploys "
+            "PAUSED, so the ingest is still launched by hand"
+        ),
     ),
     "estabelecimentos": Cadence(
         kind=DECLARED,
         every_days=_RFB_MONTHLY_DAYS,
-        why="RFB publishes one CNPJ snapshot per month; nothing here schedules the ingest",
+        why=(
+            "RFB publishes one CNPJ snapshot per month; the declared schedule deploys "
+            "PAUSED, so the ingest is still launched by hand"
+        ),
     ),
     "socios": Cadence(
         kind=DECLARED,
         every_days=_RFB_MONTHLY_DAYS,
-        why="RFB publishes one CNPJ snapshot per month; nothing here schedules the ingest",
+        why=(
+            "RFB publishes one CNPJ snapshot per month; the declared schedule deploys "
+            "PAUSED, so the ingest is still launched by hand"
+        ),
     ),
     # NO NUMBER, AND THE ABSENCE IS THE POINT. The merchant snapshot is taken from an
     # operational Postgres by a host-side extractor whenever somebody runs it; there is no

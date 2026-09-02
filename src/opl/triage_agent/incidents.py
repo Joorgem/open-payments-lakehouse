@@ -92,8 +92,8 @@ RUNNING them: the wrong join, whose zero it asserts beside a non-empty control, 
 over a fixture whose `job_run_id` really is a BIGINT -- which is the only input that can tell
 the cast from the no-op it is today.
 
-THE JOB NAME CARRIES A BUNDLE PREFIX AND IT MUST NOT BE PINNED. `databricks.yml`'s only
-target is `mode: development`, which prefixes every deployed job name with
+THE JOB NAME CARRIES A BUNDLE PREFIX AND IT MUST NOT BE PINNED. The target this
+repository DEPLOYS is `mode: development`, which prefixes every deployed job name with
 `[dev <operator>] `, so the runtime `job_name` of these eleven incidents is e.g.
 `[dev <operator>] opl-bronze-cnpj-socios`. That prefix contains an operator's username.
 CLAUDE.md forbids committing one -- the run-evidence docs redact the same string as

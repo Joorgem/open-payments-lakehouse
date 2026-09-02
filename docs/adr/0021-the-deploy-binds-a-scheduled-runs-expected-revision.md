@@ -103,9 +103,15 @@ evidence and not proved"*, and the third of which revokes the platform's own `CR
 schema every pipeline writes into. That is not a thing to find out by trying it on the only
 workspace there is.
 
-**The safety property is mechanical rather than a promise:** those grounds can fire only if the
-bundle declares a securable — `schemas`, `catalogs`, `volumes` or `external_locations`. It
-declares none, and this phase adds none.
+**The safety property is mechanical, and it is enforced rather than promised:** those grounds
+can fire only if the bundle declares a **securable**, which is the only kind of object
+`grants` rides on. [ADR 0018](0018-dataops-derives-it-does-not-instrument-and-it-does-not-act.md)
+Decision 6 enumerates those object types and this ADR does not restate the list — restating it
+is how the first draft of Decision 6's own amendment came to carry four items against its
+source's six. What is asserted instead is the stronger and cheaper property:
+`tests/test_bundle_targets_and_schedules.py` refuses any resource collection in this bundle
+other than `jobs` and `dashboards`, so no securable of any type can enter it without a test
+going red. It declares none, and this phase adds none.
 
 `mode: production` will not validate without a `workspace.root_path`; the CLI says so itself:
 
@@ -172,6 +178,37 @@ So it is written down here as the reversal condition of Decision 1, and not ship
   day, so a bronze job that fails does not stop the vault job that reads it from starting three
   hours later. Nothing here fixes that, and cross-job orchestration is out of this ADR's scope;
   the mitigation today is that every one of those runs refuses at the guard anyway.
+  `tests/test_bundle_targets_and_schedules.py` asserts the tier ORDER — bronze strictly before
+  vault, vault strictly before gold, on one day of the month — because the ordering is the only
+  part of the justification above that a cron can actually carry, and it could otherwise invert
+  silently.
+- **`bronze_ptax` is daily and `gold_fact_payment`, the one job that consumes it, has no
+  cadence.** The asymmetry is deliberate and it follows from the bullet above: PTAX's cadence is
+  a claim about the Banco Central, the fact's would be a claim about a payment stream this wheel
+  generates on request, and a cron here is not a dependency edge in either direction. While
+  every schedule is inert the asymmetry costs nothing; it is the first thing to revisit on the
+  day one is not.
+- **This ADR's own index entry declares `unmerged`, and that becomes false when this branch
+  lands.** `scripts/adr_index.py` carries `("F8", UNMERGED, "f8/iac-promotion-scheduling")` for
+  0021, and `tests/test_adr_phase_declaration.py` has an arm that refuses an `unmerged`
+  declaration once the ADR's adding commit is an ancestor of `origin/main`. **That arm skips on
+  CI's shallow checkout**, so the red appears on a full clone and nowhere else. After the merge:
+  re-declare the entry with the merge sha and regenerate the index with
+  `uv run python scripts/generate_adr_index.py`. The obligation is recorded here because this is
+  the document a reader of that entry arrives at.
+- **Adding a target makes a sentence stale wherever it was written, and a line-based `grep`
+  cannot find the sites where the words break across lines.** *"The only target"* is one of
+  those sentences. Re-derive the sites rather than trusting any count of them:
+
+  ```bash
+  git ls-files -z | xargs -0 grep -lzP '(?s)only\s+target'
+  ```
+
+  `grep -z` reads each file as one NUL-terminated record, so `\s` spans the newline a wrapped
+  comment breaks on. The plain `git grep "only target"` this phase used first missed
+  `src/opl/triage_agent/incidents.py` for exactly that reason — and the commit that corrected
+  the sites the plain grep DID find then claimed, in its own body, to have corrected that one
+  too. A sweep a reader can run is the repair; a corrected number would not have been.
 
 ## References
 

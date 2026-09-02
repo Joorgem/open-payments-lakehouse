@@ -1,9 +1,14 @@
 """The declared cadence: total, self-consistent, and resting on a premise that is asserted.
 
-WHY THE FIRST TEST IS ABOUT YAML AND NOT ABOUT THIS MODULE. `cadence.py`'s whole reason for
-existing is that nothing in this repository schedules an ingest, so freshness has no
-threshold to derive and one has to be declared instead. That premise is a fact about
-`databricks/resources/`, it was true on 2026-08-18, and nothing stopped it changing. A
+WHY THE FIRST TEST IS ABOUT THE BUNDLE AND NOT ABOUT THIS MODULE. `cadence.py`'s whole
+reason for existing is that no ingest here starts on a clock, so freshness has no threshold
+to derive and one has to be declared instead. That premise is a fact about `databricks/`,
+it was true on 2026-08-18, and nothing stopped it changing -- and it DID change: this test
+read `no schedule block exists` until F8 declared twelve of them, and it went red when they
+landed, which is what it was written for. It then stayed red unread -- that phase's own
+review reported the branch failing on the README lock and on nothing else. What replaces
+it is the narrower property the declaration actually needs, and the mechanism behind it
+is owned by `tests/test_bundle_targets_and_schedules.py` rather than restated here. A
 declaration whose reason has quietly become false is worse than no declaration."""
 from __future__ import annotations
 
@@ -11,8 +16,7 @@ import importlib.util
 import sys
 
 import pytest
-import yaml
-from job_yaml import RESOURCES
+from job_yaml import bundle_docs, keys_anywhere
 
 from opl.bronze.registry import REGISTRY
 from opl.dataops import cadence as cadence_module
@@ -30,30 +34,39 @@ from opl.dataops.cadence import (
     declares_source_date,
 )
 
-# The three keys a Databricks job uses to run itself. `schedule` is cron, `trigger` is
-# file/table arrival, `continuous` never stops.
-_SCHEDULING_KEYS = ("schedule", "trigger", "continuous")
+# The key whose ABSENCE from every committed bundle file is what leaves the deployment
+# mode deciding whether a schedule fires. `tests/test_bundle_targets_and_schedules.py`
+# owns that rule and its failure arm; this file reads the same absence because the
+# numbers below rest on it.
+_PAUSE = "pause_status"
 
 
-def test_nothing_in_the_bundle_schedules_a_run_so_the_cadence_has_to_be_declared():
+def test_no_schedule_in_this_bundle_can_fire_so_the_cadence_stays_a_declaration():
     """The premise `cadence.py` rests on, asserted rather than remembered.
 
-    All 29 `ingest` task runs in this workspace were launched by hand, and the measured
-    spread of `MAX(_ingested_at)` across the seven bronze tables is hours to 18 days. If a
-    schedule is ever added, the expected cadence stops being a declaration nobody enforces
-    and becomes a claim about something the platform now does -- and this test is what says
-    so, in the commit that adds it, rather than a year later on a dashboard."""
-    scheduled = []
-    for path in sorted(RESOURCES.glob("*.yml")):
-        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        for name, job in (document.get("resources", {}).get("jobs", {}) or {}).items():
-            scheduled += [
-                f"{path.name}:{name}:{key}" for key in _SCHEDULING_KEYS if key in job
-            ]
-    assert scheduled == [], (
-        f"{scheduled} now schedule themselves, so `opl.dataops.cadence`'s premise -- that "
-        "every ingest is launched by hand and freshness therefore has no threshold to "
-        "derive -- is no longer true. Re-decide the cadence against what the schedule says"
+    ALL 29 `ingest` task runs in this workspace were launched by hand, and the measured
+    spread of `MAX(_ingested_at)` across the seven bronze tables is hours to 18 days. F8
+    declared a cadence on twelve jobs, so `no schedule exists` -- what this test asserted
+    until then -- is no longer the property that keeps the numbers in `cadence.py` a
+    declaration. TWO THINGS DO: the source writes no `pause_status`, so the target's mode
+    decides; and the target this bundle deploys is `mode: development`, under which the
+    CLI renders `PAUSED`. Either one changing means a run can start on a clock.
+
+    THIS IS NOT THE FULL MECHANISM AND DOES NOT PRETEND TO BE. What the CLI actually
+    renders is observed in `tests/test_bundle_targets_and_schedules.py`, which needs
+    credentials; what is read here is only the two committed facts this file's numbers
+    rest on."""
+    docs = bundle_docs()
+    targets = docs["databricks.yml"]["targets"]
+    deployed = sorted(name for name, target in targets.items() if target.get("default"))
+    modes = [targets[name].get("mode") for name in deployed]
+    written = sorted(name for name, doc in docs.items() if _PAUSE in keys_anywhere(doc))
+    assert (deployed, modes, written) == (["free"], ["development"], []), (
+        f"the default target is {deployed} in mode {modes}, and {written} write "
+        f"`{_PAUSE}`. `opl.dataops.cadence`'s premise -- that every ingest is still "
+        "launched by hand, because every declared schedule deploys PAUSED under the one "
+        "target this repository deploys -- no longer holds. Re-decide the cadence against "
+        "what the schedule now does, rather than adjusting this to restore the green"
     )
 
 

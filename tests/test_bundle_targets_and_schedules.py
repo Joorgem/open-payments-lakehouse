@@ -24,6 +24,35 @@ WHICH HALF IS ASSERTED HERE AND WHICH IS NOT -- read this before trusting the gr
     the `PAUSED`/`UNPAUSED` split is observed rather than described, and it was run by
     hand on the tree that shipped it.
 
+AND WHAT THE JUSTIFICATIONS THEMSELVES CLAIM, WHICH IS THE HALF THAT WAS MISSING.
+Until F8's correction pass this module asserted only that a cron and a timezone
+EXIST. F8's independent reviewer REPORTED moving PTAX from a weekday afternoon to a
+Sunday small hour and rewriting every zone to UTC with the suite still green. What is
+checkable here rather than reported is why that is unsurprising: neither mutation
+touches anything the old assertions read, and each falsifies the paragraph written
+directly above the block it changes. So the properties those paragraphs claim are
+asserted here, and every expected value is DERIVED from a file rather than typed
+beside the assertion:
+
+  * the three monthly tiers run in the order the comments give them -- bronze strictly
+    before vault, vault strictly before gold -- on one shared day of the month;
+  * a daily job fires strictly AFTER the publication band its own comment states, and
+    on weekdays with no weekend day among them;
+  * every schedule's `timezone_id` resolves to `opl.extraction.ptax_source.BRASILIA`'s
+    offset all year -- the zone ADR 0016 Decision 2 reads the publication stamps in,
+    and the reason these crons are not in UTC.
+
+THE BAND IS PARSED OUT OF THE JOB'S OWN COMMENT (`band HH:MM-HH:MM`), which is
+deliberate: the number the cron has to beat then cannot drift away from the sentence
+that justifies it. A comment rewrapped so `band` and the times fall on different lines
+fails LOUDLY here rather than leaving the hour resting on nothing -- the failure this
+phase already paid for once, with a line-based `grep` that could not see a claim
+wrapped across two lines.
+
+`zoneinfo` NEEDS A TZ DATABASE -- the system one on Linux, the `tzdata` package on
+Windows. Where it is absent this file goes RED rather than skipping, because a zone
+check that cannot resolve a zone has checked nothing.
+
 WHY THE SPLIT MATTERS AT ALL. `mode: development` renders `pause_status: PAUSED` and
 `mode: production` renders `UNPAUSED`, from source that says neither. Write `pause_status`
 into a job YAML and the target stops deciding: a schedule would then be unpaused under
@@ -37,12 +66,14 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
-from job_yaml import RESOURCES, job_of
+from job_yaml import BUNDLE, RESOURCES, bundle_docs, job_of, keys_anywhere
 
-_BUNDLE = RESOURCES.parent / "databricks.yml"
+from opl.extraction.ptax_source import BRASILIA
 
 # The three keys that make a job start without an operator. `schedule` is the one this
 # phase declares; `trigger` (file arrival) and `continuous` are refused everywhere, in
@@ -67,6 +98,10 @@ _SCHEDULED = {
     "vault_estabelecimento_job.yml": "follows the monthly estabelecimentos bronze it reads",
     "vault_partner_job.yml": "follows the monthly socios bronze it reads",
     "vault_reference_job.yml": "follows the monthly lookup bronze it reads",
+    "gold_conformed_dimensions_job.yml": (
+        "`dim_date`'s span is MEASURED at build time from `sat_empresa_dados`' "
+        "applied dates, and that satellite is loaded by the vault job above"
+    ),
     "gold_dim_company_job.yml": "follows the empresa vault load, which follows the snapshot",
     "gold_pit_estabelecimento_job.yml": "follows the estabelecimento vault load",
 }
@@ -85,10 +120,6 @@ _UNSCHEDULED = {
         "deletion looks like and would end-date every key in the vault"
     ),
     "vault_merchant_job.yml": "follows the merchant bronze, which has no cadence to follow",
-    "gold_conformed_dimensions_job.yml": (
-        "its members ARE constants in the wheel -- the payment methods and a derived date "
-        "span -- so it changes when the wheel changes, and a clock cannot observe that"
-    ),
     "gold_fact_payment_job.yml": "follows the payments bronze, which has no cadence",
     "dataops_views_job.yml": (
         "it issues CREATE OR REPLACE VIEW over definitions that live in the wheel; the "
@@ -156,15 +187,6 @@ def _schedule_faults(root=RESOURCES) -> list[str]:
     return faults
 
 
-def _keys_anywhere(node) -> set[str]:
-    """Every mapping key at any depth of a parsed document."""
-    if isinstance(node, dict):
-        return set(node) | {k for v in node.values() for k in _keys_anywhere(v)}
-    if isinstance(node, list):
-        return {k for item in node for k in _keys_anywhere(item)}
-    return set()
-
-
 def _pause_status_faults(docs: dict[str, object]) -> list[str]:
     """No committed bundle file may DECLARE the key, at any depth.
 
@@ -178,16 +200,8 @@ def _pause_status_faults(docs: dict[str, object]) -> list[str]:
     return [
         f"{name}: declares {_PAUSE}"
         for name, doc in docs.items()
-        if _PAUSE in _keys_anywhere(doc)
+        if _PAUSE in keys_anywhere(doc)
     ]
-
-
-def _bundle_docs() -> dict[str, object]:
-    root = RESOURCES.parent
-    return {
-        str(path.relative_to(root)): yaml.safe_load(path.read_text(encoding="utf-8"))
-        for path in sorted(root.rglob("*.yml"))
-    }
 
 
 def _target_faults(bundle_text: str) -> list[str]:
@@ -237,12 +251,12 @@ def test_no_committed_bundle_file_writes_pause_status():
     paused where the deployment mode says it should be. Swept over every committed bundle
     file -- the bundle root and every resource -- at any depth of the parsed document.
     `_pause_status_faults` carries why the sweep is over values rather than text."""
-    assert not _pause_status_faults(_bundle_docs())
+    assert not _pause_status_faults(bundle_docs())
 
 
 def test_the_bundle_declares_the_two_targets_this_split_needs():
     """`free` stays the default development target; `prod` exists to be the other mode."""
-    assert not _target_faults(_BUNDLE.read_text(encoding="utf-8"))
+    assert not _target_faults(BUNDLE.read_text(encoding="utf-8"))
 
 
 # --------------------------------------------------------------------------------
@@ -344,9 +358,295 @@ def test_the_sweep_goes_red_when_a_pause_status_is_written_into_the_source(tmp_p
 
 def test_the_target_lock_goes_red_when_prod_commits_an_identity():
     """Swap the interpolation for a literal -- a FABRICATED one, never this box's."""
-    text = _BUNDLE.read_text(encoding="utf-8")
+    text = BUNDLE.read_text(encoding="utf-8")
     token = "${workspace.current_user.userName}"
     assert token in text, "the bundle no longer interpolates the user; re-point this arm"
     faults = _target_faults(text.replace(token, "someone@example.invalid"))
     assert any("literal identity" in fault for fault in faults), faults
     assert any("not interpolated" in fault for fault in faults), faults
+
+
+# --------------------------------------------------------------------------------
+# WHAT THE JUSTIFICATIONS CLAIM. A cron and a zone EXISTING is not what any comment
+# beside a schedule block promises -- see this module's docstring for the two mutations
+# that proved it.
+# --------------------------------------------------------------------------------
+
+# Quartz's six fields, in order. A seventh (year) is optional and this bundle writes none.
+_CRON_FIELDS = ("second", "minute", "hour", "day_of_month", "month", "day_of_week")
+
+# THE THREE MONTHLY TIERS, IN THE ORDER THE COMMENTS CLAIM THEY RUN. A job joins its tier
+# by being NAMED for it, which is this directory's existing convention and already
+# load-bearing (`tests/test_vault_job_wiring.py` globs `vault_*.yml`). The ORDER is the
+# claim; every hour compared against it is read out of a file.
+_TIERS = ("bronze", "vault", "gold")
+
+_WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI")
+_WEEKEND = ("SAT", "SUN")
+
+# The publication band a daily job's own comment has to state, as `band HH:MM-HH:MM`.
+_BAND = re.compile(r"band (\d{2}):(\d{2})-(\d{2}):(\d{2})")
+
+_CRON_VALUE = re.compile(r'(quartz_cron_expression: )"[^"]+"')
+
+# THE ONLY TWO RESOURCE COLLECTIONS THIS BUNDLE MAY DECLARE, AS AN ALLOWLIST RATHER THAN
+# A LIST OF SECURABLES TO REFUSE. ADR 0018 Decision 6 rejected declarative governance
+# partly on grounds that can fire ONLY over a securable, and `databricks.yml` and ADR 0021
+# both call that safety property mechanical. Enumerating the securables would be a third
+# copy of a list whose existing copies already disagreed -- six object types in ADR 0018
+# against four in the documents quoting it. An allowlist needs no such list: anything
+# that is not a job or a dashboard stops here, securable or not, and a new collection
+# becomes a decision somebody has to type out.
+_DECLARABLE = ("jobs", "dashboards")
+
+
+def _cron_of(name: str, root=RESOURCES) -> dict[str, str]:
+    """One scheduled job's quartz expression, by field name."""
+    fields = _schedule_of(job_of(name, root))["quartz_cron_expression"].split()
+    assert len(fields) == len(_CRON_FIELDS), (
+        f"{name} declares a {len(fields)}-field quartz expression; this reader knows the "
+        f"six {_CRON_FIELDS} and would silently mis-name every field of a seventh"
+    )
+    return dict(zip(_CRON_FIELDS, fields, strict=True))
+
+
+def _cron_text(name: str, root=RESOURCES) -> str:
+    return _schedule_of(job_of(name, root))["quartz_cron_expression"]
+
+
+def _minutes(hour: str, minute: str) -> int:
+    return int(hour) * 60 + int(minute)
+
+
+def _tier_of(name: str) -> str | None:
+    return next((tier for tier in _TIERS if name.startswith(f"{tier}_")), None)
+
+
+def _monthly(root=RESOURCES) -> dict[str, dict[str, int]]:
+    """{tier: {yaml: minutes past midnight}} for every schedule on a day of the MONTH."""
+    found: dict[str, dict[str, int]] = {tier: {} for tier in _TIERS}
+    for name in sorted(_SCHEDULED):
+        cron, tier = _cron_of(name, root), _tier_of(name)
+        if cron["day_of_month"].isdigit() and tier is not None:
+            found[tier][name] = _minutes(cron["hour"], cron["minute"])
+    return found
+
+
+def _days_of_month(root=RESOURCES) -> set[str]:
+    """The day every monthly schedule fires on. One shared day is what "tier" means."""
+    return {
+        _cron_of(name, root)["day_of_month"]
+        for name in _SCHEDULED
+        if _cron_of(name, root)["day_of_month"].isdigit()
+    }
+
+
+def _tier_faults(root=RESOURCES) -> list[str]:
+    """The 06:00 -> 09:00 -> 12:00 ordering the schedule comments state, asserted.
+
+    A cron offset is not a dependency (ADR 0021) and this does not pretend otherwise. What
+    it refuses is the ordering INVERTING -- a gold build ahead of the vault load it says it
+    follows -- which every one of those comments states as a fact and nothing checked."""
+    monthly = _monthly(root)
+    faults = [f"no monthly job runs in the {tier} tier" for tier in _TIERS if not monthly[tier]]
+    days = _days_of_month(root)
+    if len(days) > 1:
+        faults.append(f"the monthly tiers do not share one day of the month: {sorted(days)}")
+    for earlier, later in zip(_TIERS, _TIERS[1:], strict=False):
+        if not (monthly[earlier] and monthly[later]):
+            continue
+        last = max(monthly[earlier].items(), key=lambda item: item[1])
+        first = min(monthly[later].items(), key=lambda item: item[1])
+        if last[1] >= first[1]:
+            faults.append(
+                f"{earlier} tier's {last[0]} runs at minute {last[1]} of the day and {later} "
+                f"tier's {first[0]} at {first[1]}: the tier order is not strict"
+            )
+    return faults
+
+
+def _zone_faults(root=RESOURCES) -> list[str]:
+    """Every schedule's zone, against the offset the publication instants are READ in.
+
+    `BRASILIA` is `opl.extraction.ptax_source`'s own fixed offset, so the zone these crons
+    run in is derived from the wheel rather than typed here. FOUR PROBES ACROSS THE YEAR
+    because a zone carrying DST satisfies one instant and not the others, and an hour that
+    moves twice a year is not the hour the comments promise."""
+    faults = []
+    for name in sorted(_SCHEDULED):
+        zone = _schedule_of(job_of(name, root))["timezone_id"]
+        try:
+            info = ZoneInfo(zone)
+        except (KeyError, ValueError) as unresolved:
+            faults.append(f"{name}: timezone_id {zone!r} does not resolve here ({unresolved})")
+            continue
+        offsets = {info.utcoffset(datetime(2026, month, 15)) for month in (1, 4, 7, 10)}
+        if offsets != {BRASILIA.utcoffset(None)}:
+            faults.append(
+                f"{name}: timezone_id {zone!r} runs at {sorted(map(str, offsets))}, and the "
+                f"publication instants these cadences chase are read at {BRASILIA}"
+            )
+    return faults
+
+
+def _daily_faults(root=RESOURCES) -> list[str]:
+    """A daily schedule against the two things its own comment claims.
+
+    THE BAND IS READ OUT OF THE JOB'S FILE, so the hour cannot drift away from the sentence
+    justifying it, and a comment rewrapped so `band` and the times land on different lines
+    fails here rather than silently unhooking the check."""
+    faults = []
+    for name in sorted(_SCHEDULED):
+        cron = _cron_of(name, root)
+        if cron["day_of_month"].isdigit():
+            continue
+        days = cron["day_of_week"].upper()
+        if any(day in days for day in _WEEKEND):
+            faults.append(f"{name}: its day-of-week {days!r} names a weekend day")
+        if not any(day in days for day in _WEEKDAYS):
+            faults.append(f"{name}: its day-of-week {days!r} names no weekday")
+        band = _BAND.search((root / name).read_text(encoding="utf-8"))
+        if band is None:
+            faults.append(f"{name}: states no `band HH:MM-HH:MM` for its hour to sit after")
+            continue
+        fires, ends = _minutes(cron["hour"], cron["minute"]), _minutes(band[3], band[4])
+        if fires <= ends:
+            faults.append(
+                f"{name}: fires at {cron['hour']}:{cron['minute']}, which is not after the "
+                f"{band[1]}:{band[2]}-{band[3]}:{band[4]} band it states"
+            )
+    return faults
+
+
+def _resource_faults(docs: dict[str, object]) -> list[str]:
+    """Every `resources.<kind>` in every committed bundle file, against the allowlist."""
+    return [
+        f"{name}: declares resources.{kind}, which is neither of {_DECLARABLE}"
+        for name, doc in docs.items()
+        for kind in sorted((doc or {}).get("resources") or {})
+        if kind not in _DECLARABLE
+    ]
+
+
+def test_the_monthly_tiers_run_in_the_order_their_comments_claim():
+    """bronze strictly before vault, vault strictly before gold, on one day of the month."""
+    assert not _tier_faults()
+
+
+def test_every_schedule_runs_in_the_zone_the_publication_instants_are_read_in():
+    """Not `America/Sao_Paulo` typed here: the offset comes from the wheel's own constant."""
+    assert not _zone_faults()
+
+
+def test_a_daily_schedule_fires_on_weekdays_after_the_band_its_own_comment_states():
+    """The hour is compared against the band the file states, not against a number here."""
+    assert not _daily_faults()
+
+
+def test_the_bundle_declares_only_jobs_and_dashboards():
+    """THE SECURABLE REFUSAL ADR 0018 DECISION 6 IS QUOTED AS RESTING ON.
+
+    `databricks.yml`, ADR 0021 and ADR 0018's own F8 amendment all say that what keeps
+    Decision 6's second and third grounds hypothetical is MECHANICAL -- that they can fire
+    only over a securable and the bundle declares none. Until this test, all three said so
+    and nothing enforced it. An allowlist is what enforces it: see `_DECLARABLE` for why
+    the refusal is not written as a list of securables."""
+    assert not _resource_faults(bundle_docs())
+
+
+# --------------------------------------------------------------------------------
+# THEIR FAILURE ARMS. Each mutation is DERIVED from a file, and the two the reviewer
+# applied to the whole tree -- PTAX onto a Sunday small hour, every zone to UTC -- have
+# an arm each, because those are the two this repository is on record as not catching.
+# --------------------------------------------------------------------------------
+
+
+def _copied_tree(tmp_path):
+    """The WHOLE resources directory, so a mutation is read in the context it lives in."""
+    root = tmp_path / "resources"
+    shutil.copytree(RESOURCES, root)
+    return root
+
+
+def _swap_cron(path, cron: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    swapped, count = _CRON_VALUE.subn(lambda found: f'{found[1]}"{cron}"', text, count=1)
+    assert count == 1, f"{path.name} carries no quartz expression for this arm to swap"
+    path.write_text(swapped, encoding="utf-8")
+
+
+def _the_daily_job(root) -> str:
+    """The one scheduled YAML whose cron names days of the WEEK rather than of the month."""
+    daily = [n for n in sorted(_SCHEDULED) if not _cron_of(n, root)["day_of_month"].isdigit()]
+    assert len(daily) == 1, f"{daily} declare a weekday cadence; this arm expects exactly one"
+    return daily[0]
+
+
+def test_the_tier_lock_goes_red_when_gold_runs_before_the_vault_it_follows(tmp_path):
+    """The gold job is handed the BRONZE job's own cron, read out of that file.
+
+    No hour is typed here. An arm carrying the literal it mutates goes green the day the
+    literal moves, and nobody re-reads an arm that is passing."""
+    root = _copied_tree(tmp_path)
+    assert not _tier_faults(root)
+    bronze = min(name for name in _SCHEDULED if _tier_of(name) == "bronze")
+    gold = min(name for name in _SCHEDULED if _tier_of(name) == "gold")
+    _swap_cron(root / gold, _cron_text(bronze, root))
+    faults = _tier_faults(root)
+    assert any("tier order is not strict" in fault for fault in faults), faults
+
+
+def test_the_zone_lock_goes_red_when_a_schedule_is_rewritten_to_utc(tmp_path):
+    """The committed zone is READ out of the file and replaced; it is never typed here.
+
+    UTC is the value ADR 0016 Decision 2 rules out, and rewriting every zone to it is the
+    mutation that left the whole suite green before this lock existed."""
+    root = _copied_tree(tmp_path)
+    assert not _zone_faults(root)
+    name = sorted(_SCHEDULED)[0]
+    path = root / name
+    zone = _schedule_of(job_of(name, root))["timezone_id"]
+    path.write_text(path.read_text(encoding="utf-8").replace(zone, "UTC"), encoding="utf-8")
+    faults = _zone_faults(root)
+    assert any(name in fault for fault in faults), faults
+
+
+def test_the_band_lock_goes_red_when_the_daily_job_fires_inside_its_own_band(tmp_path):
+    """Both halves derived: the hour and minute come from the band THIS file states, and
+    every other field from the cron it declares."""
+    root = _copied_tree(tmp_path)
+    assert not _daily_faults(root)
+    name = _the_daily_job(root)
+    band = _BAND.search((root / name).read_text(encoding="utf-8"))
+    assert band, f"{name} states no band for this arm to move its cron into"
+    cron = _cron_of(name, root)
+    inside = " ".join([cron["second"], band[4], band[3], *(cron[f] for f in _CRON_FIELDS[3:])])
+    _swap_cron(root / name, inside)
+    faults = _daily_faults(root)
+    assert any("is not after the" in fault for fault in faults), faults
+
+
+def test_the_weekday_lock_goes_red_when_the_daily_job_is_moved_onto_a_weekend(tmp_path):
+    """The reviewer's other PTAX mutation. Only the day-of-week field is replaced; every
+    other field is the one the file declares."""
+    root = _copied_tree(tmp_path)
+    assert not _daily_faults(root)
+    name = _the_daily_job(root)
+    cron = _cron_of(name, root)
+    weekend = " ".join([*(cron[f] for f in _CRON_FIELDS[:-1]), _WEEKEND[1]])
+    _swap_cron(root / name, weekend)
+    faults = _daily_faults(root)
+    assert any("names a weekend day" in fault for fault in faults), faults
+
+
+def test_the_resource_lock_goes_red_when_a_securable_is_declared():
+    """A schema declared where the jobs are -- the exact shape ADR 0018 Decision 6 refuses,
+    and the one whose `grants` would be AUTHORITATIVE over a schema this project does not
+    own. The collection it replaces is read out of the document, not named here."""
+    name, text = _a_scheduled_job()
+    document = yaml.safe_load(text)
+    assert not _resource_faults({name: document})
+    declared = next(iter(document["resources"]))
+    document["resources"] = {"schemas": document["resources"].pop(declared)}
+    faults = _resource_faults({name: document})
+    assert any("resources.schemas" in fault for fault in faults), faults

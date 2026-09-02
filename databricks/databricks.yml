@@ -29,9 +29,12 @@ targets:
   # about a production target and are *"assumed on strong evidence and not proved"* -- and
   # the third revokes the platform's own `CREATE TABLE` on the schema every pipeline writes
   # into. That is not a thing to find out by trying it on the only workspace there is. The
-  # safety property is mechanical rather than a promise: those grounds can fire only if the
-  # bundle declares a SECURABLE (`schemas`, `catalogs`, `volumes`, `external_locations`),
-  # and it declares none.
+  # safety property is mechanical, and enforced rather than promised: those grounds can
+  # fire only if the bundle declares a SECURABLE -- `grants` rides on the object types
+  # ADR 0018 Decision 6 enumerates and never on a table -- and it declares none. The
+  # enforcement is in tests/test_bundle_targets_and_schedules.py, which refuses any
+  # resource collection in this bundle other than `jobs` and `dashboards`. No list of
+  # securables is restated here: a restated enumeration is what went wrong once already.
   #
   # WHY `root_path` IS HERE AND WHY IT IS INTERPOLATED. `mode: production` refuses to
   # validate without one -- *"target with 'mode: production' must set 'workspace.root_path'

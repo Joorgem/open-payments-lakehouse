@@ -34,6 +34,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "databricks" / "src"
 RESOURCES = REPO / "databricks" / "resources"
+BUNDLE = REPO / "databricks" / "databricks.yml"
 
 PYTHON_FILE_PREFIX = "../src/"
 
@@ -72,6 +73,32 @@ JOB_OF = {
     # declared.
     "merchant": "bronze_merchant_job.yml",
 }
+
+
+def bundle_docs() -> dict[str, object]:
+    """Every committed bundle file -- the root and every resource -- parsed, keyed by
+    its path under the bundle root."""
+    root = BUNDLE.parent
+    return {
+        str(path.relative_to(root)): yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in sorted(root.rglob("*.yml"))
+    }
+
+
+def keys_anywhere(node) -> set[str]:
+    """Every mapping key at any depth of a parsed document.
+
+    EXTRACTED RATHER THAN COPIED, for this module's own reason. Two locks ask the same
+    question of the same documents -- whether any committed file DECLARES
+    `pause_status`, which is what leaves the deployment MODE deciding whether a
+    schedule fires. `tests/test_bundle_targets_and_schedules.py` owns that rule and
+    `tests/dataops/test_cadence.py` rests its whole premise on it. A second copy of the
+    recursion would be a second spelling, and the copy that rots is the unread one."""
+    if isinstance(node, dict):
+        return set(node) | {k for v in node.values() for k in keys_anywhere(v)}
+    if isinstance(node, list):
+        return {k for item in node for k in keys_anywhere(item)}
+    return set()
 
 
 def job_of(job_yml: str, root: Path = RESOURCES) -> dict:

@@ -59,6 +59,32 @@ resources:
   jobs:
     opl_gold_conformed_dimensions:
       name: opl-gold-conformed-dimensions
+      # MONTHLY, IN THE 12:00 GOLD TIER, AND THE REASON IS ONE OF THE THREE TABLES THIS
+      # JOB BUILDS. `dim_channel` and `dim_currency` ARE constants in the wheel -- their
+      # members are declarations in `opl.contracts.payments` and their keys are
+      # `xxhash64` over those, so nothing but a deploy changes them and a clock cannot
+      # observe a deploy. `dim_date` IS NOT ONE, and this file said it was until F8's
+      # correction pass: its span is MEASURED at build time by
+      # `opl.gold.conformed.covered_span` over two tables -- the fact's `event_time` days
+      # and `sat_empresa_dados`' `applied_date`s -- and that satellite is loaded by
+      # `opl_vault_cnpj_empresa`, which this bundle now runs monthly at 09:00. So a new
+      # RFB snapshot widens this calendar on the RFB's cadence and not on ours, which is
+      # the same answer `gold_dim_company_job.yml` gives and the reason both sit in the
+      # 12:00 tier.
+      #
+      # THE FALSE REASON IS RECORDED RATHER THAN DELETED, because it was written in the
+      # same phase that put the satellite it reads on a clock: `its members ARE constants
+      # in the wheel -- the payment methods and a derived date span`. The `derived` in
+      # that sentence is the word that contradicts the rest of it.
+      #
+      # RE-RUNNING COSTS NOTHING WHEN THE SPAN HAS NOT MOVED: the loader is APPEND-only
+      # and idempotent by surrogate key, and a day's key is its own calendar position, so
+      # a run over an unchanged span appends zero rows.
+      #
+      # NO `pause_status`: the target's mode writes it, `PAUSED` under `free`. ADR 0021.
+      schedule:
+        quartz_cron_expression: "0 0 12 15 * ?"
+        timezone_id: America/Sao_Paulo
       parameters:
         - name: revision
           # The revision this run is launched for; the default is a value the guard
