@@ -579,9 +579,8 @@ def test_no_other_job_takes_a_row_floor_nothing_reads():
     reads as a floor that is there, and is not.
 
     Total over `databricks/resources`, so it also covers the unguarded and non-job files --
-    the parameter is cheap to paste and the classification lists above are the only other
-    thing that would notice a new YAML at all. Total means `job_yaml`'s suffix tuple and
-    not this module's own glob, for the reason the classification lock above states."""
+    the parameter is cheap to paste. Total means `job_yaml`'s suffix tuple and not this
+    module's own glob, for the reason the classification lock above states."""
     for path in resource_files():
         if path.name == _FLOOR_JOB:
             continue

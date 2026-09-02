@@ -72,7 +72,7 @@ def _loader_tasks_of_bundle(root: Path = RESOURCES) -> list[tuple[str, str, str]
 
     WHICH FILES ARE `job_yaml.resource_files`' ANSWER AND NOT A GLOB WRITTEN HERE. "Every
     loader task in the bundle" is a totality claim, and it was made over a suffix this
-    module spelled for itself: a `.yaml` job declaring a loader task was read by nothing."""
+    module spelled for itself: a `.yaml` job declaring a loader task was read by nothing here."""
     found: list[tuple[str, str, str]] = []
     for path in resource_files(root):
         document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

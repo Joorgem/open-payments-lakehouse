@@ -259,7 +259,7 @@ def _target_faults(bundle_text: str) -> list[str]:
 
 
 def test_every_job_yaml_is_classified_scheduled_or_not():
-    """TOTAL over `databricks/resources/*.yml`, so a new job cannot inherit an answer.
+    """TOTAL over `databricks/resources`, so a new job cannot inherit an answer.
 
     The question -- does something outside this repository decide when this job's input
     exists? -- has an answer for every job. NO SPLIT IS PUBLISHED HERE: the counts moved
