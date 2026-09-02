@@ -34,6 +34,16 @@ So `main` catches the broad failure beside the `WrongRevision` one: not to conti
 it -- both return non-zero -- but so that what reaches a public log is a redacted line
 rather than a traceback.
 
+THAT TOTALITY IS OVER `main`'s `try`, AND TWO CALLS SIT IN FRONT OF IT. `WorkspaceClient
+(...)` and `bundle_name()` run outside the broad catch, so an exception from either
+reaches the log as the interpreter's traceback rather than as a line from here. Measured
+independently twice, most recently on 2026-09-02: in every failure shape reachable without
+credentials -- a bundle file that is not there, one declaring no `bundle.name`, and a
+profile that does not exist -- neither carries a `/Workspace/Users/` segment, which is the
+only thing `redacted` removes. The property the paragraph above exists for holds; its
+"EVERY LINE" does not reach those two lines, and saying so is cheaper than a totality the
+next reader has to re-derive.
+
 THE COMPARISON ITSELF IS NOT REIMPLEMENTED. `opl.bronze.provenance.assert_revision_
 matches` is THE spelling of that rule -- it already refuses an unstamped artefact, a
 mismatch and a `+dirty` build, with a different instruction for each -- and a second

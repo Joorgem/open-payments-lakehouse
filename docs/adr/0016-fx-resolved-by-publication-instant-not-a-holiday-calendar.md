@@ -420,8 +420,8 @@ responsible for:
   appends, so `ptax_source.sole_quote` and `fx.rate_intervals` see different populations.
 
   > **THE REPOSITORY DID NOT AGREE WITH ITSELF ABOUT A SECOND ONE. IT IS NOW MEASURED, AND
-  > `fx.py:51-52` IS THE READING THAT SURVIVES.** That line called 2001-12-21 "a second
-  > [duplicate pair], identical stamps"; `fx.py`'s `rate_intervals`,
+  > `fx.py`'s *THE DISAGREEMENT BRANCH SHIPS UNEXERCISED* PARAGRAPH IS THE READING THAT SURVIVES.**
+  > That paragraph calls 2001-12-21 "a second [duplicate pair], identical stamps"; `fx.py`'s `rate_intervals`,
   > `tests/gold/test_fact_payment_fx.py` and `docs/f-api-run-evidence.md` §1.3 described the
   > same date as **two quote dates sharing one publication instant** — the `orderBy` tie-break
   > case, a different phenomenon. **Single-day requests settle it: 2001-12-21 returns TWO rows

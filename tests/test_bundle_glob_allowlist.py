@@ -78,6 +78,14 @@ of everything nobody has thought of:
   * a glob naming no suffix at all (`rglob("*")`, which `tests/job_yaml.py` itself uses).
     That is WIDER than a bundle document, not narrower, so it is not the defect here, and
     `_selects_a_bundle_document` holds that line deliberately rather than by accident;
+  * a metacharacter inside the suffix COMBINED WITH A DIRECTORY COMPONENT. The fallback
+    match is against a one-segment probe name, and a multi-segment pattern matches no
+    one-segment path, so the two spellings that need both choices at once fall out.
+    Measured: `*.y*ml` classifies True and `**/*.y*ml`, `*/*.y*ml` and
+    `resources/*.y*ml` all classify False, while `*.yml`, `**/*.yml` and
+    `resources/*.yml` classify True -- the directory component alone costs nothing.
+    It is NAMED and not closed: it needs two metacharacter choices at once and is not
+    the spelling the defect arrives in, and one line closes it whenever it is;
   * anything outside `tests/`. `scripts/`, `src/` and the workflows spell their own paths
     and no arm here reads them.
 

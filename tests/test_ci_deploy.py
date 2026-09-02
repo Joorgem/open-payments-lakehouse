@@ -131,7 +131,14 @@ def _rendered(job: dict) -> str:
 
     YAML COMMENTS ARE ALREADY GONE by the time this runs, which is what makes the sweep
     below stronger than the `git grep -inE '^[^#]*databricks'` it replaces: a parser
-    knows what a comment is, and `^[^#]*` only knows what a `#` is.
+    knows what a comment is, and `^[^#]*` only knows what a `#` is. WHAT THAT COSTS THE
+    GREP, MEASURED RATHER THAN ASSERTED: the pattern matches only where NO `#` precedes
+    the word on the line, so a `#` there for any reason that is not a comment -- a URL
+    fragment, a `#` inside a quoted string -- hides every `databricks` after it. Over a
+    four-line probe whose lines 2 and 3 each run `databricks bundle deploy` behind such a
+    `#`, `grep -inE '^[^#]*databricks'` returns line 1 alone while `grep -in databricks`
+    returns all four. That is the direction that reports green, and it is why the claim
+    about CI naming Databricks is a lock here and no longer that command.
 
     RE-RENDERING RATHER THAN WALKING THE VALUES, and that is a correction rather than a
     style. The walker written first collected `node.values()` and no keys, so a job
@@ -320,7 +327,16 @@ def test_the_disarmed_path_says_why_instead_of_passing_quietly():
     disarmed branch has to say so where a reader of the run will see it: an annotation
     on the run, and a line in the job summary. Neither is decoration -- without them the
     only difference between "checked and correct" and "never looked" is the colour of a
-    step nobody expands."""
+    step nobody expands.
+
+    WHAT IS ASSERTED IS THAT THE WORDS ARE THERE, NOT THAT THEY ARE TRUE. The gate's
+    condition is a conjunction, so the HALF-configured state -- exactly one secret
+    present, which is the likeliest state on the day the first one is created -- takes
+    the disarmed branch as well, and the annotation says "not both set" so that it is
+    true of that state too. Nothing below reads the wording for that property: swapping
+    it to "neither is set" leaves every assertion here green while making the message
+    false in precisely the state it was written for. True today, and held by no test:
+    T5 recorded it, and closing it is a new lock rather than a clause."""
     _, gate = _gate_step()
     run = gate["run"]
     for required in ("::warning", "GITHUB_STEP_SUMMARY", "INERT", "DATABRICKS_TOKEN"):
@@ -353,7 +369,16 @@ def test_no_ci_job_both_names_databricks_and_runs_the_suite():
     the hazard it was written for: it refuses a suite-running job that merely sets
     `DATABRICKS_HOST`, which would be a legitimate thing to want (integration tests
     against a live workspace) and is exactly the kind of thing that should be argued
-    for rather than arrive in a diff."""
+    for rather than arrive in a diff.
+
+    AND IT IS NARROWER THAN A NEIGHBOURING CLAIM, WHICH IS SAID HERE BECAUSE THIS IS THE
+    ARM A READER WOULD ASSUME HOLDS IT. The refusal is over `naming & testing`, so a job
+    that names Databricks and runs no pytest is outside it by construction -- and that is
+    every shape `databricks/databricks.yml`'s *"`deploy` is the only job with a Databricks
+    credential in its `env:`"* is about. That sentence rests on the grep it publishes
+    beside itself and on nothing here; `tests/test_iac_terraform.py`'s credential arm
+    reaches the `terraform` job alone. True today, and held by no test: T5 recorded it,
+    and closing it is a new lock rather than a clause."""
     jobs = {name: _rendered(job) for name, job in _workflow()["jobs"].items()}
     naming = {name for name, text in jobs.items() if "databricks" in text.lower()}
     testing = {name for name, text in jobs.items() if "pytest" in text}

@@ -267,7 +267,20 @@ def test_the_readme_block_that_says_what_ci_runs_is_what_ci_runs():
     It printed `terraform init -backend=false` while the job ran that plus `-input=false`,
     and the drift survived because nothing compared the two. The comparison is by whole
     line and not by substring, deliberately: the wrong text WAS a substring of the right
-    one, so a substring check would have reported green over exactly this defect."""
+    one, so a substring check would have reported green over exactly this defect.
+
+    ONE DIRECTION, AND WHICH ONE IS PART OF THE CLAIM. `missing` is quantified over
+    `commands` alone, so what is held is EVERY PRINTED COMMAND IS RUN and not its
+    converse: a step added to the `terraform` job and never written into the README
+    leaves this green, by construction rather than for want of a case. Measured -- both
+    sides are the same three lines today, and a fourth `run` line on the job side alone
+    leaves `missing` empty.
+
+    THAT IS THE DIRECTION THE DEFECT ARRIVED IN, and the converse is not free: `runs` is
+    every `run` line of every step, so demanding the README print all of them would make
+    the block a transcript of the shell rather than the shortcut it is written as. The
+    limit is named here rather than closed, because closing it is a decision about what
+    belongs in that block and it is owed an argument, not an assertion."""
     commands = _readme_ci_commands()
     assert commands, "`iac/README.md` prints no commands under `## What CI runs`"
     runs = {

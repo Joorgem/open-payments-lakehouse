@@ -254,7 +254,10 @@ def _ignored(root: Path, paths: list[Path]) -> set[str]:
 
 
 def _bundle_roots(root: Path) -> list[Path]:
-    """Every file under `root` that DECLARES a bundle, whatever it happens to be named.
+    """Every file under `root` that DECLARES a bundle, MINUS what git ignores.
+
+    THE SUMMARY LINE CARRIES THE SUBTRACTION, because the summary is what gets read: it
+    said "every file" until F8 while `_ignored` one function down took some away.
 
     THE WALK IS `job_yaml.bundle_files`, which is where the suffixes a bundle document
     may carry are decided; this module reads that list instead of spelling a second one.
@@ -262,6 +265,13 @@ def _bundle_roots(root: Path) -> list[Path]:
     `bundle.json` are refused as roots, measured -- so a JSON file declaring a named
     bundle is reported here and could not be one. That is over-strict in the direction
     that is loud; the other direction is the false green this block exists for.
+
+    `.git/` IS WALKED AND GIT DOES NOT CALL IT IGNORED, so `_ignored` cannot take it away
+    -- `check-ignore` exits 1 there as it does for a tracked file, where `.plans/` and
+    `.venv/` exit 0. Both halves measured: a planted `.git/planted.yml` comes back from
+    `bundle_files` over a scratch tree, and this `.git/` carries no bundle suffix today.
+    A hit would be a spurious root and so a RED, the loud direction, which is why it is
+    named rather than filtered: a written-down skip list is what `_ignored` refuses to be.
 
     A FILE THAT WILL NOT PARSE IS A FAULT, NOT A SKIP. Skipping would report the expected
     value because the derivation could not look, which is the shape ADR 0018 names. Every

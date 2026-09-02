@@ -623,7 +623,7 @@ clean.** Predicted 713, measured 713.
 
 ### 9.1 The `_RUNTIME_SOURCES` rule, which predicted the count three times
 
-`tests/test_revision_stamp.py:411` builds `_RUNTIME_SOURCES` from
+`tests/test_revision_stamp.py` builds `_RUNTIME_SOURCES` from
 `(_REPO/"src"/"opl").rglob("*.py")`, so **every new file under `src/opl/` adds one
 parametrised case** to `test_git_is_consulted_at_build_time_and_nowhere_the_artefact_runs`.
 Task 1 added 2 files (+2 tests over the vault count), Task 3 added 8 (+8), Task 4

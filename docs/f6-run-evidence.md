@@ -680,8 +680,8 @@ is **not in the wheel**. A module reading it works on this box and raises in the
 matters. A third option, deriving the table from the `opl-bronze-[cnpj-]<key>` naming convention,
 was rejected in the docstring as *a correlate of the mapping rather than the mapping*.
 
-The lock sweeps every `*.yml` in `resources/`, pulls each `fail_on_dq` parameter from the parsed
-YAML and holds it equal to the declaration **in both directions**. **Reported:** the reviewer
+The lock sweeps what `job_yaml.resource_files` returns — a wider set than `*.yml` — pulls each `fail_on_dq`
+parameter from the parsed YAML and holds it equal to the declaration **in both directions**. **Reported:** the reviewer
 fired it with four mutations of their own — renaming a job, adding an eighth gate job, deleting a
 gate task, and handing a gate two parameters — rather than only with the implementer's.
 
@@ -1247,8 +1247,8 @@ a scratch module whose source it had already removed.
 **And a pre-existing hole was reported rather than fixed**: a loader task added to an existing,
 already-classified non-`vault_*` job file is invisible to `tests/test_vault_job_wiring.py`'s
 totality lock while still passing it. A brand-new YAML file **is** caught. T5's own sweep is
-strictly stronger — keyed on the parameter, over every `*.yml` — and the hole is left for whoever
-owns that file.
+strictly stronger — keyed on the parameter, over every file `job_yaml.resource_files` returns —
+and the hole is left for whoever owns that file.
 
 #### AND ONE TOOLING TRAP DESTROYED A FINISHED MODULE, BECAUSE TWO CORRECT RULES COMBINE
 
@@ -2307,7 +2307,7 @@ carried its retraction, and a reader meeting one before the other should see bot
   `vault_load_satellite.py` task into `smoke_job.yml` leaves the job-wiring files green and reddens
   only T5's lock. A brand-new YAML file **is** caught, by
   `test_every_yaml_under_resources_is_classified`. **Reported, not fixed:** that lock is not this
-  task's, and T5's own sweep — keyed on the parameter, over every `*.yml` — is strictly stronger.
+  task's, and T5's own sweep — keyed on the parameter, over what `job_yaml.resource_files` returns — is strictly stronger.
   *What would exercise it: whoever next owns that file.*
 - **T5's own split cannot be certified as behaviour-free.** `test_blast_radius.py` reached 807
   lines before `tests/test_size_caps.py` caught it, and was split at a measured seam — but the
