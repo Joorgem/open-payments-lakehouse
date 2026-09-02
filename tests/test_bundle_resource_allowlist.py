@@ -361,6 +361,11 @@ _CONSTRUCT_CASES = (
         f"$root.targets.{_ANY_NAME}",
     ),
     ("items", {"properties": {"stack": {"items": _A_RESOURCES_REF}}}, "$root.stack[]"),
+    (
+        "$ref",
+        {"$defs": {"x": _A_RESOURCES_REF}, "properties": {"resources": {"$ref": "#/$defs/x"}}},
+        "$root.resources",
+    ),
 )
 
 
@@ -373,8 +378,8 @@ def test_the_walk_follows_the_construct_each_case_names_to_a_resources_type(
     The arm above needs the CLI, so it skips wherever CI runs; and in the live schema no
     `config.Resources` sits under the constructs `c685724` added, so narrowing the walk back
     to `oneOf` alone left this module green even on a box that HAS the CLI. A schema built in
-    the test needs neither CLI nor bundle, so dropping a construct from `_typed_resources`
-    turns the case for it red WITH THE CLI ABSENT as well as present -- both watched.
+    the test needs neither CLI nor bundle, so dropping a construct `_CONSTRUCT_CASES` names
+    turns that case red WITH THE CLI ABSENT as well as present -- both watched.
 
     NO CLAIM IS MADE ABOUT JSON SCHEMA. What the walk follows is in its own docstring, and
     what the derived set is and is not is in this module's."""
