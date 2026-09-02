@@ -3,9 +3,12 @@
 import. `opl.bronze.registry`'s shape, and deliberately NOT `opl.vault.registry`'s.
 
 WHY THE TABLE LIST IS INLINE HERE AND NOT DISCOVERED FROM A `domains/` PACKAGE. The
-vault's per-domain registry exists to satisfy one specific claim: wave 2 adds
-`hub_account`, `hub_customer` and `link_payment` with a git diff of "+1 file, 0
-modified", and a registry carrying the table list would be the file that breaks it. Gold
+vault's per-domain registry exists to satisfy one specific claim: that wave 2 would add
+its tables with a git diff of "+1 file, 0 modified", and a registry carrying the table
+list would be the file that breaks it. (F2 wave 2 settled that claim and shortened its
+own list: it added `link_payment` and `sat_link_payment` in one new domain module, and
+`hub_account` / `hub_customer` -- which this paragraph used to name -- are REFUTED
+rather than deferred, per ADR 0022 Decision 2.) Gold
 stakes no such claim, and Kimball's model actively refuses the decomposition -- a
 CONFORMED dimension is one `dim_company` shared by every fact, so "which domain owns
 it" has no answer. What gold does have is bronze's problem: a small, closed list of

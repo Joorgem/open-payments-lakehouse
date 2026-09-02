@@ -253,35 +253,42 @@ VAULT_LOADS_FROM: dict[str, tuple[str, ...]] = {
     # with it. A declared edge the bundle has not caught up with is the loud failure; an
     # undeclared vault table is the silent one this guard exists for.
     "link_payment": ("payments",),
-    # THE SECOND EDGE WITH NO LOADER TASK BEHIND IT, AND ITS GAP IS WIDER THAN THE LINK'S.
-    # `sat_link_payment` hangs off `link_payment` and reads the SAME bronze table -- the
-    # satellite's payload is the payment's own measures, which live on the payment row and
-    # nowhere else -- so its source is `payments` for the reason the link's is and not by
-    # copying the line above.
+    # THE SECOND EDGE WITH NO LOADER TASK BEHIND IT, AND ITS GAP USED TO BE WIDER THAN THE
+    # LINK'S. `sat_link_payment` hangs off `link_payment` and reads the SAME bronze table --
+    # the satellite's payload is the payment's own measures, which live on the payment row
+    # and nowhere else -- so its source is `payments` for the reason the link's is and not
+    # by copying the line above.
     #
-    # IT HAS NO RUNNABLE ENTRY POINT AT ALL TODAY, WHICH IS MORE THAN A MISSING YAML TASK
-    # AND IS STATED SO T3 CANNOT READ IT AS LESS. `databricks/src/vault_load_satellite.py`
-    # resolves its parent with `domains.parent_hub(spec)` and hands the result to
-    # `grain_for(hub, source)`; `parent_hub` REFUSES a link-parented satellite by design,
-    # measured:
+    # IT HAS A RUNNABLE ENTRY POINT SINCE `7b4b925` AND IT STILL HAS NO YAML TASK, AND THIS
+    # COMMENT ASSERTED THE OPPOSITE UNTIL T4'S SECOND CORRECTION ROUND. What stood here was
+    # "it has no runnable entry point at all today", and that was TRUE WHEN IT WAS WRITTEN:
+    # `databricks/src/vault_load_satellite.py` resolved its parent with
+    # `domains.parent_hub(spec)`, which refuses a link-parented satellite by design. T3
+    # replaced that with `domains.parent_of` plus a `parent_arguments` seam that routes on
+    # the resolved parent's KIND -- a grain for a hub, `axis=` for a link, a transactional
+    # satellite taking no grain -- so the script now calls `load_satellite` with arguments
+    # this table's parent accepts.
     #
-    #     >>> domains.parent_hub(domains.table_spec("sat_link_payment"))
-    #     ValueError: satellite 'sat_link_payment' hangs off 'link_payment', which is not
-    #     a hub -- ... one that only needs the parent's hash key should resolve it with
-    #     opl.vault.domains.parent_of
+    # WHAT IS STILL MISSING IS THE TASK, AND THE REASON IS THE 403. `bundle deploy` cannot
+    # create a NEW job resource in this workspace, so there is no payments vault job to hold
+    # one: `grep -rn sat_link_payment databricks/resources/` returns nothing, measured on
+    # `7b4b925`. The red `test_every_registered_vault_table_is_loaded_by_exactly_one_task`
+    # records exactly that and nothing more.
     #
-    # So the script would refuse this table before Spark started, and the red
-    # `test_every_registered_vault_table_is_loaded_by_exactly_one_task` records only the
-    # missing TASK. T3 has to give that script a `parent_of` path and an `axis=` argument
-    # (a transactional satellite takes no grain) as well as the YAML, or the task it adds
-    # will be a task that cannot run. `databricks/` is F8's area this phase, which is why
-    # this comment names the gap instead of closing it.
+    # THE SENTENCE ROTTED BECAUSE T3 AND T4 RAN IN PARALLEL ON DISJOINT FILES WHOSE FACTS
+    # OVERLAPPED -- ADR 0022 Decision 6's "the fact that rotted under a parallel task". The
+    # same claim went stale in that ADR's Decision 7 at the same moment, and THIS second
+    # site was reached only by re-running the prose sweep AFTER the edit, which is the rule
+    # Decision 6 states. `databricks/` is another session's area this phase, which is why
+    # this comment names the remaining gap instead of closing it.
     #
     # THE FIVE RED TESTS ARE STILL FIVE, WHICH IS WORTH SAYING BECAUSE IT LOOKS LIKE IT
     # SHOULD BE TEN. The reds are per-TEST comparisons of the whole bundle against this
     # whole declaration, not per-table, so a second undeclared-in-YAML table makes the
     # same five assertions fail with a longer diff rather than making ten fail. Counted
-    # rather than assumed.
+    # rather than assumed, and re-counted on `7b4b925` after the entry point landed: the
+    # script no longer refuses the table and the five are still five, because every one of
+    # them compares the BUNDLE against this declaration and the bundle is what the 403 froze.
     "sat_link_payment": ("payments",),
     "ref_cnae": ("lookup",),
     "ref_motivo": ("lookup",),

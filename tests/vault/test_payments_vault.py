@@ -36,8 +36,26 @@ THE COUNTERPARTIES ARE EIGHT-CHARACTER ROOTS AND THE ENDS ARE DERIVED ANYWAY. Br
 payments carries `payer_cnpj_basico` and `payee_cnpj_basico`, and `hub_empresa` is keyed
 on `cnpj_basico` -- so neither end names its hub's business-key column, and both declare
 a `LinkEnd.key_from`. That is `link_merchant_empresa`'s shape (F-DB), applied twice on
-one hub for the first time; `fdb:1504` predicted this field's second consumer arrives
-with wave 2 or not at all, and this is it.
+one hub for the first time.
+
+`fdb:1504` PREDICTED THIS FIELD'S SECOND CONSUMER ARRIVES WITH WAVE 2 OR NOT AT ALL, AND
+THIS IS NOT IT -- a correction to what this docstring said when it was written. The entry
+conflated a second DERIVATION on an identifying end with a second CONSUMER of
+`ObservationGrain.key_prefixes`, and only the first arrived. `link_payment` declares two
+derivations, both checked against `hub_empresa`'s width at import; it supplies no consumer,
+because its only satellite is `sat_link_payment`, which is transactional, takes `axis=` and
+reaches no grain at all -- `satellite_grain.snapshot_axis_for` refuses a link parent a grain
+by name, above `_refuse_a_prefixed_hub_grain`, which is why that refusal's docstring says a
+link-parented satellite never reaches a grain. So the row stays OPEN in
+`docs/unexercised-ledger.md` §3.2 with its exerciser corrected.
+
+ADR 0022 Decision 6 carries the conflation under the name THE PREDICTED CLOSURE, and this
+paragraph cites it BY NAME because it used to cite it by ORDINAL and the ordinal moved:
+Decision 6 went from four instances to five in a correction round, and "the fifth instance"
+then denoted one thing here and another in the ADR. What that instance IS is the phase plan
+predicting the closure. What THIS sentence's first draft was is a different thing -- one more
+SITE of the same conflation, asserting in the present tense that the closure had happened,
+found by re-running the prose sweep AFTER the edit rather than before it.
 
 `hub_empresa` IS LOADED FROM ITS OWN SOURCE, from a minimal empresas feed beside the
 payments table. There is no version of this fixture where one table feeds both: bronze

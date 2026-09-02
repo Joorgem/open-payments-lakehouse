@@ -49,25 +49,26 @@ bullet out really does delete it, so the page has to move, and
 
 WHAT IS DECLARED RATHER THAN DERIVED, AND THEREFORE NOT LOCKED HERE. The PHASE column and
 the reversal READINGS cannot be read out of the ADRs; `scripts/adr_index.py` asserts both
-are TOTAL over the ADR set at import. The declared merge sha and branch are re-derived
-from git by `test_the_declared_phase_is_what_git_says`, which SKIPS in CI, where
-`actions/checkout@v4` runs at its default `fetch-depth: 1`. The phase LABEL against the
-declared branch needs no git and does run there, in
-`test_a_phase_label_is_not_matched_by_a_branch_naming_its_sub_phase`.
+are TOTAL over the ADR set at import, and this file restates that in
+`test_every_declared_reading_still_anchors_to_a_condition_that_exists`. Checking the
+declared merge sha and branch against GIT is the other half of this split and lives in
+`tests/test_adr_phase_declaration.py`; the readers both halves share are in
+`tests/adr_files.py`, which carries the seam.
 """
 from __future__ import annotations
 
-import importlib.util
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-_REPO = Path(__file__).resolve().parents[1]
-_ADR_DIR = _REPO / "docs" / "adr"
-_INDEX = _ADR_DIR / "README.md"
+# ALIASED TO THE NAMES THIS FILE ALREADY USED, so the split moved definitions and
+# touched no call site. `tests/adr_files.py` carries why they are shared rather than
+# copied, and `tests/test_adr_phase_declaration.py` is the half that left.
+from adr_files import ADR_DIR as _ADR_DIR
+from adr_files import INDEX as _INDEX
+from adr_files import adr_paths as _adr_paths
+from adr_files import load as _load
 
 _STATUS_WORDS = ("Accepted", "Proposed", "Rejected", "Deprecated", "Superseded")
 
@@ -86,34 +87,9 @@ _HTML_OPEN = re.compile(r"^ {0,3}(?:<!--|</?(pre|script|style|textarea)\b)", re.
 _HEADING = re.compile(r"^All (\d+) ADRs$")
 
 
-def _load(name: str, filename: str):
-    """One script, loaded by path and REGISTERED under `name` before it executes.
-
-    Registered first for two reasons that both bite silently: `dataclasses` resolves
-    `KW_ONLY` through `sys.modules[cls.__module__]` and raises on a module that is not
-    there yet, and `generate_adr_index.py` does `import adr_index`, which would otherwise
-    load a SECOND copy whose declarations could drift from the one these tests assert on.
-
-    LOADED INSIDE THE TESTS THAT NEED IT, NEVER AT MODULE SCOPE, and that is not style.
-    `scripts/adr_index.py` REFUSES AT IMPORT when an ADR has no declared phase. At module
-    scope that refusal becomes a collection error and takes the file-reading tests down
-    with it, so the run reports *"could not import"* where it should report *"0021 has no
-    row in the index"* -- and it is why the mask is duplicated rather than imported."""
-    spec = importlib.util.spec_from_file_location(name, _REPO / "scripts" / filename)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 # --------------------------------------------------------------------------------
 # THE SECOND READING. Shares the generator's MASK, by construction, and nothing else.
 # --------------------------------------------------------------------------------
-
-
-def _adr_paths() -> list[Path]:
-    return sorted(_ADR_DIR.glob("0*.md"))
 
 
 def _prose_lines(text: str) -> list[str]:
@@ -492,100 +468,6 @@ def test_every_declared_reading_still_anchors_to_a_condition_that_exists():
     assert {r.state for r in idx.READINGS} <= set(idx._STATES)
 
 
-def _phase_tokens(text: str) -> list[str]:
-    """A phase label or a branch name as its lowercased alphanumeric runs."""
-    return re.findall(r"[a-z0-9]+", text.lower())
-
-
-def _branch_names_phase(phase: str, branch: str) -> bool:
-    """Whether `branch`'s tokens carry `phase`'s, contiguously and in order.
-
-    TOKENS RATHER THAN A FLATTENED STRING, because flattening cannot separate a phase from
-    its own sub-phase and this table holds exactly that pair. The first spelling stripped
-    both to `[a-z0-9]` and asked for substring containment, so `F1.4` -> `f14` was found
-    inside `feat/f1-4b-pr-b-second-month` and `F1.4b` -> `f14b` was found inside
-    `feat/f1-4-bronze-generalisation` -- the `b` coming from `bronze`. It rejected `F9`,
-    which is a phase from another universe, and accepted the only confusion available
-    here. Split on the separators, `f1`, `4` and `4b` stay distinct tokens and both
-    swaps fail."""
-    want, have = _phase_tokens(phase), _phase_tokens(branch)
-    return any(have[at:at + len(want)] == want for at in range(len(have) - len(want) + 1))
-
-
-def test_the_declared_phase_is_what_git_says():
-    """The declared merge sha and branch against GIT. This half does not run in CI.
-
-    ALL THREE DECLARED FACTS, SEPARATELY. The first draft asked
-    `if merge not in subject and branch not in subject` -- an OR, so the branch name alone
-    satisfied it and the declared sha went unchecked whenever the branch was right, while
-    the phase label was compared to nothing at all. `("F99", "0000000",
-    "feat/f6-rca-agent")` was declared for an ADR and this test reported green.
-
-    The sha and the branch are checked against git's own merge subject; the PHASE label is
-    checked against that branch, because git carries no other record of it. That third
-    check is a declaration against a declaration, and it is worth having because the
-    branch on the other side is the one git just confirmed -- it also needs no git, so
-    `test_a_phase_label_is_not_matched_by_a_branch_naming_its_sub_phase` runs it in CI.
-
-    CI's `test` job uses `actions/checkout@v4` at its default `fetch-depth: 1`, so
-    `git log --diff-filter=A` has nothing to walk. It SKIPS with the reason rather than
-    passing over an empty history, which would be a check reporting the expected value
-    because it could not look -- the exact defect ADR 0018 names."""
-    if not _history_is_deep():
-        pytest.skip(
-            "shallow clone or no origin/main: the phase derivation needs full history. "
-            "This is CI's default checkout, so this arm does not run there"
-        )
-    idx = _load("adr_index", "adr_index.py")
-    wrong = []
-    for path in _adr_paths():
-        number = path.name[:4]
-        phase, merge, branch = idx.PHASES[number]
-        subject = _merge_subject_for(path)
-        if merge not in subject:
-            wrong.append(f"{number}: declared merge {merge}; git says {subject!r}")
-        if branch not in subject:
-            wrong.append(f"{number}: declared branch {branch}; git says {subject!r}")
-        if not _branch_names_phase(phase, branch):
-            wrong.append(f"{number}: declared phase {phase!r} is not named by {branch!r}")
-    assert not wrong, wrong
-
-
-def _history_is_deep() -> bool:
-    """Whether git here can answer `which merge brought this file to main`."""
-    probe = subprocess.run(
-        ["git", "rev-parse", "--is-shallow-repository"],
-        cwd=_REPO, capture_output=True, text=True,
-    )
-    if probe.returncode or probe.stdout.strip() != "false":
-        return False
-    ref = subprocess.run(
-        ["git", "rev-parse", "--verify", "origin/main"],
-        cwd=_REPO, capture_output=True, text=True,
-    )
-    return ref.returncode == 0
-
-
-def _merge_subject_for(path: Path) -> str:
-    """`<merge sha> <subject>` of the merge that first brought this ADR to `origin/main`."""
-    added = subprocess.run(
-        ["git", "log", "--diff-filter=A", "--format=%H", "--", str(path.relative_to(_REPO))],
-        cwd=_REPO, capture_output=True, text=True, check=True,
-    ).stdout.split()
-    if not added:
-        return "<never added on this branch>"
-    merges = subprocess.run(
-        ["git", "rev-list", "--ancestry-path", "--merges", f"{added[-1]}..origin/main"],
-        cwd=_REPO, capture_output=True, text=True, check=True,
-    ).stdout.split()
-    if not merges:
-        return "<no merge; committed straight onto main>"
-    return subprocess.run(
-        ["git", "log", "-1", "--format=%h %s", merges[-1]],
-        cwd=_REPO, capture_output=True, text=True, check=True,
-    ).stdout.strip()
-
-
 # --------------------------------------------------------------------------------
 # THE FAILURE ARMS. A comparison whose red has never been seen is not a comparison.
 # --------------------------------------------------------------------------------
@@ -712,32 +594,6 @@ def test_the_two_maskings_agree_over_the_battery():
         if "\n".join(_prose_lines(doc)) != idx._mask_non_prose(doc)
     ]
     assert not wrong, f"the two maskings disagree about {wrong}"
-
-
-def test_a_phase_label_is_not_matched_by_a_branch_naming_its_sub_phase():
-    """THE ONLY PHASE CONFUSION THIS TABLE OFFERS, which flattened containment missed.
-
-    `F1.4` and `F1.4b` are both declared, against branches differing by one character in
-    the same place. Stripped to `[a-z0-9]` and asked for substring containment, each was
-    found inside the other's branch -- `f14` inside `f14bprb...`, and `f14b` inside
-    `f14bronze...`, where that `b` is the first letter of `bronze`. The check rejected
-    `F9`, a phase from another universe, and accepted the one pair it exists for.
-
-    The block at the end is the whole declaration, checked WITHOUT git -- so unlike
-    `test_the_declared_phase_is_what_git_says` this half runs in CI."""
-    assert _branch_names_phase("F1.4", "feat/f1-4-bronze-generalisation")
-    assert _branch_names_phase("F1.4b", "feat/f1-4b-empresas-socios")
-    assert _branch_names_phase("F1.4b PR B", "feat/f1-4b-pr-b-second-month")
-    assert _branch_names_phase("F2 wave 1", "feat/f2-wave-1-cnpj-vault")
-    assert not _branch_names_phase("F1.4", "feat/f1-4b-pr-b-second-month")
-    assert not _branch_names_phase("F1.4b", "feat/f1-4-bronze-generalisation")
-    assert not _branch_names_phase("F9", "feat/f6-rca-agent")
-    idx = _load("adr_index", "adr_index.py")
-    wrong = [
-        number for number, (phase, _merge, branch) in idx.PHASES.items()
-        if not _branch_names_phase(phase, branch)
-    ]
-    assert not wrong, f"{wrong}: the declared phase is not named by the declared branch"
 
 
 def test_a_second_reading_of_one_condition_is_refused(monkeypatch):

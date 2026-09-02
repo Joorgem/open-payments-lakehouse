@@ -3,12 +3,22 @@
 adds a domain without editing it.
 
 THAT LAST SENTENCE IS THE WHOLE REASON THIS FILE IS THREE STATEMENTS LONG. The plan's
-scope boundary stakes DV2's extensibility claim on wave 2 adding `hub_account`,
+scope boundary staked DV2's extensibility claim on wave 2 adding `hub_account`,
 `hub_customer` and `link_payment` with a diff of "+N files, 0 modified" -- a claim the
 git history either shows or does not, and which cannot be made retroactively. A list
 of module names here would be the file that breaks it, so there is no list: `__path__`
-is the package's own directory and `discover_domains` imports whatever is in it. Drop
-`payments.py` beside `cnpj.py` and it is registered.
+is the package's own directory and `discover_domains` imports whatever is in it.
+
+AND WAVE 2 DID IT, WITH A SHORTER LIST THAN THE ONE ABOVE. `payments_domain.py` was
+dropped beside `cnpj.py` and registered `link_payment` and `sat_link_payment` with this
+file untouched. It carries **no** `hub_account` and **no** `hub_customer`: both are
+REFUTED rather than deferred, because either would produce `hub_empresa`'s own digest
+under a second table name (ADR 0022 Decision 2). And the module is
+`payments_domain.py`, not the `payments.py` this paragraph used to name -- two repo-wide
+sweeps parametrise `src/opl/**` by `p.name`, and `opl/contracts/payments.py` already
+holds that basename, so the two would collide into `payments.py0` / `payments.py1`.
+`discover_domains` reads the DIRECTORY and the module binds `DOMAIN` at module level,
+so the file's own name carries no meaning to the registry and the suffix costs nothing.
 
 THE GUARDS RUN AT IMPORT, over every domain at once, which is why `build_registry` is
 called here rather than lazily on first lookup. A registry with two domains claiming

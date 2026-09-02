@@ -24,9 +24,9 @@ mechanism that reads it lives in the loaders, and "+1 file, 0 modified" is the p
 **AND THIS PARAGRAPH CLAIMED THE PROPERTY HELD FOR THIS DOMAIN, WHICH WAS TRUE OF T1 AND
 IS FALSE OF T2.** It listed `registry.py`, `specs.py`, `hubs.py`, `satellites.py`,
 `observation.py`, `effectivity.py` and `domains/__init__.py` as untouched; the satellite
-below modified five of those seven (`hubs.py` and `effectivity.py` are the two that
-survive) and added `registry_satellites.py` and `satellite_grain.py`. The honest split,
-which is the one the T1 report already published for the link:
+below modified SIX of those seven -- `hubs.py` ALONE survives, `effectivity.py` having
+gone with the same commit's rename sweep -- and added `registry_satellites.py` and
+`satellite_grain.py`. The honest split, the one T1's report published for the link:
 
   - THE `Link` NEEDED NOTHING NEW. Its kinds, guards and loader all existed; `links.py`
     changed only to consume a deferral ADR 0011 had already recorded by name.
@@ -40,10 +40,14 @@ which is the one the T1 report already published for the link:
 
 --- WHY THERE IS NO `hub_account` AND NO `hub_customer` -------------------------------
 
-`opl.vault.registry`'s own docstring stakes DV2's extensibility claim on wave 2 adding
-them, and `opl.contracts.payments` says the counterparties are "where they become keys".
-BOTH STATEMENTS ARE REFUTED HERE RATHER THAN DEFERRED, and the refutation is the phase's
-most interesting result:
+`opl.vault.registry`'s own docstring STAKED DV2's extensibility claim on wave 2 adding
+them, and `opl.contracts.payments` SAID the counterparties were "where they become
+keys". BOTH STATEMENTS ARE REFUTED HERE RATHER THAN DEFERRED, and the refutation is the
+phase's most interesting result. (Both sentences have since been corrected where they
+stood, and the past tense here is the correction's other half: T4's sweep found this
+paragraph describing two files in the present tense that its own edits had just changed
+-- a rename falsifying a third file's description of it, which is ADR 0022 Decision 6
+happening to the change that states the rule.)
 
   - `payer_cnpj_basico` and `payee_cnpj_basico` ARE `cnpj_basico`. `hub_empresa` is
     already keyed on it, and `loading.hash_key_expression` hashes the padded key

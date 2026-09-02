@@ -2,15 +2,25 @@
 exists for: a new domain is a new FILE, never an edit to an existing one.
 
 WHY THAT PROPERTY IS TESTED AND NOT ASSERTED IN PROSE. The plan's scope boundary
-stakes DV2's extensibility claim on wave 2 adding `hub_account`, `hub_customer` and
+staked DV2's extensibility claim on wave 2 adding `hub_account`, `hub_customer` and
 `link_payment` with a diff of "+N files, 0 modified". A registry holding its own
 table list would have to be edited to register them, and the demonstration would be
 false on the one file that matters -- and it cannot be demonstrated retroactively,
 because the git history is the evidence. `test_a_new_domain_of_hubs_satellites_and_
 links_is_discovered_without_editing_any_file` builds a throwaway domain package in
-`tmp_path` -- carrying wave 2's three tables by name -- and shows it registering
-through the same entry point `opl.vault.domains` uses, with nothing in `src/`
-touched.
+`tmp_path` and shows it registering through the same entry point `opl.vault.domains`
+uses, with nothing in `src/` touched.
+
+AND THE REAL WAVE 2 SETTLED THAT CLAIM, WHICH IS WHY THE PROBE NO LONGER BORROWS ITS
+NAMES. `domains/payments_domain.py` registered `link_payment` and `sat_link_payment`
+from one new file; `hub_account` and `hub_customer` are REFUTED rather than deferred,
+because either would produce `hub_empresa`'s own digest under a second table name
+(ADR 0022 Decision 2). The probe below therefore carries four deliberately fictional
+tables instead of a list this repository has since refused two thirds of -- the comment
+beside `_PROBE_DOMAIN_SOURCE` argues the rename, and what it costs the proof, which is
+nothing: the claim turns on the KINDS a domain may hold, never on their names.
+`test_the_registered_tables_are_the_three_domains_tables` is where the real names are
+pinned, and it is the assertion a rename of one of THOSE has to pass.
 
 DISCOVERY IS BY DIRECTORY SCAN, and the alternatives that would have failed the
 claim are worth naming because each looks tidier: a list of module names in
@@ -73,19 +83,39 @@ def _domain(*tables, name="probe") -> VaultDomain:
     return VaultDomain(name=name, tables=tables)
 
 
-# The throwaway domain the D5 proof drops into `tmp_path`: WAVE 2'S THREE TABLES BY
-# NAME, so the claim is exercised on the actual list the plan stakes it on.
+# The throwaway domain the D5 proof drops into `tmp_path`: a hub, a second hub, a
+# satellite and a link, under names that ARE NOT ANY REAL TABLE'S and are not meant to
+# become one.
+#
+# THESE NAMES USED TO BE `hub_account`, `hub_customer`, `link_payment` AND
+# `sat_account_dados`, AND THE ONE REASON GIVEN FOR THEM HAS BEEN REFUTED. The comment
+# here read "WAVE 2'S THREE TABLES BY NAME, so the claim is exercised on the actual list
+# the plan stakes it on" -- and F2 wave 2 built neither `hub_account` nor `hub_customer`
+# and will not: either would hash the same 8-character root `hub_empresa` already holds
+# and produce a byte-identical digest under a second table name (ADR 0022 Decision 2).
+# A fixture whose only justification is "these are the real ones" must be renamed when
+# they stop being real, or it becomes evidence FOR a table the repository has refused --
+# and `grep hub_account` would find a test that appears to register one.
+#
+# `link_payment` had to go for a second and sharper reason: it is now a REAL table of a
+# different shape. The real one is self-referencing on `hub_empresa` under `payer` and
+# `payee` and carries `transaction_id` as a dependent-child key; this one joins two
+# hubs that do not exist. Two tables under one name, one of them a fixture.
+#
+# WHAT THE PROOF LOSES BY THE RENAME IS NOTHING, which is the test of the decision. It
+# demonstrates that a domain of HUBS, SATELLITES AND LINKS registers from a new file
+# without an edit to `src/`; the kinds are what it turns on, and the names never were.
 _PROBE_DOMAIN_SOURCE = """\
 from opl.vault.registry import BusinessKeyColumn, Hub, Link, Satellite, VaultDomain
-HUB = Hub(name='hub_account', hash_key='hub_account_hk',
-          business_keys=(BusinessKeyColumn(name='account_id'),))
-CUSTOMER = Hub(name='hub_customer', hash_key='hub_customer_hk',
-               business_keys=(BusinessKeyColumn(name='customer_id'),))
-SAT = Satellite(name='sat_account_dados', parent='hub_account',
+HUB = Hub(name='hub_probe_alpha', hash_key='hub_probe_alpha_hk',
+          business_keys=(BusinessKeyColumn(name='alpha_key'),))
+CUSTOMER = Hub(name='hub_probe_beta', hash_key='hub_probe_beta_hk',
+               business_keys=(BusinessKeyColumn(name='beta_key'),))
+SAT = Satellite(name='sat_probe_alpha_dados', parent='hub_probe_alpha',
                 payload_columns=('status',))
-LINK = Link(name='link_payment', hash_key='link_payment_hk',
-            hubs=('hub_account', 'hub_customer'))
-DOMAIN = VaultDomain(name='payments', tables=(HUB, CUSTOMER, SAT, LINK))
+LINK = Link(name='link_probe_alpha_beta', hash_key='link_probe_alpha_beta_hk',
+            hubs=('hub_probe_alpha', 'hub_probe_beta'))
+DOMAIN = VaultDomain(name='probe', tables=(HUB, CUSTOMER, SAT, LINK))
 """
 
 
@@ -132,9 +162,10 @@ def test_a_new_domain_of_hubs_satellites_and_links_is_discovered_without_editing
     through it.
 
     WHAT THIS COVERS AND WHAT IT DOES NOT. It covers a domain made of HUBS, SATELLITES
-    AND LINKS, and the throwaway module below is wave 2's list BY NAME --
-    `hub_account`, `hub_customer`, `link_payment` -- so the plan's claim is exercised
-    kind for kind rather than by analogy. Task 3 could only claim two of the three,
+    AND LINKS, which is what the plan's claim turns on -- exercised kind for kind rather
+    than by analogy. The throwaway module used to carry wave 2's THREE TABLE NAMES and no
+    longer does; the comment beside `_PROBE_DOMAIN_SOURCE` says what refuted two of them
+    and why a fixture must not keep them. Task 3 could only claim two of the three,
     because `VaultTable` was `Hub | Satellite` then; Task 4 added the `Link` kind and
     its guards to `registry.py`, an edit INSIDE wave 1 that the plan always expected.
     It still does NOT cover a domain introducing a FOURTH kind: `VaultTable` and
@@ -145,18 +176,20 @@ def test_a_new_domain_of_hubs_satellites_and_links_is_discovered_without_editing
     import SIDE EFFECT -- `DOMAIN` is a value that `discover_domains` reads -- which is
     what lets this run without mutating the real registry, and what lets the whole-set
     guards run over every domain at once rather than in filesystem order."""
-    package = _probe_package(tmp_path, "probe_domains", {"payments": _PROBE_DOMAIN_SOURCE})
+    package = _probe_package(tmp_path, "probe_domains", {"probe": _PROBE_DOMAIN_SOURCE})
     with _importable(tmp_path, package):
         discovered = discover_domains([str(package)], "probe_domains")
 
     registry = build_registry(discovered)
 
-    assert [domain.name for domain in discovered] == ["payments"]
+    assert [domain.name for domain in discovered] == ["probe"]
     assert sorted(registry) == [
-        "hub_account", "hub_customer", "link_payment", "sat_account_dados"
+        "hub_probe_alpha", "hub_probe_beta", "link_probe_alpha_beta",
+        "sat_probe_alpha_dados",
     ]
-    assert [hub.name for hub in linked_hubs(registry, registry["link_payment"])] == [
-        "hub_account", "hub_customer"
+    probe_link = registry["link_probe_alpha_beta"]
+    assert [hub.name for hub in linked_hubs(registry, probe_link)] == [
+        "hub_probe_alpha", "hub_probe_beta"
     ]
 
 
@@ -177,7 +210,7 @@ def test_a_module_in_the_domains_package_binding_no_DOMAIN_is_refused(tmp_path):
     succeeding. Skipping it is the tempting behaviour and it is the wrong one: the
     module is IN the domains package, so it has already declared its intent."""
     package = _probe_package(tmp_path, "probe_nodomain", {
-        "payments": _PROBE_DOMAIN_SOURCE.replace("DOMAIN =", "DOMAINS ="),
+        "probe": _PROBE_DOMAIN_SOURCE.replace("DOMAIN =", "DOMAINS ="),
     })
 
     with _importable(tmp_path, package):
@@ -195,7 +228,7 @@ def test_a_module_whose_DOMAIN_is_not_a_vault_domain_is_refused(tmp_path):
     would fail on whatever the object does or does not have -- an `AttributeError`
     naming neither the module nor the attribute it should have bound."""
     package = _probe_package(tmp_path, "probe_wrongtype", {
-        "payments": "DOMAIN = 'payments'\n",
+        "probe": "DOMAIN = 'probe'\n",
     })
 
     with _importable(tmp_path, package):
@@ -232,13 +265,13 @@ def test_an_underscore_prefixed_module_is_skipped_and_does_not_have_to_be_a_doma
     still be wrong about what it found."""
     package = _probe_package(tmp_path, "probe_underscore", {
         "_shared": "HELPERS = ('not a domain',)\n",
-        "payments": _PROBE_DOMAIN_SOURCE,
+        "probe": _PROBE_DOMAIN_SOURCE,
     })
 
     with _importable(tmp_path, package):
         discovered = discover_domains([str(package)], "probe_underscore")
 
-    assert [domain.name for domain in discovered] == ["payments"]
+    assert [domain.name for domain in discovered] == ["probe"]
 
 
 def test_the_registered_tables_are_the_three_domains_tables():

@@ -1,7 +1,7 @@
 # src/opl/vault/registry.py
 """The vault registry MECHANISM. It holds no table of its own, and that is the point.
 
-WHY PER-DOMAIN FROM THE OUTSET. The plan's scope boundary stakes DV2's extensibility
+WHY PER-DOMAIN FROM THE OUTSET. The plan's scope boundary staked DV2's extensibility
 claim on wave 2 adding `hub_account`, `hub_customer` and `link_payment` with a git
 diff of "+N files, 0 modified". A single registry carrying the table list would have
 to be edited to register them, and the demonstration would be false on the one file
@@ -9,21 +9,33 @@ that matters -- and it cannot be repaired later, because the git history IS the
 evidence. So the tables live in `opl/vault/domains/<domain>.py` and this module is
 only the shape they must have, the guards they must pass, and the way they are found.
 
-EXACTLY WHAT THE CLAIM COVERS TODAY, because it is narrower than "any domain" and
-overstating it would be the same defect in prose that it is in code. A domain built
-from HUBS, SATELLITES AND LINKS is "+1 file, 0 modified": `VaultTable` carries those
-kinds and `VaultDomain.__post_init__` refuses anything else, so they need nothing added
-here. That is wave 2's whole list -- its `hub_account` and `hub_customer` are hubs with
-satellites and its `link_payment` is a link -- so the claim the plan stakes is covered
-kind for kind rather than by analogy. Note that `link_payment`'s `transaction_id` is a
-DEPENDENT-CHILD KEY, which `Link` now carries, so wave 2 does not need this file for
-that either. A domain introducing a NEW table kind still does not clear the bar: the
-kind and its own `__post_init__` land in `opl.vault.specs`, and its whole-set guard (if
-it needs one) and its word in the `VaultTable` union land here, exactly as `Link` did in
-Task 4 and `EffectivitySatellite` in Task 5, which is an edit inside WAVE 1 and is what
-the plan always said would happen. `test_a_new_domain_of_hubs_satellites_and_links_is_
-discovered_without_editing_any_file` builds a throwaway domain carrying wave 2's three
-tables by name and registers it.
+AND WAVE 2 HAS NOW RUN, SO THAT CLAIM IS SETTLED HERE RATHER THAN LEFT STANDING AS A
+PROMISE -- which is what it was for five phases, in the present tense, in the file it
+was a promise about. THE MECHANISM HALF HELD: `domains/payments_domain.py` is one new
+file, `link_payment` registered through it, and nothing in this module was edited to
+let it. TWO THIRDS OF THE TABLE LIST IS REFUTED RATHER THAN DEFERRED, and this
+sentence supersedes the one that used to say those two were hubs with satellites:
+there is no `hub_account` and no `hub_customer`, because either would be `hub_empresa`
+under a second name -- `loading.hash_key_expression` puts no table name in the digest,
+so a hub keyed on the same 8-character root produces the BYTE-IDENTICAL key -- and the
+payment stream carries no account and no customer to key one on. ADR 0022 Decision 2
+is the argument; `domains/payments_domain.py`'s own docstring is the long form.
+
+EXACTLY WHAT THE CLAIM COVERS, AND WAVE 2 CLEARED THE BAR WITH ITS LINK AND NOT WITH
+ITS SATELLITE -- a split this paragraph used to state as a single headline, which is
+the shape of overstatement it opens by warning against. A domain built from HUBS,
+SATELLITES AND LINKS is "+1 file, 0 modified": `VaultTable` carries those kinds and
+`VaultDomain.__post_init__` refuses anything else, so they need nothing added here.
+`link_payment` is exactly that case, including its `transaction_id`, which is a
+DEPENDENT-CHILD KEY that `Link` already carried. `sat_link_payment` is NOT: a satellite
+on a LINK needed `load_satellite`'s signature and this module's parent guard to change
+together, which is the case named next as not clearing the bar. A domain introducing a
+NEW table kind does not clear it either: the kind and its own `__post_init__` land in
+`opl.vault.specs`, and its whole-set guard (if it needs one) and its word in the
+`VaultTable` union land here, exactly as `Link` did in Task 4 and `EffectivitySatellite`
+in Task 5, which is an edit inside WAVE 1 and is what the plan always said would happen.
+`test_a_new_domain_of_hubs_satellites_and_links_is_discovered_without_editing_any_file`
+builds a throwaway domain of three tables and registers it.
 
 HOW A DOMAIN IS FOUND, AND THE THREE TIDIER ALTERNATIVES THAT ALL FAIL THE CLAIM.
 `discover_domains` scans the `opl.vault.domains` package DIRECTORY and imports every
