@@ -31,13 +31,13 @@ any project; the only defence is that a reader can re-run it.**
 |---|---|---|
 | **Bronze** | registered tables, each with a staging/bronze/quarantine triple, an Auto Loader read, a batch-scoped DQ gate and a quarantine table | **7** |
 | | distinct landing modes (`local`, `zips`, `generated`, `api`, `postgres`) | **5** |
-| **Silver — Data Vault 2.0** | hubs · links · satellites · effectivity satellites · reference tables | **18** (3 · 3 · 4 · 2 · 6) |
+| **Silver — Data Vault 2.0** | hubs · links · satellites · effectivity satellites · reference tables | **20** (3 · 4 · 5 · 2 · 6) |
 | **Gold — Kimball** | `dim_company` (SCD2), `dim_date`, `dim_channel`, `dim_currency`, `fact_payment`, `pit_estabelecimento` | **6** |
 | **DataOps** | derived views: reconciliation, per-file reconciliation, task telemetry, freshness | **4** |
-| **Deployment** | Databricks Asset Bundle jobs / their tasks | **21 / 99** |
-| **Decisions** | ADRs in [`docs/adr/`](docs/adr/) | **20** |
-| **Evidence** | run-evidence and validation documents in [`docs/`](docs/) | **20** |
-| **Tests** | selected by a default `uv run pytest`, of 3,330 collected (the rest need Docker) | **3,283** |
+| **Deployment** | Databricks Asset Bundle jobs / their tasks | **22 / 102** |
+| **Decisions** | ADRs in [`docs/adr/`](docs/adr/) | **21** |
+| **Evidence** | run-evidence and validation documents in [`docs/`](docs/) | **21** |
+| **Tests** | selected by a default `uv run pytest`, of 3,492 collected (the rest need Docker) | **3,445** |
 
 The data it has actually held: **337,712,651 rows** of CNPJ bronze across `empresas`,
 `socios` and `estabelecimentos`, at **two monthly snapshots each** (2026-06 and 2026-07).
@@ -109,7 +109,7 @@ Files into a bronze table is table stakes. These are not:
   own drafted output on that incident is
   [issue #29](https://github.com/Joorgem/open-payments-lakehouse/issues/29).
   [ADR 0020](docs/adr/0020-the-triage-accelerator-is-deterministic-and-the-model-runs-as-the-control.md)
-- **Twenty of the twenty-one bundle jobs open with `assert_deployed_revision`,** which
+- **Twenty-one of the twenty-two bundle jobs open with `assert_deployed_revision`,** which
   refuses to run against a wheel nobody deployed — because an Auto Loader checkpoint moved
   by the wrong artefact marks those files seen for every later run.
   [ADR 0009](docs/adr/0009-deployed-revision-provenance.md)
@@ -222,13 +222,13 @@ The Asset Bundle is checked with `databricks bundle validate -t free`, run from
 
 ## Where the record is
 
-- **[`docs/adr/`](docs/adr/)** — one architectural decision per file, twenty of them. Where
+- **[`docs/adr/`](docs/adr/)** — one architectural decision per file, twenty-one of them. Where
   a decision's premise was later measured false, the correction is written into the file
   **beside** the original rather than replacing it; ADR 0002 is the clearest case.
-- **[`docs/`](docs/)** — twenty run-evidence and validation documents, each recording
+- **[`docs/`](docs/)** — twenty-one run-evidence and validation documents, each recording
   what a run actually printed. **Thirteen of them** carry the labelling convention this project
   runs on: *Controller-verified* (someone ran the command and read the output) against
-  *Reported* (a task's stdout, an implementer or an agent said so). The other **seven** are
+  *Reported* (a task's stdout, an implementer or an agent said so). The other **eight** are
   the oldest in the directory and predate the convention.
 
 Neither list is reproduced here. A list of every evidence document inside a README is a list

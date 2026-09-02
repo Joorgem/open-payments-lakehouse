@@ -20,7 +20,7 @@ the prose being checked. So a green here means the two agree, not that one was c
 AND THE COMPARISON IS PROVED CAPABLE OF FAILING, on every run: the arms at the bottom mutate
 the README IN MEMORY -- one number at a time -- and assert `_disagreements` names that one
 fact and no other. Three more were run against the TREE, in F7 T2's correction, one from
-each direction. `**21 / 99**` was edited to `**21 / 97**` in the file and reported
+each direction. `**22 / 102**` was edited to `**22 / 100**` in the file and reported
 `{'bundle_tasks': (97, 99)}`, then restored by inverse substitution and proved byte-identical
 by sha256 -- never by `git checkout`. A twenty-first ADR reported `{'adrs': (20, 21),
 'adrs_in_prose': (20, 21)}`, and needed `git add -N` first, because `git ls-files` is blind to
@@ -52,8 +52,16 @@ _ROW_EVIDENCE = _REPO / "docs" / "f1.4b-pr-b-run-evidence.md"
 
 # The English number words this file has to read, DECLARED. An unmapped word is a KeyError
 # naming it, which is the loud failure a silent `.get(w, 0)` would swallow.
-_WORDS = {"two": 2, "four": 4, "seven": 7, "ten": 10, "thirteen": 13,
-          "seventeen": 17, "twenty": 20, "twenty-one": 21}
+# WIDENED IN F2 WAVE 2, AND WIDENING WHAT A LOCK CAN READ IS NOT RELAXING WHAT IT
+# DEMANDS. The tree began deriving 21 and 22 for counts this map had no words for, and
+# three patterns below captured with `(\w+)`, which cannot match a hyphen. The lock
+# could therefore not READ a value the repository now derives, and the only way to keep
+# it green without this change was to write a number the tree does not derive -- the
+# exact failure it exists to catch. No assertion is loosened here: a disagreement still
+# fails, and `guard_bundle_jobs` already used `([\w-]+)`, so the hyphen was expressible
+# in one half of that sentence and not the other.
+_WORDS = {"two": 2, "four": 4, "seven": 7, "eight": 8, "ten": 10, "thirteen": 13,
+          "seventeen": 17, "twenty": 20, "twenty-one": 21, "twenty-two": 22}
 
 # The vault's five kinds, as the README spells them against the class the registry builds.
 _VAULT_KINDS = {"hubs": "Hub", "links": "Link", "satellites": "Satellite",
@@ -180,7 +188,7 @@ def _stated_table(text: str) -> dict[str, object]:
 
 def _stated_prose(text: str) -> dict[str, object]:
     """The counts the README states in sentences rather than in the table."""
-    guard = _one(text, r"\*\*(\w+) of the ([\w-]+) bundle jobs open with "
+    guard = _one(text, r"\*\*([\w-]+) of the ([\w-]+) bundle jobs open with "
                        r"`assert_deployed_revision`")
     return {
         "cnpj_rows": _ints(_one(text, r"\*\*([\d,]+) rows\*\* of CNPJ bronze").group(1))[0],
@@ -189,10 +197,10 @@ def _stated_prose(text: str) -> dict[str, object]:
         "guarded_jobs": _WORDS[guard.group(1).lower()],
         "guard_bundle_jobs": _WORDS[guard.group(2).lower()],
         "adrs_in_prose": _WORDS[
-            _one(text, r"one architectural decision per file, (\w+) of them")
+            _one(text, r"one architectural decision per file, ([\w-]+) of them")
             .group(1).lower()],
         "evidence_docs_in_prose": _WORDS[
-            _one(text, r"(\w+) run-evidence and validation documents, each recording")
+            _one(text, r"([\w-]+) run-evidence and validation documents, each recording")
             .group(1).lower()],
         "labelled_docs": _WORDS[
             _one(text, r"\*\*(\w+) of them\*\* carry the labelling convention")
@@ -350,7 +358,7 @@ def test_the_gold_row_names_the_tables_it_counts():
 
 
 def test_the_vault_breakdown_sums_to_the_total_it_is_written_beside():
-    """`**18** (3 · 3 · 4 · 2 · 6)` has to be arithmetic as well as true."""
+    """`**20** (3 · 4 · 5 · 2 · 6)` has to be arithmetic as well as true."""
     stated = _stated(_readme())
     assert sum(n for _, n in stated["vault_breakdown"]) == stated["vault_total"]
 
@@ -406,13 +414,13 @@ def test_a_dropped_landing_mode_is_named_even_though_the_count_still_says_five()
 
 def test_a_reworded_vault_breakdown_is_named():
     """Moving one of the five sub-counts, leaving the total alone."""
-    assert set(_disagreements(_mutated("**18** (3 · 3 · 4 · 2 · 6)",
-                                       "**18** (3 · 3 · 5 · 1 · 6)"))) == {"vault_breakdown"}
+    assert set(_disagreements(_mutated("**20** (3 · 4 · 5 · 2 · 6)",
+                                       "**20** (3 · 4 · 6 · 1 · 6)"))) == {"vault_breakdown"}
 
 
 def test_a_changed_task_count_is_named():
-    """The `21 / 99` cell, second number only."""
-    assert set(_disagreements(_mutated("| **21 / 99** |", "| **21 / 98** |"))) \
+    """The `22 / 102` cell, second number only."""
+    assert set(_disagreements(_mutated("| **22 / 102** |", "| **22 / 101** |"))) \
         == {"bundle_tasks"}
 
 
@@ -430,9 +438,9 @@ def test_a_changed_test_count_is_named():
 
 
 def test_a_prose_count_that_drifts_from_its_table_row_is_named():
-    """`docs/adr/` says "twenty of them" in a bullet and **20** in the table."""
+    """`docs/adr/` says "twenty-one of them" in a bullet and **21** in the table."""
     assert set(_disagreements(_mutated(
-        "one architectural decision per file, twenty of them",
+        "one architectural decision per file, twenty-one of them",
         "one architectural decision per file, seventeen of them"))) == {"adrs_in_prose"}
 
 
@@ -445,8 +453,8 @@ def test_a_changed_row_total_is_named():
 def test_a_changed_guard_tally_is_named():
     """ADR 0009's own species: a job list that stops moving when the jobs do."""
     assert set(_disagreements(_mutated(
-        "**Twenty of the twenty-one bundle jobs",
-        "**Seven of the twenty-one bundle jobs"))) == {"guarded_jobs"}
+        "**Twenty-one of the twenty-two bundle jobs",
+        "**Seven of the twenty-two bundle jobs"))) == {"guarded_jobs"}
 
 
 def test_a_changed_label_tally_is_named():
