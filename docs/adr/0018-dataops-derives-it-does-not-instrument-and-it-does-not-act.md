@@ -241,7 +241,7 @@ target this repository has, the bundle half governs a schema nobody reads.
 > over-strong too, because dev mode's renaming is per resource kind — measured 2026-09-02,
 > `mode: development` renamed a declared `schemas` and left a declared `volumes` alone. The
 > per-kind argument does not have to be got right: the enforcement below refuses every
-> non-job, non-dashboard collection wherever it is declared.
+> non-job, non-dashboard collection.
 >
 > **What keeps grounds 2 and 3 hypothetical is mechanical and is now enforced rather than
 > promised, and what that enforcement does NOT cover is written here rather than left to be
@@ -257,7 +257,11 @@ target this repository has, the bundle half governs a schema nobody reads.
 > types `config.Resources`. **That set is not counted here**, and the reason is the failure
 > the paragraph above already names in another form: the count this paragraph published was
 > short of what the CLI accepts, exactly as its restated enumeration of securables was short
-> of its source. The module carries the paths as code. `targets.<name>.resources` is one of
+> of its source. The module carries the paths as code and re-derives them from
+> `databricks bundle schema`, failing if the two differ:
+> `uv run pytest tests/test_bundle_resource_allowlist.py -k swept_paths` needs the CLI and
+> therefore SKIPS wherever there is none, which is every CI run
+> (`git grep -in databricks -- .github/` returns nothing). `targets.<name>.resources` is one of
 > them, and the sweep read only the top level until F8's second correction pass while this
 > paragraph already claimed the enforcement. **What it is known not to reach**, each
 > measured rather than assumed, and not offered as a complete list of what nobody has

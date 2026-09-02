@@ -375,7 +375,7 @@ personal data inside `bundle destroy`'s blast radius. **Rejected**; revisit only
 > that is over-strong as well — dev mode's renaming is per resource kind
 > (measured 2026-09-02: `mode: development` renamed a declared `schemas` and left a
 > declared `volumes` alone). None of it has to be got right, because the enforcement below
-> refuses every non-job, non-dashboard collection wherever it is declared.
+> refuses every non-job, non-dashboard collection.
 >
 > **What keeps the other two hypothetical is no longer a promise, and its edges are stated
 > rather than left to the reader.** `tests/test_bundle_resource_allowlist.py` permits
@@ -384,7 +384,11 @@ personal data inside `bundle destroy`'s blast radius. **Rejected**; revisit only
 > `sql_warehouses`, which carry no `grants` and exist as real state in this workspace. It
 > sweeps the bundle documents under `databricks/`, at the paths the CLI's own schema types
 > `config.Resources` — **which this note no longer counts**, because the count it published
-> was short: that module carries the paths as code. `targets.<name>.resources` is one of
+> was short: that module carries the paths as code and re-derives them from
+> `databricks bundle schema`, failing if the two differ. Run it with
+> `uv run pytest tests/test_bundle_resource_allowlist.py -k swept_paths`; it needs the CLI
+> and therefore SKIPS wherever there is none, which is every CI run
+> (`git grep -in databricks -- .github/` returns nothing). `targets.<name>.resources` is one of
 > them, is where a securable would land under the production target, and was unswept until
 > F8's second correction pass while this note already claimed the enforcement. **What it is
 > known not to reach**, each measured and not offered as a complete list of what nobody has

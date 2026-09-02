@@ -96,11 +96,11 @@ _REPO = Path(__file__).resolve().parents[1]
 _SRC = _REPO / "databricks" / "src"
 _RESOURCES = _REPO / "databricks" / "resources"
 
-# THE FIVE VAULT JOBS, ENUMERATED. A glob would silently give a job added later
+# THE VAULT JOBS, ENUMERATED. A glob would silently give a job added later
 # whichever behaviour it happened to inherit, and the totality lock below -- every
 # registered vault table is loaded by exactly one task -- is only a claim about the
-# vault if this list is the whole of it. `test_the_five_vault_jobs_are_the_vault_yamls
-# _on_disk` closes the other direction.
+# vault if this list is the whole of it. `test_the_vault_jobs_are_the_vault_yamls_on_disk`
+# closes the other direction.
 _VAULT_JOBS = (
     "vault_empresa_job.yml",
     "vault_estabelecimento_job.yml",
@@ -304,7 +304,7 @@ def _parents_in(spec: VaultTable) -> tuple[str, ...]:
 # --- the locks -----------------------------------------------------------------------
 
 
-def test_the_five_vault_jobs_are_the_vault_yamls_on_disk():
+def test_the_vault_jobs_are_the_vault_yamls_on_disk():
     """`_VAULT_JOBS` is what every lock below iterates, so a vault job missing from it
     is a job none of them look at -- and the totality lock underneath would then say
     "every vault table is loaded" while ignoring the file that loads some of them."""
@@ -320,8 +320,8 @@ def test_every_registered_vault_table_is_loaded_by_exactly_one_task():
     table F2 wave 1 modelled exists in `workspace.default`, built by its own loader".
 
     A registered table with no task is a table nothing loads -- which is precisely the
-    state this branch was in until these four YAMLs existed, seventeen modules and 932
-    tests deep, with `grep -rl vault databricks/` returning nothing. And a table loaded
+    state this branch was in until these YAMLs existed, seventeen modules and 932 tests
+    deep, with `grep -rl vault databricks/` returning nothing. And a table loaded
     by TWO tasks is worse than either: both loaders are insert-only anti-joins, so the
     second one succeeds having appended nothing, and the run reports two loads."""
     loaded: dict[str, list[str]] = {}

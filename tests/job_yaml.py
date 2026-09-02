@@ -46,7 +46,7 @@ PYTHON_FILE_PREFIX = "../src/"
 #
 # OTHER SWEEPS UNDER `tests/` STILL SPELL A SUFFIX FOR THEMSELVES and do not read this tuple.
 # Which ones is derived rather than written down, because a written-down set of sites is what
-# this phase has published short four times:
+# this phase has published short:
 #
 #     git grep -n -E '\.r?glob\("[a-z_]*\*\.(yml|yaml|json)"\)' -- tests/
 #

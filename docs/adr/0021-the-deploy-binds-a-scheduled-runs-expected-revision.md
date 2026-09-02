@@ -122,7 +122,11 @@ other resource collection:
   legitimate act this lock makes somebody argue for rather than a hazard it exists to stop.
 - **It sweeps the places the CLI's own schema types `config.Resources`, and this ADR does
   not say how many that is.** The count it did publish was short of what the CLI accepts,
-  while reading as thoroughness; so the paths live as code in that module.
+  while reading as thoroughness; so the paths live as code in that module, which re-derives
+  them from `databricks bundle schema` and fails if the two differ —
+  `uv run pytest tests/test_bundle_resource_allowlist.py -k swept_paths` needs the CLI and
+  therefore SKIPS wherever there is none, which is every CI run
+  (`git grep -in databricks -- .github/` returns nothing).
   `targets.<name>.resources` is one of them and is where a securable would land under the
   production target — the target grounds 2 and 3 are about. **This ADR asserted the
   enforcement while the sweep read only the top level**, which is the defect its own

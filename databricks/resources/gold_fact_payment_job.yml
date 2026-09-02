@@ -48,8 +48,8 @@
 #
 # NAMED `gold_*` AND NOT `vault_*`, for all three other gold jobs' reason:
 # `tests/test_vault_job_wiring.py` globs `vault_*.yml`, asserts the result equals its own
-# four-entry list, and demands every table in `opl.vault.domains.REGISTRY` be loaded by
-# exactly one task of those files. A gold job under that prefix turns both locks red.
+# list, and demands every table in `opl.vault.domains.REGISTRY` be loaded by exactly one
+# task of those files. A gold job under that prefix turns both locks red.
 #
 # NO `months` PARAMETER, FOR THE THIRD DISTINCT REASON IN THIS DIRECTORY. The SCD2 build
 # DECLARES a window so it can refuse a snapshot the launch did not name; the PIT takes none
