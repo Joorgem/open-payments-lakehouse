@@ -447,10 +447,17 @@ PHASES: dict[str, tuple[str, str, str]] = {
     "0018": ("F4", "3bd2f52", "feat/f4-dataops"),
     "0019": ("F5", "5d769a3", "feat/f5-streaming"),
     "0020": ("F6", "ef123ac", "feat/f6-rca-agent"),
-    # WRITTEN IN A PHASE THAT HAS NOT MERGED, so there is no sha to declare -- see
-    # `UNMERGED` above. This row goes stale the moment the PR merges, and it is meant
-    # to: re-declare it then with the merge that carried it.
-    "0022": ("F2w2", UNMERGED, "f2w2/payment-link"),
+    # RE-DECLARED AT ITS OWN MERGE, which is what the comment this replaces instructed:
+    # "this row goes stale the moment the PR merges, and it is meant to: re-declare it
+    # THEN with the merge that carried it." It read `UNMERGED` from the moment ADR 0022
+    # was written until PR #36 landed, and the lock named the fix the instant it went
+    # stale -- "git says 9dcb0cf ... re-declare it with the merge that brought it there".
+    #
+    # THE FIRST ROW IN THIS TABLE DECLARED BY ITS OWN PHASE. 0019 and 0020 were filled in
+    # by F7 in 8a91c72, and that is not a precedent to follow: 8a91c72 is the commit that
+    # CREATED this file, so F5 and F6 had nowhere to declare their own merges. A pattern
+    # with one possible cause is not a precedent.
+    "0022": ("F2w2", "9dcb0cf", "f2w2/payment-link"),
 }
 
 # THE READINGS THAT HAVE BEEN TAKEN. Everything not named here renders `NOT READ`,
