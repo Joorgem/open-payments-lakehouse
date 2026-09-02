@@ -13,14 +13,17 @@ own metric.
 THE GROUND UNDER THAT SENTENCE MOVED IN F8, WHICH IS WHY IT NO LONGER READS `ZERO
 SCHEDULE BLOCKS`. It used to: `databricks/resources/` carried no `schedule:`, `trigger:`
 or `continuous:` block at all, and `tests/dataops/test_cadence.py` asserted the zero.
-F8 declared a cadence on twelve jobs and that test went red when they landed, which is
-exactly what it was written for -- and it then stayed red, unread, until that phase's
-correction pass. What still holds is narrower, and it is what this file now rests on:
-no committed bundle file writes `pause_status`, and the one target this repository
-deploys is `mode: development`, under which the CLI renders `PAUSED` -- so no scheduled
-run has ever fired and every ingest is still launched by hand (ADR 0021). The day one
-CAN fire, that test goes red again and the numbers below are re-decided against what
-the schedule does, rather than adjusted to restore a green.
+F8 declared cadences and that test went red when they landed, which is exactly what it
+was written for -- and it then stayed red, unread, until that phase's correction pass.
+No count of them is written here: derive it with
+`git grep -l quartz_cron_expression databricks/resources/ | wc -l`, because this file
+carried "twelve" and the figure was wrong inside the same phase (see the `lookup` entry).
+What still holds is narrower, and it is what this file now rests on: no committed bundle
+file writes `pause_status`, and the one target this repository deploys is
+`mode: development`, under which the CLI renders `PAUSED` -- so no scheduled run has ever
+fired and every ingest is still launched by hand (ADR 0021). The day one CAN fire, that
+test goes red again and the numbers below are re-decided against what the schedule does,
+rather than adjusted to restore a green.
 
 IT IS A DECLARATION AND IT SAYS SO. `every_days` is a number a human typed and can be
 argued with, and `why` is where the argument is. That is strictly better than the same
@@ -117,6 +120,17 @@ CADENCE: dict[str, Cadence] = {
     # -- which is 21 days PAST the 45-day expectation its siblings carry, and an operator
     # either chases a decision somebody already took or mutes the alert. (The age and the
     # overshoot are different numbers; this comment used to print the first as the second.)
+    #
+    # AND THIS ENTRY DECIDED A BUNDLE QUESTION IN F8, WHICH IS WHY THE DECISION IS RECORDED
+    # BESIDE IT RATHER THAN ONLY IN THE YAML. That phase gave `bronze_cnpj_lookup` -- the
+    # job that ingests this table -- the monthly cron its three CNPJ siblings carry, on the
+    # reason "the RFB CNPJ snapshot is monthly". True of the publisher; false as a statement
+    # about this table, which the entry below declares deliberately un-ingested on a
+    # recorded decision. The schedule was removed rather than this entry re-decided, on two
+    # grounds: the decision has evidence behind it and the copied cron did not, and
+    # re-deciding here would have emptied `PAUSED` of its only instance -- leaving a status
+    # arm nothing can enter, which is the species this repository hunts. The pairing is now
+    # refused by `tests/dataops/test_cadence.py` rather than left to these two comments.
     "lookup": Cadence(
         kind=PAUSED,
         every_days=None,

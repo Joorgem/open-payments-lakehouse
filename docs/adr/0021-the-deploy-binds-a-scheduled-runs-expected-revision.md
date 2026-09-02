@@ -103,15 +103,35 @@ evidence and not proved"*, and the third of which revokes the platform's own `CR
 schema every pipeline writes into. That is not a thing to find out by trying it on the only
 workspace there is.
 
-**The safety property is mechanical, and it is enforced rather than promised:** those grounds
-can fire only if the bundle declares a **securable**, which is the only kind of object
-`grants` rides on. [ADR 0018](0018-dataops-derives-it-does-not-instrument-and-it-does-not-act.md)
-Decision 6 enumerates those object types and this ADR does not restate the list — restating it
-is how the first draft of Decision 6's own amendment came to carry four items against its
-source's six. What is asserted instead is the stronger and cheaper property:
-`tests/test_bundle_targets_and_schedules.py` refuses any resource collection in this bundle
-other than `jobs` and `dashboards`, so no securable of any type can enter it without a test
-going red. It declares none, and this phase adds none.
+**The safety property is mechanical, and it is enforced rather than promised** — with edges,
+which are stated here because the first version of this paragraph did not state them and was
+stronger than its own mechanism. Those grounds can fire only if the bundle declares a
+**securable**, which is the only kind of object `grants` rides on.
+[ADR 0018](0018-dataops-derives-it-does-not-instrument-and-it-does-not-act.md) Decision 6
+enumerates those object types and this ADR does not restate the list — restating it is how the
+first draft of Decision 6's own amendment came to carry four items against its source's six.
+
+What is asserted instead is a cheaper property that happens to be **wider than securables in
+one direction and narrower than "the bundle" in another**.
+`tests/test_bundle_resource_allowlist.py` permits `jobs` and `dashboards` and refuses **every**
+other resource collection:
+
+- **It is an allowlist, not a securable refusal.** It also refuses `secret_scopes` and
+  `sql_warehouses` — neither carries `grants`, both are real state in this workspace (one
+  scope; the warehouse `databricks.yml` resolves by name), and declaring either would be a
+  legitimate act this lock makes somebody argue for rather than a hazard it exists to stop.
+- **It sweeps two places, not one.** Every `*.yml`/`*.yaml` under `databricks/`, at the top
+  level and under **each target**. The second is where a securable would land under the
+  production target — the target grounds 2 and 3 are about — and `targets.<name>.resources` is
+  accepted by the CLI: measured on a scratch bundle that validates `exit=0` and renders
+  resource kinds `['jobs', 'schemas']`. **This ADR asserted the enforcement while the sweep
+  read only the top level**, which is the defect its own correction pass found.
+- **What it does not reach**, both measured on the same scratch bundle: a resource declared in
+  a file the bundle `include`s from **outside** `databricks/` (`include: ../outside/*.yml`
+  validates `exit=0` and renders the resource), and any grant issued outside the bundle at
+  all — `apply_pii_governance` issues them imperatively, which is Decision 6's own ruling.
+
+The bundle declares no securable, and this phase adds none.
 
 `mode: production` will not validate without a `workspace.root_path`; the CLI says so itself:
 
@@ -182,6 +202,24 @@ So it is written down here as the reversal condition of Decision 1, and not ship
   vault, vault strictly before gold, on one day of the month — because the ordering is the only
   part of the justification above that a cron can actually carry, and it could otherwise invert
   silently.
+- **A DECLARATION ALREADY IN THIS REPOSITORY OVERRULED ONE OF THE CADENCES, and recording
+  which is worth more than the cadence was.** The first pass gave `bronze_cnpj_lookup` the
+  monthly cron its three CNPJ siblings carry, on the same reason — *the RFB CNPJ snapshot is
+  monthly*. True of the publisher; false as a claim about that table, because
+  `opl.dataops.cadence` declares `lookup` **`PAUSED`** — deliberately not ingested since
+  2026-06 on the scope decision F1.4b PR B recorded — and the freshness view prints
+  `paused_by_decision` beside it. One tree cannot say both. **The schedule was removed and the
+  declaration kept**, on two grounds: the declaration has evidence behind it and the cron was a
+  copied sentence, and re-deciding the declaration would have emptied the `PAUSED` kind of its
+  only instance, leaving a status arm nothing can enter. `vault_cnpj_reference` lost its
+  schedule with it, because its stated reason was *follows the monthly lookup bronze it reads*.
+  **The pairing is now a lock**: `tests/dataops/test_cadence.py` refuses a job that ingests a
+  `PAUSED` table and declares anything that fires it. **The *follows* relation the vault and
+  gold cadences rest on is still unlocked, and that is a lock nobody has built rather than one
+  that cannot be** — every vault load task names its bronze source in its own argv and
+  `tests/test_vault_job_wiring.py` already resolves that pairing; what is missing is the step
+  from there to the schedule classification, which would refuse a scheduled consumer of an
+  unscheduled producer. This ADR names the gap instead of implying a mechanism.
 - **`bronze_ptax` is daily and `gold_fact_payment`, the one job that consumes it, has no
   cadence.** The asymmetry is deliberate and it follows from the bullet above: PTAX's cadence is
   a claim about the Banco Central, the fact's would be a claim about a payment stream this wheel
@@ -209,6 +247,23 @@ So it is written down here as the reversal condition of Decision 1, and not ship
   `src/opl/triage_agent/incidents.py` for exactly that reason — and the commit that corrected
   the sites the plain grep DID find then claimed, in its own body, to have corrected that one
   too. A sweep a reader can run is the repair; a corrected number would not have been.
+
+  **A HIT IS NOT A DEFECT, AND THE SWEEP CANNOT TELL A READER WHICH IS WHICH** — so what to
+  expect in its output is written down here rather than left for the next reader to re-derive.
+  Six files today, in four kinds:
+
+  - **two state the narrower claim that is still true** — *"the only target this repository
+    **deploys**"* (`databricks/databricks.yml`, `databricks/resources/bronze_estabelecimentos_job.yml`);
+  - **two are accepted ADRs that keep the original wide sentence exactly as written and carry a
+    dated amendment directly below it** (ADR 0008, ADR 0018). That is the house rule — amend an
+    accepted ADR, never silently rewrite it — so the phrase is *supposed* to stay findable
+    there, and the amendment beside it is what a reader is meant to arrive at;
+  - **one is this ADR**, which publishes the sweep;
+  - **one is `docs/f4-run-evidence.md`**, another phase's record of what was true when its run
+    happened, deliberately not edited.
+
+  **What would be a defect is a hit asserting the wide claim in the present tense with no
+  amendment beside it.** There is none today.
 
 ## References
 

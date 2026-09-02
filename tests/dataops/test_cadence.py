@@ -4,19 +4,27 @@ WHY THE FIRST TEST IS ABOUT THE BUNDLE AND NOT ABOUT THIS MODULE. `cadence.py`'s
 reason for existing is that no ingest here starts on a clock, so freshness has no threshold
 to derive and one has to be declared instead. That premise is a fact about `databricks/`,
 it was true on 2026-08-18, and nothing stopped it changing -- and it DID change: this test
-read `no schedule block exists` until F8 declared twelve of them, and it went red when they
-landed, which is what it was written for. It then stayed red unread -- that phase's own
-review reported the branch failing on the README lock and on nothing else. What replaces
-it is the narrower property the declaration actually needs, and the mechanism behind it
-is owned by `tests/test_bundle_targets_and_schedules.py` rather than restated here. A
-declaration whose reason has quietly become false is worse than no declaration."""
+read `no schedule block exists` until F8 declared some, and it went red when they landed,
+which is what it was written for. It then stayed red unread -- that phase's own review
+reported the branch failing on the README lock and on nothing else. What replaces it is the
+narrower property the declaration actually needs, and the mechanism behind it is owned by
+`tests/test_bundle_targets_and_schedules.py` rather than restated here. A declaration whose
+reason has quietly become false is worse than no declaration.
+
+NO COUNT OF SCHEDULES IS WRITTEN HERE OR IN `cadence.py` ANY MORE, and the deletion is the
+correction rather than a tidy-up. Both said "twelve", locked by nothing, and the number was
+already wrong inside the same phase: F8's second correction pass took two cadences back off
+when one of them turned out to contradict this module's own `lookup` entry. Derive it:
+
+    git grep -l quartz_cron_expression databricks/resources/ | wc -l
+"""
 from __future__ import annotations
 
 import importlib.util
 import sys
 
 import pytest
-from job_yaml import bundle_docs, keys_anywhere
+from job_yaml import FIRING_KEYS, JOB_OF, bundle_docs, job_of, keys_anywhere
 
 from opl.bronze.registry import REGISTRY
 from opl.dataops import cadence as cadence_module
@@ -46,8 +54,8 @@ def test_no_schedule_in_this_bundle_can_fire_so_the_cadence_stays_a_declaration(
 
     ALL 29 `ingest` task runs in this workspace were launched by hand, and the measured
     spread of `MAX(_ingested_at)` across the seven bronze tables is hours to 18 days. F8
-    declared a cadence on twelve jobs, so `no schedule exists` -- what this test asserted
-    until then -- is no longer the property that keeps the numbers in `cadence.py` a
+    declared cadences, so `no schedule exists` -- what this test asserted until then -- is
+    no longer the property that keeps the numbers in `cadence.py` a
     declaration. TWO THINGS DO: the source writes no `pause_status`, so the target's mode
     decides; and the target this bundle deploys is `mode: development`, under which the
     CLI renders `PAUSED`. Either one changing means a run can start on a clock.
@@ -110,6 +118,55 @@ def test_the_paused_entry_cites_the_decision_that_paused_it():
     assert CADENCE["lookup"].kind == PAUSED
     assert "2026-06" in why and "scope decision" in why
     assert "f1.4b-pr-b-run-evidence.md 25.5" in why
+
+
+def _fires(table: str) -> list[str]:
+    """Which of `FIRING_KEYS` the job that ingests `table` declares. Usually none."""
+    job = job_of(JOB_OF[table])
+    return [key for key in FIRING_KEYS if job.get(key)]
+
+
+def _paused_jobs_that_fire(cadence=CADENCE) -> list[str]:
+    """Jobs that INGEST a table declared PAUSED and nevertheless declare a way to start.
+
+    THE CROSS-CHECK F8 SHIPPED WITHOUT. That phase put `bronze_cnpj_lookup` -- the job that
+    ingests `lookup` -- on `0 0 6 15 * ?` while this module went on declaring `lookup`
+    deliberately not ingested on a recorded scope decision, and the freshness view went on
+    printing `paused_by_decision` beside it. Two claims in one tree and nothing compared
+    them: the bundle's locks read the bundle, and this file's locks read the wheel.
+
+    NEITHER SPELLING IS MADE HERE. `JOB_OF` is the registry-to-job mapping
+    `tests/test_job_yaml_wiring.py` already holds total over the registry, and `FIRING_KEYS`
+    is declared once in `job_yaml` and read by the bundle's own classification lock."""
+    return [
+        f"{table} is declared {PAUSED} and {JOB_OF[table]} declares {_fires(table)}"
+        for table, entry in sorted(cadence.items())
+        if entry.kind == PAUSED and _fires(table)
+    ]
+
+
+def test_no_job_that_ingests_a_paused_table_declares_a_way_to_start_itself():
+    """A cadence declared for the ingest of a table this repository calls un-ingested.
+
+    ONE DIRECTION ONLY, AND THE OTHER IS DELIBERATELY NOT ASSERTED. A `DECLARED` table whose
+    job carries no schedule is not a defect: this module's header says every ingest here is
+    launched by hand, and that a declared rhythm is an expectation about the SOURCE rather
+    than a promise about the bundle. Asserting that direction would refuse the state the
+    file already argues is the normal one."""
+    assert not _paused_jobs_that_fire()
+
+
+def test_the_paused_cross_check_catches_a_cadence_declared_for_a_paused_table():
+    """Proves the lock can fail, in the shape it DID fail in.
+
+    The table moved to PAUSED is chosen BY HAVING a job that fires, so the arm names no job,
+    no table and no cron: it goes red for the pairing rather than for a literal, and it
+    reports loudly if this bundle ever stops scheduling any ingest at all."""
+    scheduled = sorted(table for table in CADENCE if _fires(table))
+    assert scheduled, "no ingestion job declares a way to start; this arm has nothing to pair"
+    broken = dict(CADENCE)
+    broken[scheduled[0]] = Cadence(kind=PAUSED, every_days=None, why="paused by this arm")
+    assert _paused_jobs_that_fire(broken)
 
 
 def test_the_tables_with_no_source_date_are_the_ones_whose_stamp_never_writes_it():

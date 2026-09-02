@@ -42,16 +42,28 @@ beside the assertion:
     offset all year -- the zone ADR 0016 Decision 2 reads the publication stamps in,
     and the reason these crons are not in UTC.
 
-THE BAND IS PARSED OUT OF THE JOB'S OWN COMMENT (`band HH:MM-HH:MM`), which is
-deliberate: the number the cron has to beat then cannot drift away from the sentence
-that justifies it. A comment rewrapped so `band` and the times fall on different lines
-fails LOUDLY here rather than leaving the hour resting on nothing -- the failure this
-phase already paid for once, with a line-based `grep` that could not see a claim
-wrapped across two lines.
+THE BAND IS PARSED OUT OF THE COMMENT ATTACHED TO THE JOB'S OWN `schedule:` KEY
+(`band HH:MM-HH:MM`), which is deliberate twice over. The number the cron has to beat
+then cannot drift away from the sentence that justifies it; and it cannot be satisfied
+by a sentence somewhere else in the file. The search ran over the WHOLE FILE until F8's
+second correction pass, above a 73-line header in the one file it reads, so any `band`
+written anywhere in that header would have done. A comment rewrapped so `band` and the
+times fall on different lines fails LOUDLY here rather than leaving the hour resting on
+nothing -- the failure this phase already paid for once, with a line-based `grep` that
+could not see a claim wrapped across two lines. And a block stating TWO DIFFERENT bands
+is a fault rather than a first-match, because that block is now small enough that
+restating the interval in it is easy -- this file's own correction did exactly that
+within one commit.
 
 `zoneinfo` NEEDS A TZ DATABASE -- the system one on Linux, the `tzdata` package on
 Windows. Where it is absent this file goes RED rather than skipping, because a zone
 check that cannot resolve a zone has checked nothing.
+
+WHAT LEFT THIS FILE. The resource allowlist -- which collections this bundle may declare
+anywhere -- moved to `tests/test_bundle_resource_allowlist.py`, whole, with its arms. It
+answers neither of this module's two questions and would read the same if nothing here had
+a schedule; it arrived here only because the phase that wrote it was a scheduling phase.
+Its own docstring carries what it covers and, more usefully, what it does not.
 
 WHY THE SPLIT MATTERS AT ALL. `mode: development` renders `pause_status: PAUSED` and
 `mode: production` renders `UNPAUSED`, from source that says neither. Write `pause_status`
@@ -71,15 +83,16 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
-from job_yaml import BUNDLE, RESOURCES, bundle_docs, job_of, keys_anywhere
+from job_yaml import (
+    BUNDLE,
+    FIRING_KEYS,
+    RESOURCES,
+    bundle_docs,
+    job_of,
+    keys_anywhere,
+)
 
 from opl.extraction.ptax_source import BRASILIA
-
-# The three keys that make a job start without an operator. `schedule` is the one this
-# phase declares; `trigger` (file arrival) and `continuous` are refused everywhere, in
-# both lists, because a job with a cadence AND a trigger has two, and nothing in this
-# repository has argued for either.
-_FIRING_KEYS = ("schedule", "trigger", "continuous")
 
 # THE KEY NO COMMITTED FILE MAY CARRY. Not a style rule: it is what makes the target's
 # mode the thing that decides, and a job YAML that writes it takes that decision away.
@@ -89,7 +102,6 @@ _PAUSE = "pause_status"
 # "does something outside this repository decide when this job's input exists?" -- and
 # where the answer is a person or another machine, the answer is no schedule.
 _SCHEDULED = {
-    "bronze_job.yml": "the RFB CNPJ snapshot is monthly",
     "bronze_empresas_job.yml": "the RFB CNPJ snapshot is monthly",
     "bronze_estabelecimentos_job.yml": "the RFB CNPJ snapshot is monthly",
     "bronze_socios_job.yml": "the RFB CNPJ snapshot is monthly",
@@ -97,10 +109,9 @@ _SCHEDULED = {
     "vault_empresa_job.yml": "follows the monthly empresas bronze it reads",
     "vault_estabelecimento_job.yml": "follows the monthly estabelecimentos bronze it reads",
     "vault_partner_job.yml": "follows the monthly socios bronze it reads",
-    "vault_reference_job.yml": "follows the monthly lookup bronze it reads",
     "gold_conformed_dimensions_job.yml": (
         "`dim_date`'s span is MEASURED at build time from `sat_empresa_dados`' "
-        "applied dates, and that satellite is loaded by the vault job above"
+        "applied dates, and that satellite is loaded by `vault_empresa_job.yml`"
     ),
     "gold_dim_company_job.yml": "follows the empresa vault load, which follows the snapshot",
     "gold_pit_estabelecimento_job.yml": "follows the estabelecimento vault load",
@@ -109,6 +120,19 @@ _SCHEDULED = {
 # AND THE JOBS THAT DELIBERATELY HAVE NONE. Each reason is this repository's own, taken
 # from the file's header rather than invented here.
 _UNSCHEDULED = {
+    # F8's CORRECTION PASS MOVED THIS ONE OUT OF `_SCHEDULED`, and the reason is a
+    # contradiction rather than a preference. F8 gave it the same "the RFB CNPJ snapshot is
+    # monthly" that its three siblings carry -- true of the PUBLISHER, and beside the point
+    # for this table: `opl.dataops.cadence` declares `lookup` `PAUSED`, deliberately not
+    # ingested since 2026-06 on a scope decision F1.4b PR B recorded, and the freshness view
+    # prints it as `paused_by_decision` rather than as a fault. One commit cannot hold both.
+    # The half with evidence behind it is the recorded decision, so the cadence stays and the
+    # schedule goes. `tests/dataops/test_cadence.py` now refuses the pairing outright.
+    "bronze_job.yml": (
+        "it ingests `lookup`, which `opl.dataops.cadence` declares PAUSED -- deliberately "
+        "not ingested since 2026-06 on a recorded scope decision. A monthly cadence here "
+        "would contradict a declaration this repository ships in the same tree"
+    ),
     "bronze_payments_job.yml": (
         "its input is GENERATED by this wheel, per profile, and `profile` is a choice "
         "rather than a cadence -- its default is a sentinel the generator refuses"
@@ -119,6 +143,22 @@ _UNSCHEDULED = {
         "an empty directory and reports SUCCESS, which for THIS table is what a total "
         "deletion looks like and would end-date every key in the vault"
     ),
+    # MOVED OUT WITH THE BRONZE IT FOLLOWS, and stating it as a consequence is the point:
+    # its own reason was "follows the monthly lookup bronze it reads", which stopped being
+    # true the moment that bronze stopped being monthly. This is the third instance of one
+    # shape -- a consumer of an uncadenced bronze carrying no cadence either.
+    #
+    # NOTHING COMPARES THE TWO, AND THAT IS AN ABSENT LOCK RATHER THAN AN UNLOCKABLE ONE.
+    # A first draft of this comment said the follows-relation "lives in these strings, not
+    # in any mapping a test can read", and that is false: every vault LOAD task names its
+    # bronze source in its own argv, and `tests/test_vault_job_wiring.py` already resolves
+    # exactly that (vault table, bronze source) pairing. What is missing is the comparison
+    # against this classification -- a scheduled vault job whose bronze producer is
+    # unscheduled -- and building it means lifting that reader into `job_yaml.py` rather
+    # than spelling it a second time here, which is more than this correction took on. The
+    # classification's TOTALITY is locked; which side of it a job belongs on is, for now,
+    # an argument in the diff.
+    "vault_reference_job.yml": "follows the lookup bronze, which has no cadence to follow",
     "vault_merchant_job.yml": "follows the merchant bronze, which has no cadence to follow",
     "gold_fact_payment_job.yml": "follows the payments bronze, which has no cadence",
     "dataops_views_job.yml": (
@@ -161,7 +201,7 @@ def _schedule_of(job: dict) -> dict:
 
 
 def _firing_keys(job: dict) -> list[str]:
-    return [key for key in _FIRING_KEYS if job.get(key)]
+    return [key for key in FIRING_KEYS if job.get(key)]
 
 
 def _schedule_faults(root=RESOURCES) -> list[str]:
@@ -229,10 +269,15 @@ def test_every_job_yaml_is_classified_scheduled_or_not():
     """TOTAL over `databricks/resources/*.yml`, so a new job cannot inherit an answer.
 
     The question -- does something outside this repository decide when this job's input
-    exists? -- has an answer for every job, and half of them answer no. Left to a glob,
-    a job added later would silently join the unscheduled majority without anyone saying
-    why, which is how the guard classification in `test_job_yaml_launch_guards.py` came to
-    be exact in both directions too."""
+    exists? -- has an answer for every job. NO SPLIT IS PUBLISHED HERE: the counts moved
+    twice inside one phase, once when the schedules landed and once when this pass took two
+    of them back off, and a number in a docstring is locked by nothing. Derive it:
+
+        git grep -l quartz_cron_expression databricks/resources/ | wc -l
+
+    Left to a glob, a job added later would silently inherit whichever answer the default
+    was, with nobody saying why -- which is how the guard classification in
+    `test_job_yaml_launch_guards.py` came to be exact in both directions too."""
     assert not _classification_faults()
 
 
@@ -387,18 +432,10 @@ _WEEKEND = ("SAT", "SUN")
 # The publication band a daily job's own comment has to state, as `band HH:MM-HH:MM`.
 _BAND = re.compile(r"band (\d{2}):(\d{2})-(\d{2}):(\d{2})")
 
+# The `schedule:` key on its own line, used to find where the justifying comment ends.
+_SCHEDULE_KEY = re.compile(r"^ +schedule:$", re.M)
+
 _CRON_VALUE = re.compile(r'(quartz_cron_expression: )"[^"]+"')
-
-# THE ONLY TWO RESOURCE COLLECTIONS THIS BUNDLE MAY DECLARE, AS AN ALLOWLIST RATHER THAN
-# A LIST OF SECURABLES TO REFUSE. ADR 0018 Decision 6 rejected declarative governance
-# partly on grounds that can fire ONLY over a securable, and `databricks.yml` and ADR 0021
-# both call that safety property mechanical. Enumerating the securables would be a third
-# copy of a list whose existing copies already disagreed -- six object types in ADR 0018
-# against four in the documents quoting it. An allowlist needs no such list: anything
-# that is not a job or a dashboard stops here, securable or not, and a new collection
-# becomes a decision somebody has to type out.
-_DECLARABLE = ("jobs", "dashboards")
-
 
 def _cron_of(name: str, root=RESOURCES) -> dict[str, str]:
     """One scheduled job's quartz expression, by field name."""
@@ -441,6 +478,22 @@ def _days_of_month(root=RESOURCES) -> set[str]:
     }
 
 
+def _untiered_monthly(root=RESOURCES) -> list[str]:
+    """Scheduled monthly jobs whose FILENAME names no tier -- which nothing used to see.
+
+    `_tier_of` returns None for such a file, `_monthly` then drops it, and `_daily_faults`
+    skips it for declaring a day of the month. So it escaped BOTH checks, and the escape is
+    measured rather than argued: with these four lines removed from `_tier_faults`, the arm
+    below hands a monthly job a name naming no tier and the whole module still passes. The
+    naming convention is what the entire ordering claim rests on, so a monthly job outside
+    it is not a job without a tier; it is an hour nothing compares."""
+    return [
+        name
+        for name in sorted(_SCHEDULED)
+        if _cron_of(name, root)["day_of_month"].isdigit() and _tier_of(name) is None
+    ]
+
+
 def _tier_faults(root=RESOURCES) -> list[str]:
     """The 06:00 -> 09:00 -> 12:00 ordering the schedule comments state, asserted.
 
@@ -449,6 +502,11 @@ def _tier_faults(root=RESOURCES) -> list[str]:
     follows -- which every one of those comments states as a fact and nothing checked."""
     monthly = _monthly(root)
     faults = [f"no monthly job runs in the {tier} tier" for tier in _TIERS if not monthly[tier]]
+    faults += [
+        f"{name}: fires on a day of the month and its filename names none of {_TIERS}, so "
+        "no tier ordering compares its hour against anything"
+        for name in _untiered_monthly(root)
+    ]
     days = _days_of_month(root)
     if len(days) > 1:
         faults.append(f"the monthly tiers do not share one day of the month: {sorted(days)}")
@@ -489,12 +547,37 @@ def _zone_faults(root=RESOURCES) -> list[str]:
     return faults
 
 
+def _justification_of(text: str) -> str:
+    """The unbroken run of comment lines directly ABOVE this file's `schedule:` key.
+
+    `_BAND` was searched over the WHOLE FILE, first match wins, above a 73-line header in
+    the one file it reads -- so a `band HH:MM-HH:MM` written anywhere in that header, about
+    anything, would have satisfied the hour. What justifies a cron is the comment attached
+    to it. A file with no `schedule:` key yields the empty string, and `_daily_faults`
+    reports the missing band rather than reading somewhere else for one."""
+    found = _SCHEDULE_KEY.search(text)
+    if found is None:
+        return ""
+    lines = text[: found.start()].splitlines()
+    kept: list[str] = []
+    while lines and lines[-1].lstrip().startswith("#"):
+        kept.append(lines.pop())
+    return "\n".join(reversed(kept))
+
+
 def _daily_faults(root=RESOURCES) -> list[str]:
     """A daily schedule against the two things its own comment claims.
 
-    THE BAND IS READ OUT OF THE JOB'S FILE, so the hour cannot drift away from the sentence
-    justifying it, and a comment rewrapped so `band` and the times land on different lines
-    fails here rather than silently unhooking the check."""
+    THE BAND IS READ OUT OF THE COMMENT ATTACHED TO THE JOB'S OWN `schedule:` KEY, so the
+    hour cannot drift away from the sentence justifying it, a comment rewrapped so `band`
+    and the times land on different lines fails here rather than silently unhooking the
+    check, and a band stated elsewhere in the file no longer satisfies one stated here.
+
+    AND A COMMENT STATING TWO DIFFERENT BANDS IS A FAULT, not a first-match. That block is
+    now small enough that restating the interval in it is easy -- this very check went green
+    on a rewritten PTAX comment carrying the same band twice, one of them inside a quoted
+    historical error -- and `search` would silently take whichever came first. Two intervals
+    that disagree give the hour two things to sit after; the file says which it means."""
     faults = []
     for name in sorted(_SCHEDULED):
         cron = _cron_of(name, root)
@@ -505,7 +588,12 @@ def _daily_faults(root=RESOURCES) -> list[str]:
             faults.append(f"{name}: its day-of-week {days!r} names a weekend day")
         if not any(day in days for day in _WEEKDAYS):
             faults.append(f"{name}: its day-of-week {days!r} names no weekday")
-        band = _BAND.search((root / name).read_text(encoding="utf-8"))
+        justification = _justification_of((root / name).read_text(encoding="utf-8"))
+        stated = set(_BAND.findall(justification))
+        if len(stated) > 1:
+            faults.append(f"{name}: its schedule comment states disagreeing bands {sorted(stated)}")
+            continue
+        band = _BAND.search(justification)
         if band is None:
             faults.append(f"{name}: states no `band HH:MM-HH:MM` for its hour to sit after")
             continue
@@ -516,16 +604,6 @@ def _daily_faults(root=RESOURCES) -> list[str]:
                 f"{band[1]}:{band[2]}-{band[3]}:{band[4]} band it states"
             )
     return faults
-
-
-def _resource_faults(docs: dict[str, object]) -> list[str]:
-    """Every `resources.<kind>` in every committed bundle file, against the allowlist."""
-    return [
-        f"{name}: declares resources.{kind}, which is neither of {_DECLARABLE}"
-        for name, doc in docs.items()
-        for kind in sorted((doc or {}).get("resources") or {})
-        if kind not in _DECLARABLE
-    ]
 
 
 def test_the_monthly_tiers_run_in_the_order_their_comments_claim():
@@ -541,17 +619,6 @@ def test_every_schedule_runs_in_the_zone_the_publication_instants_are_read_in():
 def test_a_daily_schedule_fires_on_weekdays_after_the_band_its_own_comment_states():
     """The hour is compared against the band the file states, not against a number here."""
     assert not _daily_faults()
-
-
-def test_the_bundle_declares_only_jobs_and_dashboards():
-    """THE SECURABLE REFUSAL ADR 0018 DECISION 6 IS QUOTED AS RESTING ON.
-
-    `databricks.yml`, ADR 0021 and ADR 0018's own F8 amendment all say that what keeps
-    Decision 6's second and third grounds hypothetical is MECHANICAL -- that they can fire
-    only over a securable and the bundle declares none. Until this test, all three said so
-    and nothing enforced it. An allowlist is what enforces it: see `_DECLARABLE` for why
-    the refusal is not written as a list of securables."""
-    assert not _resource_faults(bundle_docs())
 
 
 # --------------------------------------------------------------------------------
@@ -617,7 +684,7 @@ def test_the_band_lock_goes_red_when_the_daily_job_fires_inside_its_own_band(tmp
     root = _copied_tree(tmp_path)
     assert not _daily_faults(root)
     name = _the_daily_job(root)
-    band = _BAND.search((root / name).read_text(encoding="utf-8"))
+    band = _BAND.search(_justification_of((root / name).read_text(encoding="utf-8")))
     assert band, f"{name} states no band for this arm to move its cron into"
     cron = _cron_of(name, root)
     inside = " ".join([cron["second"], band[4], band[3], *(cron[f] for f in _CRON_FIELDS[3:])])
@@ -639,14 +706,58 @@ def test_the_weekday_lock_goes_red_when_the_daily_job_is_moved_onto_a_weekend(tm
     assert any("names a weekend day" in fault for fault in faults), faults
 
 
-def test_the_resource_lock_goes_red_when_a_securable_is_declared():
-    """A schema declared where the jobs are -- the exact shape ADR 0018 Decision 6 refuses,
-    and the one whose `grants` would be AUTHORITATIVE over a schema this project does not
-    own. The collection it replaces is read out of the document, not named here."""
-    name, text = _a_scheduled_job()
-    document = yaml.safe_load(text)
-    assert not _resource_faults({name: document})
-    declared = next(iter(document["resources"]))
-    document["resources"] = {"schemas": document["resources"].pop(declared)}
-    faults = _resource_faults({name: document})
-    assert any("resources.schemas" in fault for fault in faults), faults
+def test_the_tier_lock_goes_red_when_a_scheduled_monthly_job_carries_no_tier(
+    tmp_path, monkeypatch
+):
+    """A monthly job whose FILENAME names no tier used to escape both new checks.
+
+    Everything but the name is copied: the file, its cron and the classification entry all
+    come from a bronze job that already exists, so the arm carries no hour and no
+    expression of its own. `dataops_` is the prefix because it is a real one in this
+    directory (`dataops_views_job.yml`, `dataops_dashboard.yml`) and names no tier."""
+    root = _copied_tree(tmp_path)
+    assert not _tier_faults(root)
+    source = min(name for name in _SCHEDULED if _tier_of(name) == _TIERS[0])
+    untiered = f"dataops_{source}"
+    (root / untiered).write_text((root / source).read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setitem(_SCHEDULED, untiered, f"{source} copied under a name naming no tier")
+    faults = _tier_faults(root)
+    assert any(untiered in fault and "names none of" in fault for fault in faults), faults
+
+
+def test_the_band_lock_goes_red_when_the_band_moves_out_of_the_schedules_own_comment(tmp_path):
+    """The band is MOVED, not deleted -- to the top of the same file, where the old
+    whole-file search would have found it and called the hour justified.
+
+    That is the defect this anchoring exists for: 73 lines of header sit above the block,
+    and any `band HH:MM-HH:MM` in them, about anything at all, satisfied the comparison."""
+    root = _copied_tree(tmp_path)
+    assert not _daily_faults(root)
+    path = root / _the_daily_job(root)
+    text = path.read_text(encoding="utf-8")
+    stated = next(line for line in _justification_of(text).splitlines() if _BAND.search(line))
+    moved = stated + "\n" + text.replace(stated + "\n", "", 1)
+    assert _BAND.search(moved), "this arm dropped the band instead of moving it"
+    path.write_text(moved, encoding="utf-8")
+    faults = _daily_faults(root)
+    assert any("states no `band" in fault for fault in faults), faults
+
+
+def test_the_band_lock_goes_red_when_a_schedule_comment_states_two_disagreeing_bands(tmp_path):
+    """THE ARM THIS FILE PAID FOR BEFORE IT EXISTED.
+
+    F8's second correction pass rewrote the PTAX comment, restated the interval in it once
+    more, and the arm above went green over a file whose block then held two bands. Both
+    were the same value there and no hour moved -- but `search` takes the first, so a second
+    that DISAGREED would have decided nothing and been read by nobody. The second interval
+    is derived by shifting the stated one an hour, never typed."""
+    root = _copied_tree(tmp_path)
+    assert not _daily_faults(root)
+    path = root / _the_daily_job(root)
+    text = path.read_text(encoding="utf-8")
+    stated = next(line for line in _justification_of(text).splitlines() if _BAND.search(line))
+    found = _BAND.search(stated)
+    shifted = f"# band {int(found[1]) - 1:02d}:{found[2]}-{int(found[3]) - 1:02d}:{found[4]}"
+    path.write_text(text.replace(stated, f"{stated}\n{shifted}", 1), encoding="utf-8")
+    faults = _daily_faults(root)
+    assert any("disagreeing bands" in fault for fault in faults), faults

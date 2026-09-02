@@ -12,13 +12,25 @@ resources:
   jobs:
     bronze_cnpj_lookup:
       name: opl-bronze-cnpj-lookup
-      # MONTHLY, on the RFB snapshot cadence. Estabelecimentos' job carries the full
-      # argument -- including why the 15th is a choice rather than a measurement, why 06:00
-      # is a tier rather than a dependency, and why no `pause_status` is written anywhere in
-      # this bundle.
-      schedule:
-        quartz_cron_expression: "0 0 6 15 * ?"
-        timezone_id: America/Sao_Paulo
+      # NO SCHEDULE, AND IT IS THE ONE CNPJ JOB OF WHICH THAT IS TRUE. F8 gave this job the
+      # monthly cadence its three siblings carry, on the same reason -- "the RFB CNPJ
+      # snapshot is monthly" -- which is true of the PUBLISHER and beside the point for THIS
+      # table. `opl.dataops.cadence` declares `lookup` PAUSED: deliberately not ingested
+      # since 2026-06, on the scope decision F1.4b PR B recorded (the 2026-07 lookup zips
+      # were never published in that month's set), and the freshness view prints it as
+      # `paused_by_decision` rather than as a fault. A monthly cadence here would have this
+      # repository declaring, in one commit, both that the table is expected monthly and
+      # that it is deliberately not being ingested.
+      #
+      # WHICH HALF MOVED, AND WHY THAT ONE. The recorded decision has evidence behind it and
+      # nothing in F8 revisited it; the cadence was a copied sentence. Re-deciding the
+      # cadence instead would also have emptied the `PAUSED` kind of its only instance --
+      # `opl.dataops.cadence` exists FOR this entry -- leaving a status arm nothing can
+      # enter, which is the species this repository hunts rather than one it ships.
+      #
+      # LOCKED, not left to this comment: `tests/dataops/test_cadence.py` refuses a job that
+      # ingests a PAUSED table and declares anything that fires it. The day the lookups
+      # resume, that entry changes first and this schedule follows it.
       parameters:
         - name: month
           # The month this run ingests; the default is a value the tasks refuse

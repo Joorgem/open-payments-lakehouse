@@ -273,11 +273,27 @@ test asserts that exclusion rather than leaving it to be inferred from absence.
   isolated build environment; the tests read `hatch_build.py`, and a test that
   imports a package nobody declared keeps working only for as long as whatever
   happens to pull it in stays.
-- **This guard is for operator-launched runs.** None of these jobs is scheduled
-  today. A scheduled run has no local repository to bind an expected revision
+- **This guard is for operator-launched runs.** ~~None of these jobs is scheduled
+  today.~~ A scheduled run has no local repository to bind an expected revision
   from, so adding a schedule means answering this question again rather than
   passing the sentinel — and the sentinel refusing is the correct default in the
   meantime.
+
+  > **AMENDED 2026-09-01 by F8. THE STRUCK SENTENCE WAS THE TRIGGER THIS BULLET NAMED, AND
+  > F8 PULLED IT.** Jobs in this bundle now declare `schedule:` blocks — derive which with
+  > `git grep -l quartz_cron_expression databricks/resources/`; no count is written here,
+  > because a count is what went stale in the amendment three paragraphs up and because F8's
+  > own first count was wrong before the phase ended. **The rest of the bullet is not
+  > amended: it is the question, and
+  > [ADR 0021](0021-the-deploy-binds-a-scheduled-runs-expected-revision.md) is the answer.**
+  > That ADR block-quotes this bullet, sets out the five available answers with their costs,
+  > and takes the one where **the deploy binds the expected revision and CI makes a missing
+  > deploy loud** — explicitly keeping *"the sentinel refusing is the correct default in the
+  > meantime"* as the state until that CI deploy exists, which it does not yet.
+  > **So nothing scheduled can currently pass this guard, and nothing scheduled can
+  > currently run either:** every declared schedule deploys `PAUSED` under the only target
+  > this repository deploys (`mode: development`), and no scheduled run has ever fired in
+  > this workspace. The obligation this bullet created is discharged in ADR 0021, not here.
 - `git` is consulted in exactly one place in this repo: the build hook, on the
   machine that builds the wheel. Neither `opl.bronze.provenance` nor the job task
   may shell out to it, and a test enforces that. The deployed side has no

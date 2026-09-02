@@ -97,6 +97,21 @@ to Databricks' documented retention and to a billing claim applies to its own me
 expected cadence therefore ships as data in the repo, beside the metric**, in four kinds:
 `declared`, `paused`, `undeclared`, `no_source_axis`, each carrying its reason.
 
+> **AMENDED 2026-09-01 by F8. The `zero` above stopped being true that day, and the decision
+> is unchanged.** F8 declared `schedule:` blocks on the bronze, vault and gold jobs whose
+> sources have a publisher — derive which with
+> `git grep -l quartz_cron_expression databricks/resources/`, because this note publishes no
+> count and the first draft of the same claim elsewhere published one that was wrong within
+> the phase. **What the argument above actually needed was never the zero**: it was that no
+> ingest here starts on a clock, and that still holds by a narrower mechanism.
+> `databricks/databricks.yml` writes no `pause_status` anywhere and the only target this
+> repository deploys is `mode: development`, under which the CLI renders `PAUSED` — so not
+> one declared schedule can fire, no ingest has ever been launched by anything but a person,
+> and the threshold on a dashboard would still be invented
+> ([ADR 0021](0021-the-deploy-binds-a-scheduled-runs-expected-revision.md)).
+> `tests/dataops/test_cadence.py` asserts both halves of that mechanism, and goes red — not
+> green — on the day either changes.
+
 **The acceptance case is the one that would otherwise be muted in week one:** `bronze_cnpj_lookup`
 sits two months behind its siblings, and the view labels it **`paused_by_decision`** carrying the
 citation for the scope decision that put it there — not a fault. **A metric that cannot tell
@@ -215,17 +230,31 @@ target this repository has, the bundle half governs a schema nobody reads.
 > `prod`, `mode: production`, added because a target's `mode` is what writes
 > `schedule.pause_status` and a schedule under `mode: development` is deployed paused
 > ([ADR 0021](0021-the-deploy-binds-a-scheduled-runs-expected-revision.md)). **It is declared
-> and deliberately never deployed, and grounds 2 and 3 are the reason** — they are about a
-> production target, both are still *"assumed on strong evidence and not proved"*, and
-> ground 3's failure mode is revoking the platform's own `CREATE TABLE`. Ground 1 reads
-> exactly as written for the target that IS deployed. **What keeps grounds 2 and 3
-> hypothetical is mechanical, and it is now enforced rather than promised: they can fire
-> only if this bundle declares a SECURABLE — one of the object types this decision
-> enumerates above as carrying `grants` — and `tests/test_bundle_targets_and_schedules.py`
-> refuses any resource collection in the bundle other than `jobs` and `dashboards`.** The
-> enumeration is not repeated here on purpose: this amendment first carried a four-item
-> list against the six-item one three paragraphs up, which is how a restated enumeration
-> fails.
+> and deliberately never deployed, and grounds 2 and 3 are the reason** — both still
+> *"assumed on strong evidence and not proved"*, and ground 3's failure mode is revoking the
+> platform's own `CREATE TABLE`. Ground 1 reads exactly as written for the target that IS
+> deployed. **Ground 2 is about a production target; ground 3 is NOT** — an authoritative
+> `grants` block revokes what it does not list under **any** target that declares the
+> securable, and the first draft of this amendment said both were about production.
+>
+> **What keeps grounds 2 and 3 hypothetical is mechanical and is now enforced rather than
+> promised, and what that enforcement does NOT cover is written here rather than left to be
+> discovered.** Both need this bundle to declare a SECURABLE — one of the object types this
+> decision enumerates above as carrying `grants`; the enumeration is not repeated, because
+> this amendment first carried a four-item list against the six-item one three paragraphs
+> up, which is how a restated enumeration fails. `tests/test_bundle_resource_allowlist.py`
+> permits `jobs` and `dashboards` and refuses **every** other resource collection, which
+> makes it an allowlist rather than a securable refusal: it also refuses `secret_scopes` and
+> `sql_warehouses`, neither of which carries `grants`, both of which exist as real state in
+> this workspace, and declaring either would be a legitimate act it makes somebody argue for.
+> It sweeps every `*.yml`/`*.yaml` under `databricks/`, at the top level **and under each
+> target** — `targets.<name>.resources` is accepted by the CLI, measured on a scratch bundle
+> that validates `exit=0` and renders `['jobs', 'schemas']`, and the sweep read only the top
+> level until F8's second correction pass, while this paragraph already claimed the
+> enforcement. **Two things it does not reach**, both measured the same way: a resource
+> declared in a file `include`d from outside `databricks/`, and any grant issued outside the
+> bundle at all — which is what `apply_pii_governance` does, and what this decision decided
+> it should go on doing.
 
 `bundle deployment bind` is refused: it puts 55.8M rows of personal data inside
 `bundle destroy`'s blast radius for a cosmetic gain.

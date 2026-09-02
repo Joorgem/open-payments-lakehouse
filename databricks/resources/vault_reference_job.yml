@@ -26,12 +26,20 @@ resources:
   jobs:
     opl_vault_cnpj_reference:
       name: opl-vault-cnpj-reference
-      # MONTHLY, following the bronze it reads, in the 09:00 vault tier. The Empresa vault
-      # job carries the full argument, including why a clock offset is not a dependency and
-      # why no `pause_status` is written anywhere in this bundle.
-      schedule:
-        quartz_cron_expression: "0 0 9 15 * ?"
-        timezone_id: America/Sao_Paulo
+      # NO SCHEDULE, AS A CONSEQUENCE RATHER THAN AS A SEPARATE DECISION. F8 put this job in
+      # the 09:00 vault tier on the reason "follows the monthly lookup bronze it reads",
+      # which stopped being true when that bronze stopped being monthly: `bronze_job.yml`
+      # carries the argument, and it comes down to `opl.dataops.cadence` declaring `lookup`
+      # PAUSED. A cadence here would follow a cadence that is not there.
+      #
+      # THE SAME SHAPE AS TWO JOBS ALREADY IN THIS DIRECTORY -- `vault_merchant_job.yml` and
+      # `gold_fact_payment_job.yml` both read a bronze with no cadence and declare none.
+      #
+      # NOTHING COMPARES A CONSUMER'S CADENCE WITH ITS PRODUCER'S, and that is an absent
+      # lock rather than an unlockable one: every load task below names its bronze source in
+      # its own argv, and tests/test_vault_job_wiring.py already resolves that pairing. What
+      # does not exist is the step from there to the schedule classification. What IS locked
+      # is that every job here is classified scheduled or not, with a reason someone typed.
       parameters:
         - name: months
           # A LIST, for the reason vault_empresa_job.yml carries in full, even though

@@ -43,6 +43,17 @@ PYTHON_FILE_PREFIX = "../src/"
 # has to know which task is allowed to precede the masks.
 REVISION_GUARD = "assert_deployed_revision"
 
+# THE THREE KEYS THAT MAKE A JOB START WITHOUT AN OPERATOR. `schedule` is the one this
+# repository declares; `trigger` (file arrival) and `continuous` are refused everywhere,
+# because a job with a cadence AND a trigger has two and nothing here has argued for
+# either. HERE RATHER THAN IN ONE TEST MODULE for this file's own reason: two halves ask
+# the same question of the same YAMLs -- `tests/test_bundle_targets_and_schedules.py`
+# classifies every job by whether it declares one of these, and `tests/dataops/
+# test_cadence.py` asks it of the single job that ingests a table declared PAUSED. A
+# second spelling of the tuple is a second spelling of "starts without an operator", and
+# the copy that rots is the one nobody reads.
+FIRING_KEYS = ("schedule", "trigger", "continuous")
+
 # Which ingestion-flow job serves which registered table. Total over the registry and
 # asserted so by `test_every_registered_table_has_an_ingestion_job`: a table registered
 # without a job here is a table nothing ingests, and the next person to copy a job YAML
@@ -76,12 +87,32 @@ JOB_OF = {
 
 
 def bundle_docs() -> dict[str, object]:
-    """Every committed bundle file -- the root and every resource -- parsed, keyed by
-    its path under the bundle root."""
+    """Every `*.yml` and `*.yaml` FILE ON DISK under the bundle root, parsed, keyed by its
+    path relative to that root.
+
+    THE FILESYSTEM AND NOT `git ls-files`, DELIBERATELY, and the docstring used to say
+    "every committed bundle file" while doing this -- a description of a narrower sweep
+    than the code performs. The walk is the right one and the sentence was wrong: an
+    UNTRACKED resource file is still a file `include:` picks up and `bundle deploy` sends,
+    and `git ls-files` is blind to exactly those. `CLAUDE.md` records four false greens
+    from that blindness already. So the sweep is a superset of the committed set, and the
+    only way it reports clean over a declaration that would deploy is if the file is not
+    under this directory at all.
+
+    WHICH IS A REAL GAP AND IS NAMED RATHER THAN ROUNDED OFF. `include:` accepts a path
+    outside the bundle root -- measured on a scratch bundle, `include: ../outside/*.yml`
+    validates `exit=0` and renders the resource -- and no file this helper reads would
+    mention it. What holds the line there is that adding such an entry means editing
+    `databricks.yml`, which is one of the documents these sweeps read.
+
+    BOTH EXTENSIONS, because `include: resources/*.yaml` validates too (same scratch
+    bundle, `exit=0`), and a glob that knew only one spelling would leave the other as a
+    way in. This repository writes `.yml` and has no `.yaml` file today."""
     root = BUNDLE.parent
     return {
         str(path.relative_to(root)): yaml.safe_load(path.read_text(encoding="utf-8"))
-        for path in sorted(root.rglob("*.yml"))
+        for pattern in ("*.yml", "*.yaml")
+        for path in sorted(root.rglob(pattern))
     }
 
 

@@ -25,16 +25,30 @@ targets:
   # is a statement of cadence here; the target that would make one fire is this one.
   #
   # WHY IT IS NOT DEPLOYED, and either reason alone is sufficient. ADR 0018 Decision 6
-  # rejected declarative governance on three grounds, of which the second and third are
-  # about a production target and are *"assumed on strong evidence and not proved"* -- and
-  # the third revokes the platform's own `CREATE TABLE` on the schema every pipeline writes
-  # into. That is not a thing to find out by trying it on the only workspace there is. The
-  # safety property is mechanical, and enforced rather than promised: those grounds can
-  # fire only if the bundle declares a SECURABLE -- `grants` rides on the object types
-  # ADR 0018 Decision 6 enumerates and never on a table -- and it declares none. The
-  # enforcement is in tests/test_bundle_targets_and_schedules.py, which refuses any
-  # resource collection in this bundle other than `jobs` and `dashboards`. No list of
-  # securables is restated here: a restated enumeration is what went wrong once already.
+  # rejected declarative governance on three grounds. The SECOND is about a production
+  # target specifically; the THIRD -- that `resources.<securable>.grants` is authoritative
+  # and would revoke the platform's own `CREATE TABLE` on the schema every pipeline writes
+  # into -- fires under ANY target that declares the securable, and this comment said
+  # "both are about a production target" until F8's second correction pass. Both are
+  # *"assumed on strong evidence and not proved"*, and neither is a thing to find out by
+  # trying it on the only workspace there is.
+  #
+  # THE MECHANISM, WITH ITS EDGES, because a safety argument stated without them is a
+  # promise wearing a mechanism's clothes. Both grounds need the bundle to declare a
+  # SECURABLE -- `grants` rides on the object types ADR 0018 Decision 6 enumerates and never
+  # on a table -- and it declares none. What enforces that is an ALLOWLIST rather than a
+  # securable refusal: tests/test_bundle_resource_allowlist.py permits `jobs` and
+  # `dashboards` and refuses every other collection, securable or not, so it also refuses
+  # `secret_scopes` and `sql_warehouses` -- real state in this workspace, neither carrying
+  # `grants`, and declaring either would be a legitimate act somebody has to argue for. No
+  # list of securables is restated here: a restated enumeration is what went wrong once
+  # already. The sweep reads every `*.yml`/`*.yaml` under `databricks/` at the top level
+  # AND under each target, because `targets.<name>.resources` is accepted by the CLI
+  # (measured on a scratch bundle: `exit=0`, rendering `['jobs', 'schemas']`) and it read
+  # only the top level until F8's second correction pass. WHAT IT DOES NOT REACH: a
+  # resource declared in a file `include`d from outside `databricks/` -- which validates,
+  # measured -- and any grant issued outside the bundle at all, which is what
+  # `apply_pii_governance` does and what Decision 6 decided it should keep doing.
   #
   # WHY `root_path` IS HERE AND WHY IT IS INTERPOLATED. `mode: production` refuses to
   # validate without one -- *"target with 'mode: production' must set 'workspace.root_path'

@@ -78,11 +78,25 @@ resources:
       # NOT A POPULATION, and the difference is the whole reason this paragraph was
       # rewritten: ADR 0016 Decision 1 clause 1 prints those four, puts all of them inside
       # the band 13:03-13:10 Brasilia time, and warns in the same sentence that any wider
-      # claim `would be quantifying over rows nobody printed`. This comment made exactly
-      # that wider claim -- `every 2026 row it has read` -- and cited the wrong decision
-      # for it. 14:00 is after the late end of that band with room to spare, and
+      # claim `would be quantifying over rows nobody printed`.
+      #
+      # WHAT THE EARLIER DRAFT GOT WRONG, PRECISELY, because the correction that replaced
+      # it was itself half wrong. That draft quantified over `every 2026 row it has read`,
+      # attached the quantifier to the interval above, and cited ADR 0016 Decision 2 for
+      # both -- and the correction called that citing the wrong decision. It is not:
+      # `every 2026 row publishes at ~13:0x` IS Decision 2's own opening bullet, where it
+      # argues the ZONE. The defect was the JOIN. Decision 2 states no interval at all, and
+      # Decision 1 states this one over four printed rows while warning against exactly the
+      # widening that sentence performed.
+      #
+      # (The interval is deliberately named once in this block and not restated in the
+      # paragraph above: two statements of it here are two things that can disagree, and
+      # the lock below refuses a comment that states two different ones.)
+      #
+      # 14:00 is after the late end of the measured band with room to spare, and
       # tests/test_bundle_targets_and_schedules.py derives that comparison from the band
-      # named in THIS comment rather than from an hour typed beside the cron.
+      # named in THIS comment block -- the run of comment lines attached to the `schedule:`
+      # key below, not the file at large -- rather than from an hour typed beside the cron.
       #
       # ADR 0016 DECISION 2 IS THE SEPARATE RULING, and it is why the zone below is not
       # UTC: `dataHoraCotacao` carries no zone designator and is read as Brasilia time.

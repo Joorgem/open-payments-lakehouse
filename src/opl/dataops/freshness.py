@@ -17,11 +17,19 @@ reading that they are broken. Kept apart, each is defined exactly where it means
 
 THE VERDICT IS ON SOURCE FRESHNESS ONLY, AND THAT IS A REFUSAL RATHER THAN AN OMISSION.
 `opl.dataops.cadence` declares an expected rhythm for the sources that have a publisher.
-Pipeline freshness has none to declare: `databricks/resources/` contains no `schedule:`,
-no `trigger:` and no `continuous:` block, and all 29 `ingest` task runs in this workspace
-were launched by hand -- measured spread, hours to 18 days. A threshold on that number
-would be measuring when an operator last typed a command. So `pipeline_age_days` ships
-with no status attached, which is the honest shape, and `cadence` carries the argument.
+Pipeline freshness has none to declare, and the reason CHANGED IN F8 WITHOUT THIS FILE
+BEING TOLD. It used to be that `databricks/resources/` contained no `schedule:`, no
+`trigger:` and no `continuous:` block at all. That stopped being true on 2026-09-01, when
+F8 declared cadences on the bronze, vault and gold jobs whose sources have a publisher
+(derive which: `git grep -l quartz_cron_expression databricks/resources/`). What is still
+true is narrower and is what this verdict now rests on: no committed bundle file writes
+`pause_status`, and the one target this repository deploys is `mode: development`, under
+which the CLI renders `PAUSED` -- so not one of those schedules can fire, and all 29
+`ingest` task runs in this workspace were launched by hand (measured spread, hours to 18
+days). A threshold on that number would still be measuring when an operator last typed a
+command. So `pipeline_age_days` ships with no status attached, which is the honest shape,
+and `cadence` carries the argument -- including what happens to it the day a schedule can
+fire. `tests/dataops/test_cadence.py` asserts the two facts that sentence rests on.
 
 SEVEN STATUSES, AND THE ORDER OF THE LADDER IS THE WHOLE DESIGN.
 

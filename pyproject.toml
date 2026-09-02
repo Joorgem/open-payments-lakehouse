@@ -82,6 +82,19 @@ dev = [
     # (`Generator: hatchling 1.31.0`), so what the tests read is what builds the
     # artefact.
     "hatchling==1.31.0",
+    # DECLARED FOR THE THIRD TIME ON THE SAME RULE, and it was likewise already present --
+    # but only because `psycopg` happens to depend on it under win32 (`uv.lock`, the
+    # `tzdata` marker on the psycopg entry). `zoneinfo` carries no tz database of its own:
+    # it reads the operating system's where there is one, and Windows has none, so on that
+    # platform the package IS the database.
+    # tests/test_bundle_targets_and_schedules.py resolves every schedule's `timezone_id`
+    # and compares its offset against `opl.extraction.ptax_source.BRASILIA` -- and that
+    # module goes RED rather than skipping where the zone cannot resolve, on purpose. So
+    # until this line the whole file's green on Windows rested on a transitive dependency
+    # of a Postgres driver that nothing tied to it. Marker-scoped because a Linux runner
+    # already has the system database and pulling a second copy there would be a claim
+    # about the wrong platform.
+    "tzdata==2026.3; sys_platform == 'win32'",
     "psycopg[binary]==3.2.3",
     "confluent-kafka==2.6.1",
     "pre-commit==4.0.1",
