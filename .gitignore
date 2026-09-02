@@ -31,3 +31,16 @@ dist/
 CLAUDE.md
 AGENTS.md
 /.run-suite-out.txt
+
+# terraform (iac/). State is a live inventory of workspace objects, and a `.tfvars` is
+# where a host, a token or a user name would be typed -- so neither is committed. The
+# lock file is deliberately NOT ignored: it is the provider pin, and it carries the
+# hashes for both platforms `terraform init` runs on for this repository.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+.terraform.tfstate.lock.info

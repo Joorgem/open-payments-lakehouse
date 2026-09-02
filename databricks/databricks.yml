@@ -55,12 +55,12 @@ targets:
   # code and re-derives them from `databricks bundle schema`, failing if the two differ --
   # `uv run pytest tests/test_bundle_resource_allowlist.py -k swept_paths`, which needs the
   # CLI and therefore SKIPS wherever there is none, every CI run included
-  # (`git grep -in databricks -- .github/` returns nothing). It sweeps the bundle documents
-  # under `databricks/` (`tests/job_yaml.py` carries which suffixes those are). WHAT IT IS
-  # KNOWN NOT TO REACH, each measured and not offered as a complete list of what nobody has
-  # thought of: a resource declared in a file `include`d from outside `databricks/`, which
-  # validates; and any grant issued outside the bundle at all, which is what
-  # `apply_pii_governance` does and what Decision 6 decided it should keep doing.
+  # (`git grep -nE '(uses|run):.*databricks' -- .github/` returns nothing). It sweeps the
+  # bundle documents under `databricks/` (`tests/job_yaml.py` carries which suffixes those
+  # are). WHAT IT IS KNOWN NOT TO REACH, each measured and not offered as a complete list
+  # of what nobody has thought of: a resource declared in a file `include`d from outside
+  # `databricks/`, which validates; and any grant issued outside the bundle at all, which
+  # is what `apply_pii_governance` does and what Decision 6 decided it should keep doing.
   #
   # WHY `root_path` IS HERE AND WHY IT IS INTERPOLATED. `mode: production` refuses to
   # validate without one -- *"target with 'mode: production' must set 'workspace.root_path'

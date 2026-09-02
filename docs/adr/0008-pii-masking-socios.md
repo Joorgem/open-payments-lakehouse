@@ -388,7 +388,8 @@ personal data inside `bundle destroy`'s blast radius. **Rejected**; revisit only
 > `databricks bundle schema`, failing if the two differ. Run it with
 > `uv run pytest tests/test_bundle_resource_allowlist.py -k swept_paths`; it needs the CLI
 > and therefore SKIPS wherever there is none, which is every CI run
-> (`git grep -in databricks -- .github/` returns nothing). `targets.<name>.resources` is one of
+> (`git grep -nE '(uses|run):.*databricks' -- .github/` returns nothing).
+> `targets.<name>.resources` is one of
 > them, is where a securable would land under the production target, and was unswept until
 > F8's second correction pass while this note already claimed the enforcement. **What it is
 > known not to reach**, each measured and not offered as a complete list of what nobody has

@@ -217,3 +217,46 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # TERRAFORM (`iac/`), AND IT IS `fmt -check` + `validate` AND NOTHING ELSE.
+  #
+  # WHY NO `plan`, WHICH IS THE OBVIOUS THIRD STEP AND IS THE ONE THAT WOULD LIE.
+  # Measured in `iac/` with no credentials at all -- `DATABRICKS_HOST` and
+  # `DATABRICKS_TOKEN` unset and `DATABRICKS_CONFIG_FILE` pointed at a path that does
+  # not exist -- `terraform plan` over the committed defaults exits 0 and reports
+  # `Plan: 1 to add`. Nothing in that configuration reads anything while the member list
+  # is empty, so the plan never authenticates and never looks: `1 to add` is what it
+  # prints whether or not the object is already there, and nothing in the run could tell
+  # those two apart. Name one member and the same
+  # command exits 1 on `cannot configure default credentials`. A `plan` step here would
+  # therefore either fail for want of a secret or pass without meaning, decided by
+  # which of those two shapes the configuration happened to be in that week.
+  #
+  # `fmt -check` and `validate` read nothing, which is the property that matters: they
+  # mean the same thing on this runner as on the box that wrote them. The provider
+  # falls back to `~/.databrickscfg` when nothing else configures it and a runner has
+  # no such file, so a check that reads is a check whose two behaviours differ for a
+  # reason nobody declared. The version is pinned to the one this was measured under
+  # for the same reason. `tests/test_iac_terraform.py` locks both halves of this job.
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: iac
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+      - name: Format
+        run: terraform fmt -check -recursive
+      # `-backend=false`: there is no backend to configure and no state to touch, and
+      # the provider is still downloaded, which is all `validate` needs. The committed
+      # `.terraform.lock.hcl` carries linux_amd64 hashes for exactly this step -- a
+      # lock written on one platform fails init on the other with a message about the
+      # lock rather than about the configuration.
+      - name: Init (no backend, no credentials)
+        run: terraform init -backend=false -input=false
+      - name: Validate
+        run: terraform validate

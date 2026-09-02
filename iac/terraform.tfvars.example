@@ -1,0 +1,18 @@
+# iac/terraform.tfvars.example -- copy to `terraform.tfvars`, which git ignores.
+#
+# BOTH LINES ARE COMMENTED OUT AND THAT IS THE POINT. The committed defaults in
+# variables.tf are the state of this workspace, not placeholders waiting to be filled:
+# the group exists and holds nobody. An example file whose values are ready to apply is
+# an example that gets applied.
+#
+# Nothing here names a workspace. Which workspace this reaches comes from the Databricks
+# credential chain -- `DATABRICKS_CONFIG_PROFILE=<profile>`, or a host/token pair in the
+# environment -- so no host, token or organization id belongs in this file or in the one
+# you copy it to. See README.md.
+
+# A throwaway group, for a proof that must not touch the real one:
+# pii_readers_group_name = "_probe_pii_readers"
+
+# A real membership. This is the decision `scripts/rebuild_pii_reader_sp.py` declines to
+# take for you; the owner takes it, and it is what lets a real identity read real names:
+# pii_reader_user_names = ["<user>@<domain>"]
