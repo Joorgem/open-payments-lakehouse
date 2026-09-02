@@ -1399,7 +1399,7 @@ be inferred**, because a ledger that only grows stops being read:
 **And what Task 4 itself ships with zero rows through it:**
 
 - **NOTHING HAS BEEN INGESTED. `bronze_merchant` does not exist as a table.** The job YAML,
-  `bronze_merchant_ingest.py`, the fifth landing root, the DQ gate over the merchant rule
+  `bronze_merchant_ingest.py`, the fourth landing root, the DQ gate over the merchant rule
   set, the promote, and the `_snapshot_at_instant_shape` CHECK have every one of them moved
   **0 rows on Databricks**. `databricks bundle validate -t free` passes, which says the YAML
   parses and resolves — not that a task in it has run.

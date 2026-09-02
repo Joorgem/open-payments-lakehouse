@@ -353,7 +353,7 @@ def test_no_table_nothing_downloads_claims_a_downloader():
 def test_each_landing_mode_resolves_to_its_own_root(landing, root):
     """Every mode, to the root `opl.config` declares for it, for one month.
 
-    THREE ROOTS AND NOT ONE, and the whole value of this function is that a consumer asks
+    SEVERAL ROOTS AND NOT ONE, and the whole value of this function is that a consumer asks
     the landing mode instead of knowing the layout. A table resolved to the wrong root
     does not error: it reads a directory holding another source's files, which cloudFiles
     walks RECURSIVELY and with no glob."""
@@ -365,7 +365,7 @@ def test_each_landing_mode_resolves_to_its_own_root(landing, root):
 def test_a_landing_mode_no_root_serves_is_refused_rather_than_defaulted():
     """The `else` this dispatch deliberately does not have.
 
-    A mode that fell through to either root would give the table a source directory
+    A mode that fell through to any root would give the table a source directory
     belonging to something else, and the run would SUCCEED having read it. The refusal
     names the registered modes so an operator meeting it knows what the value should have
     been."""

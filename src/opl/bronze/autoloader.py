@@ -175,7 +175,7 @@ def checkpoint_location(cfg: OplConfig, table_key: str, *, month: str) -> str:
     )
 
 
-# --- WHY THE SOURCE-DIR GUARD BELOW ACCEPTS EITHER LANDING ROOT ----------------------
+# --- WHY THE SOURCE-DIR GUARD BELOW ACCEPTS ANY LANDING ROOT -------------------------
 #
 # Module level for the reason `opl.bronze.rules` gives above `rules_for`: this is the
 # reasoning, not the guard, and inside the docstring it put the function past the
@@ -216,7 +216,7 @@ def checkpoint_location(cfg: OplConfig, table_key: str, *, month: str) -> str:
 # the docstring says this function refuses the pair rather than trusting it, and until that
 # line was added that was not true of every spelling of it.
 #
-# (This paragraph moved out of the docstring when the fifth root took the function to 51 of
+# (This paragraph moved out of the docstring when the fourth root took the function to 51 of
 # this project's 50-line limit -- the same remedy the two blocks above it record.)
 def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: str) -> None:
     """Refuse a `source_dir` that is not one table's landing subdir for `month`.
@@ -230,7 +230,7 @@ def _assert_source_dir_is_this_months(cfg: OplConfig, source_dir: str, month: st
 
     REBUILT THROUGH `opl.config`'s own landing helpers rather than compared by prefix,
     so the layout is asked rather than re-spelled here. See the comment block above for
-    what the equality refuses that a prefix test would admit, and why BOTH roots are
+    what the equality refuses that a prefix test would admit, and why ANY root is
     accepted rather than the right one being selected.
 
     IT DEPENDS ON `registry._assert_subdirs_are_single_path_components`, and says so
