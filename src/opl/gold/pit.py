@@ -175,15 +175,20 @@ def _refuse_an_unusable_as_of_set(pit: PointInTimeTable, measured: Sequence[date
     window fills nothing; the anti-join on a re-run never matches it, so the whole NULL
     layer is appended again on every run; and the row count still looks like a multiple of
     the key count. Refused before a row is derived, because after the write there is
-    nothing to do but drop the table."""
+    nothing to do but drop the table.
+
+    THE VAULT REFUSES THE SAME VALUE SINCE F2 WAVE 2, which makes this the second line
+    rather than the only one: `load_satellite` refuses a candidate whose `applied_date`
+    is NULL, so an undated row is no longer written. This one stays because a satellite
+    written before that refusal existed can still hold one."""
     if any(value is None for value in measured):
         raise ValueError(
             f"refusing to build {pit.name!r}: at least one of {list(pit.satellites)} "
             f"carries a NULL {APPLIED_DATE}. It would become a NULL as-of date, which no "
             "comparison matches and no anti-join removes -- the layer would be re-appended "
             "on every run and every pointer in it would stay NULL, with the build "
-            "reporting success. The vault takes `applied_date` from bronze's "
-            "`_snapshot_ref_date`, so this is a row that did not come through the ingest"
+            "reporting success. Each satellite DECLARES where it reads applied_date "
+            "from (Satellite.applied_date_from), so start at that column on its source"
         )
     if not measured:
         raise ValueError(

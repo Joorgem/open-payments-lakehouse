@@ -41,6 +41,11 @@ WHAT THIS SATELLITE DOES NOT DO, and both are refusals rather than omissions:
     in `SatelliteLoadResult`, where an operator sees it and no code branches on it. A
     caller who wants a departure signal maps that state onto one in their own code,
     where the choice is visible in review.
+  - **It does not write a row it has no day for, and it does not drop one quietly
+    either.** `_refuse_a_candidate_with_no_applied_date` refuses the whole load. The
+    drop was already happening -- an equi-join on a NULL matches nothing -- so what the
+    refusal adds is the noise, which is what `opl.gold.pit` already makes about the same
+    value one layer along.
 
 WHY CONSULTING THE LEDGER IS LOAD-BEARING HERE AND NOT DECORATIVE, stated precisely
 because the tempting version of this wiring is not. Filtering candidates against the
@@ -256,7 +261,8 @@ class SatelliteLoadResult:
 # link and reached this shape first -- and `hub=` alone is the whole of the hub case.
 #
 # AND `hub=` KEEPS ITS NAME, WHICH IS THE SECOND REASON AND THE SMALLER ONE. It is spelled
-# by `databricks/src/vault_load_satellite.py` and by fifteen call sites in the suite;
+# by `databricks/src/vault_load_satellite.py`'s `parent_arguments` and by every
+# `load_satellite` call in the suite that keys on a hub;
 # renaming it to `parent=` would have been a rename inside another agent's area this
 # phase. Recorded rather than dressed up as design: if the two ever want to become one
 # argument, `_resolved_parent` is the only thing that changes.
@@ -409,6 +415,53 @@ def _refuse_an_applied_date_the_source_cannot_provide(
         "first, and reading a string as a date leaves applied_date a STRING -- which is "
         "this loader's ordering axis and the column an existing satellite already holds "
         "as a date"
+    )
+
+
+def _refuse_a_candidate_with_no_applied_date(
+    candidates: DataFrame, satellite: Satellite, source_table: str
+) -> None:
+    """Refuse a candidate row whose `applied_date` came out NULL, before anything is
+    written.
+
+    IT WOULD BE DROPPED SILENTLY AND NOTHING WOULD SAY SO, which is why this is a refusal
+    and not a report. `changed_rows` closes with `candidates.join(changed, on=[key,
+    APPLIED_DATE], how="left_semi")`, and an equi-join never matches a NULL -- so the row
+    is discarded whether or not the target already holds rows, the load reports success,
+    and a re-run appends 0 because the row was never a candidate for anything. Measured
+    on the five-row payments fixture with one unparseable `event_time`: 4 link rows, 3
+    satellite rows, re-run +0.
+
+    THE LAYER BELOW ALREADY REFUSES THIS VALUE LOUDLY -- `opl.gold.pit`'s
+    `_refuse_an_unusable_as_of_set`, "the 8,757-phantom-departure family" -- so this is
+    the vault agreeing with gold rather than a new rule. What made the old unconditional
+    `_snapshot_ref_date` projection safe was a control one layer up:
+    `opl.bronze.rules._unprovable_ref_date` rejects the rows `snapshot.ref_date_column`
+    leaves NULL. That control does not travel with a DECLARATION -- `AppliedDateSource`
+    lets a satellite name any column, and the payments rule set has no shape rule on
+    `event_time` -- so the guarantee had to be restated where the column is built.
+
+    AND NOT AS A `bad_event_time_shape` GATE RULE, WHICH IS THE OBVIOUS OTHER PLACE AND IS
+    DECLINED IN `rules.py`'S OWN WORDS. That gate is all-or-nothing and shipped, and a new
+    way for a live table to go red "belongs in a change that says so, not as a rider on
+    this one". It would also QUARANTINE the row -- losing the payment from `fact_payment`,
+    which reads bronze directly -- to protect a satellite. This refusal costs the vault
+    load alone and makes the narrower claim: this LOADER cannot order a row it has no day
+    for.
+
+    ONE EAGER PROBE AND NOT A COUNT: `limit(1)` lets Spark stop at the first offending
+    group, and the aggregate `candidates` already needs is the only work either way."""
+    if candidates.filter(F.col(APPLIED_DATE).isNull()).limit(1).count() == 0:
+        return
+    declared = satellite.applied_date_from
+    raise ValueError(
+        f"satellite {satellite.name!r} has at least one candidate row whose "
+        f"{APPLIED_DATE} is NULL, read from {declared.column!r} on {source_table!r} as "
+        f"{declared.reads!r}. Nothing downstream can hold it: changed_rows' closing "
+        "left_semi joins on (hash key, applied_date) and NULL matches nothing, so the "
+        "row would be dropped with the load reporting success and a re-run appending 0, "
+        "and opl.gold.pit refuses a NULL applied_date outright. The bronze DQ gate does "
+        "not check this column's shape, so fix the source value or narrow the window"
     )
 
 
@@ -688,6 +741,7 @@ def load_satellite(
         ledger = observation_ledger(spark, grain, months=months)
     else:
         refuse_a_window_the_source_never_loaded(spark, source_table, months, window_axis)
+    _refuse_a_candidate_with_no_applied_date(candidates, satellite, source_table)
     collapsed, departures = _diagnostics(
         spark, satellite, parent, hubs, source_table, months, ledger, window_axis,
         report=report_diagnostics,

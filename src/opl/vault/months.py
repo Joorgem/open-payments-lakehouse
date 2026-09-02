@@ -104,11 +104,11 @@ def refuse_unloaded_months(
     ONE SPELLING, TWO CALLERS, WHICH IS WHY IT IS HERE AND NOT INLINE IN EITHER OF THEM.
     `opl.vault.observation._window` asks it over bronze UNION quarantine, because an
     unloaded month there manufactures a candidate delete for the whole key space; and
-    `opl.vault.satellites` asks it over the ONE source a satellite with no observation
-    grain reads, because there an unloaded month selects no rows and the load reports
-    success having written nothing. Same rule, two consequences, and `consequence` is a
-    parameter for `validated_months`' reason: those are different wrong answers and an
-    operator reading one of them needs to be told which.
+    `opl.vault.satellite_grain` asks it over the ONE source a satellite with no
+    observation grain reads, because there an unloaded month selects no rows and the
+    load reports success having written nothing. Same rule, two consequences, and
+    `consequence` is a parameter for `validated_months`' reason: those are different
+    wrong answers and an operator reading one of them needs to be told which.
 
     `tables` IS A SEQUENCE AND IS NAMED IN THE MESSAGE, because the refusal is only
     actionable if the reader knows what was consulted. Two tables read "no row of 'a' or

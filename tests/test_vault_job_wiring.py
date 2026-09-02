@@ -43,9 +43,9 @@ real Spark in `tests/vault/test_effectivity_window.py`.
 
 AND THIS FILE IS NOW A PAIR, SPLIT BY F-DB TASK 1 AT EXACTLY 800 LINES. F-DB's
 `vault_merchant_job.yml` HAS SINCE BEEN ADDED to `_VAULT_JOBS`, which is what that split
-made room for -- and the totality lock now covers eighteen registered tables across TWO
-domains rather than fourteen across one. The seam is the one this repository has drawn
-twice already and named both times:
+made room for -- and the totality lock covers every table `opl.vault.domains` registers,
+so it widened again when F2 wave 2 added a domain. The seam is the one this repository
+has drawn twice already and named both times:
 `test_task_wiring.py` reads the SCRIPTS and `test_job_yaml_wiring.py` reads the JOB that
 hands them arguments; `test_gold_entry_points.py` and `test_gold_job_wiring.py` are that
 pair one layer along. The vault had both halves in one file. What went to
@@ -537,9 +537,9 @@ def _grains_the_jobs_build() -> list[tuple[str, str, str, ObservationGrain]]:
             # `spec.transactional` is False for every spec this loop ever sees and
             # deleting the two lines kills no test. It is written here, in the commit that
             # registers the table, because the alternative is a red run in which the
-            # remedy is an edit to the sweep as well as to the YAML. A ledger row is
-            # OWED for it -- F2 wave 2's T4 owns `docs/unexercised-ledger.md` -- and
-            # saying so here is the claim, not the record.
+            # remedy is an edit to the sweep as well as to the YAML. The ledger row
+            # is WRITTEN: `vwiring:534`, section 3.2 of `docs/unexercised-ledger.md`,
+            # which names that YAML task as the exerciser.
             if isinstance(spec, Satellite) and spec.transactional:
                 continue
             if isinstance(spec, Satellite):

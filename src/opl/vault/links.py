@@ -204,8 +204,8 @@ def refuse_unloaded_hubs(
 
 
 def non_identifying_ends(link: Link) -> tuple[LinkEnd, ...]:
-    """The ends of `link` whose business key is neither named columns of the source nor
-    a declared derivation.
+    """The ends of `link` that are NON-IDENTIFYING -- a reference the link RESOLVES
+    rather than one it is IDENTIFIED BY.
 
     THIS IS THE CONDITION `_refuse_a_link_this_loader_cannot_write` TESTS, RE-DERIVED IN
     F-DB RATHER THAN RELAXED, and named so the job-wiring lock can route a link to an

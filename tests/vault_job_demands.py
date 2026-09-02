@@ -169,10 +169,11 @@ def required_source_columns(spec: VaultTable) -> tuple[str, ...]:
 # `bronze_payments` does not have it, deliberately
 # (`opl.bronze.autoloader.add_common_audit_columns` omits it for a GENERATED source, and
 # `opl.bronze.rules`' payments set drops `unprovable_snapshot_ref_date` because THE COLUMN
-# DOES NOT EXIST). Against the contract alone the four RFB satellites read as pairings
-# that cannot work; without the demand at all, an RFB satellite repointed at
-# `bronze_payments` reads as one that CAN, and it cannot. That is the copy-paste this file
-# exists to refuse, one source further along than the one the original probe drives.
+# DOES NOT EXIST). Against the contract alone every satellite that reads
+# `_snapshot_ref_date` -- and they are not all RFB, since `sat_merchant_dados` reads it off
+# a POSTGRES source -- reads as a pairing that cannot work; without the demand at all, one
+# of them repointed at `bronze_payments` reads as one that CAN, and it cannot. That is the
+# copy-paste this file exists to refuse, one source further along than the original probe.
 
 
 def _satellite_key_columns(spec: Satellite) -> tuple[str, ...]:
@@ -188,9 +189,9 @@ def _satellite_key_columns(spec: Satellite) -> tuple[str, ...]:
     from the pre-existing red, because the branch is reached only through a YAML TASK and
     no YAML task names `sat_link_payment` -- T3 owns that task and is blocked on
     `databricks/`. So this is FORWARD WORK, written in the same commit as the registry
-    entry that will need it, and it goes live on the day that task is declared. A row in
-    `docs/unexercised-ledger.md` is OWED for it and is F2 wave 2's T4 to write -- this
-    sentence is the claim, not the record, and the two are not the same thing."""
+    entry that will need it, and it goes live on the day that task is declared. The row
+    in `docs/unexercised-ledger.md` is WRITTEN -- `jobdem:186`, section 3.2 -- so this
+    sentence is the claim and that row is the record."""
     parent = domains.parent_of(spec)
     if isinstance(parent, Link):
         return tuple(link_source_columns(parent, domains.linked_hubs(parent)))

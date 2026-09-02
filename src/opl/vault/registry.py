@@ -35,7 +35,7 @@ NEW table kind does not clear it either: the kind and its own `__post_init__` la
 `VaultTable` union land here, exactly as `Link` did in Task 4 and `EffectivitySatellite`
 in Task 5, which is an edit inside WAVE 1 and is what the plan always said would happen.
 `test_a_new_domain_of_hubs_satellites_and_links_is_discovered_without_editing_any_file`
-builds a throwaway domain of three tables and registers it.
+builds a throwaway domain of those kinds and registers it.
 
 HOW A DOMAIN IS FOUND, AND THE THREE TIDIER ALTERNATIVES THAT ALL FAIL THE CLAIM.
 `discover_domains` scans the `opl.vault.domains` package DIRECTORY and imports every
@@ -536,11 +536,13 @@ def parent_hub(registry: Mapping[str, VaultTable], satellite: Satellite) -> Hub:
     WRONG" AND F2 WAVE 2 MADE THAT FALSE. A link-parented satellite is now registrable,
     so this refusal is REACHABLE on a perfectly valid registry -- and it is reachable from
     outside this package: `opl.gold.registry_guards` calls it for every SCD2 dimension's
-    source satellite, and `databricks/src/vault_load_satellite.py` calls it for whatever
-    table its task names. Both would have got `'link_payment' is not a hub`, which names
-    no consequence and no alternative. The refusal is kept rather than widened, because
-    both of those callers really do need a HUB: an SCD2 dimension is a satellite's version
-    chain hung on a hub's business key, and a PIT's spine is a hub's key set.
+    source satellite, and `gold_load_dimension.py` and `gold_load_fact.py` call it for the
+    dimension they load. Each would have got `'link_payment' is not a hub`, which names no
+    consequence and no alternative. (`databricks/src/vault_load_satellite.py` was in that
+    list until `7b4b925` repointed it at `parent_of`; it calls this function nowhere now.)
+    The refusal is kept rather than widened, because the callers that remain really do need
+    a HUB: an SCD2 dimension is a satellite's version chain hung on a hub's business key,
+    and a PIT's spine is a hub's key set.
 
     `parent_of` is the resolution for a caller that can take either."""
     parent = registry[satellite.parent]

@@ -196,10 +196,10 @@ def test_the_guard_also_refuses_a_bronze_table_dropped_from_the_vault_declaratio
 def test_each_bronze_tables_answer_is_its_own_and_not_the_whole_model():
     """THE ASSERTION THE WHOLE FILE EXISTS FOR: exact tuples, table by table.
 
-    A blast radius returning all six gold tables and all nineteen vault tables for every
-    bronze table would satisfy every non-emptiness check in this file. These are the numbers
-    that cannot be produced that way -- THREE of the seven reach no gold table, ONE reaches
-    no vault table, and no two of the seven carry the same pair of legs.
+    A blast radius returning EVERY gold table and EVERY vault table for every bronze table
+    would satisfy every non-emptiness check in this file. These are the answers that cannot
+    be produced that way -- THREE of the seven bronze tables reach no gold table, ONE
+    reaches no vault table, and no two of the seven carry the same pair of legs.
 
     "TWO REACH NO VAULT TABLE" WAS TRUE UNTIL F2 WAVE 2 and is now one: `link_payment` gave
     `payments` a vault leg and left `ptax` alone in that column. T2 added a SECOND table to

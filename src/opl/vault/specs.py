@@ -279,14 +279,14 @@ class Satellite:
     kind (its own `__post_init__` here, its word in the `VaultTable` union there) does not
     describe that.
 
-    THE CHANGE DETECTOR IS THE SAME CODE AND IS INERT ON THIS TABLE, WHICH IS SAID HERE SO
-    THE SENTENCE ABOVE IS NOT READ AS MORE THAN IT CLAIMS. `changed_rows` compares each
-    row's `hash_diff` against `lag(hash_diff)` partitioned by the PARENT's hash key and
-    ordered by `applied_date`. A link hash key that carries a dependent-child key is
-    unique per event: `link_payment` hashes `transaction_id` into its digest, so every
-    payment is its own partition with exactly one `applied_date`, `lag` is always NULL,
-    and no candidate has ever been dropped as unchanged. What makes a re-load append
-    nothing is `opl.vault.loading._without_persisted`'s (key, `applied_date`) anti-join
+    THE CHANGE DETECTOR IS THE SAME CODE AND IS INERT ON THIS DATA -- WHICH IS NOT THE
+    SAME AS INERT BY CONSTRUCTION, AND THIS PARAGRAPH USED TO SAY THE SECOND.
+    `changed_rows` partitions by the PARENT's hash key and orders by `applied_date`, and
+    `link_payment` hashes `transaction_id` into its digest -- so the partition is one
+    TRANSACTION, not one `applied_date`. A redelivery carrying a CORRECTED `event_time`
+    puts two rows in one partition, and on a two-row fixture the second WAS dropped as
+    unchanged. What the generator's own byte-identical redelivery relies on instead is
+    `opl.vault.loading._without_persisted`'s (key, `applied_date`) anti-join
     ALONE. So the delta is true in form and unexercised in substance, and it stays in the
     shared path rather than being switched off: the first STATE satellite on a link --
     socios' `qualificacao_socio`, named below -- would exercise it on the day it lands,
@@ -635,9 +635,10 @@ class EffectivitySatellite:
     A FOURTH TABLE KIND RATHER THAN A `Satellite` WITH A LINK PARENT, AND ONLY ONE OF THE
     TWO ORIGINAL REASONS SURVIVES F2 WAVE 2 -- which is why this paragraph is written out
     rather than pointing at a guard. It read "the same reasons
-    `_assert_every_satellite_hangs_off_a_hub` gives", and that guard now ADMITS a link
-    parent: `load_satellite` takes one, and `sat_link_payment` is a `Satellite` on
-    `link_payment`. So "the signature takes a `Hub`" is gone.
+    `_assert_every_satellite_hangs_off_a_hub` gives", and that guard does not exist any
+    more: `registry_satellites.assert_every_satellite_hangs_off_a_hub_or_a_link` replaced
+    it and ADMITS a link parent, `load_satellite` takes one, and `sat_link_payment` is a
+    `Satellite` on `link_payment`. So "the signature takes a `Hub`" is gone.
 
     WHAT IS UNCHANGED IS THE REASON THAT WAS ALWAYS THE REAL ONE: this table has NO
     PAYLOAD and NO `hash_diff`. A `Satellite` is delta-driven on the hash of its payload

@@ -477,18 +477,30 @@ def test_every_entry_point_resolving_a_source_honours_that_sources_axis(script):
 # taking the session, a `dict()` wrapper and two conditional bindings); that count is the
 # review's and is attributed rather than re-derived here.
 #
-# NOT COVERED (a), AND THIS ONE IS SILENT, WHICH IS THE WHOLE REASON IT IS WRITTEN DOWN.
-# In-place mutation of the dict the seam returns -- `|=`, item assignment, `.update()` --
-# is structurally invisible to `locals_of`. MEASURED: inserting
+# NOT COVERED (a), AND IT IS THE SUITE THAT IS SILENT ABOUT IT AND NOT THE PRODUCTION
+# PATH -- THIS COMMENT CLAIMED BOTH. In-place mutation of the dict the seam returns --
+# `|=`, item assignment, `.update()` -- is invisible to `locals_of`. MEASURED: inserting
 # `arguments |= {"axis": bronze_table_spec("merchant").snapshot_axis}` between the seam
 # call and the loader leaves this file at 76 passed / 14 skipped, exit 0, byte-identical
-# to the honest headline -- and NEITHER gate refuses it, because `_resolved_parent` never
+# to the headline, and NEITHER GATE NAMED HERE refuses it: `_resolved_parent` never
 # reads the axis and `_transactional_axis` returns the axis it is handed without checking
 # it against `source_table`. Driven directly, `snapshot_axis_for` then answers
-# `_snapshot_at` while the payments source declares `_snapshot_month`. The mirror
-# direction is the one the axis sweep above already calls the worse half: a monthly axis
-# on a non-monthly source VALIDATES, because `_snapshot_month` is stamped on every bronze
-# row whatever its source declares, and the fold then reads a column nothing keys on.
+# `_snapshot_at` while the payments source declares `_snapshot_month`.
+#
+# BUT THE LOAD DOES NOT PROCEED, AND THE SENTENCE THAT STOOD HERE SAID IT DID. `main`
+# always names months (`required_months`), and `read_snapshot_window` validates them
+# against the axis it is handed -- so the substitution raises, before a row is read:
+# `ValueError: months contains ['2026-06'] -- every value must be
+# YYYY-MM-DDTHH:MM:SS.uuuuuuZ (27 characters, UTC), matching _snapshot_at exactly`.
+# MEASURED on local Spark, driving `load_satellite` over the payments fixture with the
+# merchant axis substituted. The mirror direction is not the worse half either, for a
+# reason the same measurement gives: `INSTANT_SNAPSHOT` is the only non-monthly axis the
+# bronze registry declares, so substituting any OTHER source's axis for the payments one
+# substitutes `MONTHLY_SNAPSHOT` for itself and changes nothing at all.
+#
+# SO WHAT IS UNCOVERED IS THE EDIT AND NOT A WRONG ANSWER: the suite stays green over a
+# source change that would stop the job on its next run. That is still worth a ledger row
+# -- `ventry:486` -- and it is a smaller claim than the one that was filed.
 #
 # NOT COVERED (b). The lock never inspects the seam call's ARGUMENTS, so
 # `parent_arguments(parent, <some other bronze spec>)` is green. It needs a second bronze

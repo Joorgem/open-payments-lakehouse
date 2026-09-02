@@ -308,11 +308,16 @@ VAULT_LOADS_FROM: dict[str, tuple[str, ...]] = {
 # no gold table reads. `payments` is `592660596679630`'s table, so the incident this whole
 # module exists for is the one whose answer degraded when the vault leg arrived.
 #
-# "NEITHER OF THESE TWO TABLES HAS A VAULT LOADER TASK" IS WHAT THIS COMMENT SAID, AND F2
-# WAVE 2 FALSIFIED IT. `payments` has one. That is why `BlastRadius` carries `gold_direct`
-# as its own leg: the two facts -- feeds a vault table, and drives a gold table straight
-# from bronze -- are both true of `payments` now, and a model with room for only one of
-# them reported the union under the wrong heading.
+# "NEITHER OF THESE TWO TABLES HAS A VAULT LOADER TASK" IS WHAT THIS COMMENT SAID AND IT
+# IS STILL TRUE OF THE BUNDLE. `grep -rln payments databricks/resources/vault_*.yml`
+# returns nothing, and the 403 that froze this workspace's job resources is why. What F2
+# wave 2 changed is the DECLARATION -- `VAULT_LOADS_FROM` above now names `payments` as the
+# parent of `link_payment` and `sat_link_payment` -- and an earlier round of this phase
+# wrote "`payments` has one" here, which the bundle does not support. That declaration is
+# why `BlastRadius` carries `gold_direct` as its own leg: the two facts -- feeds a vault
+# table, and drives a gold table straight from bronze -- are both true of `payments` in the
+# declaration this module reads, and a model with room for only one of them reported the
+# union under the wrong heading.
 DIRECT_TO_GOLD: dict[str, tuple[str, ...]] = {
     # `fact_payment` reads bronze payments as its SOURCE (`gold_load_fact.py`'s
     # `source_table=`), one fact row per payment event. `dim_date` reads it too, and only
@@ -511,11 +516,17 @@ def _radius(
         vault=vault,
         gold=_gold_reached(frozenset(vault), reaches),
         # THE DIRECT LEG IS THE SAME CLOSURE OVER NO VAULT TABLES, not the raw declaration:
-        # a gold table reached straight from bronze pulls in whatever the star reaches from
-        # it, so `fact_payment` direct from `payments` still carries `dim_date` behind it.
-        # Running the same function with an empty vault set is what keeps the two legs
-        # closed the same way -- a second, simpler expression here would be the second
-        # spelling that drifts.
+        # `_gold_reached` adds a gold table whose OWN gold sources intersect what is already
+        # reached, so a reached dimension pulls in the fact that READS it.
+        #
+        # AND TODAY IT ADDS NOTHING TO EITHER KEY, MEASURED RATHER THAN ILLUSTRATED: this
+        # comment used to say `fact_payment` direct from `payments` "still carries `dim_date`
+        # behind it", and `dim_date` is in `DIRECT_TO_GOLD['payments']` outright -- so the
+        # closure did not put it there and the example demonstrated nothing. `ptax` declares
+        # `fact_payment`, and nothing in gold reads `fact_payment`. Running the same function
+        # with an empty vault set is what keeps the two legs closed the same way -- a second,
+        # simpler expression here would be the second spelling that drifts, and it is the one
+        # that would stop agreeing on the day a gold table reads the fact.
         gold_direct=_gold_reached(frozenset(), reaches),
     )
 
@@ -540,14 +551,15 @@ def blast_radius(source: str | None) -> BlastRadius:
 def blast_radius_note(source: str | None) -> str:
     """One sentence a person reads, for the issue payload T6 assembles.
 
-    THREE ARMS AND EVERY ONE OF THEM IS REACHED BY A REAL TABLE IN THIS WORKSPACE --
-    `payments` and `ptax` take the first, `empresas` and `estabelecimentos` the second,
-    `merchant`, `socios` and `lookup` the third. An arm no input can reach is the shape this
-    repository hunts, so the test names a table for each.
+    FOUR ARMS AND EVERY ONE OF THEM IS REACHED BY A REAL TABLE IN THIS WORKSPACE --
+    `payments` takes the first, `ptax` the second, `empresas` and `estabelecimentos` the
+    third, `lookup`, `merchant` and `socios` the fourth. An arm no input can reach is the
+    shape this repository hunts, so the test names a table for each. (This paragraph said
+    THREE and mis-assigned every table by one until the arms were re-counted.)
 
-    THE FIRST ARM SAYS THE BYPASS OUT LOUD instead of leaving an empty vault list to be
-    read as an empty answer. That sentence is the whole reason this function exists rather
-    than a caller formatting the tuples.
+    BOTH BYPASS ARMS SAY IT OUT LOUD instead of leaving an empty vault list to be read as
+    an empty answer. That sentence is the whole reason this function exists rather than a
+    caller formatting the tuples.
 
     FOUR ARMS SINCE F2 WAVE 2, and the new one is FIRST because it is the only arm whose
     absence produced a FALSE sentence rather than a missing one. `payments` now feeds

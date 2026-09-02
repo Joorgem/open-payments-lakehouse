@@ -559,8 +559,9 @@ def test_the_written_radius_carries_every_field_the_reader_requires():
     and did not add it to `as_mapping`, which spelled three field names as literals. Every
     payload written since carried three keys where the reader required four, so
     `payloads_from_json` raised `KeyError: 'gold_direct'` for every incident -- the whole
-    of `triage_publish`'s input path, dead, with nineteen tests red on it and none of them
-    naming the cause. A fourth literal would have left the same hole open for the fifth
+    of the publisher's input path -- `scripts/open_triage_issue.py`, which calls
+    `payloads_from_json` on the file this writes -- dead, with nineteen tests red on it and
+    none of them naming the cause. A fourth literal would have left the same hole open for the fifth
     field, so `as_mapping` iterates `fields(...)` and this asserts the two ends agree
     against the dataclass rather than against a list either side could restate."""
     carried = as_mapping(issue(PAYMENTS))["radius"]

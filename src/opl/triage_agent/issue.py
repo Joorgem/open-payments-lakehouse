@@ -600,8 +600,10 @@ def as_mapping(issue: TriageIssue) -> dict[str, Any]:
     `gold_direct` to `BlastRadius` and to `_radius_of`'s read, and did not add it here -- so
     every payload this function wrote was missing a key its own reader requires by name, and
     `payloads_from_json(json.dumps(as_mapping(...)))` raised `KeyError: 'gold_direct'` for
-    every incident. That is the WHOLE publish path: `triage_publish` reads its facts from a
-    file this function wrote. Nineteen tests across `test_issue_payload.py` and
+    every incident. That is the WHOLE publish path: `scripts/open_triage_issue.py` reads
+    its facts from a file this function wrote, through `payloads_from_json`. Nothing
+    called triage_publish has ever existed in this tree, and this sentence named it
+    until the corpus was swept. Nineteen tests across `test_issue_payload.py` and
     `test_issue_publisher.py` were red on it, and no test asserted the round trip's field
     list, so a fourth literal added here would have been the same defect again on the fifth
     field. `fields(BlastRadius)` is the list now, and

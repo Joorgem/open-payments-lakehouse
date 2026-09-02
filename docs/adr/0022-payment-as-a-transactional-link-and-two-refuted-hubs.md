@@ -263,7 +263,7 @@ the gold layer already uses on this exact column (`opl.gold.conformed.day_of`,
 `to_date(substring(event_time, 1, 10))`), and never a `CAST`: a cast resolves the instant in the
 **session** timezone, and `applied_date` is the satellite's ordering axis.
 
-**What reverses it:** `bronze_payments` gaining a `_snapshot_ref_date` it can prove — which means the generated stream declaring a date in its own filename, the thing three bronze modules say a generated stream does not have. The declaration would then be redundant for this table and would still be the mechanism, because the four RFB satellites and the payments one would no longer be readable from one constant by luck.
+**What reverses it:** `bronze_payments` gaining a `_snapshot_ref_date` it can prove — which means the generated stream declaring a date in its own filename, the thing three bronze modules say a generated stream does not have. The declaration would then be redundant for this table and would still be the mechanism, because the satellites that read `_snapshot_ref_date` today (the RFB ones, and `sat_merchant_dados`, whose source is Postgres and whose axis is an instant) and the payments one would no longer be readable from one constant by luck.
 
 ---
 

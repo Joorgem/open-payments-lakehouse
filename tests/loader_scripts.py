@@ -8,12 +8,14 @@ ONE OF THIS SUITE'S PLAIN READER MODULES, beside `tests/job_yaml.py`,
 DO NOT SHARE. Their argument is anti-duplication: "two copies of `sole_call` is two
 copies of the assertion that makes a lock a lock, and the copy that goes stale is the one
 whose failure message nobody has read in a year." NOTHING HERE IS DUPLICATED. Every
-function below has exactly one consumer, `tests/test_vault_entry_points.py`, and each
-would be perfectly correct sitting inside it. The reason is the next paragraph's alone:
-that file hit the line cap. Anti-duplication is why `main_of` and `locals_of` are
-imported from `task_ast` rather than rewritten here; it is not why this file exists. No
-ordinal is written on purpose: two more such modules are in flight on this branch, so
-"the fourth" would be false on the merged tree without anybody editing the line.
+function below has exactly one consumer -- `tests/test_vault_entry_points.py`, except
+`kind_accepted_by`, whose one caller is `the_one_accepting` in this file -- and each would
+be perfectly correct sitting inside it. The reason is the next paragraph's alone: that
+file hit the line cap. Anti-duplication is why `main_of` and `locals_of` are imported from
+`task_ast` rather than rewritten here; it is not why this file exists. No ordinal is
+written on purpose, and the reason has since come true: `tests/adr_files.py` and
+`tests/ledger_sources.py` landed on this branch afterwards, so "the fourth" would have
+been false on the merged tree without anybody editing the line.
 
 WHAT FORCED IT, MEASURED. `tests/test_vault_entry_points.py` reached 850 lines against
 this project's strictly-under-800 cap while F2 wave 2's correction was closing two locks
@@ -28,9 +30,10 @@ ones that file carried. FIVE OF THE TEN KEPT THEIR NAME MINUS THE LEADING UNDERS
 `_loader_scripts` to `all_scripts`, `_scripts_exposing_the_seam` to `exposing_the_seam`,
 `_the_one_script_accepting` to `the_one_accepting`, `_kind_a_script_accepts` to
 `kind_accepted_by` -- because a private spelling reads wrong on a module whose whole
-surface is public. The importing file aliases all ten back to the names its tests already
-used, so no CALL SITE moved; a PROSE reference to an old name is a different matter, and
-this split left two of those dangling until a review found them.
+surface is public. The importing file aliases the NINE it calls back to the names its
+tests already used, so no CALL SITE moved; the tenth, `kind_accepted_by`, is called only
+from `the_one_accepting` and travelled with it. A PROSE reference to an old name is a
+different matter, and this split left two of those dangling until a review found them.
 
 AND THE `importlib` LOADER IS HERE, WHICH REVERSES `task_ast.py`'S JUDGEMENT FOR THIS
 FILE ALONE AND NOT FOR EVERY OTHER MODULE CARRYING THAT IDIOM. That module declined to
@@ -44,8 +47,9 @@ is the ARGUMENT, which never turned on the count: hoisting an idiom out of every
 that carries it is a change to all of them, and this split is not that.
 Both halves of THIS split execute one: `kind_accepted_by` resolves a class in the
 script's own namespace and `exposing_the_seam` asks a module whether it has an
-attribute. So the loader travels with the readers built on it, and the twelve other
-modules keep their private copies untouched -- the count is unchanged, not grown.
+attribute. So the loader travels with the readers built on it, and the other modules
+keep their private copies untouched -- their number is unchanged, not grown. (No figure
+is written here either, for the reason the paragraph above declines to write one.)
 
 `main_of` AND `locals_of` ARE IMPORTED FROM `task_ast` AND NOT REWRITTEN. `locals_of`
 already refuses a `main` that binds one local name twice, with the argument for why a

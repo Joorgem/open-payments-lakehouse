@@ -22,10 +22,11 @@ called that.
 WHAT IS SHARED AND WHAT IS NOT. Everything above the estabelecimentos section is
 generic: the months, the two dates the RFB itself stamps, the audit columns bronze adds
 to every contract, and the two helpers that write and derive Delta tables. Below it are
-the two table fixtures, each kept whole rather than parameterised, because their rows
-ARE their argument -- each module's docstring reads them against the measurement they
-mirror. Both moved here for the same reason: their modules hit the 800-line cap and
-their materialisations cost seconds that a second file must not pay twice."""
+the table fixtures, each kept whole rather than parameterised, because their rows ARE
+their argument -- each module's docstring reads them against the measurement they mirror.
+The two CNPJ ones moved here because their modules hit the 800-line cap and their
+materialisations cost seconds a second file must not pay twice; the payments one moved
+for a different reason, argued in the comment block that opens its own section below."""
 from __future__ import annotations
 
 from datetime import date, datetime
