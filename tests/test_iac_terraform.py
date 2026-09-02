@@ -292,11 +292,20 @@ def _terraform_job() -> dict:
 
 
 def _strings(node) -> list[str]:
-    """Every string anywhere inside a parsed YAML node."""
+    """Every string anywhere inside a parsed YAML node, KEYS INCLUDED.
+
+    THE KEYS WERE MISSING AND THAT MADE THE ARM BELOW BLIND TO THE COMMONEST SPELLING
+    OF THE THING IT REFUSES. A credential reaches a job as `DATABRICKS_TOKEN: <value>`,
+    where the name that matters is the KEY; collecting only `node.values()` left
+    `env: {DATABRICKS_TOKEN: not-a-real-token}` planted in the `terraform` job with
+    this module still reporting `7 passed`. Measured by that plant, in F8 T5, by the
+    commit that added the one job in this file entitled to hold that credential."""
     if isinstance(node, str):
         return [node]
     if isinstance(node, dict):
-        return [s for value in node.values() for s in _strings(value)]
+        return [str(key) for key in node] + [
+            s for value in node.values() for s in _strings(value)
+        ]
     if isinstance(node, list):
         return [s for value in node for s in _strings(value)]
     return []

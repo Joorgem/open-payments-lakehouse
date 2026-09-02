@@ -269,3 +269,132 @@ jobs:
         run: terraform init -backend=false -input=false
       - name: Validate
         run: terraform validate
+
+  # THE DEPLOY, AND THE DETECTOR THAT MAKES A MISSING DEPLOY LOUD -- ADR 0021 Decision 1.
+  #
+  # WHY CI DEPLOYS AT ALL, GIVEN THAT ADR 0009 REJECTED DEPLOY-TIME BINDING. It rejected
+  # it because "nobody deployed at all" then gives `expected == actual == the old sha`
+  # and PASSES -- the socios re-run that terminated SUCCESS having masked only bronze.
+  # That objection is about a SILENCE, not about the value: nothing went red when the
+  # deploy did not happen. A better value does not repair that; a detector for the
+  # silence, placed where it cannot be skipped, does. So the deploy moves here, where it
+  # runs on every merge whether or not anyone is watching, and the step after it reads
+  # the wheel THE WORKSPACE holds and refuses anything that is not this commit.
+  #
+  # IT SHIPS INERT, AND THE GATE IS NAMED RATHER THAN WORKED AROUND. Creating the
+  # secrets is the operator's decision and not this repository's; today `gh secret list`
+  # prints nothing at all. So the first step decides and every later step stands down. A
+  # SKIP THAT SAYS WHY is the whole requirement: a drift check that passes because it
+  # never ran is the exact species this job exists to remove, so the disarmed path emits
+  # a `::warning::` annotation and a run-summary line rather than a green nobody reads.
+  #
+  # WHY THE GATE IS A STEP AND NOT A JOB-LEVEL `if:`, WHICH IS THE OBVIOUS SPELLING AND
+  # IS NOT AVAILABLE. Measured 2026-09-02 by pushing one-job workflows to a throwaway
+  # branch and reading the runs back, rather than recalled:
+  #
+  #   job-level  `if: ${{ secrets.X == '' }}`  -> the run fails at 0s, no job is created,
+  #                                               and `gh run view` reports "This run
+  #                                               likely failed because of a workflow
+  #                                               file issue"
+  #   job-level  `if: ${{ env.X == '' }}`      -> the same 0s invalid-workflow failure
+  #   step-level `if: ${{ secrets.X == '' }}`  -> the same 0s invalid-workflow failure
+  #   step-level `if: env.X != ''` and
+  #              `if: steps.<id>.outputs.…`    -> both parse and behave, and an ABSENT
+  #                                               secret mapped into `env:` renders as
+  #                                               the empty string, so the guarded steps
+  #                                               skip
+  #
+  # So the job always starts, one step decides, and the rest read that step's output.
+  # What is NOT established until this runs with the secrets present: that the armed
+  # path works. Every arm above was measured disarmed.
+  #
+  # `needs: [test]` IS ONE NAMED GATE AND NOT AN ATTEMPT AT "every job". Listing the
+  # other jobs here would be a closed enumeration that goes stale in silence the day a
+  # job is added, which is this repository's own recurring defect. The `test` shards are
+  # the whole unit suite by construction and `tests/test_ci_shards.py` locks that, so
+  # one name covers it. `postgres` and `redpanda` are deliberately NOT gates: each
+  # depends on a container, and a broker flake would then be what decides whether the
+  # workspace gets `main`.
+  #
+  # ON A PUSH TO `main` ONLY. A pull request's head is not `main`'s head, so deploying
+  # one would put a branch's wheel into the only workspace there is, and the check below
+  # would then be comparing against a revision nobody merged.
+  #
+  # THIS JOB INSTALLS THE DATABRICKS CLI AND RUNS NO PYTEST, and that pairing is
+  # load-bearing rather than tidy.
+  # `tests/test_bundle_resource_allowlist.py -k swept_paths` needs that CLI and SKIPS
+  # where there is none, and committed documents rest on it doing so -- derive which
+  # with `git grep -ln test_ci_deploy -- .`, since each of them now cites the lock
+  # instead of a grep. `tests/test_ci_deploy.py` refuses any job that both names
+  # Databricks and runs the suite, so the sentence is enforced rather than re-checked
+  # by hand.
+  deploy:
+    needs: [test]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      # THE EXPECTED SIDE, AND IT COMES FROM GITHUB RATHER THAN FROM THE WORKSPACE.
+      # `github.sha` on a push to `main` is the commit that was merged. The other side
+      # is read out of the deployed wheel. Derive both from one place and the check
+      # passes always while looking exactly like a working one (ADR 0009).
+      EXPECTED_REVISION: ${{ github.sha }}
+    steps:
+      - name: The gate -- is there a Databricks credential in this repository's secrets?
+        id: gate
+        run: |
+          why="no DATABRICKS_HOST/DATABRICKS_TOKEN secret exists, so nothing was deployed"
+          why="$why and the workspace's deployed revision was NOT compared with main"
+          if [ -n "$DATABRICKS_HOST" ] && [ -n "$DATABRICKS_TOKEN" ]; then
+            echo "armed=true" >> "$GITHUB_OUTPUT"
+            echo "ARMED: deploying $EXPECTED_REVISION, then reading it back." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "armed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Nothing deployed and nothing checked::INERT -- $why (ADR 0021)."
+            echo "INERT: $why (ADR 0021)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.armed == 'true'
+      - uses: astral-sh/setup-uv@v5
+        if: steps.gate.outputs.armed == 'true'
+        with: { python-version: "3.12" }
+
+      # PINNED TWICE -- the action AND the CLI it installs -- for the reason the
+      # `terraform` job pins its binary. v1.8.0 is the version every Databricks
+      # measurement in this repository was taken under, including the resource-collection
+      # sweep `tests/test_bundle_resource_allowlist.py` derives from `bundle schema`. The
+      # action's own default is "latest", which is a different program on a different
+      # week and would make a deploy's behaviour a function of the date.
+      - uses: databricks/setup-cli@v1.8.0
+        if: steps.gate.outputs.armed == 'true'
+        with: { version: 1.8.0 }
+
+      - run: uv sync --all-groups --all-extras
+        if: steps.gate.outputs.armed == 'true'
+
+      # `bundle deploy` runs the `artifacts:` build, which is `uv build --wheel`, so the
+      # wheel this uploads is stamped by `hatch_build.py` with this checkout's HEAD --
+      # `github.sha`, the value the next step expects. A dirty tree would be stamped
+      # `+dirty` and refused by that step; a runner's checkout is clean, so that arm is
+      # unexercised here and is exercised in `tests/test_revision_stamp.py` instead.
+      #
+      # `-t free` AND NEVER `-t prod`. The production target is declared in order never
+      # to be deployed (ADR 0021 Decision 2): its `mode: production` is what renders
+      # every `schedule:` block UNPAUSED, and unpausing them today buys a refusal at the
+      # first task of every guarded job, on a cadence. `tests/test_ci_deploy.py` refuses
+      # a step here that names it.
+      - name: Deploy the bundle to `free`
+        if: steps.gate.outputs.armed == 'true'
+        working-directory: databricks
+        run: databricks bundle deploy -t free
+
+      # THE DETECTOR, AND IT RUNS AFTER THE DEPLOY ON PURPOSE. It reads the wheel the
+      # WORKSPACE holds -- never `dist/`, which is this checkout again -- and compares
+      # its build stamp with the revision GitHub says this run is for. Run before the
+      # deploy it would report on the previous merge; run after, it reports whether this
+      # one arrived.
+      - name: Does the workspace hold this commit? (ADR 0021)
+        if: steps.gate.outputs.armed == 'true'
+        run: uv run python scripts/check_deployed_revision.py --expected "$EXPECTED_REVISION"

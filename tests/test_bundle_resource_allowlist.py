@@ -324,15 +324,19 @@ def _typed_resources(schema: dict, node, path: str) -> list[str]:
 def test_the_swept_paths_are_every_path_the_cli_schema_types_config_resources():
     """THE SET IS DERIVED FROM THE CLI, NOT COUNTED IN A DOCSTRING.
 
-    NOT A CI LOCK, AND THAT IS SAID RATHER THAN GLOSSED. CI installs no Databricks CLI --
-    `git grep -inE '^[^#]*databricks' -- .github/` returns nothing -- so this arm
-    SKIPS on every CI run and is a derivation that happens on a developer box. What stands
-    in CI is `_SWEPT_PATHS` itself and the arms that exercise each entry of it.
+    NOT A CI LOCK, AND THAT IS SAID RATHER THAN GLOSSED. No CI job that runs this suite
+    installs the Databricks CLI, so this arm SKIPS on every CI run and is a derivation
+    that happens on a developer box. What stands in CI is `_SWEPT_PATHS` itself and the
+    arms that exercise each entry of it.
 
-    THAT COMMAND READS WHOLE LINES ON PURPOSE. Matching `databricks` only against a `uses:`
-    or `run:` line cannot see an install inside a multi-line `run: |` block, which `ci.yml`
-    already contains -- measured, an install planted in one left that spelling at exit 1
-    while this one names the line. `^[^#]*` drops the comments that mention the CLI.
+    THAT SENTENCE USED TO BE A GREP AND IS NOW A LOCK, and the swap is a repair rather
+    than a tidy-up. It read `git grep -inE '^[^#]*databricks' -- .github/` returns
+    nothing, which was true until F8 added a `deploy` job -- a job that names Databricks
+    BECAUSE it deploys this bundle, and that runs no pytest. No whole-file grep can tell
+    those two apart, so the claim moved to `tests/test_ci_deploy.py::
+    test_no_ci_job_both_names_databricks_and_runs_the_suite`, which reads the workflow as
+    YAML -- comments already gone, keys included -- and refuses a job that both names
+    Databricks and runs the suite.
 
     WHAT IT DERIVES IS A TYPING, NOT A GUARANTEE ABOUT EVERY WAY A RESOURCE CAN ARRIVE. The
     schema also carries `$root.python` and `$root.experimental.python`, typed otherwise;

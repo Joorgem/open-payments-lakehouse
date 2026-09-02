@@ -387,8 +387,10 @@ personal data inside `bundle destroy`'s blast radius. **Rejected**; revisit only
 > was short: that module carries the paths as code and re-derives them from
 > `databricks bundle schema`, failing if the two differ. Run it with
 > `uv run pytest tests/test_bundle_resource_allowlist.py -k swept_paths`; it needs the CLI
-> and therefore SKIPS wherever there is none, which is every CI run
-> (`git grep -inE '^[^#]*databricks' -- .github/` returns nothing).
+> and therefore SKIPS wherever there is none, which is every CI job that runs the
+> suite — enforced by `tests/test_ci_deploy.py`, which refuses a job that both names
+> Databricks and runs pytest, since F8's CI deploy made the word appear under
+> `.github/`.
 > `targets.<name>.resources` is one of
 > them, is where a securable would land under the production target, and was unswept until
 > F8's second correction pass while this note already claimed the enforcement. **What it is

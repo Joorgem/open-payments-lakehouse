@@ -125,8 +125,10 @@ other resource collection:
   while reading as thoroughness; so the paths live as code in that module, which re-derives
   them from `databricks bundle schema` and fails if the two differ —
   `uv run pytest tests/test_bundle_resource_allowlist.py -k swept_paths` needs the CLI and
-  therefore SKIPS wherever there is none, which is every CI run
-  (`git grep -inE '^[^#]*databricks' -- .github/` returns nothing).
+  therefore SKIPS wherever there is none, which is every CI job that runs the suite
+  — enforced by `tests/test_ci_deploy.py`, which refuses a job that both names
+  Databricks and runs pytest, since the CI deploy this ADR asks for made the word
+  appear under `.github/`.
   `targets.<name>.resources` is one of them and is where a securable would land under the
   production target — the target grounds 2 and 3 are about. **This ADR asserted the
   enforcement while the sweep read only the top level**, which is the defect its own
