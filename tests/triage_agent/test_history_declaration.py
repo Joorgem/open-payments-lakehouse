@@ -41,7 +41,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from job_yaml import RESOURCES
+from job_yaml import RESOURCES, resource_files
 
 from opl.bronze import reconcile as reconcile_module
 from opl.bronze.reconcile import VERDICTS
@@ -141,9 +141,13 @@ def _condition_gates_of_bundle(root: Path = RESOURCES) -> dict[str, str]:
     that read a value from a task it does not wait for would run on batches whose gate had
     not published, and the identity behind this module's key would stop holding. All five
     are fired, one mutated bundle each, by `test_the_checks_the_sweep_makes_while_reading_
-    are_fired_on_the_drift_each_refuses`."""
+    are_fired_on_the_drift_each_refuses`.
+
+    WHICH FILES IS `job_yaml.resource_files`' ANSWER. "Every job" was asserted over a suffix
+    this module spelled for itself, so a bronze job carrying a gate in a `.yaml` file was
+    read by nothing here -- the drift this lock exists to catch, arriving unseen."""
     found: dict[str, str] = {}
-    for path in sorted(root.glob("*.yml")):
+    for path in resource_files(root):
         document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for job in (document.get("resources", {}).get("jobs", {}) or {}).values():
             tasks = job.get("tasks", [])
@@ -217,9 +221,13 @@ def _declared_task_keys(root: Path = RESOURCES) -> set[str]:
 
     A parameter rather than a constant for `_condition_gates_of_bundle`'s reason: the lock
     below is about a name being ABSENT, and an absence is satisfied by a reader that found
-    nothing -- so the same sweep has to be runnable over a bundle that DOES carry the name."""
+    nothing -- so the same sweep has to be runnable over a bundle that DOES carry the name.
+
+    "EVERY FILE UNDER `root`" MEANS `job_yaml.resource_files`' SUFFIX TUPLE. Spelled here it
+    was `*.yml`, and an absence lock is exactly the shape a narrow sweep cannot fail: a
+    retired task key re-introduced in a `.yaml` file would have satisfied it."""
     keys: set[str] = set()
-    for path in sorted(root.glob("*.yml")):
+    for path in resource_files(root):
         document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for job in (document.get("resources", {}).get("jobs", {}) or {}).values():
             keys |= {task["task_key"] for task in job.get("tasks", [])}

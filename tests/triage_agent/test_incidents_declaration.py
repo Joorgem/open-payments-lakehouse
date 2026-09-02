@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from job_yaml import RESOURCES
+from job_yaml import RESOURCES, resource_files
 
 from opl.bronze.reconcile import batch_grain_sql
 from opl.bronze.registry import REGISTRY
@@ -210,9 +210,12 @@ def _dq_gate_tables_of_bundle(root: Path = RESOURCES) -> dict[str, str]:
     Read from the PARSED YAML rather than by regex, and swept over every file in
     `resources/` rather than over a list of known jobs: a new bronze job carrying a
     `fail_on_dq` task is exactly the drift this lock exists to catch, and a list would
-    have to be updated by the same person who forgot the declaration."""
+    have to be updated by the same person who forgot the declaration.
+
+    "EVERY FILE" IS `job_yaml.resource_files`' ANSWER AND NOT A SUFFIX SPELLED HERE, which
+    is what the sentence above had been claiming while reading one suffix of that set."""
     found: dict[str, str] = {}
-    for path in sorted(root.glob("*.yml")):
+    for path in resource_files(root):
         document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for job in (document.get("resources", {}).get("jobs", {}) or {}).values():
             gates = [
@@ -392,8 +395,8 @@ def test_the_lock_catches_a_gate_task_renamed_in_the_bundle_and_not_here(tmp_pat
 
     THE SURVIVING SIX ARE NAMED, AND WITHOUT THAT LINE THIS TEST PASSED ON `{}`. Both of
     its assertions were negative -- a name absent, a mapping unequal -- and a reader that
-    read NOTHING satisfies both: swapping `root.glob("*.yml")` for `"*.yaml"` in
-    `_dq_gate_tables_of_bundle` failed the two sibling tests and left this one GREEN,
+    read NOTHING satisfies both: narrowing `_dq_gate_tables_of_bundle`'s sweep to a suffix
+    no file under `resources/` carries failed the two sibling tests and left this one GREEN,
     reporting that a rename is caught by a reader that had found no jobs at all. The
     equality below is the discriminating arm, in the same test function, which is the
     standard this file states forty lines up and dropped here."""

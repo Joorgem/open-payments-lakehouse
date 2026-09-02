@@ -38,7 +38,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from job_yaml import PYTHON_FILE_PREFIX, RESOURCES, SRC
+from job_yaml import PYTHON_FILE_PREFIX, RESOURCES, SRC, resource_files
 
 from opl.bronze.registry import REGISTRY
 from opl.gold.registry import REGISTRY as GOLD_REGISTRY
@@ -68,9 +68,13 @@ def _loader_tasks_of_bundle(root: Path = RESOURCES) -> list[tuple[str, str, str]
 
     IT CANNOT COLLIDE WITH A GOLD TASK'S FIRST PARAMETER, and that is not luck:
     `opl.gold.registry_guards._assert_no_gold_name_is_owned_by_another_layer` refuses a gold
-    table whose name the vault holds, at gold's own import."""
+    table whose name the vault holds, at gold's own import.
+
+    WHICH FILES ARE `job_yaml.resource_files`' ANSWER AND NOT A GLOB WRITTEN HERE. "Every
+    loader task in the bundle" is a totality claim, and it was made over a suffix this
+    module spelled for itself: a `.yaml` job declaring a loader task was read by nothing."""
     found: list[tuple[str, str, str]] = []
-    for path in sorted(root.glob("*.yml")):
+    for path in resource_files(root):
         document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for job in (document.get("resources", {}).get("jobs", {}) or {}).values():
             for task in job.get("tasks", []) or []:
@@ -164,9 +168,9 @@ def test_the_sweep_finds_a_loader_task_in_a_job_file_no_name_pattern_would_match
     This is the property that separates it from `tests/test_vault_job_wiring.py`, whose
     `_VAULT_JOBS` list is closed by a `vault_*.yml` glob -- and what escapes that glob is
     NARROWER than the glob makes it sound, which was measured rather than reasoned. A
-    loader task in a BRAND-NEW YAML is caught: `tests/test_job_yaml_launch_guards.py`
-    classifies every file `databricks/resources/*.yml` matches and fails on one it does not
-    know. What is invisible is a loader task added to an EXISTING file already classified
+    loader task in a BRAND-NEW file is caught: `tests/test_job_yaml_launch_guards.py`
+    classifies every bundle document under `databricks/resources` and fails on one it does
+    not know. What is invisible is a loader task added to an EXISTING file already classified
     there under a name that is not `vault_*` -- a `vault_load_satellite.py` task injected
     into `smoke_job.yml` leaves the five job-wiring files green and reddens this one. That
     hole is REPORTED AND NOT FIXED, because `tests/test_vault_job_wiring.py` is not this
@@ -287,6 +291,11 @@ def _bronze_spec_alias(tree: ast.Module) -> str | None:
     return None
 
 
+# WHICH FILES THE SWEEP BELOW READS IS `job_yaml.resource_files`', for
+# `_loader_tasks_of_bundle`'s reason one layer along: a suffix spelled here is a second
+# spelling of what a bundle document is, and the copy that rots is the one no deploy reads.
+# ABOVE THE SIGNATURE AND NOT IN THE DOCSTRING: with it inside, `tests/test_size_caps.py`
+# named this function over the strictly-under-50 cap, which counts docstrings.
 def _gold_entry_points_of_bundle(
     root: Path = RESOURCES, src: Path = SRC
 ) -> dict[str, tuple[str, ...]]:
@@ -316,7 +325,7 @@ def _gold_entry_points_of_bundle(
     script reading bronze whose task is handed no gold table name is SILENT, and nothing
     narrows it: that totality is over gold TABLES, and such a script builds none."""
     found: dict[str, list[str]] = {}
-    for path in sorted(root.glob("*.yml")):
+    for path in resource_files(root):
         document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for job in (document.get("resources", {}).get("jobs", {}) or {}).values():
             for task in job.get("tasks", []) or []:

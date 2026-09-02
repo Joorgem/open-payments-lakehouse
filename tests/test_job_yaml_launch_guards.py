@@ -63,6 +63,7 @@ from job_yaml import (
     ancestors,
     job_of,
     mutated,
+    resource_files,
     script_of,
     tasks_of,
 )
@@ -267,7 +268,15 @@ _RESOURCE_KINDS_THAT_RUN_NOTHING = frozenset({"dashboards"})
 
 
 def test_every_yaml_under_resources_is_classified():
-    """The classification is TOTAL over `databricks/resources/*.yml`.
+    """The classification is TOTAL over the bundle documents in `databricks/resources`.
+
+    THE SUFFIX SET IS `job_yaml`'s ONE TUPLE AND NOT A GLOB OF THIS MODULE'S OWN. It was
+    `*.yml` here while `bundle_docs()` had learned more, and the gap was reachable rather
+    than theoretical: a scheduled, unclassified `zz_probe_job.yaml` planted under
+    `databricks/resources/` left this module reporting a full green underneath a docstring
+    that said TOTAL. THE NAME STILL SAYS `yaml` because it is cited by name from outside
+    this file -- `git grep -n test_every_yaml_under_resources_is_classified` -- while what
+    is classified is every suffix `BUNDLE_DOC_SUFFIXES` carries.
 
     A new job YAML must be added to one of the two job lists, and the choice is the
     point: "does a run of this job against a wheel built from another revision matter?"
@@ -279,7 +288,7 @@ def test_every_yaml_under_resources_is_classified():
     written out -- see the comment above `_NON_JOB_RESOURCES` for why the glob is not
     narrowed to job files instead."""
     declared = set(_GUARDED_JOBS) | set(_UNGUARDED_JOBS) | set(_NON_JOB_RESOURCES)
-    present = {path.name for path in RESOURCES.glob("*.yml")}
+    present = {path.name for path in resource_files()}
     assert declared == present, (
         f"unclassified YAML(s) under databricks/resources: {sorted(present - declared)}; "
         f"classified but absent: {sorted(declared - present)}"
@@ -571,8 +580,9 @@ def test_no_other_job_takes_a_row_floor_nothing_reads():
 
     Total over `databricks/resources`, so it also covers the unguarded and non-job files --
     the parameter is cheap to paste and the classification lists above are the only other
-    thing that would notice a new YAML at all."""
-    for path in RESOURCES.glob("*.yml"):
+    thing that would notice a new YAML at all. Total means `job_yaml`'s suffix tuple and
+    not this module's own glob, for the reason the classification lock above states."""
+    for path in resource_files():
         if path.name == _FLOOR_JOB:
             continue
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
