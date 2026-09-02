@@ -1,0 +1,145 @@
+# databricks/resources/vault_payments_job.yml
+# THE PAYMENTS DOMAIN. Two tables, and the second is the first DESCRIPTIVE satellite on a
+# LINK this lakehouse has ever registered -- the table F2 wave 1's registry refused by
+# name, saying "one parented on a LINK -- which DV2 does allow -- would be a registered
+# table nothing in this package can write. The guard and that signature have to change
+# together." Both halves moved in F2 wave 2 and this job is what runs the result.
+#
+# WHAT THIS JOB PRODUCES, and the shape rather than a count, because the counts depend on
+# how many months of the synthetic stream have been ingested when it runs:
+#
+#   link_payment       one row per (payer root, payee root, transaction_id). The
+#                      transaction id is IN the key, so two payments between one pair on
+#                      one day are two rows rather than a collision -- which is the whole
+#                      reason the id is a dependent-child key and not an attribute.
+#   sat_link_payment   one row per (link hash key, applied_date) whose payload changed,
+#                      carrying amount, currency and payment_method.
+#
+# --- THE ORDERING THIS JOB CANNOT EXPRESS ------------------------------------------
+#
+# `vault_empresa_job` MUST HAVE RUN. `link_payment` references `hub_empresa` at BOTH ends
+# and this job does not load it. `opl.vault.links.refuse_unloaded_hubs` runs inside
+# `load_link` before anything is written and refuses a missing or empty `hub_empresa`. It
+# is an EXISTENCE check and not referential integrity -- a populated hub short of some
+# referenced root still passes -- so it closes "that job never ran here" completely and
+# closes nothing else. The same shape as `vault_partner_job.yml` and
+# `vault_merchant_job.yml`, and here it is the point rather than an accident: a payment's
+# two ends are companies, and the companies come from the Receita's file feed while the
+# payments come from a generated stream.
+#
+# `bronze_payments`' INGEST AND DQ GATE MUST HAVE RUN AT LEAST ONCE, for the reason
+# `vault_merchant_job.yml` states: the loaders read the quarantine table, and
+# `dq_gate_batch` is what creates it -- even on the `already == 0` branch.
+#
+# --- `months` TAKES CALENDAR MONTHS HERE -------------------------------------------
+#
+# `bronze_payments` declares the MONTHLY axis (`_snapshot_month`), unlike
+# `bronze_merchant`'s instants, so every value is `YYYY-MM` and
+# `opl.vault.job_params.required_months` validates it before Spark starts.
+#
+#     databricks bundle run opl_vault_payments -t free \
+#       --params months=2026-06,revision=$(git rev-parse HEAD)
+#
+# --- WHY THE SATELLITE TAKES NO OBSERVATION GRAIN ----------------------------------
+#
+# `sat_link_payment` is TRANSACTIONAL: `vault_load_satellite.py` hands it an `axis=` and
+# builds no observation ledger for it. A payment is an event that happened once, so there
+# is no window to close and a "departure" at this grain would mean the processor
+# un-delivered a payment. The ledger exists to gate closes; this table closes nothing.
+# The consequence an operator sees is that this task reports NO departure count at any
+# flag setting -- not "measured zero", but "does not exist here" -- and the task says so
+# in its own output rather than leaving a reader to infer it from a blank.
+#
+# --- THE HONEST LIMIT THIS JOB DOES NOT FIX ----------------------------------------
+#
+# `fact_payment` still reads `bronze_payments` DIRECTLY. Running this job puts the
+# payment in the vault; it does not put the vault in the fact. Re-pointing the gold fact
+# is a separate decision with its own risk and was explicitly out of F2 wave 2's scope.
+# So the honest sentence after this job runs is "the payment is in the vault, and the
+# fact does not yet read it" -- see `docs/f2-wave-2-run-evidence.md`.
+
+resources:
+  jobs:
+    opl_vault_payments:
+      name: opl-vault-payments
+      parameters:
+        - name: months
+          # A LIST; see vault_empresa_job.yml for the full argument. `bronze_payments` is
+          # monthly, so these are `YYYY-MM` and not instants.
+          default: "REQUIRED-PASS-A-MONTH"
+        - name: revision
+          #     databricks bundle run opl_vault_payments -t free \
+          #       --params months=2026-06,revision=$(git rev-parse HEAD)
+          default: "REQUIRED-PASS-A-REVISION"
+        - name: report_diagnostics
+          # OFF, AND THE REASON IS THIS TABLE RATHER THAN COST. On a TRANSACTIONAL
+          # satellite the departure count does not exist at any flag setting -- there
+          # is no observation ledger to derive it from -- so the only thing this flag
+          # can buy here is the FOLD count, one extra pass rather than the two
+          # `sat_empresa_dados` pays. Off is the honest default because "not measured"
+          # and "measured, found none" must stay distinguishable, and the task says
+          # which it is printing.
+          #
+          # A PARAMETER AND NEVER A LITERAL BELOW, for `vault_merchant_job.yml`s
+          # reason: a hardcoded value would leave this present, settable and connected
+          # to nothing. Ask for it with: --params ...,report_diagnostics=true
+          default: "false"
+      tasks:
+        - task_key: assert_deployed_revision
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/assert_deployed_revision.py
+            parameters: ["{{job.parameters.revision}}"]
+
+        # `vault_load_link.py` AND NOT `vault_load_partner_link.py`. Both of this link's
+        # ends are DERIVED -- bronze payments carries no column named `cnpj_basico` -- but
+        # they are derived by a DECLARED `KeyPrefix` on the end itself, which the generic
+        # loader reads and writes. The partner link's derivation is not declared anywhere
+        # a loader can see, which is why it has its own entry point and this does not.
+        - task_key: link_payment
+          depends_on: [{ task_key: assert_deployed_revision }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_link.py
+            parameters:
+              - "link_payment"
+              - "payments"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+
+        # AFTER THE LINK IT HANGS OFF, for `vault_partner_job.yml`'s reason: the satellite
+        # keys through `link_hash_key_expression` rather than joining to the link, so this
+        # order is not what makes the keys agree -- it is what stops the satellite
+        # carrying measures for a relationship the link does not yet hold.
+        #
+        # `vault_load_satellite.py` AND NOT A NEW SCRIPT. That script resolves
+        # `domains.parent_of` and routes on the resolved parent's KIND -- a hub yields
+        # `{hub, grain}`, a link yields `{link, hubs, axis}` -- because
+        # `opl.vault.satellites.load_satellite` already accepts both parents. This is the
+        # first table in this repository where a table's kind does not determine its
+        # loader, and routing here was by kind until F2 wave 2.
+        - task_key: sat_link_payment
+          depends_on: [{ task_key: link_payment }]
+          max_retries: 0
+          environment_key: opl_env
+          spark_python_task:
+            python_file: ../src/vault_load_satellite.py
+            parameters:
+              - "sat_link_payment"
+              - "payments"
+              - "{{job.parameters.months}}"
+              - "{{job.start_time.iso_datetime}}"
+              # THE FIFTH PARAMETER ONLY THIS ENTRY POINT TAKES. Six locks in
+              # `tests/test_vault_job_wiring.py` went red on its absence and each named
+              # the entry points full signature -- which is what a lock owes a reader
+              # who did not write the thing it guards.
+              - "{{job.parameters.report_diagnostics}}"
+
+      environments:
+        - environment_key: opl_env
+          spec:
+            environment_version: "3"
+            dependencies:
+              - ../../dist/*.whl

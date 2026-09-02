@@ -175,6 +175,16 @@ _GUARDED_JOBS = (
     # keys and payloads that a later correct load re-derives; this one writes an
     # inference about something that is no longer there to re-read.
     "vault_merchant_job.yml",
+    # The payments vault job (F2 wave 2). This list's question -- does a run
+    # against a wheel built from another revision matter? -- has the vault answer
+    # above, with one addition specific to this job. `link_payment` keys on
+    # `transaction_id` as a dependent-child key, so a wheel whose
+    # `link_hash_key_expression` orders or pads components differently writes
+    # rows that are individually well-formed and key to nothing the previous load
+    # wrote -- and the satellite hanging off it then carries measures for
+    # relationships no join reaches. Insert-only, so the repair is deleting rows
+    # by hand.
+    "vault_payments_job.yml",
     # F4 Task 1's views job, and this list's question has an answer here that no entry
     # above has, because this is the first guarded job that WRITES NOTHING. Every other
     # entry argues from rows: a wheel from another revision appends the wrong ones, and

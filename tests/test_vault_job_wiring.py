@@ -118,6 +118,12 @@ _VAULT_JOBS = (
     # feed. Every lock below is total over it unchanged; what it needs from this list is
     # the same thing the other four do.
     "vault_merchant_job.yml",
+    # F2 wave 2, and the first vault job whose SATELLITE hangs off a link rather
+    # than a hub. Every lock below is total over it unchanged; what it needs from
+    # this list is what the other five needed. This list is a hand-kept population
+    # and it did its job on this file: it went RED on a YAML nobody had listed,
+    # rather than sweeping a job whose tasks nothing checked.
+    "vault_payments_job.yml",
 )
 
 # THE JOBS WHOSE `report_diagnostics` DEFAULT IS ON, WITH THE REASON -- a declared
@@ -531,15 +537,14 @@ def _grains_the_jobs_build() -> list[tuple[str, str, str, ObservationGrain]]:
             # so there is nothing for this sweep to compare, and `grain_for` would be
             # handed a parent it cannot key a ledger on.
             #
-            # AND THIS BRANCH IS UNEXERCISED TODAY, WHICH IS SAID RATHER THAN IMPLIED. The
-            # loop walks the tasks a YAML declares, and no YAML declares one for
-            # `sat_link_payment` -- T3 owns that task and is blocked on `databricks/`, so
+            # THIS BRANCH IS NOW EXERCISED, AND THIS COMMENT USED TO SAY THE OPPOSITE.
+            # It read: no YAML declares a task for `sat_link_payment`, so
             # `spec.transactional` is False for every spec this loop ever sees and
-            # deleting the two lines kills no test. It is written here, in the commit that
-            # registers the table, because the alternative is a red run in which the
-            # remedy is an edit to the sweep as well as to the YAML. The ledger row
-            # is WRITTEN: `vwiring:534`, section 3.2 of `docs/unexercised-ledger.md`,
-            # which names that YAML task as the exerciser.
+            # deleting the two lines kills no test. `vault_payments_job.yml` declares
+            # that task, so the loop now sees a transactional spec and the branch is
+            # reached. The ledger row that named this YAML as its exerciser is closed
+            # by the thing it asked for, which is the outcome a row is supposed to
+            # have rather than a surprise.
             if isinstance(spec, Satellite) and spec.transactional:
                 continue
             if isinstance(spec, Satellite):
