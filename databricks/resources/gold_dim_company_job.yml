@@ -13,10 +13,8 @@
 # `tests/test_vault_job_wiring.py` globs `vault_*.yml`, asserts the result equals its own
 # list, and then demands that every table in `opl.vault.domains.REGISTRY` be loaded by
 # exactly one task of those files. A gold job under that prefix would be swept into the
-# glob and would turn both locks red -- the first because it is not in the list, the
-# second because its task names a table no vault domain registers. The prefix costs
-# nothing and avoids all of it; `tests/test_gold_job_wiring.py` asserts it rather than
-# trusting it.
+# glob. The prefix costs nothing and avoids all of it; `tests/test_gold_job_wiring.py`
+# asserts it rather than trusting it.
 #
 # ONE JOB PER PLAN TASK, for `vault_empresa_job.yml`'s reason and with the same payoff:
 # the Databricks UI reports duration per task and per run, so one job per plan task with

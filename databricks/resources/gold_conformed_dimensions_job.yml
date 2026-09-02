@@ -23,7 +23,7 @@
 # NAMED `gold_*` AND NOT `vault_*`, for `gold_dim_company_job.yml`'s reason:
 # `tests/test_vault_job_wiring.py` globs `vault_*.yml`, asserts the result equals its own
 # list, and then demands every table in `opl.vault.domains.REGISTRY` be loaded by exactly
-# one task of those files. A gold job under that prefix turns both locks red.
+# one task of those files.
 #
 # NO `months` PARAMETER, WHICH MAKES THIS THE ONLY BUILD JOB IN THE REPOSITORY WITHOUT
 # ONE. A bronze ingest STAMPS its month, a vault load NARROWS to it, and the SCD2 build

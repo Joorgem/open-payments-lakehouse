@@ -102,7 +102,7 @@
 # NAMED `gold_*` AND NOT `vault_*`, for both other gold jobs' reason:
 # `tests/test_vault_job_wiring.py` globs `vault_*.yml`, asserts the result equals its own
 # list, and demands every table in `opl.vault.domains.REGISTRY` be loaded by exactly one
-# task of those files. A gold job under that prefix turns both locks red.
+# task of those files.
 resources:
   jobs:
     opl_gold_pit_estabelecimento:

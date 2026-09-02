@@ -64,7 +64,7 @@ _GOLD_JOBS = (
 # `test_vault_job_wiring.py::test_the_vault_jobs_are_the_vault_yamls_on_disk` globs
 # `vault_*.yml` and asserts the result equals its own list, and the totality lock beside
 # it demands that every table in `opl.vault.domains.REGISTRY` be loaded by exactly one
-# task of one of those files. A gold job named `vault_gold_...` would be swept into both.
+# task of one of those files. A gold job named `vault_gold_...` would be swept into that glob.
 _VAULT_PREFIX = "vault_"
 
 _GUARD = "assert_deployed_revision"
@@ -182,9 +182,7 @@ def test_no_gold_job_is_named_like_a_vault_job():
     """THE NAME IS LOAD-BEARING, not cosmetic. `test_vault_job_wiring.py` globs
     `vault_*.yml` and asserts the result equals its own list, then demands that every
     table in the VAULT registry be loaded by exactly one task of those files.
-    A gold job whose filename began `vault_` would be swept into that glob and would turn
-    both locks red -- the first because it is not in the list, the second because its
-    task names a table no vault domain registers."""
+    A gold job whose filename began `vault_` would be swept into that glob."""
     for job_yml in _GOLD_JOBS:
         assert not job_yml.startswith(_VAULT_PREFIX), (
             f"{job_yml} is named like a vault job; test_vault_job_wiring.py's glob would "

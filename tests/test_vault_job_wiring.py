@@ -43,8 +43,7 @@ real Spark in `tests/vault/test_effectivity_window.py`.
 
 AND THIS FILE IS NOW A PAIR, SPLIT BY F-DB TASK 1 AT EXACTLY 800 LINES. F-DB's
 `vault_merchant_job.yml` HAS SINCE BEEN ADDED to `_VAULT_JOBS`, which is what that split
-made room for -- and the totality lock now covers eighteen registered tables across TWO
-domains rather than fourteen across one. The seam is the one this repository has drawn
+made room for. The seam is the one this repository has drawn
 twice already and named both times:
 `test_task_wiring.py` reads the SCRIPTS and `test_job_yaml_wiring.py` reads the JOB that
 hands them arguments; `test_gold_entry_points.py` and `test_gold_job_wiring.py` are that
@@ -320,8 +319,8 @@ def test_every_registered_vault_table_is_loaded_by_exactly_one_task():
     table F2 wave 1 modelled exists in `workspace.default`, built by its own loader".
 
     A registered table with no task is a table nothing loads -- which is precisely the
-    state this branch was in until these YAMLs existed, seventeen modules and 932 tests
-    deep, with `grep -rl vault databricks/` returning nothing. And a table loaded
+    state this branch was in until these YAMLs existed, with `grep -rl vault databricks/`
+    returning nothing. And a table loaded
     by TWO tasks is worse than either: both loaders are insert-only anti-joins, so the
     second one succeeds having appended nothing, and the run reports two loads."""
     loaded: dict[str, list[str]] = {}
