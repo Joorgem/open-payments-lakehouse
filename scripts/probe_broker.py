@@ -1,5 +1,7 @@
-"""Does the MANAGED Redpanda cluster still answer, TODAY? -- ADR 0019 Decision 6's dated
-obligation, and ledger row `f5:980`.
+"""Does the MANAGED Redpanda cluster still answer? ADR 0019 Decision 6's dated obligation.
+
+ONE LINE, BECAUSE `--help` SHOWS EXACTLY THAT LINE and a wrapped opening reaches an operator
+as a sentence fragment. Ledger row `f5:980` is where the obligation is written down.
 
 F5 shipped a managed Redpanda cluster on a free trial expected to be deleted around
 2026-09-03, and what the broker does after that date is the last thing F5 left unexercised.
