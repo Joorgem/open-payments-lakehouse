@@ -3,11 +3,11 @@
 THIS FILE IS HALF OF THE EVIDENCE, DELIBERATELY, AND SAYS SO. The phase's premise is
 that `hash_diff` detects a real change across two real snapshots, and the only way to
 show that is against 69M rows in Databricks -- which CI cannot do, because
-`.github/workflows/ci.yml` carries `GITHUB_TOKEN` and nothing else and runs local
-Spark. So the proof is two artefacts: this fixture, which guards the MECHANIC on every
-push, and a measurement against real bronze recorded in the task report. Neither
-stands in for the other, and this file must not be read as evidence about the RFB's
-data.
+`.github/workflows/ci.yml` carries no Databricks credential -- it NAMES two, and
+`gh secret list` returns exit 0 and no lines -- and CI runs local Spark. So the proof
+is two artefacts: this fixture, which guards the MECHANIC on every push, and a
+measurement against real bronze recorded in the task report. Neither stands in for the
+other, and this file must not be read as evidence about the RFB's data.
 
 WHAT THE FIXTURE MIRRORS AND WHERE IT DELIBERATELY DOES NOT. The measured shape
 between 2026-06-13 and 2026-07-11 (`01f19061-4f47-1b47-ab3a-1880491dda04`) is:

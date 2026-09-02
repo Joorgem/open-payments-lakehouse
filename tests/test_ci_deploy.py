@@ -19,22 +19,34 @@ expected value because it could not look -- and it is why the arms below read th
 declaration rather than the outcome.
 
 THE SCRIPT'S ARMS ARE HERMETIC AND ITS REMOTE HALF IS NOT TESTED HERE. Nothing below
-opens a socket. The functions that talk to a workspace were measured by hand against
-the live one on 2026-09-02 -- a mismatch, a match, and a target nothing is deployed to
--- and what is locked here is everything that decides WHAT the script compares and
-WHETHER it may report success, because those are the parts a future edit can get wrong
-silently.
+opens a socket -- the two arms that drive `main` end to end do it over a stand-in
+client. The functions that talk to a workspace were measured by hand against the live
+one on 2026-09-02: a mismatch, a match, a target nothing is deployed to, and a download
+of a path that is gone.
+
+WHAT IS LOCKED, NAMED RATHER THAN CALLED *EVERYTHING*. This header used to claim it
+locked *everything that decides WHAT the script compares*, and that was false against
+its own tree -- nothing here constrained where the expected revision came from, or that
+the step passed one at all, so four separate one-line mutations of
+`.github/workflows/ci.yml` each left this module at `14 passed`. What the arms below
+cover is: where each side of the comparison comes from (the expected revision from
+`github.sha` and into the step's argv; the actual revision out of a wheel the WORKSPACE
+names), whether the script may report success, and what it is allowed to print. That is
+a list of what is checked, not a claim that nothing else could go wrong.
 """
 from __future__ import annotations
 
 import importlib.util
 import io
+import re
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
+from databricks.sdk.errors import ResourceDoesNotExist
 from opl.bronze.provenance import WrongRevision, assert_revision_matches
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -46,6 +58,18 @@ _SCRIPT_PATH = _REPO / "scripts" / "check_deployed_revision.py"
 # `mode: production` is what renders every `schedule:` block UNPAUSED (ADR 0021
 # Decision 2), and every guarded job then refuses at its first task, on a cadence.
 _NEVER_DEPLOYED = "prod"
+
+# THE EXPECTED SIDE OF THE COMPARISON, and the one place it may come from. `github.sha`
+# on a push to `main` is the commit that was merged, and GitHub is not the workspace.
+_EXPECTED_ENV = "EXPECTED_REVISION"
+_EXPECTED_SOURCE = "${{ github.sha }}"
+
+# `steps.<id>.outputs.<name> == '<value>'` -- the shape of a guarded step's `if:`, read
+# so the gate can be required to WRITE the assignment those steps wait for.
+_GUARD_CONDITION = re.compile(r"steps\.[\w-]+\.outputs\.([\w-]+)\s*==\s*'([^']*)'")
+
+# A stand-in operator, for the paths the arms at the bottom of this file build.
+_USER = "someone@example.invalid"
 
 
 def _load(name: str, path: Path):
@@ -112,10 +136,12 @@ def _rendered(job: dict) -> str:
     RE-RENDERING RATHER THAN WALKING THE VALUES, and that is a correction rather than a
     style. The walker written first collected `node.values()` and no keys, so a job
     declaring `DATABRICKS_HOST: https://…` was INVISIBLE to it -- planted in the `test`
-    job, and the arm below stayed green. The identical blind spot is in
+    job, and the arm below stayed green. The identical blind spot WAS in
     `tests/test_iac_terraform.py::_strings`, whose credential arm asks about
-    `DATABRICKS_` and `secrets.` in exactly the same way; today no key there carries
-    either, so that arm is correct and narrower than it reads."""
+    `DATABRICKS_` and `secrets.` in exactly the same way. The commit that added this
+    module fixed that walker too, so both collect keys now -- which is why this sentence
+    is in the past tense, having been committed in the present one over a tree where it
+    was already false."""
     return yaml.safe_dump(job, default_flow_style=False, sort_keys=True)
 
 
@@ -135,6 +161,37 @@ def test_the_deploy_job_deploys_and_then_reads_back_what_it_deployed():
     )
 
 
+def test_the_expected_side_comes_from_github_and_the_step_is_actually_given_it():
+    """THE OTHER SOURCE, AND UNTIL THIS ARM NOTHING IN THIS REPOSITORY LOOKED AT IT.
+
+    ADR 0009's objection is that ONE source dressed as two passes always: derive the
+    expected revision and the actual revision from the same act and the check compares a
+    value with itself while looking exactly like a working one. The arms elsewhere in
+    this module pin the ACTUAL side -- it comes out of a wheel the workspace names. This
+    is the other half, and it has two parts because either alone is satisfied by a
+    broken job: the value has to be `github.sha`, and the step has to be handed it.
+
+    MEASURED BEFORE THIS ARM EXISTED, each a one-line mutation of the workflow, each
+    leaving the module at `14 passed`: no `--expected` passed at all; the `env:` entry
+    sourced from something other than `github.sha`; the `env:` entry deleted outright;
+    and `github.event.before`, which is the pre-push head -- the one value that would
+    make this check green on precisely the merge that failed to deploy."""
+    env = _deploy_job().get("env") or {}
+    assert env.get(_EXPECTED_ENV) == _EXPECTED_SOURCE, (
+        f"the `deploy` job's `env.{_EXPECTED_ENV}` is {env.get(_EXPECTED_ENV)!r} rather "
+        f"than {_EXPECTED_SOURCE!r}. The check compares the workspace's wheel against "
+        "this value; taken from anywhere the deploy itself decides, it is the same "
+        "source twice (ADR 0009)."
+    )
+    _, checking = _step_running("check_deployed_revision.py")
+    given = _flag_value(checking["run"], "--expected")
+    assert given is not None and _EXPECTED_ENV in given, (
+        f"the check step runs {checking['run']!r}, which does not hand it `--expected` "
+        f"on `${_EXPECTED_ENV}`. Passing no flag at all fails loudly, because the script "
+        "requires it; passing some OTHER value fails silently, by passing."
+    )
+
+
 def test_the_deploy_job_never_deploys_the_production_target():
     """ADR 0021 Decision 2, asserted rather than promised.
 
@@ -142,8 +199,12 @@ def test_the_deploy_job_never_deploys_the_production_target():
     schedule -- measured, on a scratch bundle, both ways. Deploying that target
     unattended would start eleven cadences whose every guarded job refuses at its first
     task, on the only workspace this project has. The target exists to state a cadence,
-    not to be deployed."""
-    assert _NEVER_DEPLOYED not in _rendered(_deploy_job()).split(), (
+    not to be deployed.
+
+    ON A WORD BOUNDARY AND NOT ON A WHITESPACE SPLIT, which is a correction: the split
+    reads `-t prod` and is blind to `--target=prod`, the spelling the CLI accepts just as
+    happily."""
+    assert not re.search(rf"\b{_NEVER_DEPLOYED}\b", _rendered(_deploy_job())), (
         f"the `deploy` job names {_NEVER_DEPLOYED!r}, and `-t {_NEVER_DEPLOYED}` deploys "
         "the target "
         "ADR 0021 declares in order never to deploy: its mode unpauses every schedule in "
@@ -226,7 +287,7 @@ def test_every_step_that_can_touch_the_workspace_stands_down_without_the_gate():
     A JOB-LEVEL `if:` CANNOT DO THIS and that is measured, not assumed: `secrets` is
     unavailable in `jobs.<id>.if` and so is `env`, and a workflow that reads either
     there fails to parse -- the run dies at 0s with no job created."""
-    identifier, _ = _gate_step()
+    identifier, gate = _gate_step()
     expected = f"steps.{identifier}.outputs"
     unguarded = [
         step.get("name") or step.get("uses")
@@ -237,6 +298,18 @@ def test_every_step_that_can_touch_the_workspace_stands_down_without_the_gate():
         f"{unguarded} run whether or not the gate armed. Every step after the gate has "
         f"to carry `if:` on `{expected}...`"
     )
+    waited_for = {
+        f"{match.group(1)}={match.group(2)}"
+        for step in _steps()[1:]
+        if (match := _GUARD_CONDITION.search(str(step.get("if", ""))))
+    }
+    assert waited_for, "no step after the gate compares one of the gate's outputs with a value"
+    for assignment in sorted(waited_for):
+        assert assignment in gate["run"], (
+            f"every guarded step waits for `{assignment}` and the gate never writes it, "
+            "so the armed path is unreachable from every state and the job is inert for "
+            f"good -- while staying green. The gate runs:\n{gate['run']}"
+        )
 
 
 def test_the_disarmed_path_says_why_instead_of_passing_quietly():
@@ -255,6 +328,13 @@ def test_the_disarmed_path_says_why_instead_of_passing_quietly():
             f"the gate step does not mention {required!r}, so a disarmed run cannot tell "
             f"a reader that nothing was deployed and nothing was checked:\n{run}"
         )
+    summarised = [ln for ln in run.splitlines() if "GITHUB_STEP_SUMMARY" in ln and "INERT" in ln]
+    assert summarised, (
+        "the gate writes no INERT line into `$GITHUB_STEP_SUMMARY`. The loop above is "
+        "satisfied by the ARMED branch's summary line plus the `::warning`, so deleting "
+        "the disarmed one was invisible; a run's annotation and its summary page are "
+        f"two different places a reader looks. The gate runs:\n{run}"
+    )
 
 
 def test_no_ci_job_both_names_databricks_and_runs_the_suite():
@@ -263,9 +343,11 @@ def test_no_ci_job_both_names_databricks_and_runs_the_suite():
     `tests/test_bundle_resource_allowlist.py -k swept_paths` needs the Databricks CLI
     and SKIPS where there is none, and committed files say that this is every CI job
     running the suite -- derive which with `git grep -ln test_ci_deploy -- .`, since
-    each of them now cites this arm. Until this phase the claim was derivable by
-    grepping `.github/` for the word; the `deploy` job makes the word appear, so it
-    needed either a weaker sentence or a stronger check. This is the stronger check.
+    each of them now cites this arm. That sweep also returns the workflow and this
+    module, which are the mechanism rather than sites resting on it. Until this phase
+    the claim was derivable by grepping `.github/` for the word; the `deploy` job makes
+    the word appear, so it needed either a weaker sentence or a stronger check. This is
+    the stronger check.
 
     IT IS WIDER THAN THE CLAIM, DELIBERATELY, in the way an allow-list is wider than
     the hazard it was written for: it refuses a suite-running job that merely sets
@@ -372,14 +454,109 @@ def test_a_wheel_with_no_stamp_is_refused_by_the_comparison_it_feeds():
     assert "does not say what revision it was built from" in str(refused.value)
 
 
+def _deployed_paths() -> tuple[str, str]:
+    """(metadata path, wheel path) shaped the way THIS bundle's own deployment writes them.
+
+    The marker comes from `databricks/databricks.yml` through the script's own two
+    functions rather than being typed here: the bundle's name lives in that file, and a
+    literal would go on matching a bundle nobody deploys."""
+    marker = cli.deployment_marker(cli.bundle_name(), cli._DEFAULT_TARGET)
+    home = f"/Workspace/Users/{_USER}{marker}"
+    return f"{home}state/metadata.json", f"{home}artifacts/.internal/x.whl"
+
+
+class _FakeJobs:
+    def __init__(self, listed: list[dict]):
+        self._listed = listed
+
+    def list(self, expand_tasks: bool = False) -> list:
+        return [SimpleNamespace(as_dict=lambda job=job: job) for job in self._listed]
+
+
+class _FakeWorkspace:
+    def __init__(self, blob: bytes, failure: Exception | None):
+        self._blob, self._failure = blob, failure
+
+    def download(self, path: str):
+        if self._failure is not None:
+            raise self._failure
+        return io.BytesIO(self._blob)
+
+
+class _FakeClient:
+    """`WorkspaceClient` reduced to the two calls `deployed_revision` makes.
+
+    STILL NOTHING OPENS A SOCKET. What the two arms below need is a client that hands
+    back a workspace PATH carrying a user name, since that path is the value the
+    redaction exists for and the thing `main` prints."""
+
+    def __init__(self, blob: bytes = b"", failure: Exception | None = None):
+        metadata, self.wheel = _deployed_paths()
+        self.jobs = _FakeJobs([_job(metadata, whl=self.wheel)])
+        self.workspace = _FakeWorkspace(blob, failure)
+
+
+def test_the_success_line_prints_its_path_through_the_redaction_and_not_beside_it(
+    monkeypatch, capsys
+):
+    """THE CALL SITE, WHICH THE HELPER'S OWN ARM DOES NOT REACH.
+
+    `redacted()` being right is worth nothing where the line that prints a path does not
+    call it. Measured: printing the raw `wheel` in the success line left this module at
+    `14 passed`, because the only arm on the redaction was the helper's. So this one
+    drives `main` end to end and reads what came out."""
+    revision = "d" * 40
+    blob = _wheel_bytes(hook.STAMPED_MODULE, hook.revision_module_source(revision))
+    monkeypatch.setattr(cli, "WorkspaceClient", lambda *a, **k: _FakeClient(blob=blob))
+    assert cli.main(["--expected", revision]) == 0
+    printed = capsys.readouterr()
+    assert _USER not in printed.out + printed.err, (
+        "the success path printed the user segment of a workspace path:\n"
+        f"{printed.out}{printed.err}"
+    )
+    assert "<user>" in printed.out, (
+        f"nothing in the success line went through `redacted`:\n{printed.out}"
+    )
+
+
+def test_a_failure_the_sdk_raises_is_redacted_before_anything_prints_it(monkeypatch, capsys):
+    """THE PATH THAT LEAKED, AND IT IS REACHABLE ON EVERY MERGE ONCE THIS JOB IS ARMED.
+
+    `main` caught `WrongRevision` and nothing else, so every other failure left the
+    process as an uncaught traceback. Measured read-only against the live workspace on
+    2026-09-02: `workspace.download` on a path that is gone raises `ResourceDoesNotExist`
+    whose message is `Path (/Workspace/Users/<the operator>/...) doesn't exist.` The
+    artefact can go between `jobs.list` and the download, so this is a live path rather
+    than a hypothetical one -- and it ends in a public log."""
+    _, wheel = _deployed_paths()
+    gone = ResourceDoesNotExist(f"Path ({wheel}) doesn't exist.")
+    monkeypatch.setattr(cli, "WorkspaceClient", lambda *a, **k: _FakeClient(failure=gone))
+    assert cli.main(["--expected", "e" * 40]) == 1, (
+        "a workspace failure that is not a `WrongRevision` has to end the run non-zero"
+    )
+    printed = capsys.readouterr()
+    assert _USER not in printed.out + printed.err, (
+        "an SDK failure reached the log with the workspace path's user segment intact:\n"
+        f"{printed.out}{printed.err}"
+    )
+    assert "<user>" in printed.err and "ResourceDoesNotExist" in printed.err, (
+        f"the failure was not reported redacted, and it must be:\n{printed.err}"
+    )
+
+
 def test_every_workspace_path_this_check_prints_has_the_user_name_removed():
     """THIS REPOSITORY IS PUBLIC AND SO ARE ITS CI LOGS.
 
     The wheel path this bundle's deployed jobs name begins `/Workspace/Users/<the
     operator>/` -- measured against the live workspace -- and this check prints paths in
-    both its success line and two of its refusals. The redaction is therefore not
-    tidiness: it is the difference between a green build and a workspace user name
-    published on every merge."""
+    both its success line and two of its refusals.
+
+    WHAT THE REDACTION IS WORTH, AT ITS REAL SIZE. This docstring first said it was *the
+    difference between a green build and a workspace user name published on every merge*,
+    and that overstated it: the identity behind that path is not one this repository is
+    otherwise silent about. It stays right on two grounds that do not depend on who
+    deploys today -- the principal can change, and a public CI log is a surface of its
+    own -- but it is a boundary held rather than a secret kept."""
     path = "/Workspace/Users/someone@example.invalid/.bundle/opl/free/artifacts/x.whl"
     hidden = cli.redacted(path)
     assert "someone@example.invalid" not in hidden

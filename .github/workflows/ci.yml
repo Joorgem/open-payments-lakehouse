@@ -325,9 +325,10 @@ jobs:
   # `tests/test_bundle_resource_allowlist.py -k swept_paths` needs that CLI and SKIPS
   # where there is none, and committed documents rest on it doing so -- derive which
   # with `git grep -ln test_ci_deploy -- .`, since each of them now cites the lock
-  # instead of a grep. `tests/test_ci_deploy.py` refuses any job that both names
-  # Databricks and runs the suite, so the sentence is enforced rather than re-checked
-  # by hand.
+  # instead of a grep -- a sweep that also returns this workflow and the lock itself,
+  # which are the mechanism rather than sites resting on it. `tests/test_ci_deploy.py`
+  # refuses any job that both names Databricks and runs the suite, so the sentence is
+  # enforced rather than re-checked by hand.
   deploy:
     needs: [test]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -338,13 +339,20 @@ jobs:
       # THE EXPECTED SIDE, AND IT COMES FROM GITHUB RATHER THAN FROM THE WORKSPACE.
       # `github.sha` on a push to `main` is the commit that was merged. The other side
       # is read out of the deployed wheel. Derive both from one place and the check
-      # passes always while looking exactly like a working one (ADR 0009).
+      # passes always while looking exactly like a working one (ADR 0009). Nothing but
+      # prose held that until this phase's correction pass: `tests/test_ci_deploy.py`
+      # now asserts BOTH halves -- that this value is `github.sha`, and that the check
+      # step is actually handed it -- because four separate one-line edits here each
+      # left that module green.
       EXPECTED_REVISION: ${{ github.sha }}
     steps:
       - name: The gate -- is there a Databricks credential in this repository's secrets?
         id: gate
         run: |
-          why="no DATABRICKS_HOST/DATABRICKS_TOKEN secret exists, so nothing was deployed"
+          # NOT "neither exists": the condition below is a conjunction, so the
+          # likeliest state on the day the first secret is created -- exactly one
+          # present -- lands here too, and the annotation has to be true of it.
+          why="DATABRICKS_HOST and DATABRICKS_TOKEN are not both set, so nothing was deployed"
           why="$why and the workspace's deployed revision was NOT compared with main"
           if [ -n "$DATABRICKS_HOST" ] && [ -n "$DATABRICKS_TOKEN" ]; then
             echo "armed=true" >> "$GITHUB_OUTPUT"

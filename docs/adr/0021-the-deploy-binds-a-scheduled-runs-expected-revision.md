@@ -279,6 +279,39 @@ So it is written down here as the reversal condition of Decision 1, and not ship
   **What would be a defect is a hit asserting the wide claim in the present tense with no
   amendment beside it.** There is none today.
 
+- **THREE FAMILIES OF COMMITTED SENTENCE GO FALSE ON ONE FUTURE ACT, and the act is the day
+  `DATABRICKS_HOST` and `DATABRICKS_TOKEN` exist as GitHub secrets.** Until then every step
+  of the `deploy` job is skipped, so *"CI validates the repository and never what is
+  deployed"* is true exactly as committed, and editing it today would be writing a claim on
+  somebody else's future act. What is owed instead is the sweep, recorded here rather than
+  in a commit message nobody greps. **Re-derive the sites; trust no count of them.** `grep
+  -z` reads each file as one NUL-terminated record, so `\s` spans the newline a wrapped
+  comment breaks on — a line-based `git grep` misses the wrapped ones, which is how the
+  bullet above came to be needed too:
+
+  ```bash
+  git ls-files -z | xargs -0 grep -lzP '(?si)never\s+(validates\s+)?what\s+is\s+deployed'
+  git ls-files -z | xargs -0 grep -lzP '(?si)ci\.yml`?\s+carr(y|ies)'
+  git ls-files -z | xargs -0 grep -lzP '(?si)CI\s*#?\s*runs\s+(ruff|only|nothing|local|a\s|the\s)'
+  ```
+
+  **One hit is a RUNTIME message, which is why this is not filed as tidying.**
+  `src/opl/bronze/provenance.py` prints *"CI validates the repository and never what is
+  deployed"* inside the refusal an operator reads at the moment a deployed wheel disagrees
+  with the revision they launched for. On the day the secrets exist, that sentence misleads
+  precisely the person debugging precisely that.
+
+  **This is deliberately NOT a lock.** Whether a GitHub secret exists is not a fact any file
+  in this repository holds, so a test asserting it would be a mechanism that cannot look at
+  its own subject — [ADR 0018](0018-dataops-derives-it-does-not-instrument-and-it-does-not-act.md)'s
+  named species, and the thing this ADR exists to remove. It is recorded in prose for the
+  same reason the index-entry obligation two bullets above is.
+
+  **A HIT IS NOT A DEFECT**, on the same terms as the sweep directly above: this ADR is
+  itself a hit of the first command, because publishing a sweep means carrying its words.
+  What would be a defect is a site asserting one of these sentences on a tree where the
+  secrets exist.
+
 ## References
 
 - [ADR 0009](0009-deployed-revision-provenance.md) — the guard, the two-sources argument, and the

@@ -24,6 +24,16 @@ working one. So nothing below derives one side from the other, and nothing below
 consults `dist/`: a local wheel is evidence about this checkout, which is the thing
 already known.
 
+EVERY LINE THIS SCRIPT PRINTS GOES THROUGH `redacted`, INCLUDING THE ONES IT DID NOT
+WRITE. A workspace path carries the operator's user name, and an SDK failure quotes the
+path it was handed: `workspace.download` on a path that is gone raises
+`ResourceDoesNotExist` whose message is `Path (/Workspace/Users/<the operator>/...)
+doesn't exist.` -- measured against the live workspace on 2026-09-02, read-only. That is
+reachable on any merge, since the artefact can go between `jobs.list` and the download.
+So `main` catches the broad failure beside the `WrongRevision` one: not to continue past
+it -- both return non-zero -- but so that what reaches a public log is a redacted line
+rather than a traceback.
+
 THE COMPARISON ITSELF IS NOT REIMPLEMENTED. `opl.bronze.provenance.assert_revision_
 matches` is THE spelling of that rule -- it already refuses an unstamped artefact, a
 mismatch and a `+dirty` build, with a different instruction for each -- and a second
@@ -168,7 +178,10 @@ def one_wheel(wheels: set[str], marker: str) -> str:
             "installs more than one wheel, so which artefact a run executes is decided "
             "by whatever order the platform resolves them in. The jobs take their wheel "
             'through the glob `dependencies: ["../../dist/*.whl"]` over a `dist/` that '
-            "nothing cleans; clean it and deploy again."
+            "nothing cleans. That is ONE cause and not the only one: this marker names a "
+            "bundle and a target, never a principal, so two people deploying this target "
+            "land two deployments that both match it. Clean `dist/` and deploy again, or "
+            "find out whose the other wheel is."
         )
     return next(iter(wheels))
 
@@ -204,6 +217,13 @@ def main(argv: list[str] | None = None) -> int:
         verified = assert_revision_matches(expected=args.expected, actual=actual)
     except WrongRevision as refused:
         print(f"check_deployed_revision: {refused}", file=sys.stderr)
+        return 1
+    except Exception as failed:
+        # BROAD ON PURPOSE, AND IT CHANGES NO OUTCOME -- see the module docstring. An SDK
+        # failure quotes the workspace path it was given, and an uncaught one would print
+        # that path, unredacted, into a public CI log.
+        print(f"check_deployed_revision: {type(failed).__name__}: {redacted(str(failed))}",
+              file=sys.stderr)
         return 1
     print(f"check_deployed_revision: {redacted(wheel)} was built from {verified}, which "
           "is the revision this check was given. The workspace holds it.")

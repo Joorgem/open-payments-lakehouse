@@ -109,8 +109,13 @@ targets:
 # time. Measured 2026-08-18: `databricks bundle validate -t free -o json` renders
 # `"wh": {"lookup": {"warehouse": "..."}, "value": "13cf10c85b0f189d"}`, so the name is
 # what lives in git and the id is resolved per workspace on every deploy. It is also why
-# `bundle validate` now needs credentials for this bundle, which costs nothing here: CI
-# runs ruff and pytest and has never run `bundle validate`.
+# `bundle validate` now needs credentials for this bundle, which costs nothing here: no
+# CI job has ever run `bundle validate`. What CI does run is not enumerated in this
+# comment -- the enumeration that was here said "ruff and pytest" and was falsified twice
+# in one phase, by the `terraform` job and then by `deploy`. The one fact this paragraph
+# needs is narrower and derivable: `deploy` is the only job with a Databricks credential
+# in its `env:` (`git grep -n 'secrets\.DATABRICKS' -- .github/`), and it runs
+# `bundle deploy`, never `bundle validate`.
 variables:
   wh:
     description: >-
