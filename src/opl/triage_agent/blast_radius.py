@@ -87,7 +87,7 @@ that contains NEITHER of the tables this leg exists for.) And empty is the most 
 answer available, printed against the incident that most needs the opposite. That is this
 phase's species in its purest form, and the defence is not a comment:
 `_assert_no_bronze_table_reaches_nothing` runs at IMPORT and refuses a registered bronze
-table whose whole downstream set is empty, so deleting `payments` from `DIRECT_TO_GOLD`
+table whose whole downstream set is empty, so deleting `ptax` from `DIRECT_TO_GOLD`
 breaks the import of every module that reads this one rather than quietly returning `()`.
 The test that proves it fires drives the guard on a declaration missing that entry; it does
 not merely observe that the entry is present.
@@ -235,6 +235,24 @@ VAULT_LOADS_FROM: dict[str, tuple[str, ...]] = {
     "sat_eff_merchant_empresa": ("merchant",),
     "link_company_partner": ("socios",),
     "sat_eff_company_partner": ("socios",),
+    # F2 WAVE 2, AND THE FIRST EDGE HERE WITH NO LOADER TASK BEHIND IT YET. `link_payment`
+    # is registered by `opl.vault.domains.payments_domain` and loaded from bronze
+    # `payments` by `vault_load_link.py` -- but the JOB that runs that task cannot be
+    # deployed while the workspace 403s on every NEW job resource, so the YAML lands with
+    # the task that owns `databricks/`. Until it does, FIVE tests in
+    # `tests/triage_agent/test_blast_radius_lock.py` and `tests/test_vault_job_wiring.py`
+    # are RED on this one line, deliberately -- not one, which is what this comment claimed
+    # until the T1 review counted them. The five are the bundle-versus-declaration
+    # comparisons; every OTHER red this line produced was a consequence of `BlastRadius`
+    # having no shape for a table with both legs, and those are fixed here rather than
+    # waiting for a YAML file that could never have repaired them.
+    #
+    # The alternative to declaring the edge at all is leaving the key out, and
+    # `_assert_the_vault_declaration_is_total_over
+    # _both_registries` then refuses AT IMPORT and takes every module that reads this one
+    # with it. A declared edge the bundle has not caught up with is the loud failure; an
+    # undeclared vault table is the silent one this guard exists for.
+    "link_payment": ("payments",),
     "ref_cnae": ("lookup",),
     "ref_motivo": ("lookup",),
     "ref_municipio": ("lookup",),
@@ -248,10 +266,16 @@ VAULT_LOADS_FROM: dict[str, tuple[str, ...]] = {
 # tasks only the gold table's name.
 #
 # THIS IS THE ENTRY THAT KEEPS THE WORKSPACE'S LARGEST INCIDENT FROM READING AS HARMLESS.
-# Neither of these two tables has a vault loader task anywhere in the bundle, so a manifest
-# walked bronze -> vault -> gold answers "nothing downstream" for both -- including for
-# `payments`, which is `592660596679630`'s table. `_assert_no_bronze_table_reaches_nothing`
-# refuses that state at import rather than trusting this comment.
+# A manifest walked bronze -> vault -> gold answers "nothing downstream" for `ptax`, and for
+# `payments` it now answers something WORSE THAN NOTHING: `link_payment`, a vault table that
+# no gold table reads. `payments` is `592660596679630`'s table, so the incident this whole
+# module exists for is the one whose answer degraded when the vault leg arrived.
+#
+# "NEITHER OF THESE TWO TABLES HAS A VAULT LOADER TASK" IS WHAT THIS COMMENT SAID, AND F2
+# WAVE 2 FALSIFIED IT. `payments` has one. That is why `BlastRadius` carries `gold_direct`
+# as its own leg: the two facts -- feeds a vault table, and drives a gold table straight
+# from bronze -- are both true of `payments` now, and a model with room for only one of
+# them reported the union under the wrong heading.
 DIRECT_TO_GOLD: dict[str, tuple[str, ...]] = {
     # `fact_payment` reads bronze payments as its SOURCE (`gold_load_fact.py`'s
     # `source_table=`), one fact row per payment event. `dim_date` reads it too, and only
@@ -303,16 +327,57 @@ class BlastRadius:
     source: str
     vault: tuple[str, ...]
     gold: tuple[str, ...]
+    # THE GOLD THIS TABLE REACHES WITHOUT PASSING THROUGH A VAULT TABLE, and it is a
+    # SEPARATE FIELD rather than a subtraction from `gold` because the two legs are two
+    # different facts and one of them cannot be recovered from the other: a gold table can
+    # be reachable BOTH ways, so `gold - gold_direct` is not "the vault-reached gold" and
+    # any reader computing it would get a smaller set than the truth.
+    #
+    # F2 WAVE 2 IS WHAT FORCED THIS FIELD TO EXIST. Before it, every bronze table had
+    # exactly one leg -- `payments` and `ptax` reached gold directly with an empty vault
+    # tuple, everything else reached gold only through the vault -- so ONE tuple plus a
+    # boolean said everything and `bypasses_the_vault` could be spelled "the vault leg is
+    # empty". `link_payment` made `payments` the first table with BOTH legs, and the old
+    # model answered that state by reporting the union of the two and attributing all of
+    # it to the vault leg: `blast_radius_note("payments")` said `fact_payment` was reached
+    # "through" `link_payment`, which reaches no gold table at all. A false sentence in an
+    # issue body a person acts on.
+    gold_direct: tuple[str, ...]
 
     @property
     def bypasses_the_vault(self) -> bool:
-        """This table reaches gold with no vault table in between.
+        """This table reaches at least one gold table with no vault table in between.
 
-        NOT "the vault leg is empty": that is true of a table that reaches nothing at all,
-        which this class can never hold (`_assert_no_bronze_table_reaches_nothing`) but
-        which a reader of one field cannot rule out. Both halves are in the expression so
-        the word means what it says."""
-        return not self.vault and bool(self.gold)
+        READ OFF THE DIRECT LEG, NOT OFF AN EMPTY VAULT LEG, and the difference is the
+        whole reason `gold_direct` exists. The old spelling was `not vault and gold`, which
+        answers FALSE for a table that has a vault loader AND drives a gold table straight
+        from bronze -- exactly `payments` since F2 wave 2. The bypass is a property of the
+        direct leg alone; whether a vault leg also exists is a different question, and
+        conflating them made the one table this repository most often triages report that
+        it does not bypass the vault while its fact was being loaded from bronze.
+
+        A table that reaches nothing at all cannot hold (`_assert_no_bronze_table_reaches_
+        nothing`), so this is not hiding that case."""
+        return bool(self.gold_direct)
+
+    def __post_init__(self) -> None:
+        """The direct leg must be part of the whole, and this is why `gold` stays STORED.
+
+        `gold` is the union of the two legs and is therefore redundant with them, which is
+        the shape that drifts -- `opl.config`'s month rule is this repository's record of
+        what two spellings of one value cost. It is kept stored anyway because `gold` is
+        the field the issue payload carries and `opl.triage_agent.issue._radius_of`
+        compares field-for-field, so turning it into a property would change a serialised
+        format to remove a redundancy. **So the redundancy is CHECKED instead of removed:**
+        a direct leg holding a table the whole set does not is a derivation that has come
+        apart, and it fails here rather than in a sentence a triager reads."""
+        stray = frozenset(self.gold_direct) - frozenset(self.gold)
+        if stray:
+            raise ValueError(
+                f"blast radius for {self.source!r} reaches {sorted(stray)} directly and "
+                f"not at all: `gold` is the union of both legs, so a direct-leg table "
+                "missing from it means the two were computed from different declarations"
+            )
 
 
 def vault_sources_of(table: GoldTable) -> tuple[str, ...]:
@@ -403,10 +468,18 @@ def _radius(
     entry point below takes one argument and no seam, so a caller cannot reach this by
     accident."""
     vault = _vault_reached(source, loads_from)
+    reaches = direct.get(source, ())
     return BlastRadius(
         source=source,
         vault=vault,
-        gold=_gold_reached(frozenset(vault), direct.get(source, ())),
+        gold=_gold_reached(frozenset(vault), reaches),
+        # THE DIRECT LEG IS THE SAME CLOSURE OVER NO VAULT TABLES, not the raw declaration:
+        # a gold table reached straight from bronze pulls in whatever the star reaches from
+        # it, so `fact_payment` direct from `payments` still carries `dim_date` behind it.
+        # Running the same function with an empty vault set is what keeps the two legs
+        # closed the same way -- a second, simpler expression here would be the second
+        # spelling that drifts.
+        gold_direct=_gold_reached(frozenset(), reaches),
     )
 
 
@@ -437,8 +510,23 @@ def blast_radius_note(source: str | None) -> str:
 
     THE FIRST ARM SAYS THE BYPASS OUT LOUD instead of leaving an empty vault list to be
     read as an empty answer. That sentence is the whole reason this function exists rather
-    than a caller formatting the tuples."""
+    than a caller formatting the tuples.
+
+    FOUR ARMS SINCE F2 WAVE 2, and the new one is FIRST because it is the only arm whose
+    absence produced a FALSE sentence rather than a missing one. `payments` now feeds
+    `link_payment` AND drives `fact_payment` straight from bronze; with three arms it fell
+    through to "feeds ... in the vault, and through them ... in gold", attributing every
+    gold table it reaches to a vault table that reaches none of them. `link_payment` is
+    read by nothing in gold -- that is this phase's declared gap -- so the arm has to name
+    the two legs separately or lie about one of them."""
     radius = blast_radius(source)
+    if radius.vault and radius.bypasses_the_vault:
+        return (
+            f"{radius.source} feeds {', '.join(radius.vault)} in the vault, AND reaches "
+            f"{', '.join(radius.gold_direct)} in gold DIRECTLY from bronze, not through "
+            "the vault. A downstream manifest walked bronze -> vault -> gold reports the "
+            "vault leg and misses the direct one"
+        )
     if radius.bypasses_the_vault:
         return (
             f"{radius.source} has NO vault loader task in the bundle and still reaches gold: "
@@ -545,8 +633,20 @@ def _assert_no_bronze_table_reaches_nothing(
 
     A bronze table that reaches nothing is what a stale manifest returns and it is also the
     single most reassuring thing this module could print, so it is refused outright rather
-    than reported. Removing `payments` from `DIRECT_TO_GOLD` breaks the import of every
-    module that reads this one, which is the difference between a manifest and a list.
+    than reported. Removing `ptax` from `DIRECT_TO_GOLD` breaks the import of every module
+    that reads this one, which is the difference between a manifest and a list.
+
+    THAT SENTENCE NAMED `payments` UNTIL F2 WAVE 2 AND WAS FALSIFIED BY IT, which is worth
+    recording rather than quietly re-pointing. `payments` demonstrated this guard only
+    because it had no vault leg: with `link_payment` registered, dropping its
+    `DIRECT_TO_GOLD` entry leaves the radius non-empty and this guard stays silent. **So
+    what died was the DEMONSTRATION, not the guard** -- it still refuses a table that
+    reaches nothing, and `ptax` is now the table with no vault leg that proves it. The
+    dropped-edge case `payments` used to cover is held by
+    `tests/triage_agent/test_blast_radius_lock.py`'s `ast` sweep, which compares
+    `DIRECT_TO_GOLD`'s KEY SET against the bronze tables the gold entry points actually
+    read -- a stronger check than this one, and the reason the coverage did not move when
+    the demonstration did.
 
     ITERATES `REGISTRY` KEYS AND NOT `blast_radius`, deliberately: the public entry point
     resolves through `table_spec`, so a registry entry whose spec belongs to another table

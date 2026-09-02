@@ -3,9 +3,13 @@
 
 WHAT A LINK ROW ASSERTS, because everything below follows from it: "these hub keys
 were seen together". Not when the relationship started, not when it ended, not what it
-looked like -- a link carries its own hash key, one reference per participating hub,
-and the two pieces of DV2 metadata saying when WE first saw the pair and where it came
-from. Descriptive facts and effectivity windows belong to a satellite on the link --
+looked like -- a link carries its own hash key, one reference per participating hub, any
+DEPENDENT-CHILD KEYS it is identified by, and the two pieces of DV2 metadata saying when
+WE first saw the relationship and where it came from. (This module wrote no
+dependent-child key and refused every link declaring one until F2 wave 2, which is a
+deferral ADR 0011 recorded by name and `_refuse_a_link_this_loader_cannot_write` still
+carries the argument for; `link_payment` is the table that consumed it.)
+Descriptive facts and effectivity windows belong to a satellite on the link --
 and since Task 5 the vault has one of those two: `sat_eff_company_partner`, an
 `EffectivitySatellite` loaded by `opl.vault.effectivity` and admitted by
 `registry._assert_every_effectivity_satellite_hangs_off_a_link`. A DESCRIPTIVE
@@ -196,7 +200,7 @@ def refuse_unloaded_hubs(
         _refuse_a_hub_that_was_never_loaded(link, hub, table, rows)
 
 
-def undeclared_derived_ends(link: Link) -> tuple[LinkEnd, ...]:
+def non_identifying_ends(link: Link) -> tuple[LinkEnd, ...]:
     """The ends of `link` whose business key is neither named columns of the source nor
     a declared derivation.
 
@@ -211,18 +215,36 @@ def undeclared_derived_ends(link: Link) -> tuple[LinkEnd, ...]:
     be in the link's digest or a merchant re-pointed to another company keeps its link
     hash key and no window is ever closed.
 
-    SO THE GUARD IS STRICTLY SHARPER, NOT WEAKER. `link_company_partner`'s partner end
-    declares no `key_from` and is non-identifying, so it is still refused, and its
-    derivation still lives in `opl.vault.partners` -- which is not migrated, because
-    that link also carries dependent-child keys this loader does not write and the
-    migration would buy no capability while touching a loader proven over 33.13 GB."""
-    return tuple(
-        end for end in link.ends if end.key_from is None and not end.identifying
-    )
+    THE CONDITION IS `not end.identifying` ALONE, and the T1 review is why. The narrower
+    `key_from is None and not identifying` shipped first, and the reviewer broke it by
+    construction -- declaring `key_from=(KeyPrefix("cpf_cnpj_socio", 8),)` on socios'
+    partner end made this loader ACCEPT `link_company_partner`. The refusal's own docstring
+    carries what that would have written.
+
+    WHY `identifying` IS PRINCIPLED HERE AND NOT A PROXY. `LinkEnd` defines
+    `identifying=False` as "a reference the link RESOLVES rather than one it is IDENTIFIED
+    BY" -- a FUNCTION of the link's identity. This loader computes each end's reference from
+    that end's own columns, independently of the other ends, so such an end is exactly the
+    one it cannot compute, whatever it declares. That does NOT conflate `identifying` with
+    `key_from` (the defect F-DB corrected): a derived AND identifying end is still written.
+    `identifying=False` is declared in one place in this repository (`domains/cnpj.py`), so
+    this refuses no link that exists today.
+
+    HALF OF WHY THAT LOADER IS NOT MIGRATED EXPIRED IN F2 WAVE 2, AND IT IS CORRECTED
+    HERE RATHER THAN LEFT TO READ AS STILL TRUE. The reason given was "that link also
+    carries dependent-child keys this loader does not write", and this loader writes them
+    now. What is unchanged is the reason that actually decides it: socios' partner root is
+    a CONDITIONAL slice -- the first eight characters of `cpf_cnpj_socio`, and only where
+    `identificador_socio` says the partner is a company -- which no `KeyPrefix` can
+    express and which `opl.vault.specs.KeyPrefix` refuses to grow an escape hatch for. So
+    the migration is not merely unprofitable against a loader proven over 33.13 GB; it is
+    not expressible in the declaration this loader reads."""
+    return tuple(end for end in link.ends if not end.identifying)
 
 
 def _refuse_a_link_this_loader_cannot_write(link: Link) -> None:
-    """This loader writes one hub reference per end and nothing else.
+    """This loader writes one hub reference per end, the link's dependent-child keys, and
+    nothing else.
 
     NOT IN `refuse_mismatched_hubs`, WHICH IS SHARED. That function answers "do these
     hubs belong to this link", which `opl.vault.partners` asks too; this one answers
@@ -233,38 +255,120 @@ def _refuse_a_link_this_loader_cannot_write(link: Link) -> None:
     load here: `link_candidates` would compute that end's reference from the columns its
     hub is NAMED after, so both ends of `link_company_partner` would be hashed from
     `cnpj_basico` and every relationship would read as a company partnered with
-    itself -- right row count, working joins, nonsense. And its dependent-child keys
-    would be hashed into the link's key by `link_hash_key_expression` and then not
-    written, so the table's identity column would describe columns it does not have."""
-    undeclared = undeclared_derived_ends(link)
-    if link.dependent_child_keys or undeclared:
+    itself -- right row count, working joins, nonsense.
+
+    THE DEPENDENT-CHILD-KEY ARM IS GONE, AND IT WAS HALF OF THIS REFUSAL UNTIL F2 WAVE 2.
+    It refused every link carrying one, on the ground that they "would be hashed into the
+    link's key by `link_hash_key_expression` and then not written, so the table's identity
+    column would describe columns it does not have" -- true of the loader as it stood, and
+    ADR 0011 recorded the fix as deliberately deferred rather than impossible: "a small
+    change -- `link_hash_key_expression` already hashes them -- and it should be made by
+    the wave-2 task that has a table to point at it." `link_payment` is that table, and
+    the projection is now in `link_candidates` and `link_columns`, so the reason this arm
+    existed is gone rather than waived.
+
+    THE TWO CONDITIONS WERE NEVER ONE, WHICH IS WHY THIS IS A NARROWING AND NOT A
+    DELETION. `link_company_partner` satisfied BOTH, so a reader could take the refusal
+    for a single rule about "complicated links"; it is still refused, by the arm that
+    survives, and `tests/vault/test_payments_vault.py` fires both directions against the
+    two real links so the pair cannot quietly collapse back into one."""
+    undeclared = non_identifying_ends(link)
+    if undeclared:
         raise ValueError(
-            f"link {link.name!r} declares dependent-child keys or an end whose business "
-            f"key is neither named columns of the source nor a declared derivation "
-            f"({[end.hub for end in undeclared]}), and this loader writes hub references "
-            "and nothing else. Such an end is derived, so both ends would be hashed from "
-            "the same column and every relationship would read as a company partnered "
-            "with itself. Either declare the derivation with `LinkEnd.key_from`, which "
-            "this loader CAN write and `build_registry` checks against the hub, or use "
-            "`opl.vault.partners.load_partner_link`, which knows socios' own; see its "
-            "module docstring for why that one is separate"
+            f"link {link.name!r} declares a NON-IDENTIFYING end "
+            f"({[end.hub for end in undeclared]}), and this loader computes every end's "
+            "reference from that end's own source columns, INDEPENDENTLY of the other "
+            "ends. A non-identifying end is one the link RESOLVES rather than one it is "
+            "identified by -- its reference is a function of the link's identity -- so "
+            "computing it independently is exactly the wrong derivation, and it produces "
+            "a plausible digest rather than an error. Declaring `LinkEnd.key_from` does "
+            "NOT make it writable here and this refusal no longer accepts that as an "
+            "answer: a `KeyPrefix` cannot express a CONDITIONAL slice, which is what "
+            "socios' partner root is. Use `opl.vault.partners.load_partner_link`, which "
+            "knows "
+            "socios' own; see its module docstring for why that one is separate"
+        )
+    _refuse_a_width_bearing_dependent_child_key(link)
+
+
+def _refuse_a_width_bearing_dependent_child_key(link: Link) -> None:
+    """A dependent-child key declaring a `width` is refused, because this loader would
+    HASH THE PADDED VALUE AND WRITE THE RAW ONE.
+
+    FOUND BY THE T1 REVIEW, MEASURED ON A REAL SESSION rather than reasoned about: with
+    `BusinessKeyColumn(name="transaction_id", width=12)`, `link_hash_key_expression`
+    composes `lpad(transaction_id, 12, '0')` into the digest (`loading._padded`) while
+    `link_columns` projects the bare column. The table's identity column is then a digest
+    over a value the table does not hold, so the key cannot be recomputed from the row --
+    and nothing fails, which is this repository's defining failure shape.
+
+    THE LATENCY IS OLDER THAN THIS PHASE AND THAT IS NOT A REASON TO LEAVE IT. The same
+    mismatch exists in `opl.vault.partners`, which shipped over 33.13 GB; socios' two
+    dependent-child keys declare no width, so it was never reachable. What F2 wave 2
+    changed is that the generic loader now writes dependent-child keys at all, so the
+    first widthed declaration anywhere reaches it.
+
+    REFUSED RATHER THAN REPAIRED, AND THE REPAIR IS NAMED SO THE CHOICE IS VISIBLE. The
+    arguably better fix is to PROJECT the padded value, making the table hold the
+    canonical form that was hashed -- which is what `zero_padded_column` does for a hub's
+    business key, so there is a precedent pulling that way. It is not taken here because
+    `link_columns` returns NAMES, read by the projection, the `GROUP BY` and the final
+    `select` alike, and threading an expression through all three would change a write
+    path proven over 33.13 GB to serve a declaration no table in this repository makes.
+    **Refusing costs the first caller who wants one a decision; projecting would cost
+    every existing row a re-derivation.** If a widthed dependent-child key is ever really
+    wanted, delete this refusal and pad the projection -- do not do half of it."""
+    widthed = [key.name for key in link.dependent_child_keys if key.width is not None]
+    if widthed:
+        raise ValueError(
+            f"link {link.name!r} declares dependent-child keys with a width {widthed}, "
+            "and this loader hashes the PADDED value into the link's hash key while "
+            "projecting the RAW column -- so the identity column would be a digest over a "
+            "value the row does not carry, and no re-load could reproduce it. Declare the "
+            "key without a width if the source value is already canonical, or pad it "
+            "upstream of this loader so the hashed and the written value are the same"
         )
 
 
 def reference_columns(link: Link, hubs: Sequence[Hub]) -> list[str]:
     """The link's hash key followed by one reference column per end, in write order.
 
-    Spelled once and read by the projection, the aggregate and the final `select`, so
-    the three cannot disagree about a role."""
+    Spelled once and read by `link_columns`, so the projection, the aggregate and the
+    final `select` cannot disagree about a role."""
     return [
         link.hash_key,
         *(end.reference_column(hub) for end, hub in zip(link.ends, hubs, strict=True)),
     ]
 
 
+def link_columns(link: Link, hubs: Sequence[Hub]) -> list[str]:
+    """Every column the link carries that is not DV2 metadata, in write order: its hash
+    key, one reference per end, then its dependent-child keys.
+
+    THE DEPENDENT-CHILD KEYS COME LAST AND IN DECLARATION ORDER, matching
+    `loading.link_hash_key_expression`, which hashes them after every hub. The two orders
+    do not have to agree for the table to be correct -- these are column names and those
+    are digest components -- but a reader reconciling a row by hand reads them side by
+    side, and two orders would make that harder for no gain.
+
+    ONE SPELLING, SHARED WITH `opl.vault.partners`, which had a private copy of this list
+    under the name `_link_columns` from Task 5 until F2 wave 2 gave the generic loader the
+    same projection. Two spellings of "what a link row holds" is how one loader gains a
+    column the other silently drops: both write into tables the registry validated under
+    ONE set of names, and a mismatch lands as a Delta schema error in a job rather than
+    here.
+
+    READ BY THE AGGREGATE AS WELL AS BY THE WRITE, which is the load-bearing half.
+    `earliest_record_source` GROUPS BY this list, so a column missing from it is a column
+    the fold collapses on -- two payments between one pair would become one row before
+    anything was written, with the load reporting success."""
+    return [*reference_columns(link, hubs), *link.dependent_child_key_columns]
+
+
 def source_columns(link: Link, hubs: Sequence[Hub]) -> list[str]:
-    """Every column of the ONE source this loader reads a hub business key out of, in
-    end order -- the list `refuse_non_string_columns` is handed.
+    """Every column of the ONE source this loader reads a KEY COMPONENT out of, in hash
+    order -- each end's hub business key, then the dependent-child keys. The list
+    `refuse_non_string_columns` is handed.
 
     EVERY END'S BUSINESS KEY MUST BE READABLE FROM THIS ONE SOURCE, which is what makes
     a link loadable from a single table at all: estabelecimentos carries `cnpj_basico`
@@ -282,13 +386,25 @@ def source_columns(link: Link, hubs: Sequence[Hub]) -> list[str]:
     and both the refusal and the expression read that one answer. What is unchanged is the
     requirement: ONE source, one scan, no join. `hash_key_for_end` is the expression half.
 
+    THE DEPENDENT-CHILD KEYS ARE IN THIS LIST SINCE F2 WAVE 2, and they belong in it for
+    the ends' own reason rather than by analogy. They are hashed into the link's digest by
+    `link_hash_key_expression` -- through `_padded`, which reaches the same
+    `hash_key_column` the references do -- so the hash standard's precondition applies to
+    them: STRING columns, refused here by name. Left out, a `transaction_id` that arrived
+    as a bigint would be cast silently and hashed as the cast, giving a table of plausible
+    digests no re-load over a string column could ever reproduce. `opl.vault.partners`
+    already refused its own two by name; this is the same list, derived.
+
     A NAMED FUNCTION RATHER THAN A COMPREHENSION INSIDE THE CALLER, because the paragraph
     above is what it is FOR, and `link_candidates` reached this project's 50-line function
     cap carrying it. The prose moves with the code it describes."""
     return [
-        name
-        for end, hub in zip(link.ends, hubs, strict=True)
-        for name in end.source_columns(hub)
+        *(
+            name
+            for end, hub in zip(link.ends, hubs, strict=True)
+            for name in end.source_columns(hub)
+        ),
+        *link.dependent_child_key_columns,
     ]
 
 
@@ -302,11 +418,17 @@ def link_candidates(
     axis: SnapshotAxis = MONTHLY_SNAPSHOT,
 ) -> DataFrame:
     """One row per relationship in the window: the link's hash key, one hash-key
-    reference per participating hub, and the `record_source` of the earliest month the
-    relationship appeared in.
+    reference per participating hub, its dependent-child keys, and the `record_source` of
+    the earliest month the relationship appeared in.
 
-    ONE SOURCE, ONE SCAN, AND EVERY END'S KEY READ OUT OF IT -- see `source_columns`
+    ONE SOURCE, ONE SCAN, AND EVERY KEY COMPONENT READ OUT OF IT -- see `source_columns`
     above, which is the list this refuses on and where that requirement is argued.
+
+    THE DEPENDENT-CHILD KEYS ARE PROJECTED AS WELL AS HASHED, which is F2 wave 2's whole
+    change here and is two properties rather than one. They reach the WRITE, so the
+    table's identity column no longer describes columns the table does not have; and they
+    reach the GROUP BY through `link_columns`, so two relationships differing only in a
+    dependent-child key stay two rows instead of being folded into one by the aggregate.
 
     THE REFERENCES ARE COMPUTED, NOT LOOKED UP. Joining to the hubs to fetch their
     digests would make this load depend on the hubs having been loaded first and would
@@ -329,10 +451,11 @@ def link_candidates(
             hash_key_for_end(end, hub).alias(end.reference_column(hub))
             for end, hub in zip(link.ends, hubs, strict=True)
         ),
+        *(F.col(name) for name in link.dependent_child_key_columns),
         F.col(axis.column),
         F.col(BRONZE_RECORD_SOURCE),
     )
-    return earliest_record_source(keyed, reference_columns(link, hubs), axis=axis)
+    return earliest_record_source(keyed, link_columns(link, hubs), axis=axis)
 
 
 def load_link(
@@ -372,7 +495,7 @@ def load_link(
         )
     (
         candidates.select(
-            *reference_columns(link, hubs),
+            *link_columns(link, hubs),
             F.lit(load_date).alias(LOAD_DATE),
             F.col(RECORD_SOURCE),
         )

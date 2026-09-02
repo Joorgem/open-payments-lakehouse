@@ -75,7 +75,7 @@ from opl.config import SENTINEL_MONTH, is_month
 from opl.contracts.catalogue import columns_for
 from opl.vault import domains
 from opl.vault.job_params import optional_flag
-from opl.vault.links import undeclared_derived_ends
+from opl.vault.links import non_identifying_ends
 from opl.vault.observation import ObservationGrain
 from opl.vault.registry import (
     EffectivitySatellite,
@@ -227,7 +227,7 @@ def _is_a_derived_link(link: Link) -> bool:
 
     THE SAME CONDITION `opl.vault.links._refuse_a_link_this_loader_cannot_write` TESTS,
     and since F-DB it is the same FUNCTION rather than a restatement of it:
-    `undeclared_derived_ends` is exported from that module for exactly this caller. That
+    `non_identifying_ends` is exported from that module for exactly this caller. That
     refusal is the reason there are two link loaders at all -- `load_link` computes every
     end's reference from the columns that hub is NAMED after, so an undeclared derived
     end would hash both ends of `link_company_partner` from `cnpj_basico` and every
@@ -240,8 +240,17 @@ def _is_a_derived_link(link: Link) -> bool:
     spelling this lock would have routed it to `vault_load_partner_link.py` -- a loader
     that would refuse it -- while under the flag's stated MEANING it belongs on
     `vault_load_link.py`, which can now write it. Asking the loader's own function means
-    the two cannot disagree about which entry point a link needs."""
-    return bool(link.dependent_child_keys) or bool(undeclared_derived_ends(link))
+    the two cannot disagree about which entry point a link needs.
+
+    THE DEPENDENT-CHILD-KEY ARM CAME OFF IN F2 WAVE 2, IN THE SAME COMMIT AS THE LOADER'S.
+    `load_link` writes dependent-child keys now -- `link_candidates` projects them and
+    `links.link_columns` names them -- so a link carrying one is no longer a link this
+    entry point cannot run. Left in, this lock would have routed `link_payment` to
+    `vault_load_partner_link.py`, a loader that refuses any link whose dependent-child
+    keys are not socios' own two, and the whole table would have been unrunnable with the
+    routing looking deliberate. `link_company_partner` still routes there, on the arm that
+    survives: its partner end declares no `key_from`."""
+    return bool(non_identifying_ends(link))
 
 
 def _entry_point_for(spec: VaultTable) -> str:
@@ -278,11 +287,16 @@ def _required_source_columns(spec: VaultTable) -> tuple[str, ...]:
         # column names, or the columns a `LinkEnd.key_from` declares. Restated as
         # `hub.business_key_columns` this lock would demand `cnpj_basico` from
         # `bronze_merchant`, which has no such column, and refuse a pairing that works.
+        #
+        # AND THE DEPENDENT-CHILD KEYS, SINCE F2 WAVE 2, for the reason `links.source_
+        # columns` gives: they are hashed into the link's digest and written into the
+        # table, so a source that does not carry one is a source this loader cannot read.
+        # `link_payment` is the first link on this branch of the routing to have any.
         return tuple(
             name
             for end, hub in zip(spec.ends, hubs, strict=True)
             for name in end.source_columns(hub)
-        )
+        ) + spec.dependent_child_key_columns
     if isinstance(spec, EffectivitySatellite):
         link = domains.parent_link(spec)
         return (*domains.link_identity_columns(link), spec.entry_column)

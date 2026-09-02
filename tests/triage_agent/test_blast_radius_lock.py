@@ -250,16 +250,36 @@ def test_the_shared_hub_is_declared_with_both_parents_and_both_appear_in_the_bun
 # ----------------------------------------------------------------------------------
 
 
-def test_no_vault_loader_task_in_the_bundle_names_payments_or_ptax():
+def test_leg_threes_premise_still_holds_for_ptax_and_no_longer_holds_for_payments():
     """The premise of leg 3, read off the bundle rather than asserted about it.
 
-    This is what makes the empty vault leg below a FACT about the pipeline instead of an
-    omission in the declaration -- and it is the arithmetic that says a bronze -> vault ->
-    gold walk really does return nothing for these two."""
+    F2 WAVE 2 FALSIFIED HALF OF THIS TEST AND THE HALF IT LEFT IS NARROWER THAN IT LOOKS.
+    It used to read `sourced == set(REGISTRY) - {"payments", "ptax"}` and
+    `blast_radius("payments").vault == ()`: the premise was that NEITHER table had a vault
+    leg, which made "a bronze -> vault -> gold walk returns nothing for these two" a fact
+    about the pipeline. `link_payment` ended that for `payments`. A walk now returns
+    something for it, and something that reaches no gold table -- which is worse, and is
+    why `blast_radius` grew `gold_direct` rather than having this test relaxed.
+
+    WHY THE `sourced` EQUALITY IS GONE RATHER THAN UPDATED. It asserted a totality --
+    every other bronze table has a loader task -- that
+    `test_the_vault_load_declaration_is_what_the_bundle_hands_its_loader_tasks` already
+    holds, by comparing the declaration against the bundle in both directions. Restating
+    it here made it a number that has to be edited by whoever lands the payments job YAML,
+    for no coverage that test does not already give. It is de-duplicated, not dropped: if
+    that comparison is ever deleted, the totality goes with it and this comment is the
+    pointer to what was relied on.
+
+    SO WHAT IS LEFT IS ONLY WHAT IS PERMANENT. `ptax` is the last bronze table with no
+    vault leg at all, and `payments` is the first with both legs."""
     sourced = {source for _key, _table, source in _loader_tasks_of_bundle()}
-    assert sourced == set(REGISTRY) - {"payments", "ptax"}
-    assert blast_radius("payments").vault == ()
+
+    assert "ptax" not in sourced
     assert blast_radius("ptax").vault == ()
+    assert blast_radius("ptax").bypasses_the_vault is True
+
+    assert blast_radius("payments").vault == ("link_payment",)
+    assert blast_radius("payments").bypasses_the_vault is True
 
 
 # ----------------------------------------------------------------------------------

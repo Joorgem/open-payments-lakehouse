@@ -561,8 +561,8 @@ def test_the_generic_link_loader_refuses_the_link_it_cannot_write(
     partnered with itself.
 
     THE REFUSAL IS UNCHANGED AND ITS WORDING IS NOT (F-DB Task 5): `not end.identifying`
-    was a proxy: see `links.undeclared_derived_ends` for the reason it now refuses on."""
-    with pytest.raises(ValueError, match="nor a declared derivation"):
+    was a proxy: see `links.non_identifying_ends` for the reason it now refuses on."""
+    with pytest.raises(ValueError, match="NON-IDENTIFYING end"):
         load_link(
             spark, LINK, hubs=LINK_HUBS, hub_tables=socios_hub_tables(socios_target),
             source_table=socios_source.bronze,

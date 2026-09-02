@@ -617,8 +617,16 @@ def as_mapping(issue: TriageIssue) -> dict[str, Any]:
 def _radius_of(carried: Mapping[str, Any], source: str) -> BlastRadius:
     """The radius this wheel derives, checked against the one the file carries."""
     derived = blast_radius(source)
+    # `gold_direct` IS READ BY NAME LIKE THE OTHERS, and a payload written before F2 wave 2
+    # added the field therefore fails here with a `KeyError` rather than comparing equal on
+    # three fields out of four. That is the behaviour this function exists for: the guard
+    # below reports a wheel whose manifest has moved since the facts were produced, and a
+    # payload from before the field existed IS that case.
     written = BlastRadius(
-        source=carried["source"], vault=tuple(carried["vault"]), gold=tuple(carried["gold"]),
+        source=carried["source"],
+        vault=tuple(carried["vault"]),
+        gold=tuple(carried["gold"]),
+        gold_direct=tuple(carried["gold_direct"]),
     )
     if derived != written:
         raise MismatchedFacts(

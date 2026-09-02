@@ -241,7 +241,7 @@ def test_an_underscore_prefixed_module_is_skipped_and_does_not_have_to_be_a_doma
     assert [domain.name for domain in discovered] == ["payments"]
 
 
-def test_the_registered_tables_are_the_two_domains_wave_one_tables():
+def test_the_registered_tables_are_the_three_domains_tables():
     """The real package, through the real entry point. Pinned as literals for the
     reason the bronze registry pins its four table names: a rename is a re-keying of
     everything downstream and should cost a deliberate edit here.
@@ -252,7 +252,17 @@ def test_the_registered_tables_are_the_two_domains_wave_one_tables():
     second domain is registered by existing. That is the "+1 file, 0 modified" claim
     holding at the level it was made -- `domains/__init__.py` and `registry.py`'s
     discovery are untouched -- and this assertion is where a domain that stopped being
-    discovered would show up as four missing names rather than as a job failing."""
+    discovered would show up as four missing names rather than as a job failing.
+
+    AND THREE SINCE F2 WAVE 2, ON THE SAME MECHANISM AND WITH ONE FEWER TABLE TO SHOW IT.
+    `link_payment` is `opl/vault/domains/payments_domain.py`'s whole contribution, and no
+    file under `opl/vault/` names that module either -- so the claim is made a second time
+    against a domain of ONE table, where a single missing name is the whole evidence.
+
+    ADDING A NAME HERE IS THE DELIBERATE EDIT THIS TEST IS FOR, not a lock to route
+    around: the paragraph above says so about a RENAME, and an addition is the same act.
+    It is `sorted(REGISTRY)` rather than a subset check so that the other direction costs
+    just as much -- a name here that no domain declares fails equally loudly."""
     assert sorted(domains.REGISTRY) == [
         "hub_empresa",
         "hub_estabelecimento",
@@ -260,6 +270,7 @@ def test_the_registered_tables_are_the_two_domains_wave_one_tables():
         "link_company_partner",
         "link_empresa_estabelecimento",
         "link_merchant_empresa",
+        "link_payment",
         "ref_cnae",
         "ref_motivo",
         "ref_municipio",
