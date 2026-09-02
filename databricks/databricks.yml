@@ -52,12 +52,12 @@ targets:
   # the count of places this sweep reads was published short, and so was the count of the
   # documents publishing it. The places a bundle document can declare a resource collection
   # are the ones the CLI's own schema types `config.Resources`; that module carries them as
-  # code and derives the set from `databricks bundle schema` in an arm of its own, and it
-  # sweeps every bundle document under `databricks/` (`tests/job_yaml.py` carries which
-  # suffixes those are). WHAT IT DOES NOT REACH: a resource declared in a file `include`d
-  # from outside `databricks/` -- which validates, measured -- and any grant issued outside
-  # the bundle at all, which is what `apply_pii_governance` does and what Decision 6 decided
-  # it should keep doing.
+  # code, and it sweeps the bundle documents under `databricks/` (`tests/job_yaml.py` carries
+  # which suffixes those are). WHAT IT IS KNOWN NOT TO REACH, each measured and not offered
+  # as a complete list of what nobody has thought of: a resource declared in a file
+  # `include`d from outside `databricks/`, which validates; and any grant issued outside the
+  # bundle at all, which is what `apply_pii_governance` does and what Decision 6 decided it
+  # should keep doing.
   #
   # WHY `root_path` IS HERE AND WHY IT IS INTERPOLATED. `mode: production` refuses to
   # validate without one -- *"target with 'mode: production' must set 'workspace.root_path'

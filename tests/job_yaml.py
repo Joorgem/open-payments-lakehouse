@@ -38,15 +38,22 @@ BUNDLE = REPO / "databricks" / "databricks.yml"
 
 PYTHON_FILE_PREFIX = "../src/"
 
-# THE SUFFIXES A BUNDLE DOCUMENT MAY CARRY, IN ONE PLACE BECAUSE THE SWEEPS DRIFTED APART
-# ONCE ALREADY: `bundle_docs` learned `*.yaml` and the two sweeps in
+# THE SUFFIXES A BUNDLE DOCUMENT MAY CARRY, FOR THE SWEEPS IN THIS FILE AND THE MODULES THAT
+# IMPORT THEM. Two sweeps that spelled the set for themselves drifted apart once already:
+# `bundle_docs` learned `*.yaml` and the two sweeps in
 # `tests/test_bundle_targets_and_schedules.py` did not, so a scheduled, unclassified
-# `zz_probe_job.yaml` under `databricks/resources/` left both modules green. The set is the
-# CLI's own, named in its own refusal of anything else -- *"must be YAML or JSON files."* --
-# and JSON is not theoretical: on a scratch bundle `include: resources/*.json` validates
-# `exit=0` and renders the job declared in it. This repository writes `.yml` and has no
-# `.yaml` or `.json` resource today, which is exactly why a sweep could stop reading one
-# without anything going red.
+# `zz_probe_job.yaml` under `databricks/resources/` left both modules green.
+#
+# OTHER SWEEPS UNDER `tests/` STILL SPELL A SUFFIX FOR THEMSELVES and do not read this tuple.
+# Which ones is derived rather than written down, because a written-down set of sites is what
+# this phase has published short four times:
+#
+#     git grep -n -E '\.r?glob\("[a-z_]*\*\.(yml|yaml|json)"\)' -- tests/
+#
+# The set is the CLI's own, named in its own refusal of anything else -- *"must be YAML or
+# JSON files."* -- and JSON is not theoretical: on a scratch bundle `include: resources/*.json`
+# validates `exit=0` and renders the job declared in it. This repository writes `.yml`, which
+# is exactly why a sweep could stop reading another suffix without anything going red.
 BUNDLE_DOC_SUFFIXES = (".yml", ".yaml", ".json")
 
 # THE CLI'S OWN OUTPUT DIRECTORY, EXCLUDED FROM THE BUNDLE-WIDE SWEEP BY DIRECTORY NAME.
@@ -57,6 +64,11 @@ BUNDLE_DOC_SUFFIXES = (".yml", ".yaml", ".json")
 # deployed and GREEN in CI, which has no `.databricks/` at all: a local/CI divergence
 # pointing the wrong way. Excluded by NAME rather than by consulting git, which keeps
 # `bundle_docs`'s deliberate filesystem-not-`git ls-files` property below.
+#
+# MATCHED AGAINST THE PATH RELATIVE TO THE SWEPT ROOT, not the absolute one: the first
+# version read `path.parts`, which also sees the drive and the directories above the
+# checkout, so a clone under a directory called `.databricks` emptied the sweep instead of
+# narrowing it -- a green that means nothing was read.
 CLI_OUTPUT_DIR = ".databricks"
 
 # The task key of the deployed-revision guard (ADR 0009). Shared because both halves
@@ -108,7 +120,8 @@ JOB_OF = {
 
 
 def bundle_files(root: Path) -> list[Path]:
-    """Every bundle document at any depth under `root`, sorted, CLI output excluded.
+    """Files at any depth under `root` carrying a bundle-document suffix, sorted, with the
+    CLI's own output directory dropped.
 
     WHICH SUFFIXES IS NOT THIS FUNCTION'S DECISION and neither is the exclusion:
     `BUNDLE_DOC_SUFFIXES` and `CLI_OUTPUT_DIR` above carry both, with their reasons, and
@@ -120,17 +133,17 @@ def bundle_files(root: Path) -> list[Path]:
         for path in root.rglob("*")
         if path.suffix in BUNDLE_DOC_SUFFIXES
         and path.is_file()
-        and CLI_OUTPUT_DIR not in path.parts
+        and CLI_OUTPUT_DIR not in path.relative_to(root).parts
     )
 
 
 def resource_files(root: Path = RESOURCES) -> list[Path]:
-    """The files the bundle's own `include: resources/*` reaches: one directory, no descent.
+    """The bundle documents directly in `root`, sorted: one directory, no descent.
 
-    NOT `bundle_files`, and the difference is the `include:` glob's: `resources/*.yml`
-    matches nothing in a subdirectory, so a sweep that recursed here would demand a
-    classification for files the bundle never picks up. The SUFFIXES are shared, because
-    that is the half that drifted."""
+    NOT `bundle_files`, which recurses. The SUFFIXES are shared with it, because that is the
+    half that drifted, and they may be wider than the `include:` globs `databricks.yml`
+    declares -- a file here that the bundle would not pick up is classified anyway. That is
+    over-strict, which is the direction to be wrong in."""
     return sorted(
         path
         for path in root.iterdir()
@@ -139,17 +152,22 @@ def resource_files(root: Path = RESOURCES) -> list[Path]:
 
 
 def bundle_docs() -> dict[str, object]:
-    """Every bundle document ON DISK under the bundle root, parsed, keyed by its path
+    """What `bundle_files` finds ON DISK under the bundle root, parsed, keyed by its path
     relative to that root.
+
+    A SUFFIX SWEEP, NOT A LIST OF WHAT THE BUNDLE READS AS SOURCE.
+    `databricks/dashboards/dataops.lvdash.json` is a Lakeview export rather than a resource
+    file, and this sweep parses it like one. Kept that way: the wide sweep's cost is a false
+    RED over a file nobody deploys, which is loud and says look, and the narrow sweep's
+    would be a false green.
 
     THE FILESYSTEM AND NOT `git ls-files`, DELIBERATELY, and the docstring used to say
     "every committed bundle file" while doing this -- a description of a narrower sweep
     than the code performs. The walk is the right one and the sentence was wrong: an
     UNTRACKED resource file is still a file `include:` picks up and `bundle deploy` sends,
     and `git ls-files` is blind to exactly those. `CLAUDE.md` records four false greens
-    from that blindness already. So the sweep is a superset of the committed set, and the
-    only way it reports clean over a declaration that would deploy is if the file is not
-    under this directory at all.
+    from that blindness already. So the sweep is a superset of the committed set, and a
+    declaration that would deploy from OUTSIDE this directory is one it does not read.
 
     WHICH IS A REAL GAP AND IS NAMED RATHER THAN ROUNDED OFF. `include:` accepts a path
     outside the bundle root -- measured on a scratch bundle, `include: ../outside/*.yml`

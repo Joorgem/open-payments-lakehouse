@@ -253,12 +253,11 @@ target this repository has, the bundle half governs a schema nobody reads.
 > makes it an allowlist rather than a securable refusal: it also refuses `secret_scopes` and
 > `sql_warehouses`, neither of which carries `grants`, both of which exist as real state in
 > this workspace, and declaring either would be a legitimate act it makes somebody argue for.
-> It sweeps every bundle document under `databricks/`, at every path the CLI's own schema
+> It sweeps the bundle documents under `databricks/`, at the paths the CLI's own schema
 > types `config.Resources`. **That set is not counted here**, and the reason is the failure
 > the paragraph above already names in another form: the count this paragraph published was
 > short of what the CLI accepts, exactly as its restated enumeration of securables was short
-> of its source. The module carries the paths as code and derives the set from
-> `databricks bundle schema` in an arm of its own. `targets.<name>.resources` is one of
+> of its source. The module carries the paths as code. `targets.<name>.resources` is one of
 > them, and the sweep read only the top level until F8's second correction pass while this
 > paragraph already claimed the enforcement. **What it is known not to reach**, each
 > measured rather than assumed, and not offered as a complete list of what nobody has

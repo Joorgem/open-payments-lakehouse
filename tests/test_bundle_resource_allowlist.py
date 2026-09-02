@@ -17,13 +17,13 @@ in this phase, so it is derived instead --
 
     git grep -ln test_bundle_resource_allowlist -- docs databricks
 
-`bundle_docs()` parses every bundle document under `databricks/` (`tests/job_yaml.py`
-carries which suffixes those are, and what is skipped, with the reason for each), and every
-resource collection in each is held to the allowlist at every path the CLI's own schema
-types `config.Resources`. THOSE PATHS ARE NOT COUNTED HERE EITHER: `_SWEPT_PATHS` below
-carries them as code, in the CLI's own spelling, and a test derives that set from
-`databricks bundle schema` -- so the sweep's reach is checked against the CLI rather than
-described by a sentence somebody has to keep true.
+`bundle_docs()` parses what a suffix sweep finds under `databricks/` (`tests/job_yaml.py`
+carries which suffixes those are, what is skipped, and what the sweep picks up that the
+bundle does not read as source), and every
+resource collection in each is held to the allowlist at the paths `_SWEPT_PATHS` below
+carries, in the CLI's own spelling. THOSE PATHS ARE NOT COUNTED HERE EITHER, and they are
+not asserted complete either: a test derives the set from `databricks bundle schema`, which
+needs the CLI and therefore runs on a developer box and skips in CI. Its docstring says so.
 
 THE TARGET PATH IS NOT A REFINEMENT. It is where a securable would land under the
 PRODUCTION target -- the one [ADR 0018] Decision 6's grounds 2 and 3 are about -- and until
@@ -48,7 +48,6 @@ assumed, and not offered as a complete list of what nobody has thought of:
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 
@@ -218,15 +217,18 @@ def test_the_lock_goes_red_when_a_securable_is_declared_under_a_deprecated_envir
     """THE THIRD PATH, AND THE ARM BUILDS THE STATE THAT IS ACTUALLY REACHABLE.
 
     `environments` cannot sit beside `targets` -- the CLI refuses the pair -- so this arm
-    does what the conversion to the deprecated spelling would do: it MOVES the production
-    target under `environments` rather than adding one alongside. The target is still read
-    out of the committed bundle by its mode, so the arm follows a rename."""
+    does what the conversion to the deprecated spelling would do: the whole `targets`
+    mapping becomes `environments`, and the securable is planted in the production one. An
+    earlier draft moved that one target and DELETED the rest, which is not a conversion. The
+    target is still read out of the committed bundle by its mode, so the arm follows a
+    rename."""
     document = yaml.safe_load(BUNDLE.read_text(encoding="utf-8"))
     assert not _resource_faults({"databricks.yml": document})
     name = _the_production_target(document)
-    body = document.pop("targets")[name]
-    body["resources"] = {"schemas": {"governed": {"name": "default"}}}
-    document["environments"] = {name: body}
+    declared = set(document["targets"])
+    document["environments"] = document.pop("targets")
+    assert set(document["environments"]) == declared, "the conversion dropped a target"
+    document["environments"][name]["resources"] = {"schemas": {"governed": {"name": "default"}}}
     faults = _resource_faults({"databricks.yml": document})
     assert any(f"environments.{name}.resources.schemas" in fault for fault in faults), faults
 
@@ -250,14 +252,18 @@ def _bundle_schema() -> dict:
     `databricks.yml`. THE ONLY SKIP IS THE CLI BEING ABSENT: a CLI that is present and exits
     non-zero fails here, because what this derives is the CLI's own answer and a skip would
     report green over not having asked it. `encoding` is named because the schema carries
-    non-ASCII and Windows would otherwise decode it in the ANSI codepage and raise."""
+    non-ASCII and Windows would otherwise decode it in the ANSI codepage and raise.
+
+    NO `MSYS_NO_PATHCONV` IN THE CHILD ENVIRONMENT: it was copied in from `CLAUDE.md`, whose
+    rule is about `databricks api /...` typed at a Git Bash prompt. MSYS rewrites arguments
+    when an MSYS SHELL launches a native binary; a CPython child is not one, so the variable
+    did nothing here and no argument below starts with a slash."""
     cli = shutil.which("databricks")
     if cli is None:
         pytest.skip("no `databricks` CLI on PATH; this derivation is a developer-box arm")
     done = subprocess.run(
         [cli, "bundle", "schema"],
         cwd=REPO, capture_output=True, text=True, encoding="utf-8",
-        env={**os.environ, "MSYS_NO_PATHCONV": "1"},
     )
     assert not done.returncode, f"`bundle schema` exited {done.returncode}: {done.stderr[:300]}"
     return json.loads(done.stdout)
@@ -271,7 +277,17 @@ def _resolved(schema: dict, ref: str) -> dict:
 
 
 def _typed_resources(schema: dict, node, path: str) -> list[str]:
-    """Every path under `node` whose type is `config.Resources`, in the schema's spelling.
+    """The paths under `node` THIS WALK REACHES whose type is `config.Resources`, in the
+    schema's spelling.
+
+    WHICH CONSTRUCTS IT FOLLOWS IS IN THE CODE and no claim is made about JSON Schema at
+    large. `anyOf`/`allOf` were added because the first draft followed `oneOf` alone while
+    the live schema carries an `anyOf` too -- no `config.Resources` sits under it today, so
+    the narrow walk agreed by luck, and agreeing by luck is the failure this arm exists to
+    catch. `items` is followed with a distinct `[]` in the path rather than the parent's
+    spelling: a collection nested in an ARRAY is somewhere `_resource_collections` does not
+    walk, so it must surface as a path `_SWEPT_PATHS` lacks, not as a duplicate of one it
+    has.
 
     EVERY `$ref` IS FOLLOWED AND NOTHING IS MEMOISED, which the first draft of this walk
     guarded against with a visited-set on the ground that the schema is cyclic. It is not:
@@ -289,7 +305,8 @@ def _typed_resources(schema: dict, node, path: str) -> list[str]:
         return _typed_resources(schema, _resolved(schema, ref), path)
     found = [
         found
-        for branch in node.get("oneOf") or ()
+        for combinator in ("oneOf", "anyOf", "allOf")
+        for branch in node.get(combinator) or ()
         for found in _typed_resources(schema, branch, path)
     ]
     found += [
@@ -299,6 +316,8 @@ def _typed_resources(schema: dict, node, path: str) -> list[str]:
     ]
     if isinstance(node.get("additionalProperties"), dict):
         found += _typed_resources(schema, node["additionalProperties"], f"{path}.{_ANY_NAME}")
+    if isinstance(node.get("items"), dict):
+        found += _typed_resources(schema, node["items"], f"{path}[]")
     return found
 
 
@@ -355,3 +374,15 @@ def test_the_sweep_does_not_read_the_clis_own_record_of_what_it_deployed(tmp_pat
     )
     (tmp_path / "databricks.yml").write_text("bundle:\n  name: probe\n", encoding="utf-8")
     assert [path.name for path in bundle_files(tmp_path)] == ["databricks.yml"]
+
+
+def test_the_exclusion_reads_the_path_below_the_swept_root_and_not_the_whole_drive(tmp_path):
+    """AN ANCESTOR OF THE CHECKOUT NAMED `.databricks` MUST NOT EMPTY THE SWEEP.
+
+    The first version matched `path.parts`, which carries the drive and the directories
+    above the repository as well, so a clone under such a directory made this helper return
+    NOTHING -- and a sweep that read no files reports the same green as a clean tree."""
+    root = tmp_path / CLI_OUTPUT_DIR / "checkout"
+    root.mkdir(parents=True)
+    (root / "databricks.yml").write_text("bundle:\n  name: probe\n", encoding="utf-8")
+    assert [path.name for path in bundle_files(root)] == ["databricks.yml"]

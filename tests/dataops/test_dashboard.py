@@ -57,10 +57,11 @@ _WORKSPACE_SCOPED_WAREHOUSE_ID = "13cf10c85b0f189d"
 # CLI's build output and is deliberately not swept -- it is generated, git-ignored, and
 # holds the resolved id by design.
 #
-# `resource_files` RATHER THAN A GLOB OF THIS FILE'S OWN, and this was the third spelling of
-# the suffix set in this repository. The other two drifted -- one learned `.yaml` and the
-# other did not, and a resource file the bundle deploys walked through the gap. The set now
-# lives once, in `tests/job_yaml.py`, with the CLI's own refusal quoted beside it.
+# `resource_files` RATHER THAN A GLOB OF THIS FILE'S OWN, because two sweeps that spelled the
+# suffix set for themselves drifted -- one learned `.yaml` and the other did not, and a
+# resource file the bundle deploys walked through the gap. This file reads the set from
+# `tests/job_yaml.py`, where the CLI's own refusal is quoted beside it and where the grep that
+# derives the sweeps still spelling a suffix for themselves is published.
 _BUNDLE_FILES = (_BUNDLE / "databricks.yml", *resource_files())
 
 # Everything that turns a NULL into a NUMBER, not just the one spelling the first version

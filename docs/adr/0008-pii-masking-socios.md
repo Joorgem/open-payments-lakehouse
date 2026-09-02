@@ -382,15 +382,14 @@ personal data inside `bundle destroy`'s blast radius. **Rejected**; revisit only
 > `jobs` and `dashboards` and refuses every other resource collection in that bundle —
 > an ALLOWLIST, not a securable refusal, so it also refuses `secret_scopes` and
 > `sql_warehouses`, which carry no `grants` and exist as real state in this workspace. It
-> sweeps every bundle document under `databricks/`, at every path the CLI's own schema
-> types `config.Resources` — **which this note no longer counts**, because the count it
-> published was short: that module carries the paths as code and derives the set from
-> `databricks bundle schema` in an arm of its own. `targets.<name>.resources` is one of
+> sweeps the bundle documents under `databricks/`, at the paths the CLI's own schema types
+> `config.Resources` — **which this note no longer counts**, because the count it published
+> was short: that module carries the paths as code. `targets.<name>.resources` is one of
 > them, is where a securable would land under the production target, and was unswept until
-> F8's second correction pass while this note already claimed the enforcement. **It does
-> not reach** a resource declared in a file `include`d from outside `databricks/`, nor any
-> grant issued outside the bundle — which is what
-> `apply_pii_governance` does, imperatively, by
+> F8's second correction pass while this note already claimed the enforcement. **What it is
+> known not to reach**, each measured and not offered as a complete list of what nobody has
+> thought of: a resource declared in a file `include`d from outside `databricks/`, and any
+> grant issued outside the bundle — which is what `apply_pii_governance` does, imperatively, by
 > [ADR 0018](0018-dataops-derives-it-does-not-instrument-and-it-does-not-act.md)
 > Decision 6's own ruling.
 

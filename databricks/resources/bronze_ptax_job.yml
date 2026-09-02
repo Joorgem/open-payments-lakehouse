@@ -93,8 +93,8 @@ resources:
       # paragraph above: two statements of it here are two things that can disagree, and
       # the lock below refuses a comment that states two different ones.
       #
-      # SO IF THE BAND IS EVER SUPERSEDED, THIS BLOCK IS THE ONE PLACE IN THIS REPOSITORY
-      # WHERE THE HOUSE PRACTICE OF RECORDING THE OLD VALUE IN PLACE, STRUCK, CANNOT BE
+      # SO IF THE BAND IS EVER SUPERSEDED, THIS BLOCK IS A PLACE IN THIS REPOSITORY WHERE
+      # THE HOUSE PRACTICE OF RECORDING THE OLD VALUE IN PLACE, STRUCK, CANNOT BE
       # FOLLOWED. The lock reads `band HH:MM-HH:MM` out of these comment lines and compares
       # values; it cannot see a strike, a "was", or a quotation, so a superseded interval
       # left here reads as a second interval and turns the file red. Replace the interval in
