@@ -8,11 +8,10 @@ and the landing-classification guard's call carried that file to 802 of this pro
 payments `BronzeTable` plus its comment block is ~66 lines; a comparably documented sixth
 entry lands the file at ~775-785." It landed at 802.
 
-THE SEAM IS THE ONE THIS GROUP OF MODULES HAS USED FOUR TIMES ALREADY: `registry.py`
+THE SEAM IS THE ONE THIS GROUP OF MODULES HAS USED ALREADY: `registry.py`
 changes when a TABLE is added, `registry_collisions.py` when a whole-set NAME collision
 guard is added, `registry_landing.py` when the landing LAYOUT changes -- and this file when
-the VOLUME RESERVES A DIRECTORY, or when what counts as a directory NAME changes. That is a
-fifth reason to edit and therefore a fifth file.
+the VOLUME RESERVES A DIRECTORY, or when what counts as a directory NAME changes.
 
 WHY NOT INTO `registry_landing.py`, which is the nearest neighbour and where a reader would
 look first. Two reasons, and the second is the deciding one. Its subject is which ROOT a

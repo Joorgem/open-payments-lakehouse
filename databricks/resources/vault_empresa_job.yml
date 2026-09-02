@@ -1,7 +1,6 @@
 # databricks/resources/vault_empresa_job.yml
 # THE FIRST JOB IN THIS REPOSITORY THAT RUNS A VAULT LOADER. Until this file existed,
-# `grep -rl vault databricks/` returned nothing: seventeen modules, four ADRs and a
-# published set of predictions, and no loader had ever executed.
+# `grep -rl vault databricks/` returned nothing: no loader had ever executed.
 #
 # ONE JOB PER PLAN TASK, not one job for the whole vault, and the reason is measurement
 # rather than tidiness. F2 wave 1's workspace-run phase loads these tables in four
