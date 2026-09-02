@@ -15,9 +15,12 @@ existed: substituting every one of them back to its own `*.yml` glob, with a `.y
 resource file planted under `databricks/resources/`, left every arm that reads them
 green. That is the false green they were widened to remove, reproduced. Which sweeps read
 the shared helper is derived rather than written down here, because a written-down set of
-sites is what this phase has published short:
+sites is what this phase has published short. It excludes THIS module, which names the
+helper in prose without reading it -- an exclusion measured rather than tidied in: without
+it the command returns its own paragraphs, the line below among them, and a derivation that
+returns the prose describing it has stopped being a derivation.
 
-    git grep -n resource_files -- tests/
+    git grep -n resource_files -- tests/ ':!tests/test_bundle_glob_allowlist.py'
 
 The probe that reddened them was deleted with the commit that used it. This module is what
 stands in its place, and it is deliberately a DIFFERENT shape: locking each sweep
@@ -60,16 +63,21 @@ look.
 WHAT IT IS KNOWN NOT TO REACH, each derived rather than assumed, and not offered as a list
 of everything nobody has thought of:
 
-  * a sweep that does not glob -- the `os` walkers, the `glob` module's own functions,
-    `fnmatch`, or an `iterdir()` filtered on `Path.suffix`. None is CALLED under `tests/`
-    today, and the command below exits 1. It matches on the opening parenthesis on
-    purpose, because the paragraph you are reading names those functions and a grep
-    cannot tell a call from a mention -- which is this module's whole argument, arriving
-    uninvited in its own docstring:
+  * a sweep that does not glob -- the `os` walkers, `glob.iglob`, `fnmatch`, or an
+    `iterdir()` filtered on `Path.suffix`. None is CALLED under `tests/` today, and the
+    command below exits 1. It matches on the opening parenthesis on purpose, because the
+    paragraph you are reading names those functions and a grep cannot tell a call from a
+    mention -- which is this module's whole argument, arriving uninvited in its own
+    docstring. `glob.glob` is NOT in this bullet and measuring is why: the walk matches an
+    attribute call by its attribute name, so a call spelled through the module is caught
+    like any other `glob` -- `iglob` alone is the name the tuple does not carry. Naming it
+    here without its parenthesis is not squeamishness: the command below matches on that
+    parenthesis, and a mention carrying one would make this paragraph its own only hit:
 
     git grep -nE '\bos\.(walk|scandir|listdir)\(|\bglob\.i?glob\(|\bfnmatch\.' -- tests/
   * a glob naming no suffix at all (`rglob("*")`, which `tests/job_yaml.py` itself uses).
-    That is WIDER than a bundle document, not narrower, so it is not the defect here;
+    That is WIDER than a bundle document, not narrower, so it is not the defect here, and
+    `_selects_a_bundle_document` holds that line deliberately rather than by accident;
   * anything outside `tests/`. `scripts/`, `src/` and the workflows spell their own paths
     and no arm here reads them.
 
@@ -101,11 +109,38 @@ _SWEEP_NAMES = ("glob", "rglob")
 # with no positional argument is not automatically a call with no pattern.
 _PATTERN_KEYWORD = "pattern"
 
+# THE NAMES `_selects_a_bundle_document` ASKS A PATTERN ABOUT. Only the suffixes are
+# load-bearing; the stem is arbitrary and shared so that the two probes differ in nothing
+# else. `_NOT_A_BUNDLE_DOCUMENT` carries a suffix outside the tuple on purpose: a pattern
+# reaching it as well is not making a claim about bundle documents at all.
+_PROBE_STEM = "resource"
+_NOT_A_BUNDLE_DOCUMENT = f"{_PROBE_STEM}.py"
+
+# A FLOOR AND NOT A COUNT, for the reason `tests/test_size_caps.py` gives for the floors on
+# its own measurements: an exact count is a claim about the repository that goes stale on
+# the next file added, which is the species this tree keeps catching. Both arms that read
+# the real tree assert an EMPTINESS, and an emptiness is also what a walk that read nothing
+# reports -- so each reads this floor first. The reverse arm is the one that published the
+# guarantee in prose: it said it fails when the walk reads nothing, while `set(_ALLOWED) -
+# anything` is empty once the list is, so the guarantee rode on entries this module exists
+# to remove and expired exactly when the module succeeded. Measured: with `_ALLOWED` empty
+# and the walk returning nothing, both arms were green.
+_FLOOR_ON_THE_WALK = 100
+
+_UNEARNED_GREEN = (
+    f"the walk read {{read}} modules under {_TESTS.name}/, which is fewer than a tree any "
+    "arm here can claim an emptiness over. This green is one the walk could not have earned"
+)
+
 # EVERY BUNDLE-DOCUMENT GLOB SPELLED OUTSIDE `job_yaml` TODAY, EACH WITH ITS OWN REASON.
 # Keys are (module path relative to `tests/`, the glob pattern), and a new entry is a
 # decision somebody has to type out -- the argument `_DECLARABLE` already makes in
-# `tests/test_bundle_resource_allowlist.py`. None of these is a sweep claiming totality
-# over a directory, which is the thing this module exists to refuse.
+# `tests/test_bundle_resource_allowlist.py`. NOT EVERY ENTRY HERE IS AN EXCEPTION ON ITS
+# MERITS: one of them IS a sweep claiming totality over a directory it reads one suffix of,
+# and its reason says so. An allowlist reason may record a deferral -- the fix moves with a
+# file this module does not own -- but calling a deferred defect "not a defect" is how a
+# list like this becomes the place to put things. Which entry it is, its own line says;
+# counting them here would be a claim that rots on the next one added.
 _ALLOWED: dict[tuple[str, str], str] = {
     ("test_gold_job_wiring.py", "gold_*.yml"):
         "a naming-convention closure: it selects a convention, not a directory's totality",
@@ -114,7 +149,10 @@ _ALLOWED: dict[tuple[str, str], str] = {
     ("triage_agent/test_blast_radius_lock.py", "vault_merchant*.yml"):
         "asserts a rename() took effect on one known file inside a copytree, not a sweep",
     ("test_readme_counts.py", "*.yml"):
-        "mirrors a fragment README.md publishes verbatim and asserts is present there",
+        "THE DEFECT, DEFERRED AND NOT EXCUSED: it derives the bundle's job and task counts "
+        "from one suffix while its own docstring says `the bundle's jobs`. The same glob is "
+        "a fragment README.md publishes and another arm there asserts is present, so the "
+        "two halves move together and are fixed with the README, not from here",
     ("test_revision_stamp.py", "databricks.yml"):
         "names ONE file; whether to widen it to the other bundle-root spellings is open",
 }
@@ -138,10 +176,17 @@ def _module_constants(tree: ast.Module) -> dict[str, str]:
 
     A name bound twice is dropped rather than resolved to whichever assignment came last:
     this walk does not know which one reaches the glob, and guessing would be the one
-    outcome worse than refusing. Dropped means UNREADABLE, which `_glob_faults` reports."""
+    outcome worse than refusing. Dropped means UNREADABLE, which `_glob_faults` reports.
+
+    An AUGMENTED assignment drops the name whatever it adds, literal or not, because
+    `_G = '*.y'` followed by `_G += 'ml'` is a name bound twice wearing a spelling that
+    reads like one binding -- and resolving it to the first half would classify a glob of
+    every bundle document as a glob of nothing."""
     bound: dict[str, str] = {}
     rebound: set[str] = set()
     for node in tree.body:
+        if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            rebound.add(node.target.id)
         for name, value in _string_bindings(node):
             if name in bound:
                 rebound.add(name)
@@ -182,19 +227,49 @@ def _pattern_of(call: ast.Call, constants: dict[str, str]) -> str | None:
     return None
 
 
+def _selects_a_bundle_document(pattern: str) -> bool:
+    """Whether `pattern` reaches the files a bundle document may be named.
+
+    AN EXACT SUFFIX MATCH ALONE IS NOT THE QUESTION, and measuring it is how this arm found
+    out: `*.y*ml`, `*yml` and `*.[yj]ml` all reach bundle documents, and NONE of them has a
+    bundle suffix, because a metacharacter spelled inside or before the suffix walks
+    straight past `PurePosixPath.suffix`. `*.y*ml` is a plausible hand-spelling of "every
+    bundle document" that reaches the `y` suffixes and not `.json` -- which is not an edge
+    case but the defect itself, a totality claim over a subset, wearing the one spelling
+    the classification could not see. So the pattern is also MATCHED against a name per
+    entry of the suffix tuple, and reaching any of them is enough.
+
+    The last direction is what keeps that from swallowing the opposite case: a pattern that
+    reaches `_NOT_A_BUNDLE_DOCUMENT` too is WIDER than a bundle document rather than a
+    totality claim over one -- `rglob("*")` is the live example, and the docstring above
+    already argues it is not the defect here. Comparison is case-folded in both directions,
+    so a `*.YML` spelling is not a way past this."""
+    lowered = pattern.lower()
+    if PurePosixPath(pattern).suffix.lower() in BUNDLE_DOC_SUFFIXES:
+        return True
+    if not PurePosixPath(lowered).name:
+        return False
+    if PurePosixPath(_NOT_A_BUNDLE_DOCUMENT).match(lowered):
+        return False
+    return any(
+        PurePosixPath(f"{_PROBE_STEM}{suffix}").match(lowered)
+        for suffix in BUNDLE_DOC_SUFFIXES
+    )
+
+
 def _bundle_globs(module: str, source: str) -> list[tuple[int, str | None]]:
     """Every glob call in `source` this lock has something to say about.
 
-    Two kinds, and the second is why the first can be believed: a pattern whose suffix is
-    one a bundle document may carry, and a pattern that could not be read at all (`None`).
-    Suffixes are compared case-folded, so a `*.YML` spelling is not a way past this."""
+    Two kinds, and the second is why the first can be believed: a pattern that selects the
+    files a bundle document may be named, and a pattern that could not be read at all
+    (`None`)."""
     tree = ast.parse(source, filename=module)
     constants = _module_constants(tree)
     return [
         (call.lineno, pattern)
         for call in _sweep_calls(tree)
         for pattern in [_pattern_of(call, constants)]
-        if pattern is None or PurePosixPath(pattern).suffix.lower() in BUNDLE_DOC_SUFFIXES
+        if pattern is None or _selects_a_bundle_document(pattern)
     ]
 
 
@@ -267,8 +342,13 @@ def test_no_test_module_spells_a_bundle_document_glob_of_its_own():
 
     Nothing here is a defect today; see this module's docstring. What this refuses is a new
     sweep spelling `*.yml` where it means "every bundle document", which is how the widened
-    sweeps got their false green in the first place."""
-    assert not _glob_faults(_module_sources())
+    sweeps got their false green in the first place.
+
+    THE FLOOR IS READ FIRST because this arm's entire content is `not [...]`, and a walk
+    that read no modules reports the same empty list a clean tree does."""
+    sources = _module_sources()
+    assert len(sources) >= _FLOOR_ON_THE_WALK, _UNEARNED_GREEN.format(read=len(sources))
+    assert not _glob_faults(sources)
 
 
 def test_every_allowlisted_pair_is_still_spelled_on_disk():
@@ -276,9 +356,15 @@ def test_every_allowlisted_pair_is_still_spelled_on_disk():
 
     An entry whose module was renamed, or whose glob was moved into `job_yaml` where it
     belongs, fails here -- so the list shrinks as sites are fixed instead of quietly
-    re-permitting the spelling for whoever adds it back. It also fails if the walk read
-    nothing at all, which is the green a broken sweep reports."""
-    stale = sorted(set(_ALLOWED) - _spelled_pairs(_module_sources()))
+    re-permitting the spelling for whoever adds it back.
+
+    IT ALSO FAILS IF THE WALK READ NOTHING, and that used to be a sentence rather than a
+    check. `set(_ALLOWED) - anything` is empty once the list is empty, so the guarantee
+    rode on entries this module exists to remove: with `_ALLOWED` shrunk to nothing, a walk
+    returning nothing was green here. The floor is what the sentence now rests on."""
+    sources = _module_sources()
+    assert len(sources) >= _FLOOR_ON_THE_WALK, _UNEARNED_GREEN.format(read=len(sources))
+    stale = sorted(set(_ALLOWED) - _spelled_pairs(sources))
     assert not stale, (
         f"these pairs are allowlisted and no longer spelled under {_TESTS.name}/: {stale}. "
         "Delete the entry; an allowlist that outlives its site permits a spelling nobody "
@@ -343,6 +429,49 @@ def test_a_name_bound_twice_is_refused_rather_than_resolved_to_the_last_one():
     """Two assignments and this walk cannot say which reaches the call, so it says so."""
     twice = "import pathlib\n_G = 'a.py'\n_G = '*.yml'\npathlib.Path('.').glob(_G)\n"
     assert _glob_faults({"test_probe.py": twice})
+
+
+def test_a_name_built_up_by_augmented_assignment_is_refused_too():
+    """A NAME BOUND TWICE WEARING A SPELLING THAT READS LIKE ONE BINDING.
+
+    `_G = '*.y'` then `_G += 'ml'` globs every bundle document, and resolving it to the
+    first half classifies it on the suffix `.y` -- a green over a totality claim, which is
+    the exact shape this module refuses. Both were measured green before this arm: the
+    second because a non-literal augment left the first binding standing untouched."""
+    for augment in ("_G += 'ml'", "_G += _SUFFIX"):
+        source = f"import pathlib\n_G = '*.y'\n{augment}\npathlib.Path('.').glob(_G)\n"
+        assert _glob_faults({"test_probe.py": source}), augment
+
+
+def test_a_metacharacter_inside_the_suffix_does_not_walk_past_the_classification():
+    """`*.y*ml` REACHES BUNDLE DOCUMENTS AND HAS NO BUNDLE SUFFIX.
+
+    Classification was an exact suffix match, so a wildcard spelled inside or before the
+    suffix walked past it -- and every pattern in the first group was measured GREEN before
+    this arm existed. A sweep spelled that way is a hand-spelling of "every bundle
+    document" that reads the `y` suffixes and not `.json`: a totality claim over a subset,
+    which is the defect this module exists to refuse rather than an edge case near it.
+
+    THE SECOND GROUP IS WHY THE FIRST IS NOT JUST A WIDER NET. A glob naming no suffix at
+    all reaches more than bundle documents rather than claiming to be all of them, and this
+    module's docstring says that is not what it refuses. An arm that only reddens is as
+    unmeasured as one that only greens."""
+    for pattern in ("*.y*ml", "*.y?ml", "*.[yj]ml", "*.yaml*", "*yml", "*.y[am]*l"):
+        assert _glob_faults({"test_probe.py": _probe(pattern)}), pattern
+    for pattern in ("*", "**/*", "*.py", "registry*.py", "*.md", "*.whl"):
+        assert not _glob_faults({"test_probe.py": _probe(pattern)}), pattern
+
+
+def test_a_pattern_naming_no_file_at_all_is_classified_rather_than_raising():
+    """`PurePosixPath('').match(...)` RAISES, and a lock that raises has not measured.
+
+    An empty pattern and a bare `.` have no final component, so neither names a file and
+    neither selects a bundle document. Without the guard the classifier reaches the match
+    and a ValueError comes out where a verdict should -- a red nobody can act on, which is
+    the same failure as a green nobody earned. The rest are neighbours that must stay
+    green: they name a file, they just do not name a bundle document."""
+    for pattern in ("", ".", "..", "a/", "[", "  "):
+        assert not _glob_faults({"test_probe.py": _probe(pattern)}), pattern
 
 
 def test_the_pattern_is_read_when_the_call_passes_it_by_keyword():
