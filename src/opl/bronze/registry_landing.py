@@ -1,12 +1,12 @@
 # src/opl/bronze/registry_landing.py
 """How a bronze table's raw bytes reach the Volume, and where they land.
 
-SPLIT OUT OF `registry.py` BY F1b TASK 3, which is the fourth seam this group of
-modules has needed and follows the rule the first three did: `registry.py` changes
-when a TABLE is added, `registry_collisions.py` when a whole-set collision guard is
-added, and this file when the LANDING LAYOUT changes. Adding a third landing mode
-plus its root, its resolver and its two guards would have carried `registry.py` past
-this project's 800-line limit; the seam is the axis the change moved along.
+SPLIT OUT OF `registry.py` BY F1b TASK 3, which is a seam this group of modules has
+needed: `registry.py` changes when a TABLE is added, `registry_collisions.py` when a
+whole-set collision guard is added, and this file when the LANDING LAYOUT changes.
+Adding a third landing mode plus its root, its resolver and its two guards would have
+carried `registry.py` past this project's 800-line limit; the seam is the axis the
+change moved along.
 
 `registry*.py` IS NOT A STYLE CHOICE IN THE FILENAME. `tests/bronze/
 test_registry_guard_wiring.py` globs exactly that pattern to learn which modules may

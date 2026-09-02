@@ -32,8 +32,8 @@ and pass in silence.
 THE THREE GUARDS TAKE THE REGISTRY AS AN ARGUMENT, which is a signature change from the
 no-argument versions that lived in `registry.py`, and it is the same change every other
 extracted guard made for the same reason: `registry.py` calls them at its own import, so
-importing `REGISTRY` back from here would be a cycle. `registry_collisions` and
-`registry_landing` both state it; this is the third instance of one rule.
+importing `REGISTRY` back from here would be a cycle. `registry_collisions` states it;
+this is the third instance of one rule.
 """
 from __future__ import annotations
 

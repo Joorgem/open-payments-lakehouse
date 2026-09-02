@@ -1,6 +1,5 @@
 # databricks/resources/gold_dim_company_job.yml
-# THE FIRST JOB IN THIS REPOSITORY THAT BUILDS A GOLD TABLE: four ADRs about the vault,
-# fourteen vault tables loaded and RUN, and no star at all.
+# THE FIRST JOB IN THIS REPOSITORY THAT BUILDS A GOLD TABLE.
 #
 # THE GREP THAT USED TO BE QUOTED HERE SAID NOTHING. It was `grep -ril "kimball|dim_|
 # fact_"`, a BASIC regular expression in which `|` is a literal, so the pattern matched
