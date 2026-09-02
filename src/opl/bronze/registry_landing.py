@@ -107,7 +107,7 @@ LANDING_MODES = frozenset(
 # `LANDING_MODES - <the other>`.
 #
 # WHAT A SUBTRACTION WOULD COST, WHICH IS THE HOLE F-API'S FIX PASS CLOSED. Nothing used
-# to guard this membership at all. A fifth mode that IS file-fed, added to `LANDING_MODES`
+# to guard this membership at all. A further mode that IS file-fed, added to `LANDING_MODES`
 # and not to the set below, would be examined by the MIRROR -- whose empty-group +
 # `None`-prefix path ACCEPTS -- so it would lose
 # `_assert_prefixes_match_their_file_groups`' "no prefixes -> raise" branch, whose own
@@ -119,14 +119,14 @@ LANDING_MODES = frozenset(
 # `_assert_every_landing_mode_is_classified` below. A mode in neither half, in both, or in
 # a half without being a registered mode is refused where it is DECLARED -- which is the
 # same argument `_assert_landing_modes_known` makes below about a mode's spelling, applied
-# to its classification. Adding a fifth mode is therefore an edit HERE by construction,
+# to its classification. Adding a further mode is therefore an edit HERE by construction,
 # and that is the correction to three sentences this module used to carry: "the next mode
 # needs no edit here at all" was true of a NON-file-fed mode and false of a file-fed one,
 # and it was stated unconditionally.
 #
 # WHAT THAT GUARD STILL CANNOT SEE, STATED AT THE DECLARATION BECAUSE THIS IS WHERE THE
 # MISTAKE IS MADE. It closes the OMISSION edit -- a mode classified nowhere -- and not the
-# MISFILING one. A fifth mode that IS file-fed and is put in `NON_FILE_FED_LANDING_MODES`
+# MISFILING one. A further mode that IS file-fed and is put in `NON_FILE_FED_LANDING_MODES`
 # is in exactly one half, so the guard passes; a table on it whose contract has no
 # `FILE_GROUPS` producer then reaches the cross-check, which SKIPS it, and the mirror,
 # which ACCEPTS it (no group, no prefix is the mirror's pass) -- verbatim the hole the
@@ -137,7 +137,7 @@ LANDING_MODES = frozenset(
 #
 # WHAT CATCHES IT NEXT, AND WHY THE SILENT VERSION NEEDS A THIRD EDIT. `_landing_and_tmp`
 # below serves each mode from ONE declared root and refuses a mode it has no branch for, so
-# a misfiled fifth mode has no landing dir at all: `landing_dir` raises before any Auto
+# a misfiled mode has no landing dir at all: `landing_dir` raises before any Auto
 # Loader is pointed anywhere, which is loud and is not the "SUCCESS over an empty source
 # dir" the guard's message warns about. Reaching THAT needs the same author to also give
 # the mode a root here. Measured both ways in
@@ -372,12 +372,12 @@ def _assert_landing_modes_known(registry) -> None:
 # WHAT THE COMPLEMENT DOES NOT BUY, corrected here because this comment claimed it and
 # two other places claimed it too: "adding a mode requires no edit to either" is TRUE OF A
 # NON-FILE-FED MODE ONLY. The complement makes EXAMINATION total -- every table is looked
-# at by one of the pair -- and it does not make the VERDICT right. A fifth mode that is
+# at by one of the pair -- and it does not make the VERDICT right. A further mode that is
 # file-fed and is not added to `FILE_FED_LANDING_MODES` is examined by the mirror, which
 # ACCEPTS it (no file group, no prefix is the mirror's pass), and the "no prefixes ->
 # raise" branch below is lost rather than moved: that refusal has no complement anywhere.
 # `_assert_every_landing_mode_is_classified` is what makes the membership itself a
-# declaration, so a fifth mode is an edit to the classification by construction, and only
+# declaration, so a further mode is an edit to the classification by construction, and only
 # the two guard bodies are left needing none.
 #
 # --- WHY THE MIRROR'S OWN PROSE IS UP HERE ------------------------------------------

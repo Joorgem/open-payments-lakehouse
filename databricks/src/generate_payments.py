@@ -63,7 +63,7 @@ def _refuse_a_table_nothing_generates(spec: BronzeTable) -> None:
     from a quarantine full of unrecognisable rows rather than from the wiring mistake.
 
     Compared against `LANDING_GENERATED` rather than for "not zips", the same way
-    `reclaim_landing` states its own refusal: a fourth landing mode added later must
+    `reclaim_landing` states its own refusal: any landing mode added later must
     be refused by default here, not admitted by an `else`."""
     if spec.landing != LANDING_GENERATED:
         raise ValueError(

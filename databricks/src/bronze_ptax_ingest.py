@@ -6,7 +6,7 @@ WHY A FOURTH ENTRY POINT AND NOT A BRANCH IN `bronze_payments_ingest.py`, since 
 spelling of ingest" is the defect this repository names most often -- and this one is
 closer to an existing file than any before it. THE CODE THERE ALREADY SAID SO, IN
 ADVANCE. `_refuse_a_table_this_does_not_ingest` compares against `LANDING_GENERATED`
-rather than testing for "not zips", and its own docstring gives the reason: "a fourth
+rather than testing for "not zips", and its own docstring gives the reason: "any
 mode added later must be refused by default here rather than admitted by an `else`". That
 task refuses PTAX by construction, deliberately, and reaching into it to add the fourth
 mode would be spending a guard that was written for this exact moment.
@@ -71,7 +71,7 @@ def _refuse_a_table_this_does_not_ingest(spec: BronzeTable) -> None:
     then fail on a schema mismatch after the read.
 
     Compared against `LANDING_API` rather than for "not generated": the registry refuses
-    unknown landing modes where they are declared, and a fifth mode added later must be
+    unknown landing modes where they are declared, and any mode added later must be
     refused by default here rather than admitted by an `else`. That is the same sentence
     `bronze_payments_ingest` wrote about the mode this file exists for."""
     if spec.landing != LANDING_API:

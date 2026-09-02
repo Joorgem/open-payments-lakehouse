@@ -732,7 +732,7 @@ _assert_prefixes_match_their_file_groups(REGISTRY)
 # skips every table no downloader feeds, and this is the only thing that says anything
 # about those. The two skips are exact complements since F-API Task 2, so between them
 # they are total over the registry for any set of landing modes -- which is what stops a
-# fifth mode falling into neither, the way `api` fell into neither when both were scoped
+# further mode falling into neither, the way `api` fell into neither when both were scoped
 # positively. Total EXAMINATION and not a total verdict: which of the two questions a
 # table is asked still turns on the classification the guard above now refuses to leave
 # unstated. Split rather than folded in, for the reason the subdir trio is three

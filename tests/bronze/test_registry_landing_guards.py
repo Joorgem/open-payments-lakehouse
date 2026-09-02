@@ -219,7 +219,7 @@ def test_exactly_one_of_the_pair_refuses_a_spec_that_is_wrong_for_its_half(
     pair has had twice -- `api` in neither half before F-API Task 2, and `local` falling
     through both under a one-character change to the cross-check's skip.
 
-    PARAMETRISED OVER `LANDING_MODES` rather than over a list, so a fifth mode arrives
+    PARAMETRISED OVER `LANDING_MODES` rather than over a list, so a further mode arrives
     with its case already written and has to pass this on the same day it is declared."""
     file_fed = landing in FILE_FED_LANDING_MODES
     trap = replace(
@@ -275,7 +275,7 @@ def test_an_undeclared_mode_still_falls_to_the_mirror_rather_than_through_both(m
 #
 # The complement buys total EXAMINATION and not a total VERDICT. Which of the two
 # questions a table is asked turns on membership of `FILE_FED_LANDING_MODES`, and until
-# F-API's fix pass NOTHING guarded that membership: a fifth mode that IS file-fed and was
+# F-API's fix pass NOTHING guarded that membership: a further mode that IS file-fed and was
 # not added to it would be examined by the mirror, which ACCEPTS (no file group and no
 # prefix is the mirror's pass), so the cross-check's "no producer -> raise" branch would be
 # LOST rather than moved -- it has no complement anywhere.
@@ -300,7 +300,7 @@ def test_a_declared_mode_in_neither_half_is_refused_at_import(monkeypatch, half)
     file-fed table whose missing producer nothing would then refuse. The guard reads the
     declaration and not the registry, so both are refused before any table names the mode.
 
-    A fifth mode added to `LANDING_MODES` and to neither half is the same edit seen from
+    A further mode added to `LANDING_MODES` and to neither half is the same edit seen from
     the other side, and it is the one this repository will actually make."""
     module = sys.modules[_assert_every_landing_mode_is_classified.__module__]
     dropped = sorted(getattr(module, half))[0]
@@ -363,7 +363,7 @@ def test_a_file_fed_mode_MISFILED_as_non_file_fed_passes_both_guards_and_fails_a
 ):
     """The residual, in three steps and one refusal that is not either guard's.
 
-    A fifth mode that IS file-fed, put in `NON_FILE_FED_LANDING_MODES`, is in exactly one
+    A further mode that IS file-fed, put in `NON_FILE_FED_LANDING_MODES`, is in exactly one
     half -- so the classification guard passes. A table on it whose contract has no
     `FILE_GROUPS` producer is then SKIPPED by the cross-check and ACCEPTED by the mirror (no
     group, no prefix is the mirror's pass), which is verbatim the hole the classification

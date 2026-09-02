@@ -120,7 +120,7 @@ def _cannot_reclaim(spec: BronzeTable) -> str:
     for ANY table says so with `ANY_TABLE_FLAG` and gets this same text as a green
     no-op.
 
-    Compares against LANDING_ZIPS rather than for LANDING_LOCAL, so a third landing
+    Compares against LANDING_ZIPS rather than for LANDING_LOCAL, so any landing
     mode added later is refused by default instead of inheriting a delete."""
     return (
         f"refusing to reclaim {spec.name}: it does not land as zips "

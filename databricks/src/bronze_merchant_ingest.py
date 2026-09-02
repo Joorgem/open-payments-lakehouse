@@ -5,7 +5,7 @@ its staging table. AvailableNow: each run drains only files the checkpoint has n
 WHY A FIFTH ENTRY POINT AND NOT A BRANCH IN `bronze_ptax_ingest.py`, since "a second
 spelling of ingest" is the defect this repository names most often. THE CODE THERE ALREADY
 SAID SO, IN ADVANCE: `_refuse_a_table_this_does_not_ingest` compares against `LANDING_API`
-rather than testing for "not generated", and its own docstring gives the reason -- "a fifth
+rather than testing for "not generated", and its own docstring gives the reason -- "any
 mode added later must be refused by default here rather than admitted by an `else`". That
 task refuses this table by construction, deliberately, and reaching into it to add the
 fifth mode would be spending a guard written for this exact moment.
@@ -95,7 +95,7 @@ def _refuse_a_table_this_does_not_ingest(spec: BronzeTable) -> None:
     It also derives `_snapshot_ref_date` from a column no other contract carries, so the
     stamp would fail on an unresolved column AFTER the read had been configured.
 
-    Compared against `LANDING_POSTGRES` rather than for "not api": a sixth mode added later
+    Compared against `LANDING_POSTGRES` rather than for "not api": any mode added later
     must be refused by default here rather than admitted by an `else`. That is the same
     sentence `bronze_ptax_ingest` wrote about the mode this file exists for."""
     if spec.landing != LANDING_POSTGRES:

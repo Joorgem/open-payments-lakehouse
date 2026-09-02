@@ -120,7 +120,7 @@ def _refuse_a_table_this_does_not_fetch(spec: BronzeTable) -> None:
     generator will later refuse to write over.
 
     Compared against `LANDING_API` rather than for "not zips", the same way
-    `generate_payments` and `bronze_payments_ingest` state their own refusals: a fifth
+    `generate_payments` and `bronze_payments_ingest` state their own refusals: any
     landing mode added later must be refused by default here rather than admitted by an
     `else`."""
     if spec.landing != LANDING_API:

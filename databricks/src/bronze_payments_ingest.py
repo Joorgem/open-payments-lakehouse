@@ -59,7 +59,7 @@ def _refuse_a_table_this_does_not_ingest(spec: BronzeTable) -> None:
     carries five, so the append would then fail on a schema mismatch after the read.
 
     Compared against `LANDING_GENERATED` rather than for "not zips": the registry
-    refuses unknown landing modes where they are declared, and a fourth mode added
+    refuses unknown landing modes where they are declared, and any mode added
     later must be refused by default here rather than admitted by an `else`."""
     if spec.landing != LANDING_GENERATED:
         raise ValueError(

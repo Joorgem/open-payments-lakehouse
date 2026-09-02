@@ -273,7 +273,7 @@ BRONZE_TABLE_KEY = "bronze_merchant"
 BRONZE_STAGING_TABLE = "bronze_merchant_staging"
 BRONZE_TABLE = "bronze_merchant"
 BRONZE_QUARANTINE_TABLE = "bronze_merchant_quarantine"
-# The landing subdir, under the POSTGRES root -- a fifth landing mode and a fifth root, for
+# The landing subdir, under the POSTGRES root -- a fifth landing mode and a fourth root, for
 # the reason `opl.config` gives about the third: the discriminator is HOW THE BYTES ARRIVE.
 LANDING_SUBDIR = "merchant"
 
