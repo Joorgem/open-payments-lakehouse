@@ -72,8 +72,9 @@ KINDS THAT ARE NOT THE SAME FAILURE. Both lists were measured against the rule o
   * REWRITTEN ONLY IN PART, WHICH IS THE WORSE FAILURE -- the placeholder lands and A FRAGMENT
     OF THE ADDRESS SURVIVES BESIDE IT, which is the state `foreign`'s redact-before-cap rule
     exists to prevent. `seed.example.c:9092` becomes `<network-address-redacted>.c:9092`, and
-    so for a last label starting with a digit, a last label holding `_`, a non-ASCII last
-    label, and a trailing-dot FQDN; `::ffff:203.0.113.7` keeps its `::ffff:` prefix.
+    so for a last label starting with a digit, one holding `_`, and a non-ASCII one;
+    `::ffff:203.0.113.7` keeps its `::ffff:` prefix. A trailing-dot FQDN is the mild end of
+    the same defect -- the name goes, the dot stays.
 
 An earlier version of this paragraph called the one-character last label a PASS-THROUGH and
 listed no partial rewrites at all, which lumped the two kinds together and got the worse one
@@ -195,8 +196,8 @@ ADDRESS_PLACEHOLDER = "<network-address-redacted>"
 # failure: shapes that pass through UNTOUCHED (a bare unbracketed IPv6, a name with no dot, a
 # bracketed IPv6 carrying a `%zone`, an IPv4 written as a single integer), and shapes this
 # rewrites ONLY IN PART, leaving a fragment of the address beside the placeholder (a
-# one-character last label, one starting with a digit, one holding `_`, a non-ASCII one, a
-# trailing-dot FQDN, and the IPv4 inside an `::ffff:` mapped address).
+# one-character last label, one starting with a digit, one holding `_`, a non-ASCII one, the
+# IPv4 inside an `::ffff:` mapped address, and -- mildly -- a trailing-dot FQDN).
 # What it covers is the foreign text this script prints -- the topic names in a metadata
 # reply, and the `ipv4#...` literal librdkafka puts in a connect failure. Over-redaction is
 # the safe direction, and it is paid for by keeping every string this script prints free of
