@@ -20,9 +20,10 @@ why it is declared here rather than passed in.
 WHAT IT REPLACES. The baseline was established by emitting from two git worktrees and
 running `cmp` between them; with the numbers recorded below, one run answers the same
 question. If you do compare two trees, CREATE THE SECOND WORKTREE OUTSIDE THE REPOSITORY
-ROOT: `tests/test_revision_stamp.py::test_the_watched_paths_cover_everything...` rglobs for
-`databricks.yml` excluding only `.venv`, so a worktree under the root turns it red locally
-and is invisible to CI.
+ROOT: `tests/test_revision_stamp.py::test_the_watched_paths_cover_everything...` walks this
+tree for every file that DECLARES a bundle and requires each one's directory to be watched
+by the deployment stamp, so a worktree under the root -- carrying its own copy of the
+bundle -- turns it red locally and is invisible to CI.
 
 A FAILURE HERE IS NOT AUTOMATICALLY A BUG. It means a landed file's bytes moved, which is
 sometimes exactly what a change intends -- a new profile, a re-declared window. What it may

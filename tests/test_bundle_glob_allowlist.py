@@ -153,8 +153,6 @@ _ALLOWED: dict[tuple[str, str], str] = {
         "from one suffix while its own docstring says `the bundle's jobs`. The same glob is "
         "a fragment README.md publishes and another arm there asserts is present, so the "
         "two halves move together and are fixed with the README, not from here",
-    ("test_revision_stamp.py", "databricks.yml"):
-        "names ONE file; whether to widen it to the other bundle-root spellings is open",
 }
 
 

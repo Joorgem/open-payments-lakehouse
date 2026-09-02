@@ -29,6 +29,8 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
+from job_yaml import BUNDLE, bundle_files
 
 from opl.bronze.provenance import (
     STAMP_MODULE,
@@ -168,6 +170,163 @@ def _covers(watched: set[Path], path: str) -> bool:
     return bool(watched & (set(candidate.parents) | {candidate}))
 
 
+# WHAT MAKES A FILE A BUNDLE ROOT, AND IT IS NOT WHAT THE FILE IS CALLED. The derivation
+# below used to be `_REPO.rglob("databricks.yml")` with the answer asserted to be one
+# file. Measured against the CLI (v1.8.0) on scratch bundles, that is three spellings
+# short of the question: `databricks.yml`, `databricks.yaml`, `bundle.yml` and
+# `bundle.yaml` are each located and validated `exit=0` and render the job they declare,
+# while `foo.yml`, `databricks.json` and `bundle.json` are refused with `unable to locate
+# bundle root: databricks.yml not found` -- THE CLI'S OWN ERROR NAMES ONE SPELLING WHILE
+# IT ACCEPTS FOUR. So a second bundle spelled `bundle.yml` left that glob returning one
+# file and the count assertion green, with the second bundle's directory unwatched by the
+# dirty check -- the one thing that stamps the wheel `+dirty` and makes every guarded job
+# refuse a run built from uncommitted code.
+#
+# WIDENING THE GLOB TO THE FOUR NAMES WAS REFUSED, and not on taste: it commits a
+# four-member list of filenames derived from the behaviour of a CLI that names one of
+# them, and it goes stale the day a fifth is accepted, silently and in the direction of a
+# false green. What the CLI REQUIRES of a root is derivable instead, and that is what is
+# asked here. A root with no bundle NAME is refused -- `unable to define default
+# workspace root: bundle name not defined`, measured alike for a `databricks.yml`
+# declaring no `bundle:` key, for one whose `bundle:` mapping carries no `name`, and for
+# an empty file. The name is what has to be there; the filename is what the CLI is free
+# to change.
+#
+# THE QUESTION IS ASKED AT EVERY DEPTH, which is measured rather than defensive: the CLI
+# takes the same name from `targets.<t>.bundle.name` and from
+# `environments.<t>.bundle.name`, both `exit=0`. Enumerating the paths a name may arrive
+# by is the same mistake as enumerating the filenames one level up, so every mapping is
+# asked instead of a counted list of them.
+_BUNDLE = "bundle"
+_BUNDLE_NAME = "name"
+
+
+def _declares_a_named_bundle(node) -> bool:
+    """Whether `node` carries a `bundle:` mapping with a `name`, at any depth."""
+    if isinstance(node, dict):
+        declared = node.get(_BUNDLE)
+        if isinstance(declared, dict) and _BUNDLE_NAME in declared:
+            return True
+        return any(_declares_a_named_bundle(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_declares_a_named_bundle(item) for item in node)
+    return False
+
+
+def _ignored(root: Path, paths: list[Path]) -> set[str]:
+    """Which of `paths` git's own ignore rules exclude, as posix paths relative to `root`.
+
+    NEITHER TIDINESS NOR SPEED. What is being defended is
+    `git status --porcelain -- DEPLOYMENT_INPUTS`, and that command cannot report an
+    ignored path at all -- so a bundle root under `.venv/`, `dist/` or `data/` could
+    not make the stamp dirty whatever that tuple held, and demanding its directory be
+    watched would be a red no edit to the tuple can clear. Asked of git rather than
+    spelled out here, because a written-down list of directories to skip goes stale in
+    the worst available direction: a LOCAL red, on a box that has run a deploy or holds
+    working notes, that CI never reproduces.
+
+    NUL-SEPARATED AND IN BYTES, WHICH IS NOT FASTIDIOUSNESS -- the first version of this
+    was `text=True` with newline-separated paths, and a bundle root planted under a
+    git-ignored directory went through it untouched. Two things went wrong at once and
+    each alone was enough: text mode translates the `\\n` it writes into `\\r\\n` on
+    Windows, so git received paths ending in a carriage return and treated it as part of
+    the filename; and git then quoted those unusual names on the way back, so every string
+    returned carried a `"` at each end. The set never matched anything and the filter
+    silently did nothing, which nothing but a plant in an ignored directory would show.
+
+    `check-ignore` exits 1 when nothing matches, so only a third code is a failure."""
+    if not paths:
+        return set()
+    done = subprocess.run(
+        ["git", "-C", str(root), "check-ignore", "-z", "--stdin"],
+        input=b"".join(
+            path.relative_to(root).as_posix().encode("utf-8") + b"\0" for path in paths
+        ),
+        capture_output=True,
+    )
+    assert done.returncode in (0, 1), (
+        f"git check-ignore could not answer for {root}: "
+        f"{done.stderr.decode('utf-8', 'replace').strip()!r}. This derivation cannot tell "
+        "which files the stamp is structurally blind to, so it refuses rather than "
+        "reporting a set it was unable to narrow"
+    )
+    return {entry.decode("utf-8") for entry in done.stdout.split(b"\0") if entry}
+
+
+def _bundle_roots(root: Path) -> list[Path]:
+    """Every file under `root` that DECLARES a bundle, whatever it happens to be named.
+
+    THE WALK IS `job_yaml.bundle_files`, which is where the suffixes a bundle document
+    may carry are decided; this module reads that list instead of spelling a second one.
+    It is one suffix WIDER than a bundle root can be -- `databricks.json` and
+    `bundle.json` are refused as roots, measured -- so a JSON file declaring a named
+    bundle is reported here and could not be one. That is over-strict in the direction
+    that is loud; the other direction is the false green this block exists for.
+
+    A FILE THAT WILL NOT PARSE IS A FAULT, NOT A SKIP. Skipping would report the expected
+    value because the derivation could not look, which is the shape ADR 0018 names. Every
+    file this walk reads parses today, and one that stops should say so rather than drop
+    out of a set other arms then call total."""
+    swept = bundle_files(root)
+    ignored = _ignored(root, swept)
+    found = []
+    for path in swept:
+        relative = path.relative_to(root).as_posix()
+        if relative in ignored:
+            continue
+        try:
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (yaml.YAMLError, UnicodeDecodeError) as exc:
+            raise AssertionError(
+                f"{relative} carries a bundle-document suffix and does not parse "
+                f"({type(exc).__name__}), so nothing here can say whether it declares a "
+                "bundle. Fix the file, or move it out of the tree this walk reads"
+            ) from exc
+        if _declares_a_named_bundle(document):
+            found.append(path)
+    return found
+
+
+def _roots_of_this_repository() -> list[Path]:
+    """`_bundle_roots(_REPO)` with the floor every arm over it has to read first.
+
+    THE ARM BELOW IS A CLAIM ABOUT A SET SOMETHING WALKED, and a walk that returns
+    nothing satisfies "every root is watched" exactly as a correct tree does. The floor
+    is the bundle this repository actually ships, taken from `job_yaml` -- the module
+    that owns where the bundle is -- rather than typed here a second time, so a move of
+    it is a red rather than a silent pass. It is a known member and not a count: a count
+    would be a claim about the repository that the next bundle falsifies."""
+    roots = _bundle_roots(_REPO)
+    assert BUNDLE in roots, (
+        f"the bundle this repository ships is at {BUNDLE}, and the content derivation "
+        f"did not find it: {[str(path) for path in roots]}. Every claim below is about a "
+        "set this walk read, so a walk that cannot find the known root earns none of them"
+    )
+    return roots
+
+
+def _reaches_the_workspace(wheel: dict) -> dict[str, list[str]]:
+    """What a deploy puts in the workspace, keyed by what puts it there.
+
+    FOUR SOURCES OF TRUTH, each owned somewhere other than `DEPLOYMENT_INPUTS`, which is
+    the whole point: the single-source version of the arm below was what certified the
+    omission of `databricks/` as correct. The wheel's packages and the hook's registered
+    path come from `pyproject.toml`; the sync roots come from what the files themselves
+    DECLARE, which is not what they are named -- see the block above. Add a fifth thing
+    to the deployment and this is where it goes."""
+    return {
+        "the wheel's package": wheel["packages"],
+        "a bundle sync root": sorted(
+            {path.parent.relative_to(_REPO).as_posix() for path in _roots_of_this_repository()}
+        ),
+        "the wheel's metadata": ["pyproject.toml"],
+        # The stamp's own logic: this file decides what the revision SAYS, including
+        # whether the dirty check runs at all, so an uncommitted edit to it would
+        # otherwise produce a clean stamp for a commit that does not contain it.
+        "the build hook": [wheel["hooks"]["custom"].get("path", "hatch_build.py")],
+    }
+
+
 def test_the_watched_paths_cover_everything_a_deploy_puts_in_the_workspace():
     """A silent hole this test ITSELF used to certify as closed.
 
@@ -178,32 +337,157 @@ def test_the_watched_paths_cover_everything_a_deploy_puts_in_the_workspace():
     uncommitted edit to a job entry point shipped under a bare stamp equal to HEAD,
     the guard passed, and the run executed code that was never committed.
 
-    So the requirement is derived from FOUR sources of truth, each owned elsewhere:
-    the wheel's packages, the bundle's sync root (the directory holding
-    `databricks.yml`), the wheel's metadata file, and the hook's own registered path.
-    Add a fifth thing to the deployment and this test is what should go red."""
+    IT NO LONGER ASSERTS THAT THERE IS EXACTLY ONE BUNDLE, and that is a replacement
+    rather than a relaxation. The count was standing in for this check and could not
+    carry it: a second root under any of the other three accepted spellings left it
+    counting one. Now every root found is checked, so a second one inside `databricks/`
+    passes -- the stamp already watches that directory -- and a second one anywhere the
+    stamp does not look fails here, which is the case the count was there for.
+
+    WHAT IT DOES NOT ESTABLISH: that every root the CLI would accept has been found. It
+    reads what `job_yaml.bundle_files` walks, so a root above this checkout, or one
+    reached only through a symlink out of it, is out of range; it drops what git's ignore
+    rules exclude, deliberately, because the stamp is a `git status` that is blind to
+    those as well; and a root declaring only `include:` takes its bundle name from the
+    included file, so the directory named here would be that file's and not the CLI's
+    root. Nor does it claim the covering path is SUFFICIENT -- only that one exists."""
     config = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
     wheel = config["tool"]["hatch"]["build"]["targets"]["wheel"]
     watched = {Path(p) for p in DEPLOYMENT_INPUTS}
 
-    bundles = [path for path in _REPO.rglob("databricks.yml") if ".venv" not in path.parts]
-    assert len(bundles) == 1, f"expected one bundle definition, found {bundles}"
-    required = {
-        "the wheel's package": wheel["packages"],
-        "the bundle's sync root": [str(bundles[0].parent.relative_to(_REPO).as_posix())],
-        "the wheel's metadata": ["pyproject.toml"],
-        # The stamp's own logic: this file decides what the revision SAYS, including
-        # whether the dirty check runs at all, so an uncommitted edit to it would
-        # otherwise produce a clean stamp for a commit that does not contain it.
-        "the build hook": [wheel["hooks"]["custom"].get("path", "hatch_build.py")],
-    }
-    for what, paths in required.items():
+    for what, paths in _reaches_the_workspace(wheel).items():
         for path in paths:
             assert _covers(watched, path), (
                 f"{path!r} reaches the workspace as {what}, and no watched path covers "
                 f"it: {sorted(DEPLOYMENT_INPUTS)}. An uncommitted change there would be "
                 "stamped as clean, and the guard would pass a run built from it"
             )
+
+
+@pytest.mark.parametrize(
+    ("name", "body", "declares", "why"),
+    [
+        (
+            "nothing-the-cli-would-locate.yml",
+            "bundle:\n  name: probe\n",
+            True,
+            "a name the CLI would not locate a root under is still found, which is what "
+            "makes this a content derivation rather than a list of filenames waiting to "
+            "be one short",
+        ),
+        (
+            "databricks.yml",
+            "resources:\n  jobs: {}\n",
+            False,
+            "the CLI refuses a root with no bundle name -- `unable to define default "
+            "workspace root: bundle name not defined` -- so the accepted filename is not "
+            "what makes a file a root, and keying on the name is what earns that",
+        ),
+        (
+            "under-a-target.yml",
+            "targets:\n  dev:\n    bundle:\n      name: probe\n",
+            True,
+            "the CLI takes the name from `targets.<t>.bundle.name` too, and from "
+            "`environments.<t>.bundle.name`; asking every depth commits to neither list",
+        ),
+    ],
+)
+def test_a_bundle_root_is_what_a_file_declares_and_not_what_it_is_named(
+    repo, name, body, declares, why
+):
+    """THE DERIVATION ITSELF, on a tree whose contents this test decides.
+
+    The arm above reads the real repository, where there is one bundle and every
+    spelling question is hypothetical -- so it would stay green under a derivation that
+    had quietly gone back to matching a filename. These three cases are the ones that
+    separate the two, and each is measured against the CLI rather than assumed.
+
+    IT DOES NOT ESTABLISH that the CLI would accept the files it calls roots, nor that it
+    would refuse the one it does not. The three verdicts quoted here were measured on CLI
+    v1.8.0 by hand; nothing in CI re-measures them, and a CLI that changed its mind would
+    leave this arm green and its reasons stale."""
+    (repo / "docs" / name).write_text(body, encoding="utf-8")
+    found = [path.name for path in _bundle_roots(repo)]
+    assert (found == [name]) is declares, f"{found} was derived from {name}: {why}"
+
+
+@pytest.mark.parametrize(
+    ("directory", "covered", "why"),
+    [
+        (
+            "docs",
+            False,
+            "a second bundle root outside every watched path is the defect this block "
+            "was rewritten for: nothing would stamp an uncommitted edit to it dirty, so "
+            "a run built from it would carry a bare stamp equal to HEAD and be accepted",
+        ),
+        (
+            "databricks/second",
+            True,
+            "a second root INSIDE the watched sync root is deliberately fine, and this "
+            "case is what says so: the dirty check already sweeps `databricks`, so the "
+            "replacement for the old `== 1` count must not refuse it",
+        ),
+    ],
+)
+def test_a_planted_second_bundle_root_is_watched_only_where_the_stamp_looks(
+    repo, directory, covered, why
+):
+    """THE PLANTED POSITIVE, kept as an arm instead of deleted with the commit that ran
+    it -- which is exactly what left the old glob's gap unlocked in the first place.
+
+    A second root is planted under a spelling the CLI accepts and the old derivation did
+    not look for, and the answer is read out of the same `_covers` the arm above uses.
+    The `docs` case is the one that must FAIL a real tree; the `databricks/second` case
+    is the behaviour this replacement intends and is not an accident of it.
+
+    IT DOES NOT ESTABLISH anything about `DEPLOYMENT_INPUTS` being right. It reads that
+    tuple; the arm above is what asserts this repository's own roots are inside it."""
+    (repo / directory).mkdir(parents=True, exist_ok=True)
+    (repo / directory / "bundle.yml").write_text(
+        "bundle:\n  name: second\n", encoding="utf-8"
+    )
+    roots = _bundle_roots(repo)
+    assert [path.name for path in roots] == ["bundle.yml"], (
+        f"the plant under {directory} was not derived as a bundle root: {roots}"
+    )
+    watched = {Path(p) for p in DEPLOYMENT_INPUTS}
+    reached = {
+        _covers(watched, root.parent.relative_to(repo).as_posix()) for root in roots
+    }
+    assert reached == {covered}, why
+
+
+def test_a_bundle_root_git_ignores_is_dropped_and_one_it_does_not_survives(repo):
+    """THE EXCLUSION, ASSERTED IN BOTH DIRECTIONS IN ONE ARM, because a filter is exactly
+    the shape that can silently stop filtering.
+
+    It did. The first `_ignored` here matched nothing at all -- Windows text mode put a
+    carriage return on every path it handed git, git quoted the odd names on the way back,
+    and the returned set intersected nothing. Every arm in this file stayed green, because
+    no ignored directory in this repository holds a bundle root; only a plant in one
+    showed it. So both roots are planted together: an empty answer fails as loudly as an
+    unfiltered one, and neither can be reached by the filter doing nothing.
+
+    WHY THE EXCLUSION IS THERE AT ALL is `_ignored`'s own docstring, and it is not
+    convenience: the stamp is `git status --porcelain`, which cannot report an ignored
+    path, so no edit to `DEPLOYMENT_INPUTS` could ever clear a red raised over one.
+
+    IT DOES NOT ESTABLISH that an ignored bundle root is harmless. It cannot be deployed
+    from this repository and it cannot make the stamp dirty; whether someone runs the CLI
+    on it by hand is outside anything the stamp sees."""
+    (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+    for directory in ("scratch", "databricks"):
+        (repo / directory).mkdir(exist_ok=True)
+        (repo / directory / "bundle.yml").write_text(
+            "bundle:\n  name: probe\n", encoding="utf-8"
+        )
+    found = [path.relative_to(repo).as_posix() for path in _bundle_roots(repo)]
+    assert found == ["databricks/bundle.yml"], (
+        f"two bundle roots were planted, one under a git-ignored directory, and the "
+        f"derivation returned {found}. Either the ignore filter stopped filtering or it "
+        "dropped a root the stamp can see"
+    )
 
 
 @pytest.mark.parametrize(
