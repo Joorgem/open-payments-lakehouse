@@ -342,6 +342,45 @@ def test_the_swept_paths_are_every_path_the_cli_schema_types_config_resources():
     )
 
 
+# A `$ref` the walk stops at, spelled the way the CLI spells one: a path into `$defs` whose
+# tail is the type. The schemas below need no `$defs` entry for it to land in, because a
+# matching `$ref` is where `_typed_resources` returns instead of descending.
+_A_RESOURCES_REF = {"$ref": f"#/$defs/bundle/{_RESOURCES_TYPE}"}
+
+# Each case reaches a `config.Resources` through ONE construct `_typed_resources` follows,
+# with the path the walk should report for it. `items` carries a `[]` because a collection
+# nested in an ARRAY is somewhere `_resource_collections` does not walk: it has to surface as
+# a path `_SWEPT_PATHS` lacks rather than as a duplicate of one it has.
+_CONSTRUCT_CASES = (
+    ("oneOf", {"properties": {"resources": {"oneOf": [_A_RESOURCES_REF]}}}, "$root.resources"),
+    ("anyOf", {"properties": {"resources": {"anyOf": [_A_RESOURCES_REF]}}}, "$root.resources"),
+    ("allOf", {"properties": {"resources": {"allOf": [_A_RESOURCES_REF]}}}, "$root.resources"),
+    (
+        "additionalProperties",
+        {"properties": {"targets": {"additionalProperties": _A_RESOURCES_REF}}},
+        f"$root.targets.{_ANY_NAME}",
+    ),
+    ("items", {"properties": {"stack": {"items": _A_RESOURCES_REF}}}, "$root.stack[]"),
+)
+
+
+@pytest.mark.parametrize(("construct", "schema", "expected"), _CONSTRUCT_CASES)
+def test_the_walk_follows_the_construct_each_case_names_to_a_resources_type(
+    construct: str, schema: dict, expected: str
+):
+    """THE HALF OF THIS DERIVATION THAT RUNS IN CI, and the reason it is written synthetically.
+
+    The arm above needs the CLI, so it skips wherever CI runs; and in the live schema no
+    `config.Resources` sits under the constructs `c685724` added, so narrowing the walk back
+    to `oneOf` alone left this module green even on a box that HAS the CLI. A schema built in
+    the test needs neither CLI nor bundle, so dropping a construct from `_typed_resources`
+    turns the case for it red WITH THE CLI ABSENT as well as present -- both watched.
+
+    NO CLAIM IS MADE ABOUT JSON SCHEMA. What the walk follows is in its own docstring, and
+    what the derived set is and is not is in this module's."""
+    assert _typed_resources(schema, schema, "$root") == [expected], construct
+
+
 # --------------------------------------------------------------------------------
 # WHAT THE SWEEP READS OFF DISK. The suffix set and the CLI's own output directory both
 # live in `tests/job_yaml.py`; the arms below are what make those constants load-bearing

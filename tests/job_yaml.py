@@ -52,8 +52,7 @@ PYTHON_FILE_PREFIX = "../src/"
 #
 # The set is the CLI's own, named in its own refusal of anything else -- *"must be YAML or
 # JSON files."* -- and JSON is not theoretical: on a scratch bundle `include: resources/*.json`
-# validates `exit=0` and renders the job declared in it. This repository writes `.yml`, which
-# is exactly why a sweep could stop reading another suffix without anything going red.
+# validates `exit=0` and renders the job declared in it.
 BUNDLE_DOC_SUFFIXES = (".yml", ".yaml", ".json")
 
 # THE CLI'S OWN OUTPUT DIRECTORY, EXCLUDED FROM THE BUNDLE-WIDE SWEEP BY DIRECTORY NAME.

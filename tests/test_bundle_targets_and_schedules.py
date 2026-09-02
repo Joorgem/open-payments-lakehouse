@@ -16,7 +16,7 @@ WHICH HALF IS ASSERTED HERE AND WHICH IS NOT -- read this before trusting the gr
     target's `mode`, and asking what it wrote means running `databricks bundle validate`,
     which needs credentials for this bundle -- it resolves the current user for the dev-mode
     prefix and a warehouse by `lookup:`. So the rendering arm skips on the CLI being absent
-    and on a credential state's measured signatures, and goes RED on anything else; `_rendered`
+    and on a credential signature it RECOGNISES, and goes RED on anything else; `_rendered`
     carries that distinction and what it costs. It is not decoration: it is the only place
     the `PAUSED`/`UNPAUSED` split is observed rather than described, and it was run by hand
     on the tree that shipped it.
@@ -302,22 +302,23 @@ def test_the_bundle_declares_the_two_targets_this_split_needs():
 # --------------------------------------------------------------------------------
 
 
-# THE MEASURED SIGNATURES OF A CREDENTIAL STATE, CLI v1.8.0, 2026-09-02. No config file and no
-# `DATABRICKS_HOST`/`DATABRICKS_TOKEN`: *"default auth: cannot configure default credentials"*.
-# Host present, PAT rejected -- routine on this free-tier box: *"Invalid access token ... (403
-# 403)"*, answered by `GET /api/2.0/preview/scim/v2/Me`. A rejected token is a credential state
-# one step further into the same handshake; what refused is the identity endpoint, not this
+# CREDENTIAL-STATE SIGNATURES THIS SKIP RECOGNISES -- recognition, not classification: an exit
+# carrying neither string is RED whatever caused it. Measured on CLI v1.8.0: with no config
+# file and no `DATABRICKS_HOST`/`DATABRICKS_TOKEN`, *"default auth: cannot configure default
+# credentials"*; with a host and a rejected PAT, *"Invalid access token ... (403 403)"* from
+# `GET /api/2.0/preview/scim/v2/Me` -- the identity endpoint, not anything that read this
 # bundle.
-_CREDENTIAL_FAILURES = ("cannot configure default credentials", "invalid access token")
+_RECOGNISED_CREDENTIAL_FAILURES = ("cannot configure default credentials", "invalid access token")
 
 
 def _rendered(target: str) -> dict:
     """`databricks bundle validate -t <target> -o json`, or skip with the reason.
 
-    A SKIP IS FOR A CREDENTIAL STATE AND FOR NOTHING ELSE. Turning EVERY non-zero exit into
-    one swallowed a probe: a bundle that had stopped validating read exactly like a box with
-    no token. THE COST: `bundle validate` reaches the workspace, so an outage on a
-    credentialed box fails rather than skips -- a red says look, the skip said nothing."""
+    A SKIP NEEDS A SIGNATURE NAMED ABOVE; EVERY OTHER NON-ZERO EXIT IS RED, INCLUDING
+    CREDENTIAL STATES SPELLED SOME WAY THAT TUPLE LACKS. Turning them all into skips
+    swallowed a probe: a bundle that had stopped validating read exactly like a box with no
+    token. THE COST: `bundle validate` reaches the workspace, so an outage on a credentialed
+    box fails rather than skips -- a red says look, the skip said nothing."""
     cli = shutil.which("databricks")
     if cli is None:
         pytest.skip("no `databricks` CLI on PATH; the rendering half cannot run here")
@@ -325,11 +326,10 @@ def _rendered(target: str) -> dict:
         [cli, "bundle", "validate", "-t", target, "-o", "json"],
         cwd=RESOURCES.parent, capture_output=True, text=True, encoding="utf-8",
     )
-    if done.returncode and any(s in done.stderr.lower() for s in _CREDENTIAL_FAILURES):
+    if done.returncode and any(s in done.stderr.lower() for s in _RECOGNISED_CREDENTIAL_FAILURES):
         pytest.skip(f"`bundle validate -t {target}`: no usable credentials here")
     assert not done.returncode, (
-        f"`bundle validate -t {target}` exited {done.returncode} for a reason that is not a "
-        f"credential state: {done.stderr.strip()[:300]}"
+        f"`bundle validate -t {target}` exited {done.returncode}: {done.stderr.strip()[:300]}"
     )
     return json.loads(done.stdout)["resources"]["jobs"]
 
