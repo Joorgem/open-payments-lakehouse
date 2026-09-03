@@ -72,12 +72,37 @@ the managed cluster: ADR 0019 Decision 7's own "what reverses it" clause, and
 librdkafka renders the bootstrap address into its OWN log lines and, given no instruction
 otherwise, writes them to FILE DESCRIPTOR 2 ITSELF from an internal thread. Nothing at the
 Python level sees that: not a `try/except` around the call, not a reassigned `sys.stderr`,
-not any redaction applied to what this module returns. MEASURED on 2026-09-02,
-`confluent-kafka` 2.6.1 against an invented `.invalid` host, in the shape this module opens
-a client in -- the extension imported by `_open_client` at the moment of the call: 440 to
-443 bytes on fd 2 (the width of a timestamp apart) naming the host THREE TIMES before
-`flush` had returned, in every one of 7 fresh processes, and 733 bytes naming it six times
-two seconds later, 4 of 4. It was a LATENT door and not a live leak --
+not any redaction applied to what this module returns.
+
+THERE IS NO SINGLE NUMBER FOR IT, and quoting one was this paragraph's own defect: it read
+"440 to 443 bytes ... naming the host THREE TIMES before `flush` had returned", which is a
+figure from a LATER instant pinned to an earlier one. What fd 2 holds grows while the client
+lives, jumps again when the client is DESTROYED, and is in part a measurement of how many
+characters the host's name has. So the TIMELINE is the measurement. Taken on 2026-09-02,
+`confluent-kafka` 2.6.1, an invented 26-character `.invalid` host, in the shape this module
+opens a client in -- the extension imported by `_open_client` at the moment of the call --
+and read through a handle that never disturbs the redirection, 5 fresh processes a row:
+
+    the instant `flush` returned                   host 3x    269 bytes    10 of 10
+    still inside the `except`, its traceback
+      holding the client's frame alive             host 3x    269 bytes     5 of 5
+    that traceback dropped, the client dying       host 3x    457 bytes     2 of 5
+                                                   host 6x    759 bytes     3 of 5
+    a client left ALIVE instead, two seconds on    host 6x    571 bytes     5 of 5
+    that same client then destroyed                host 6x    759 bytes     5 of 5
+
+THE MENTION COUNT IS THE DURABLE PART. The bytes carry the host itself, so a shorter name
+shrinks every row by five bytes a mention: the 21-character host
+`tests/test_producer_client_logging.py` uses makes those rows 254, 442 and 729 by
+arithmetic, and that file's control process -- same host, a shorter flush -- measures 440 to
+441 for the middle one, 7 of 7. Which is where the "440-443" and "733" above came from:
+right numbers, wrong instants. Two things outlive the arithmetic. A reading taken when the
+call returns UNDERSTATES what the process ends up writing -- by 1.7x if the client dies at
+once, by 2.8x if it lives a couple of seconds. And the biggest burst lands AFTER the call
+the reader was watching has returned, which is why the lock holds fd 2 open two seconds past
+the publish instead of restoring it on return.
+
+It was a LATENT door and not a live leak --
 every current caller arrives with `localhost:9092` -- and it is closed because the door is
 general purpose and the next caller need not be local.
 
@@ -89,9 +114,13 @@ the same shape. It is set in `_open_client` and NOT in `client_config`, because
 that script's whole subject is publishing what the broker said -- redacted, through its own
 single `print`. This is a decision about how THIS module opens a producer.
 
-THE SECOND IS THE LOGGER, and it is what stands if the first is ever deleted: handed
-`logger=`, librdkafka gives its lines to Python instead of to fd 2, and
-`_discarding_client_logger` gives them to nothing.
+THE SECOND IS THE LOGGER, and what it stands as, if the first is ever deleted, is a
+LEAK-STOPPER AND NOT A WORKING PUBLISH: handed `logger=`, librdkafka gives its lines to
+Python instead of to fd 2, and `_discarding_client_logger` gives them to nothing. Measured
+with the level deleted and only the logger left, fd 2 held at 0 bytes on 5 of 5 runs and the
+publish died anyway, for the reason the next paragraph gives. Both halves of that are the
+point, and an earlier draft of this line only had the first: alone, the logger keeps the
+address in; it does not keep the transport up.
 
 `logger=` ALONE WOULD HAVE BEEN A CRASH HERE, which is why the level is set as well rather
 than instead. With the level left at its default, librdkafka's resolution-failure line
@@ -102,6 +131,19 @@ this box, across four logger shapes including the discarding one below -- the de
 in the C callback, so no arrangement on the Python side can prevent it. At `log_level=0` the
 callback never fires and the exception cannot arise. A leak traded for a crash would still
 have been a trade; this is not one.
+
+AND "HERE" IS LOAD-BEARING IN THAT SENTENCE, because the crash belongs to THIS MACHINE and
+not to the library. The bytes strict UTF-8 rejects are the OPERATING SYSTEM's error string,
+localised: this box reports `('pt_BR', 'cp1252')`, and the 224-byte buffer the decoder was
+handed carries `Failed to resolve '<host>': Este host n<0xe3>o <0xe9> conhecido.` -- two
+accented characters, at offsets 179 and 182, in a Portuguese sentence Windows wrote. A
+runner whose OS error strings are UTF-8, or simply ASCII English, hands that decoder nothing
+to refuse, so on CI and on the Linux targets this repository deploys to the exception does
+not arise at all. STATED FROM THE MECHANISM, not measured there. A reader who cannot
+reproduce the crash must not conclude the paragraph above is false and delete `log_level=0`
+on the strength of it: the level is what stops the line being RENDERED, which is the defence
+on every platform, and the crash is only the extra reason the logger could never have been
+the whole of it.
 
 WHAT IS LOST IS librdkafka's OWN COMMENTARY AND NOTHING ELSE, and no caller loses a channel
 they could have configured: those lines never entered Python's logging in the first place,

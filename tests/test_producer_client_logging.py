@@ -7,8 +7,15 @@ deliberately". Everything that module prints, raises or repr's has been arranged
 that. librdkafka is not bound by any of it: it renders the address into its own log lines
 and writes them to FILE DESCRIPTOR 2 from an internal thread, underneath every Python-level
 defence there is. MEASURED on 2026-09-02, `confluent-kafka` 2.6.1, an invented `.invalid`
-host, in the shape `_open_client` really opens a client in -- 440 to 443 bytes on fd 2
-carrying the host THREE TIMES, in every one of 7 fresh processes, before `flush` returned.
+host, in the shape `_open_client` really opens a client in -- the host THREE TIMES on fd 2
+by the moment `flush` returned, 10 fresh processes out of 10, and SIX times by the time the
+client that wrote them had been destroyed.
+
+WHICH IS WHY NO ARM BELOW ASSERTS A BYTE COUNT AS A NUMBER. What fd 2 holds is a function of
+how long the client has lived and of how many characters the host's name has, so any figure
+read at one instant is a floor -- the producer's own module docstring carries the full
+timeline and the arithmetic. What does not move is the count of MENTIONS: never zero without
+a defence, and never anything but zero with one.
 
 WHAT THIS FILE LOCKS IS TWO DEFENCES AND THE JOIN BETWEEN THEM, because either alone is one
 token away from being deleted and the AST arm alone would be the defect T1a found in
@@ -196,7 +203,23 @@ def test_the_logger_the_client_is_handed_writes_the_line_nowhere(monkeypatch):
 def test_a_second_publish_replaces_the_handler_rather_than_stacking_another(monkeypatch):
     """`logging.getLogger` returns a PROCESS-GLOBAL object, so two publishes are two calls
     on one logger. Appending would grow the handler list for the life of the process, and --
-    worse for a lock -- would leave whatever a previous caller had attached in place."""
+    worse for a lock -- would leave whatever a previous caller had attached in place.
+
+    AND WHAT SURVIVES IS CHECKED FOR WHAT IT WILL DO, not for what it is an instance of.
+    `isinstance(..., logging.NullHandler)` was the whole of that check, and a SUBCLASS
+    satisfies it: with one substituted into `_discarding_client_logger` -- overriding
+    `handle` to append to a file -- every one of the six arms here reported PASSED while a
+    record driven through the shipped function put the host in that file, 76 bytes.
+    Assigning `handle` ON AN INSTANCE of the real `NullHandler` leaks the same 76 bytes and
+    survives an exact-type check as well; it is the one-line move this file makes on `emit`
+    two arms above, so it is not a hypothetical shape.
+
+    NEITHER IS REACHED BY THE ARM ABOVE, whose three escape routes are `sys.stderr`, fd 2
+    and the root logger -- a file is a fourth, and enumerating routes never closes the last
+    one. So the OBJECT is pinned instead: exactly the stdlib's discard handler, and the
+    `handle` that `logging.Logger.callHandlers` will really invoke still the stdlib's own
+    stub. That is one constraint covering every route, including routes no assertion here
+    could name, and it costs two lines."""
     intruder = logging.Handler()
     first = _discarding_client_logger()
     first.addHandler(intruder)
@@ -207,7 +230,19 @@ def test_a_second_publish_replaces_the_handler_rather_than_stacking_another(monk
         f"{len(second.handlers)} handlers after a second publish; the list is replaced, not "
         "appended to, so a handler another caller attached cannot survive into a publish"
     )
-    assert isinstance(second.handlers[0], logging.NullHandler)
+    handler = second.handlers[0]
+    assert type(handler) is logging.NullHandler, (
+        f"the handler left on the logger is a {type(handler).__name__}; `isinstance` cannot "
+        "tell a SUBCLASS from the stdlib's discard handler, and one that overrides `handle` "
+        "writes the line wherever it likes -- to a file, say -- while the handler count, "
+        "`propagate`, `sys.stderr`, fd 2 and the root logger all stay green"
+    )
+    assert getattr(handler.handle, "__func__", None) is logging.NullHandler.handle, (
+        f"`handle` is {handler.handle!r}, reassigned ON THE INSTANCE -- which the exact-type "
+        "check above cannot see, because `Logger.callHandlers` looks `handle` up on the "
+        "object. It is the same one-line move this file makes on `emit` two arms above, and "
+        "it publishes every record the client library hands over"
+    )
     assert second.name == CLIENT_LOGGER_NAME
 
 
@@ -249,7 +284,8 @@ def test_the_client_is_built_from_both_of_the_defences_and_from_nothing_else():
     passed = {keyword.arg: keyword.value for keyword in built[0].keywords}
     assert "logger" in passed, (
         "the client is built with NO `logger=`, so a line that survives the log level goes "
-        "to file descriptor 2 -- measured at ~440 bytes naming the host three times"
+        "to file descriptor 2 -- the host three times by the moment `flush` returns, and "
+        "six by the time the client that wrote them is destroyed"
     )
     assert isinstance(passed["logger"], ast.Call), (
         "`logger=` is handed a name rather than a call, so what the client writes to is "
@@ -277,8 +313,13 @@ _PROBE = textwrap.dedent(
     import os
     import sys
     import tempfile
+    import time
 
     mode, bootstrap, password = sys.argv[1], sys.argv[2], sys.argv[3]
+
+    # How long fd 2 stays redirected AFTER the publish has returned. See the settle below
+    # for why the arm is worth nothing without it.
+    SETTLE_SECONDS = 2.0
 
     # NOT a `confluent_kafka` import: `opl.streaming.producer` imports the compiled
     # extension inside `_open_client`, which is what puts the import INSIDE the window
@@ -311,6 +352,15 @@ _PROBE = textwrap.dedent(
                 publish_records(records, topic="t1c-topic", broker=broker, flush_timeout=1.0)
         except BaseException as failed:
             refusal = f"{type(failed).__name__}: {failed}"
+        # THE WINDOW OUTLIVES THE CALL, deliberately, and this line is where the arm's
+        # zero stops meaning "zero SO FAR". librdkafka writes from a thread of its own and
+        # the leak measured beside this one GROWS after the call returns: the host three
+        # times by the moment `flush` returned, six by the time the client that wrote them
+        # was destroyed. And the client is destroyed HERE, by the `except` above dropping
+        # the traceback that kept its frame alive -- already past `publish_records`. With
+        # fd 2 restored on return, that burst would go to the REAL stderr, unread and
+        # unasserted, and this arm would report a green it had not earned.
+        time.sleep(SETTLE_SECONDS)
     finally:
         os.dup2(saved, 2)
         os.close(saved)
@@ -339,21 +389,17 @@ def _probe(mode: str) -> dict[str, object]:
     return json.loads(result.stdout)
 
 
-def test_a_publish_to_an_unreachable_broker_writes_nothing_to_the_file_descriptor():
-    """THE ARM THAT IS ABOUT THE REAL CLIENT, and the only one that would have caught this.
+def _the_leak_reproduced_or_skip() -> dict[str, object]:
+    """The NEGATIVE CONTROL, and the decision of whether this machine can measure at all.
 
-    A real `publish_records` against a host that cannot resolve, fd 2 read at the OS level,
-    beside a control process that builds the client the way this module built it before the
-    fix. The control is what makes the zero mean something: measured at 440-443 bytes with
-    the host three times, 7 of 7, and the byte count varies only because the line carries a
-    timestamp -- which is why this asserts a floor and not a number.
+    LIFTED OUT OF THE ARM BELOW AT A REAL SEAM, not to fit a cap: deciding whether the leak
+    reproduces here is a different job from asserting the shipped path is silent, and it is
+    the job that has to run first. `pytest.skip` raises, so calling it from a helper skips
+    the calling test, and a `return` here is reached only when the control really leaked.
 
-    AND THE REFUSAL IS ASSERTED TOO. Silencing a client library is a change that can eat the
-    diagnosis along with the leak; `_refuse_an_incomplete_delivery` still has to name the
-    records that never left the process, in its own words, or the fix cost more than the
-    defect."""
-    pytest.importorskip("confluent_kafka", reason="the client library is a dev-group wheel")
-
+    Without this, "zero bytes on fd 2" is a sentence a broken harness, a missing client
+    library and a machine whose resolver answers differently all produce -- ADR 0018's
+    species exactly."""
     control = _probe("control")
     if control["bytes"] == 0:
         pytest.skip(
@@ -364,11 +410,57 @@ def test_a_publish_to_an_unreachable_broker_writes_nothing_to_the_file_descripto
         f"the control leaked {control['bytes']} bytes but none of them named the host, so "
         "this arm is not measuring what it claims to"
     )
+    assert control["password_hits"] == 0, (
+        f"the client library's own log lines carried the SASL PASSWORD "
+        f"{control['password_hits']} times inside {control['bytes']} bytes. The address is "
+        "a coordinate this repository keeps out of committed text; the password is a "
+        "credential whose escape is repaired by ROTATING it and not by closing a file "
+        "descriptor, and an arm that watches a leak has to say which of the two it saw"
+    )
+    return control
+
+
+def test_a_publish_to_an_unreachable_broker_writes_nothing_to_the_file_descriptor():
+    """THE ARM THAT IS ABOUT THE REAL CLIENT, and the only one that would have caught this.
+
+    A real `publish_records` against a host that cannot resolve, fd 2 read at the OS level,
+    beside a control process that builds the client the way this module built it before the
+    fix. The control is what makes the zero mean something: 440 to 441 bytes naming the host
+    THREE TIMES and the password not once, 7 of 7 on 2026-09-02 -- the one-byte spread is
+    the width of the millisecond count librdkafka prints into the line. THAT FIGURE IS A
+    WHOLE CLIENT'S LIFE and not a reading at an instant: the control opens, flushes and
+    destroys its client inside the window, and destruction is where a large part of those
+    bytes arrives -- in the timeline the producer's module docstring carries, a three-mention
+    reading grows from 254 bytes to 442 at that moment. Every number here is a floor, which
+    is what this asserts.
+
+    AND THE WINDOW OUTLIVES THE PUBLISH BY TWO SECONDS, which is what lets the shipped arm's
+    zero mean "zero" instead of "zero so far": see the settle in `_PROBE` for why the burst
+    this arm most needs to see lands after the call returns. Measured with the settle in
+    place at 0 bytes, 0 host mentions and 0 password mentions, 7 of 7 -- the wait buys the
+    stronger sentence without buying a flake.
+
+    AND THE REFUSAL IS ASSERTED TOO. Silencing a client library is a change that can eat the
+    diagnosis along with the leak; `_refuse_an_incomplete_delivery` still has to name the
+    records that never left the process, in its own words, or the fix cost more than the
+    defect."""
+    pytest.importorskip("confluent_kafka", reason="the client library is a dev-group wheel")
+
+    control = _the_leak_reproduced_or_skip()
 
     shipped = _probe("shipped")
+    # Checked separately from the byte count below, and before it. Zero bytes cannot
+    # contain a substring, so today this cannot fail on its own -- what the separate line
+    # buys is that the password's severity does not ride on the host's: a floor loosened
+    # later to tolerate a timestamp or a thread's parting line must not loosen this too.
+    assert shipped["password_hits"] == 0, (
+        f"a publish through `publish_records` put the SASL PASSWORD on file descriptor 2 "
+        f"{shipped['password_hits']} times, in {shipped['bytes']} bytes"
+    )
     assert shipped["bytes"] == 0, (
         f"a publish through `publish_records` wrote {shipped['bytes']} bytes to file "
-        f"descriptor 2, naming the bootstrap host {shipped['host_hits']} times"
+        f"descriptor 2, naming the bootstrap host {shipped['host_hits']} times -- the "
+        f"unsilenced control beside it wrote {control['bytes']}"
     )
     assert "still queued" in str(shipped["refusal"]), (
         f"the publish refused with {shipped['refusal']!r} rather than naming the records "
