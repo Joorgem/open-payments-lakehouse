@@ -67,6 +67,50 @@ the managed cluster: ADR 0019 Decision 7's own "what reverses it" clause, and
 `docs/f5-run-evidence.md`'s "the BOOTSTRAP still is a secret, deliberately".
 `scripts/probe_broker.py` redacts it on every path it prints.
 
+--- AND THE CLIENT LIBRARY PUBLISHED IT ANYWAY, FROM A THREAD NO `except` CAN REACH -------
+
+librdkafka renders the bootstrap address into its OWN log lines and, given no instruction
+otherwise, writes them to FILE DESCRIPTOR 2 ITSELF from an internal thread. Nothing at the
+Python level sees that: not a `try/except` around the call, not a reassigned `sys.stderr`,
+not any redaction applied to what this module returns. MEASURED on 2026-09-02,
+`confluent-kafka` 2.6.1 against an invented `.invalid` host, in the shape this module opens
+a client in -- the extension imported by `_open_client` at the moment of the call: 440 to
+443 bytes on fd 2 (the width of a timestamp apart) naming the host THREE TIMES before
+`flush` had returned, in every one of 7 fresh processes, and 733 bytes naming it six times
+two seconds later, 4 of 4. It was a LATENT door and not a live leak --
+every current caller arrives with `localhost:9092` -- and it is closed because the door is
+general purpose and the next caller need not be local.
+
+TWO DEFENCES, AND THE FIRST IS AT THE SOURCE. `log_level=0` is librdkafka's own syslog
+threshold: at 0 only LOG_EMERG survives, so the `%3|...|FAIL|` line is never rendered, and a
+line that is never rendered cannot be written, decoded or redacted. Measured at 0 bytes, in
+the same shape. It is set in `_open_client` and NOT in `client_config`, because
+`client_config` is also what `scripts/probe_broker.py` builds its admin client from, and
+that script's whole subject is publishing what the broker said -- redacted, through its own
+single `print`. This is a decision about how THIS module opens a producer.
+
+THE SECOND IS THE LOGGER, and it is what stands if the first is ever deleted: handed
+`logger=`, librdkafka gives its lines to Python instead of to fd 2, and
+`_discarding_client_logger` gives them to nothing.
+
+`logger=` ALONE WOULD HAVE BEEN A CRASH HERE, which is why the level is set as well rather
+than instead. With the level left at its default, librdkafka's resolution-failure line
+embeds the OPERATING SYSTEM's error string in the machine's own code page, and
+`confluent-kafka` 2.6.1 decodes that buffer as strict UTF-8 before any Python code sees it:
+`poll()` raised `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe3` on 5 of 5 runs on
+this box, across four logger shapes including the discarding one below -- the decode happens
+in the C callback, so no arrangement on the Python side can prevent it. At `log_level=0` the
+callback never fires and the exception cannot arise. A leak traded for a crash would still
+have been a trade; this is not one.
+
+WHAT IS LOST IS librdkafka's OWN COMMENTARY AND NOTHING ELSE, and no caller loses a channel
+they could have configured: those lines never entered Python's logging in the first place,
+they went straight to fd 2. What disappears is the unredacted dump. The diagnosis this
+module publishes is untouched -- `_refuse_an_incomplete_delivery`'s three refusals, and the
+`KafkaException` the client still raises. `tests/test_producer_client_logging.py` holds all
+of it, driving a real client against an invented host in a fresh subprocess and reading fd 2
+at the OS level, with a negative control that reproduces those bytes in the same shape.
+
 --- THE CLIENT IS INJECTABLE, AND THAT IS WHAT MAKES THE DIGEST TEST A UNIT TEST ----------
 
 `publish_records` takes either a `BrokerConfig` (it opens a client) or a ready `producer`
@@ -80,6 +124,7 @@ the same thing through the real client and a real Redpanda, and the two must agr
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -108,6 +153,17 @@ FLUSH_TIMEOUT_SECONDS = 120.0
 # so a broker that stops draining fails with a message instead of looping forever.
 _QUEUE_DRAIN_SECONDS = 1.0
 _QUEUE_DRAIN_ATTEMPTS = 60
+
+# librdkafka's OWN syslog threshold, and the first of the two defences the module docstring
+# describes. At 0 only LOG_EMERG survives, so the `%3|...|FAIL|` line that carries the
+# bootstrap address three times is never rendered -- which is why nothing downstream of it
+# has to be right. Named rather than inlined, because it is the value a test asserts.
+CLIENT_LOG_LEVEL_OPTION = "log_level"
+CLIENT_LOG_LEVEL = 0
+
+# The logger the client library is handed, which is the second defence. `getLogger` returns
+# a PROCESS-GLOBAL object, so the name is the only handle anything else has on it.
+CLIENT_LOGGER_NAME = "opl.streaming.producer.client"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -283,6 +339,46 @@ class _DeliveryLedger:
         return tuple(sorted(Counter(partition for partition, _ in self.delivered).items()))
 
 
+def _client_config_that_cannot_log(broker: BrokerConfig) -> dict[str, Any]:
+    """`broker.client_config()` with librdkafka's own logging turned off AT THE SOURCE.
+
+    A NEW MAPPING RATHER THAN A MUTATION of what `client_config` returned, so this cannot
+    reach back into the credential the other caller of that method is holding.
+
+    HERE AND NOT IN `client_config` ITSELF: `scripts/probe_broker.py` builds an admin client
+    from the same method and its entire subject is publishing what the broker said, through
+    a redacting choke point it owns. Silencing the library there would make that script's
+    `client said |` branch permanently empty, and this is a decision about how the PRODUCER
+    is opened, not about what a credential is."""
+    return {**broker.client_config(), CLIENT_LOG_LEVEL_OPTION: CLIENT_LOG_LEVEL}
+
+
+def _discarding_client_logger() -> logging.Logger:
+    """The logger librdkafka writes to instead of fd 2 -- and it writes NOWHERE.
+
+    THE `NullHandler` IS LOAD-BEARING AND IS NOT A FORMALITY, which is the one thing about
+    this function that is easy to get wrong. `logging.Logger.callHandlers` falls back to
+    `logging.lastResort` when a record reaches NO handler at all, and `lastResort` is a
+    stderr handler at WARNING -- so a logger with `propagate = False` and an empty handler
+    list publishes librdkafka's ERROR lines to stderr, which is the exact leak being closed.
+    `propagate = False` is the other half: the root logger's handlers belong to the
+    APPLICATION, and one configured to stderr would republish the address through a path
+    this module does not own.
+
+    HANDLERS ARE REPLACED, NEVER APPENDED, because `getLogger` returns a process-global
+    object and a second publish would otherwise stack a second handler on it.
+
+    NO REDACTION HERE, DELIBERATELY. Nothing is emitted, so there is no text for a rule to
+    act on, and a redaction rule that nothing exercises is a rule nobody can trust -- the
+    one this repository does exercise is `scripts/probe_broker.py`'s, at the place where
+    lines are actually printed. If a record ever does arrive here it is DISCARDED, not
+    withheld-and-printed, and the module docstring says what that costs."""
+    logger = logging.getLogger(CLIENT_LOGGER_NAME)
+    logger.handlers = [logging.NullHandler()]
+    logger.propagate = False
+    return logger
+
+
 def _open_client(broker: BrokerConfig | None, producer: KafkaProducer | None) -> KafkaProducer:
     """Resolve the client from exactly one of the two doors, or refuse.
 
@@ -297,7 +393,12 @@ def _open_client(broker: BrokerConfig | None, producer: KafkaProducer | None) ->
 
     AND THE FAILURE CARRIES A MESSAGE, because the bare `ImportError` names a package a
     reader of a serverless task log has no reason to expect and says nothing about the
-    other door."""
+    other door.
+
+    THE CLIENT IS BUILT WITH BOTH DEFENCES OR IT IS NOT BUILT HERE. Without them librdkafka
+    writes the bootstrap address to fd 2 from its own thread, which this repository treats
+    as a secret; the module docstring carries the measurement and
+    `tests/test_producer_client_logging.py` carries the lock."""
     if (broker is None) == (producer is None):
         raise ValueError(
             "pass exactly one of `broker` (open a client from it) or `producer` (use this "
@@ -318,7 +419,9 @@ def _open_client(broker: BrokerConfig | None, producer: KafkaProducer | None) ->
             "all, and it is the door the unit tests publish through with no broker running."
         ) from absent
 
-    return Producer(broker.client_config())
+    return Producer(
+        _client_config_that_cannot_log(broker), logger=_discarding_client_logger()
+    )
 
 
 def _produce_one(
